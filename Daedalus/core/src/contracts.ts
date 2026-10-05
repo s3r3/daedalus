@@ -1,0 +1,15 @@
+export type TaskSpec = { id: string; goal: string; repo_path: string; constraints: string[]; done_criteria: string[]; created_at: string };
+export type PlanStepStatus = 'pending' | 'active' | 'done' | 'skipped';
+export type PlanStep = { id: string; intent: string; status: PlanStepStatus; evidence: string[] };
+export type Plan = { id: string; task_id: string; steps: PlanStep[]; version: number; status: 'draft' | 'active' | 'complete' };
+export type ToolCall = { id: string; task_id: string; turn_id: string; tool: string; args: unknown; approved_by?: string; started_at: string };
+export type ToolResultStatus = 'ok' | 'error' | 'denied' | 'timeout';
+export type ToolResult = { call_id: string; status: ToolResultStatus; output: string; truncated: boolean; meta: Record<string, unknown> };
+export type ValidationCheck = { name: string; cmd: string; status: 'pass' | 'fail' | 'error' | 'skipped'; exit_code: number | null; summary: string; diagnostics: Array<{ file?: string; line?: number; message: string }> };
+export type ValidationResult = { checks: ValidationCheck[] };
+export type RecoveryAction = { reason: string; strategy: 'retry' | 'fix' | 'replan' | 'abort'; attempt: number; limits: Record<string, number> };
+export type FinalReport = { task_id: string; outcome: 'success' | 'partial' | 'failed'; diff: string; evidence: string[]; metrics: Record<string, number> };
+export type TaskState = TaskSpec & { plan: Plan; steps: PlanStep[]; status: 'pending' | 'active' | 'done' | 'failed'; current_step_id?: string; last_observation?: string; last_error?: string; last_tool_call_id?: string; tool_result?: ToolResult };
+export const EVENT_TYPES = ['TASK_STARTED','PLAN_CREATED','TOOL_CALL_STARTED','TOOL_CALL_FINISHED','FILE_CHANGED','COMMAND_STARTED','COMMAND_OUTPUT','COMMAND_FINISHED','VALIDATION_STARTED','VALIDATION_FAILED','VALIDATION_PASSED','RECOVERY_STARTED','REPLAN_CREATED','TASK_COMPLETED','MODEL_REQUEST_STARTED','MODEL_REQUEST_FINISHED','MODEL_REQUEST_FAILED','APPROVAL_REQUESTED','APPROVAL_DECIDED'] as const;
+export type EventType = (typeof EVENT_TYPES)[number];
+export type Event = { seq: number; task_id: string; turn_id?: string; type: EventType; payload: unknown; ts: string };

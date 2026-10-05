@@ -1,0 +1,78 @@
+/**
+ * Canonical LLM types and provider contract.
+ *
+ * Provider-agnostic: `AgentLoop` (Phase 3) consumes only these shapes, so a
+ * second provider can be registered without touching the loop.
+ */
+
+export type Role = "system" | "user" | "assistant" | "tool";
+
+export type TextContent = { type: "text"; text: string };
+
+export type ImageContent = { type: "image_url"; image_url: { url: string } };
+
+export type ContentBlock = TextContent | ImageContent;
+
+export type ToolCall = {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+};
+
+export type Message = {
+  role: Role;
+  content: string | ContentBlock[];
+  name?: string;
+  tool_call_id?: string;
+  tool_calls?: ToolCall[];
+};
+
+export type ToolDefinition = {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+  };
+};
+
+export type Usage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+};
+
+export type ChatResponse = {
+  message: Message;
+  usage?: Usage;
+  finish_reason?: string;
+  raw?: unknown;
+};
+
+export type ChatOptions = {
+  temperature?: number;
+  max_tokens?: number;
+  top_p?: number;
+  stop?: string[];
+  signal?: AbortSignal;
+  timeout_ms?: number;
+};
+
+export type StreamChunk =
+  | { type: "delta"; content: string; tool_calls?: Partial<ToolCall>[] }
+  | { type: "usage"; usage: Usage }
+  | { type: "finish"; finish_reason?: string };
+
+/**
+ * Provider contract. `chat` is non-streaming; `stream` is streaming.
+ * Both must honour `signal` and `timeout_ms`.
+ */
+export interface LLMProvider {
+  readonly name: string;
+  chat(messages: Message[], tools?: ToolDefinition[], options?: ChatOptions): Promise<ChatResponse>;
+  stream(
+    messages: Message[],
+    tools?: ToolDefinition[],
+    options?: ChatOptions,
+  ): AsyncIterable<StreamChunk>;
+}

@@ -1,0 +1,7 @@
+{
+  "pendant.autoGenerateSessionNames": true,
+  "pendant.sessionNameGeneration": {
+    "model": "local-router/claude-lo"
+  },
+  "pendant.showThinking": false
+}

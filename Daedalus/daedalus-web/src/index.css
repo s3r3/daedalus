@@ -1,0 +1,280 @@
+@import 'tailwindcss';
+@import './styles/motion.css';
+
+/*
+ * Theme tokens (PLAN.md §3.4).
+ *
+ * Components must never hardcode a color: every color below resolves to a
+ * `--daedalus-*` custom property, and those are written at runtime by
+ * `applyPaletteVars()` (src/theme/theme.ts) from the shared core palette
+ * (`core/src/theme.ts`). The hex after each `var()` is the same-paint fallback
+ * for the first frame, before JavaScript runs; `src/web.test.tsx` asserts it
+ * equals the core palette, so the two can never drift.
+ *
+ * The palette is CharmTone Pantera, the theme the reference terminal agent
+ * ships: a brand quad, a four-step foreground ramp, a four-step surface ramp,
+ * paired status hues with a full-strength and a muted step, two diff bands per
+ * sign, four button states, and a 16-entry ANSI palette for terminal output.
+ *
+ * `daedalus-dark` is the default. `daedalus-light` keeps the same semantic
+ * layering on light neutral ramps, so a component renders identically in both
+ * without a single theme-conditional class.
+ */
+
+:root,
+[data-theme='daedalus-dark'] {
+  color-scheme: dark;
+
+  --primary: var(--daedalus-primary, #6b50ff);
+  --secondary: var(--daedalus-secondary, #ff60ff);
+  --accent: var(--daedalus-accent, #68ffd6);
+  --fg-base: var(--daedalus-fgBase, #ecebf0);
+  --fg-subtle: var(--daedalus-fgSubtle, #bfbcc8);
+  --muted: var(--daedalus-fgMoreSubtle, #858392);
+  --fg-most-subtle: var(--daedalus-fgMostSubtle, #605f6b);
+  --bg-base: var(--daedalus-bgBase, #201f26);
+  --bg-surface: var(--daedalus-bgSurface, #2d2c36);
+  --bg-raised: var(--daedalus-bgRaised, #3a3943);
+  --bg-overlay: var(--daedalus-bgOverlay, #4d4c57);
+  --on-primary: var(--daedalus-onPrimary, #fffaf1);
+  --success: var(--daedalus-success, #00ffb2);
+  --success-muted: var(--daedalus-successMuted, #68ffd6);
+  --warning: var(--daedalus-warning, #f5ef34);
+  --warning-muted: var(--daedalus-warningMuted, #e8fe96);
+  --error: var(--daedalus-error, #eb4268);
+  --error-muted: var(--daedalus-destructive, #ff577d);
+  --info: var(--daedalus-info, #00a4ff);
+  --info-muted: var(--daedalus-infoMuted, #4fbefe);
+  --border: var(--daedalus-separator, #3a3943);
+  --color-keyword: var(--daedalus-keyword, #ff84ff);
+  --color-destructive: var(--daedalus-destructive, #ff577d);
+  --color-success-subtle: var(--daedalus-successMuted, #68ffd6);
+  --color-success-most-subtle: var(--daedalus-successMostSubtle, #12c78f);
+  --color-info-subtle: var(--daedalus-infoMuted, #4fbefe);
+  --color-info-most-subtle: var(--daedalus-infoMostSubtle, #007ab8);
+  --color-attention: var(--daedalus-attention, #ff985a);
+  --color-busy: var(--daedalus-busy, #e8ff27);
+  --color-yolo: var(--daedalus-yolo, #e8fe96);
+  --color-plan: var(--daedalus-plan, #6b50ff);
+  --color-plan-subtle: var(--daedalus-planSubtle, #8b75ff);
+  --color-button: var(--daedalus-button, #ff60ff);
+  --color-button-subtle: var(--daedalus-buttonSubtle, #3a3943);
+  --color-button-inactive: var(--daedalus-buttonInactive, #4d4c57);
+  --color-button-hovered: var(--daedalus-buttonHovered, #605f6b);
+  --color-working-grad-from: var(--daedalus-workingFrom, #6b50ff);
+  --color-working-grad-to: var(--daedalus-workingTo, #68ffd6);
+  --color-diff-insert-fg: var(--daedalus-diffInsertFg, #629657);
+  --color-diff-insert-code-bg: var(--daedalus-diffInsertCodeBg, #2d3430);
+  --color-diff-insert-gutter-bg: var(--daedalus-diffInsertGutterBg, #282d2c);
+  --color-diff-delete-fg: var(--daedalus-diffDeleteFg, #a45c59);
+  --color-diff-delete-code-bg: var(--daedalus-diffDeleteCodeBg, #33272d);
+  --color-diff-delete-gutter-bg: var(--daedalus-diffDeleteGutterBg, #2a232a);
+  --color-ansi-0: var(--daedalus-ansiBlack, #2d2c36);
+  --color-ansi-1: var(--daedalus-ansiRed, #ff577d);
+  --color-ansi-2: var(--daedalus-ansiGreen, #12c78f);
+  --color-ansi-3: var(--daedalus-ansiYellow, #f5ef34);
+  --color-ansi-4: var(--daedalus-ansiBlue, #6b50ff);
+  --color-ansi-5: var(--daedalus-ansiMagenta, #ff60ff);
+  --color-ansi-6: var(--daedalus-ansiCyan, #00a4ff);
+  --color-ansi-7: var(--daedalus-ansiWhite, #bfbcc8);
+  --color-ansi-8: var(--daedalus-ansiBrightBlack, #4d4c57);
+  --color-ansi-9: var(--daedalus-ansiBrightRed, #ff6daa);
+  --color-ansi-10: var(--daedalus-ansiBrightGreen, #00ffb2);
+  --color-ansi-11: var(--daedalus-ansiBrightYellow, #e8fe96);
+  --color-ansi-12: var(--daedalus-ansiBrightBlue, #7272ff);
+  --color-ansi-13: var(--daedalus-ansiBrightMagenta, #ff84ff);
+  --color-ansi-14: var(--daedalus-ansiBrightCyan, #4fbefe);
+  --color-ansi-15: var(--daedalus-ansiBrightWhite, #f7f6fb);
+
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-elevated: var(--bg-raised);
+  --color-bg-overlay: var(--bg-overlay);
+  --color-border: var(--border);
+  --color-separator: var(--border);
+  --color-fg-base: var(--fg-base);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-fg-more-subtle: var(--muted);
+  --color-fg-most-subtle: var(--fg-most-subtle);
+
+  /* Syntax: the highlighter reads these, never a literal. */
+  --color-syntax-text: var(--daedalus-syntaxText, #bfbcc8);
+  --color-syntax-comment: var(--daedalus-syntaxComment, #605f6b);
+  --color-syntax-commentpreproc: var(--daedalus-syntaxCommentPreproc, #ff6e63);
+  --color-syntax-keyword: var(--daedalus-syntaxKeyword, #00a4ff);
+  --color-syntax-keywordreserved: var(--daedalus-syntaxKeywordReserved, #ff4fbf);
+  --color-syntax-keywordtype: var(--daedalus-syntaxKeywordType, #7272ff);
+  --color-syntax-operator: var(--daedalus-syntaxOperator, #ff7f90);
+  --color-syntax-punctuation: var(--daedalus-syntaxPunctuation, #e8fe96);
+  --color-syntax-name: var(--daedalus-syntaxName, #bfbcc8);
+  --color-syntax-namebuiltin: var(--daedalus-syntaxNameBuiltin, #68ffd6);
+  --color-syntax-nametag: var(--daedalus-syntaxNameTag, #d46eff);
+  --color-syntax-nameattribute: var(--daedalus-syntaxNameAttribute, #8b75ff);
+  --color-syntax-nameclass: var(--daedalus-syntaxNameClass, #f7f6fb);
+  --color-syntax-namedecorator: var(--daedalus-syntaxNameDecorator, #ff985a);
+  --color-syntax-namefunction: var(--daedalus-syntaxNameFunction, #12c78f);
+  --color-syntax-number: var(--daedalus-syntaxNumber, #00ffb2);
+  --color-syntax-string: var(--daedalus-syntaxString, #bf976f);
+  --color-syntax-stringescape: var(--daedalus-syntaxStringEscape, #68ffd6);
+  --color-syntax-deleted: var(--daedalus-syntaxDeleted, #ff577d);
+  --color-syntax-inserted: var(--daedalus-syntaxInserted, #12c78f);
+  --color-syntax-background: var(--daedalus-syntaxBackground, #3a3943);
+}
+
+[data-theme='daedalus-light'] {
+  color-scheme: light;
+
+  --primary: var(--daedalus-primary, #5b40ec);
+  --secondary: var(--daedalus-secondary, #d633d6);
+  --accent: var(--daedalus-accent, #0f9b7d);
+  --fg-base: var(--daedalus-fgBase, #201f26);
+  --fg-subtle: var(--daedalus-fgSubtle, #4d4c57);
+  --muted: var(--daedalus-fgMoreSubtle, #6b6a75);
+  --fg-most-subtle: var(--daedalus-fgMostSubtle, #a2a0ad);
+  --bg-base: var(--daedalus-bgBase, #fbfbfb);
+  --bg-surface: var(--daedalus-bgSurface, #f2f1f5);
+  --bg-raised: var(--daedalus-bgRaised, #e8e7ec);
+  --bg-overlay: var(--daedalus-bgOverlay, #d6d3dc);
+  --on-primary: var(--daedalus-onPrimary, #fffaf1);
+  --success: var(--daedalus-success, #0f9b7d);
+  --success-muted: var(--daedalus-successMuted, #0a7a63);
+  --warning: var(--daedalus-warning, #8a7a00);
+  --warning-muted: var(--daedalus-warningMuted, #a39600);
+  --error: var(--daedalus-error, #c21e46);
+  --error-muted: var(--daedalus-destructive, #a45c59);
+  --info: var(--daedalus-info, #0070b8);
+  --info-muted: var(--daedalus-infoMuted, #005a94);
+  --border: var(--daedalus-separator, #d6d3dc);
+  --color-keyword: var(--daedalus-keyword, #e879b0);
+  --color-destructive: var(--daedalus-destructive, #a45c59);
+  --color-success-subtle: var(--daedalus-successMuted, #0a7a63);
+  --color-success-most-subtle: var(--daedalus-successMostSubtle, #0a7a63);
+  --color-info-subtle: var(--daedalus-infoMuted, #005a94);
+  --color-info-most-subtle: var(--daedalus-infoMostSubtle, #005a94);
+  --color-attention: var(--daedalus-attention, #a39600);
+  --color-busy: var(--daedalus-busy, #a39600);
+  --color-yolo: var(--daedalus-yolo, #8a7a00);
+  --color-plan: var(--daedalus-plan, #5b40ec);
+  --color-plan-subtle: var(--daedalus-planSubtle, #6b6a75);
+  --color-button: var(--daedalus-button, #d633d6);
+  --color-button-subtle: var(--daedalus-buttonSubtle, #e8e7ec);
+  --color-button-inactive: var(--daedalus-buttonInactive, #d6d3dc);
+  --color-button-hovered: var(--daedalus-buttonHovered, #6b6a75);
+  --color-working-grad-from: var(--daedalus-workingFrom, #0f9b7d);
+  --color-working-grad-to: var(--daedalus-workingTo, #00a4ff);
+  --color-diff-insert-fg: var(--daedalus-diffInsertFg, #0a7a63);
+  --color-diff-insert-code-bg: var(--daedalus-diffInsertCodeBg, #d0e1db);
+  --color-diff-insert-gutter-bg: var(--daedalus-diffInsertGutterBg, #dfeae6);
+  --color-diff-delete-fg: var(--daedalus-diffDeleteFg, #a45c59);
+  --color-diff-delete-code-bg: var(--daedalus-diffDeleteCodeBg, #ecdad9);
+  --color-diff-delete-gutter-bg: var(--daedalus-diffDeleteGutterBg, #f2e6e5);
+  --color-ansi-0: var(--daedalus-ansiBlack, #201f26);
+  --color-ansi-1: var(--daedalus-ansiRed, #c21e46);
+  --color-ansi-2: var(--daedalus-ansiGreen, #0a7a63);
+  --color-ansi-3: var(--daedalus-ansiYellow, #8a7a00);
+  --color-ansi-4: var(--daedalus-ansiBlue, #0070b8);
+  --color-ansi-5: var(--daedalus-ansiMagenta, #d633d6);
+  --color-ansi-6: var(--daedalus-ansiCyan, #0f9b7d);
+  --color-ansi-7: var(--daedalus-ansiWhite, #4d4c57);
+  --color-ansi-8: var(--daedalus-ansiBrightBlack, #6b6a75);
+  --color-ansi-9: var(--daedalus-ansiBrightRed, #c21e46);
+  --color-ansi-10: var(--daedalus-ansiBrightGreen, #0f9b7d);
+  --color-ansi-11: var(--daedalus-ansiBrightYellow, #a39600);
+  --color-ansi-12: var(--daedalus-ansiBrightBlue, #005a94);
+  --color-ansi-13: var(--daedalus-ansiBrightMagenta, #e879b0);
+  --color-ansi-14: var(--daedalus-ansiBrightCyan, #0a7a63);
+  --color-ansi-15: var(--daedalus-ansiBrightWhite, #201f26);
+
+  --color-bg-surface: var(--bg-surface);
+  --color-bg-elevated: var(--bg-raised);
+  --color-bg-overlay: var(--bg-overlay);
+  --color-border: var(--border);
+  --color-separator: var(--border);
+  --color-fg-base: var(--fg-base);
+  --color-fg-subtle: var(--fg-subtle);
+  --color-fg-more-subtle: var(--muted);
+  --color-fg-most-subtle: var(--fg-most-subtle);
+
+  /* Syntax: the highlighter reads these, never a literal. */
+  --color-syntax-text: var(--daedalus-syntaxText, #4d4c57);
+  --color-syntax-comment: var(--daedalus-syntaxComment, #a2a0ad);
+  --color-syntax-commentpreproc: var(--daedalus-syntaxCommentPreproc, #c21e46);
+  --color-syntax-keyword: var(--daedalus-syntaxKeyword, #0070b8);
+  --color-syntax-keywordreserved: var(--daedalus-syntaxKeywordReserved, #e879b0);
+  --color-syntax-keywordtype: var(--daedalus-syntaxKeywordType, #005a94);
+  --color-syntax-operator: var(--daedalus-syntaxOperator, #4d4c57);
+  --color-syntax-punctuation: var(--daedalus-syntaxPunctuation, #a39600);
+  --color-syntax-name: var(--daedalus-syntaxName, #4d4c57);
+  --color-syntax-namebuiltin: var(--daedalus-syntaxNameBuiltin, #0f9b7d);
+  --color-syntax-nametag: var(--daedalus-syntaxNameTag, #d633d6);
+  --color-syntax-nameattribute: var(--daedalus-syntaxNameAttribute, #6b6a75);
+  --color-syntax-nameclass: var(--daedalus-syntaxNameClass, #5b40ec);
+  --color-syntax-namedecorator: var(--daedalus-syntaxNameDecorator, #a39600);
+  --color-syntax-namefunction: var(--daedalus-syntaxNameFunction, #0a7a63);
+  --color-syntax-number: var(--daedalus-syntaxNumber, #0a7a63);
+  --color-syntax-string: var(--daedalus-syntaxString, #8a7a00);
+  --color-syntax-stringescape: var(--daedalus-syntaxStringEscape, #0f9b7d);
+  --color-syntax-deleted: var(--daedalus-syntaxDeleted, #a45c59);
+  --color-syntax-inserted: var(--daedalus-syntaxInserted, #0a7a63);
+  --color-syntax-background: var(--daedalus-syntaxBackground, #e8e7ec);
+}
+
+/* Expose the tokens as Tailwind colors: text-muted, bg-surface, border-line… */
+@theme inline {
+  --color-primary: var(--primary);
+  --color-secondary: var(--secondary);
+  --color-accent: var(--accent);
+  --color-foreground: var(--fg-base);
+  --color-foreground-subtle: var(--fg-subtle);
+  --color-surface: var(--bg-surface);
+  --color-surface-base: var(--bg-base);
+  --color-surface-raised: var(--bg-raised);
+  --color-surface-overlay: var(--bg-overlay);
+  --color-line: var(--border);
+  --color-muted: var(--muted);
+  --color-muted-strong: var(--fg-most-subtle);
+  --color-on-primary: var(--on-primary);
+  --color-success: var(--success);
+  --color-success-muted: var(--success-muted);
+  --color-warning: var(--warning);
+  --color-warning-muted: var(--warning-muted);
+  --color-error: var(--error);
+  --color-error-muted: var(--error-muted);
+  --color-info: var(--info);
+  --color-info-muted: var(--info-muted);
+  --color-attention: var(--color-attention);
+  --color-busy: var(--color-busy);
+
+  --font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    background-color: var(--bg-base);
+    color: var(--fg-base);
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Keep focus visible for keyboard users (a11y: never remove without replacement) */
+  :focus-visible {
+    outline: 2px solid var(--info);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--primary) 40%, transparent);
+  }
+}

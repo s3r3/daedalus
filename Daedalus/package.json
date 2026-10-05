@@ -1,0 +1,22 @@
+{
+  "name": "daedalus",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Daedalus — A Web-Based Agentic Coding Framework Powered by Large Language Models",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "core",
+    "cli",
+    "server",
+    "daedalus-web"
+  ],
+  "scripts": {
+    "check": "bash scripts/check.sh",
+    "build": "npm run build --workspaces",
+    "lint": "npm run lint --workspaces",
+    "test": "npm run test --workspaces"
+  }
+}

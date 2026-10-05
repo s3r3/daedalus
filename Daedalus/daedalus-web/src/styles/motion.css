@@ -1,0 +1,243 @@
+/*
+ * Motion vocabulary (PLAN.md §3.4).
+ *
+ * Every animation below is triggered by a recorded event and is fully disabled
+ * under `prefers-reduced-motion: reduce`. Timing budget: micro 80–120ms,
+ * standard 180–240ms, nothing above 400ms. Colors come from theme tokens only.
+ */
+
+@media (prefers-reduced-motion: no-preference) {
+  .motion-plan-step {
+    animation: daedalus-plan-step 220ms ease-out both;
+  }
+
+  .motion-token-reveal {
+    animation: daedalus-token-reveal 900ms linear both;
+  }
+
+  .motion-caret {
+    animation: daedalus-caret 1s steps(1) infinite;
+  }
+
+  .motion-tool-pulse {
+    animation: daedalus-tool-pulse 1.2s ease-in-out infinite;
+  }
+
+  .motion-tool-shimmer {
+    background-image: linear-gradient(90deg, transparent, color-mix(in oklab, var(--primary) 45%, transparent), transparent);
+    background-size: 200% 100%;
+    animation: daedalus-shimmer 1.1s linear infinite;
+  }
+
+  .motion-approval-rise {
+    animation: daedalus-approval-rise 200ms ease-out both;
+  }
+
+  .motion-validation-shimmer {
+    background-image: linear-gradient(90deg, transparent, color-mix(in oklab, var(--muted) 35%, transparent), transparent);
+    background-size: 200% 100%;
+    animation: daedalus-shimmer 1.4s linear infinite;
+  }
+
+  .motion-pass-flash {
+    animation: daedalus-pass-flash 300ms ease-out;
+  }
+
+  .motion-fail-shake {
+    animation: daedalus-fail-shake 250ms ease-in-out;
+  }
+
+  .motion-retry-enter {
+    animation: daedalus-retry-enter 200ms ease-out both;
+  }
+
+  .motion-report-expand {
+    animation: daedalus-report-expand 240ms ease-out both;
+  }
+
+  .motion-composer-collapse {
+    animation: daedalus-composer-collapse 200ms ease-out both;
+  }
+
+  /* Diff lines animate in once, then stay static (§3.4 rule 5). */
+  .motion-diff-line {
+    animation: daedalus-diff-line 180ms ease-out both;
+  }
+}
+
+/* Reduced motion: keep the state change, drop the transform/shimmer. */
+@media (prefers-reduced-motion: reduce) {
+  .motion-plan-step,
+  .motion-token-reveal,
+  .motion-caret,
+  .motion-tool-pulse,
+  .motion-tool-shimmer,
+  .motion-approval-rise,
+  .motion-validation-shimmer,
+  .motion-pass-flash,
+  .motion-fail-shake,
+  .motion-retry-enter,
+  .motion-report-expand,
+  .motion-composer-collapse,
+  .motion-diff-line {
+    animation: none !important;
+    transition: none !important;
+    background-image: none !important;
+  }
+
+  /* The spinner keeps its gradient: only the shimmer stops. Without the fill it
+   * would render its glyph in transparent text and disappear. */
+  .motion-working-grad {
+    animation: none !important;
+    transition: none !important;
+    background-image: linear-gradient(
+      90deg,
+      var(--color-working-grad-from) 0%,
+      var(--color-working-grad-to) 100%
+    ) !important;
+  }
+}
+
+@keyframes daedalus-plan-step {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes daedalus-token-reveal {
+  from {
+    opacity: 0.2;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes daedalus-caret {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0.2;
+  }
+}
+
+.motion-working-grad {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-working-grad-from) 0%,
+    var(--color-working-grad-to) 50%,
+    var(--color-working-grad-from) 100%
+  );
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: daedalus-shimmer 2.4s linear infinite;
+}
+
+@keyframes daedalus-tool-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@keyframes daedalus-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@keyframes daedalus-approval-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes daedalus-pass-flash {
+  0% {
+    background-color: transparent;
+  }
+  40% {
+    background-color: color-mix(in oklab, var(--success) 24%, transparent);
+  }
+  100% {
+    background-color: transparent;
+  }
+}
+
+@keyframes daedalus-fail-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  75% {
+    transform: translateX(3px);
+  }
+}
+
+@keyframes daedalus-retry-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes daedalus-report-expand {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes daedalus-diff-line {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes daedalus-composer-collapse {
+  from {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+  to {
+    opacity: 0.85;
+    transform: scaleY(0.98);
+  }
+}
