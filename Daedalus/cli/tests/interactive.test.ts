@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
+import { ProviderRegistry } from '@daedalus/core';
 import { InteractiveSession, padVisibleEnd, sanitizeTerminalText, truncateVisible, visibleWidth } from '../src/interactive.ts';
 
 const cleanups: Array<() => void> = [];
@@ -284,6 +285,134 @@ describe('InteractiveSession', () => {
   });
 });
 
+describe('model picker overlay', () => {
+  function offlineRegistry(models: string[]): ProviderRegistry {
+    // Fetch always fails: discovery is offline, configured models remain.
+    const registry = new ProviderRegistry(async () => { throw new Error('offline'); });
+    registry.upsert({ id: 'nine-router', name: '9Router', baseUrl: 'http://127.0.0.1:9/v1', models });
+    return registry;
+  }
+
+  test('bare /models opens the picker and never dumps the list into the transcript', async () => {
+    const session = new InteractiveSession({
+      workspaceRoot: workspace(),
+      providerRegistry: offlineRegistry(['kr/auto', 'claude-lo', 'cx/gpt-5.5']),
+      providerId: 'nine-router',
+      model: 'kr/auto',
+    });
+    const result = await session.handleInput('/models');
+    expect(result).toMatchObject({ kind: 'slash', action: 'models' });
+    expect(session.modelPickerOpen).toBe(true);
+    expect(session.modelPickerItems().map((item) => item.model)).toEqual(['kr/auto', 'claude-lo', 'cx/gpt-5.5']);
+    // The transcript carries only the command echo — no model list lines.
+    expect(session.transcript).toEqual(['> /models']);
+    expect(session.transcript.join('\n')).not.toContain('claude-lo');
+    await session.refreshModelPicker();
+    expect(session.modelPickerOpen).toBe(true);
+  });
+
+  test('filter narrows by substring, shows the matched/total count, and Enter applies the selection', async () => {
+    const session = new InteractiveSession({
+      workspaceRoot: workspace(),
+      providerRegistry: offlineRegistry(['kr/auto', 'claude-lo', 'kr/claude-sonnet-4-agentic']),
+      providerId: 'nine-router',
+      model: 'kr/auto',
+    });
+    await session.openModelPicker();
+    const render = session.renderModelPicker();
+    expect(render).toContain('Switch Model');
+    expect(render).toContain('3/3');
+    expect(render).toContain('nine-router');
+    expect(render).toContain('type to filter');
+    const widths = new Set(render.split('\n').map((line) => visibleWidth(line)));
+    expect(widths.size).toBe(1);
+
+    session.setModelPickerFilter('sonnet');
+    expect(session.modelPickerItems().map((item) => item.model)).toEqual(['kr/claude-sonnet-4-agentic']);
+    expect(session.renderModelPicker()).toContain('1/3');
+
+    const accepted = session.acceptModelPickerSelection();
+    expect(accepted?.text).toContain('nine-router/kr/claude-sonnet-4-agentic');
+    expect(session.modelPickerOpen).toBe(false);
+    expect(session.providerId).toBe('nine-router');
+    expect(session.model).toBe('kr/claude-sonnet-4-agentic');
+    // Exactly one confirmation line; the sidebar and composer follow the choice.
+    const confirmations = session.transcript.filter((line) => line.includes('claude-sonnet'));
+    expect(confirmations).toHaveLength(1);
+    expect(session.renderSidebarLines().join('\n')).toContain('◇ kr/claude-sonnet-4-agentic');
+    expect(session.renderScreen({ columns: 132, rows: 34 })).toContain('nine-router/kr/claude-sonnet-4-agentic');
+  });
+
+  test('arrow keys move the highlight, Esc cancels without changing the model', async () => {
+    const session = new InteractiveSession({
+      workspaceRoot: workspace(),
+      providerRegistry: offlineRegistry(['kr/auto', 'claude-lo']),
+      providerId: 'nine-router',
+      model: 'kr/auto',
+    });
+    await session.openModelPicker();
+    expect(session.selectedModelPickerItem()?.model).toBe('kr/auto');
+    expect(session.handleKey('', { name: 'down' }).action).toBe('model_down');
+    expect(session.selectedModelPickerItem()?.model).toBe('claude-lo');
+    expect(session.handleKey('', { name: 'p', ctrl: true }).action).toBe('model_up');
+    expect(session.selectedModelPickerItem()?.model).toBe('kr/auto');
+    session.moveModelPickerSelection(1);
+    expect(session.handleKey('', { name: 'escape' }).action).toBe('model_close');
+    expect(session.modelPickerOpen).toBe(false);
+    expect(session.model).toBe('kr/auto');
+    expect(session.transcript.join('\n')).not.toContain('Model set to');
+  });
+
+  test('typing in the picker edits the filter and Enter accepts through handleKey', async () => {
+    const session = new InteractiveSession({
+      workspaceRoot: workspace(),
+      providerRegistry: offlineRegistry(['kr/auto', 'claude-lo']),
+      providerId: 'nine-router',
+      model: 'kr/auto',
+    });
+    await session.openModelPicker();
+    for (const ch of 'claude') expect(session.handleKey(ch, { name: ch }).action).toBe('model_filter');
+    expect(session.modelPickerFilter).toBe('claude');
+    expect(session.modelPickerItems()).toHaveLength(1);
+    expect(session.handleKey('', { name: 'backspace' }).action).toBe('model_filter');
+    expect(session.modelPickerFilter).toBe('claud');
+    const accepted = session.handleKey('', { name: 'return' });
+    expect(accepted.action).toBe('model_accept');
+    expect(session.model).toBe('claude-lo');
+    expect(session.modelPickerOpen).toBe(false);
+  });
+
+  test('picker falls back to the session model without a provider registry', async () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace(), model: 'solo-model' });
+    const items = await session.openModelPicker();
+    expect(items).toEqual([{ providerId: 'default', model: 'solo-model' }]);
+    expect(session.acceptModelPickerSelection()?.text).toContain('solo-model');
+    expect(session.transcript.filter((line) => line.includes('solo-model'))).toHaveLength(1);
+  });
+
+  test('fullscreen screen overlays the Switch Model modal within the terminal width', async () => {
+    const many = Array.from({ length: 40 }, (_, i) => `vendor/model-${i}`);
+    const session = new InteractiveSession({
+      workspaceRoot: workspace(),
+      providerRegistry: offlineRegistry(many),
+      providerId: 'nine-router',
+      model: 'vendor/model-0',
+    });
+    await session.openModelPicker();
+    session.setModelPickerFilter('model-3');
+    const screen = session.renderScreen({ input: '', columns: 120, rows: 35 });
+    expect(screen).toContain('Switch Model');
+    expect(screen).toContain('11/40');
+    expect(screen).toContain('enter confirm');
+    for (const line of screen.split('\n')) {
+      expect(line).not.toContain('\x1b');
+      expect(visibleWidth(line)).toBeLessThanOrEqual(120);
+    }
+    // Non-matching models never leak into the transcript or the frame body.
+    expect(session.transcript.join('\n')).not.toContain('model-7');
+  });
+});
+
 describe('frame renderer safety (ghosting regression)', () => {
   test('visible width ignores ANSI escapes and counts wide glyphs as two cells', () => {
     expect(visibleWidth('\x1b[38;2;255;0;0mab\x1b[0m')).toBe(2);
@@ -360,5 +489,68 @@ describe('frame renderer safety (ghosting regression)', () => {
       expect(visibleWidth(line)).toBeLessThanOrEqual(100);
     }
     expect(screen).toContain('Commands /mo');
+  });
+});
+
+describe('casual chat never becomes a task', () => {
+  test('"hai" gets a direct reply: no task, no plan, no tool lines', async () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace(), initialMode: 'ask' });
+    let taskRuns = 0;
+    session.setCallbacks({
+      runTask: async () => { taskRuns += 1; return 'should never run'; },
+      chatReply: async ({ input }) => `Halo juga! (menjawab: ${input}) Ada tugas coding?`,
+    });
+    const result = await session.handleInput('hai');
+    expect(result.kind).toBe('chat');
+    expect(result.text).toContain('Halo juga!');
+    expect(taskRuns).toBe(0);
+    expect(session.status).toBe('idle');
+    const screen = session.renderScreen({ columns: 132, rows: 40 });
+    expect(screen).toContain('Halo juga!');
+    expect(screen).toContain('No active plan');
+    expect(session.transcript.join('\n')).not.toContain('Plan (');
+    expect(session.transcript.join('\n')).not.toContain('Task:');
+  });
+
+  test('without a chatReply callback the local fallback answers, still no task', async () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace() });
+    let taskRuns = 0;
+    session.setCallbacks({ runTask: async () => { taskRuns += 1; return 'x'; } });
+    const result = await session.handleInput('kamu siapa?');
+    expect(result.kind).toBe('chat');
+    expect(result.text).toContain('Daedalus');
+    expect(taskRuns).toBe(0);
+  });
+
+  test('a throwing provider degrades to a friendly line, never a task', async () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace() });
+    session.setCallbacks({
+      chatReply: async () => { throw new Error('provider down'); },
+    });
+    const result = await session.handleInput('halo');
+    expect(result.kind).toBe('chat');
+    expect(result.text).toContain('provider error');
+  });
+
+  test('greeting plus a real request still routes to the task path', async () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace() });
+    session.setCallbacks({ chatReply: async () => 'should not be used' });
+    await expect(session.handleInput('hai, tolong buatkan fungsi login')).resolves.toEqual({
+      kind: 'task',
+      text: 'hai, tolong buatkan fungsi login',
+    });
+    await expect(session.handleInput('jelaskan file ini')).resolves.toMatchObject({ kind: 'task' });
+  });
+
+  test('conversational history accumulates for follow-ups', async () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace() });
+    const seen: number[] = [];
+    session.setCallbacks({
+      chatReply: async ({ history }) => { seen.push(history.length); return 'balasan'; },
+    });
+    await session.handleInput('hai');
+    await session.handleInput('apa kabar');
+    expect(seen).toEqual([0, 2]);
+    expect(session.chatHistory).toHaveLength(4);
   });
 });
