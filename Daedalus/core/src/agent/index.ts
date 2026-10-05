@@ -46,6 +46,13 @@ export {
   type ReviewFinding,
   type ReviewResult,
 } from './review.ts';
+export {
+  CONVERSATIONAL_SYSTEM_PROMPT,
+  answerConversational,
+  classifyChatIntent,
+  conversationalFallbackReply,
+  type ChatIntent,
+} from './conversation.ts';
 export { handleObservation } from './observation.ts';
 export { evaluateStopConditions, noProgressCondition } from './stop.ts';
 export type {

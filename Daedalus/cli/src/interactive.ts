@@ -5,10 +5,13 @@ import {
   ModeController,
   ProviderRegistry,
   SlashCommandRegistry,
+  classifyChatIntent,
+  conversationalFallbackReply,
   modeAccent,
   type AgentMode,
   type Attachment,
   type Event,
+  type Message,
   type ModelStrategy,
   type ProviderConfigPublic,
   type SlashCommand,
@@ -17,6 +20,12 @@ import {
 
 export type InteractiveCallbacks = {
   runTask?: (goal: string) => Promise<string>;
+  /**
+   * Answer one conversational (non-task) chat line. The session passes the
+   * raw input plus its recent chat history; the host wires this to the
+   * configured provider. Without it, a friendly local fallback is used.
+   */
+  chatReply?: (request: { input: string; history: Message[] }) => Promise<string>;
   validate?: () => Promise<string> | string;
   diff?: () => Promise<string> | string;
   rewind?: () => Promise<SlashCommandResult> | SlashCommandResult;
@@ -27,7 +36,7 @@ export type InteractiveCallbacks = {
 };
 
 export type InteractiveHandleResult = {
-  kind: 'empty' | 'slash' | 'task';
+  kind: 'empty' | 'slash' | 'task' | 'chat';
   text: string;
   action?: string;
   data?: unknown;
@@ -42,9 +51,16 @@ export type InteractiveKey = {
 };
 
 export type InteractiveKeyAction = {
-  action: 'none' | 'cancel' | 'quit' | 'toggle_sidebar' | 'cycle_mode' | 'open_commands' | 'open_models' | 'focus_chat' | 'newline' | 'palette_up' | 'palette_down' | 'palette_accept' | 'palette_close';
+  action: 'none' | 'cancel' | 'quit' | 'toggle_sidebar' | 'cycle_mode' | 'open_commands' | 'open_models' | 'focus_chat' | 'newline' | 'palette_up' | 'palette_down' | 'palette_accept' | 'palette_close' | 'model_up' | 'model_down' | 'model_accept' | 'model_close' | 'model_filter';
   text?: string;
   command?: string;
+  data?: unknown;
+};
+
+/** One selectable model in the interactive model picker overlay. */
+export type ModelPickerItem = {
+  providerId: string;
+  model: string;
 };
 
 export type ModifiedFile = {
@@ -102,6 +118,8 @@ export class InteractiveSession {
   #attachments: Attachment[] = [];
   #callbacks: InteractiveCallbacks;
   #transcript: string[] = [];
+  /** Recent casual-chat exchanges (user/assistant), capped at 6 turns. */
+  #chatHistory: Message[] = [];
   #modifiedFiles = new Map<string, ModifiedFile>();
   #lsps: ExtensionEntry[] = [];
   #mcps: ExtensionEntry[] = [];
@@ -112,6 +130,15 @@ export class InteractiveSession {
   #contextPercent?: number;
   #rulesFiles: string[] = [];
   #palette = { open: false, filter: '', selectedIndex: 0 };
+  #modelPicker: { open: boolean; filter: string; selectedIndex: number; items: ModelPickerItem[]; loading: boolean } = {
+    open: false,
+    filter: '',
+    selectedIndex: 0,
+    items: [],
+    loading: false,
+  };
+  #modelPickerRefresh: Promise<void> | undefined;
+  #modelPickerListener: (() => void) | undefined;
 
   constructor(options: {
     workspaceRoot: string;
@@ -191,6 +218,23 @@ export class InteractiveSession {
 
   get paletteFilter(): string {
     return this.#palette.filter;
+  }
+
+  get modelPickerOpen(): boolean {
+    return this.#modelPicker.open;
+  }
+
+  get modelPickerFilter(): string {
+    return this.#modelPicker.filter;
+  }
+
+  get modelPickerLoading(): boolean {
+    return this.#modelPicker.loading;
+  }
+
+  /** Total (unfiltered) models currently known to the picker. */
+  get modelPickerTotal(): number {
+    return this.#modelPicker.items.length;
   }
 
   get attachments(): Attachment[] {
@@ -497,6 +541,7 @@ export class InteractiveSession {
   }
 
   openCommandPalette(filter = ''): CommandPaletteItem[] {
+    this.closeModelPicker();
     this.#palette.open = true;
     this.#palette.filter = filter.replace(/^\//, '').toLowerCase();
     this.#palette.selectedIndex = 0;
@@ -544,6 +589,178 @@ export class InteractiveSession {
 
   closeCommandPalette(): void {
     this.#palette.open = false;
+  }
+
+  /** Notified (fullscreen shell) when async model discovery updates the picker. */
+  setModelPickerListener(listener: (() => void) | undefined): void {
+    this.#modelPickerListener = listener;
+  }
+
+  /** Models known locally without any network discovery: configured provider models, the session model, and the pool. */
+  localModelItems(): ModelPickerItem[] {
+    const items: ModelPickerItem[] = [];
+    const seen = new Set<string>();
+    const add = (providerId: string, model: string) => {
+      const cleanModel = model.trim();
+      if (!cleanModel) return;
+      const key = `${providerId}/${cleanModel}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      items.push({ providerId, model: cleanModel });
+    };
+    const providers = this.providerRegistry?.list().filter((provider) => provider.enabled) ?? [];
+    for (const provider of providers) {
+      if (this.#providerId && provider.id !== this.#providerId) continue;
+      for (const model of provider.models) add(provider.id, model);
+    }
+    if (this.#model) add(this.#providerId ?? providers[0]?.id ?? 'default', this.#model);
+    for (const model of this.#models) add(this.#providerId ?? providers[0]?.id ?? 'default', model);
+    return items;
+  }
+
+  /**
+   * Open the model picker overlay with the locally known models, then refresh
+   * from provider discovery in the background (a provider can expose hundreds
+   * of models; the picker stays filterable while discovery runs).
+   */
+  async openModelPicker(): Promise<ModelPickerItem[]> {
+    this.closeCommandPalette();
+    const items = this.localModelItems();
+    this.#modelPicker.open = true;
+    this.#modelPicker.filter = '';
+    this.#modelPicker.items = items;
+    this.#modelPicker.loading = Boolean(this.providerRegistry);
+    const current = items.findIndex((item) => item.model === this.#model && (item.providerId === this.#providerId || !this.#providerId));
+    this.#modelPicker.selectedIndex = current >= 0 ? current : 0;
+    void this.refreshModelPicker();
+    return this.modelPickerItems();
+  }
+
+  /** Re-run provider model discovery and merge the result into the open picker. */
+  refreshModelPicker(): Promise<void> {
+    if (this.#modelPickerRefresh) return this.#modelPickerRefresh;
+    if (!this.providerRegistry) {
+      this.#modelPicker.loading = false;
+      return Promise.resolve();
+    }
+    const registry = this.providerRegistry;
+    const run = (async () => {
+      try {
+        const discovered = await registry.listModels(this.#providerId);
+        if (this.#modelPicker.open && discovered.length > 0) {
+          const merged: ModelPickerItem[] = [];
+          const seen = new Set<string>();
+          for (const item of [...this.#modelPicker.items, ...discovered]) {
+            const key = `${item.providerId}/${item.model}`;
+            if (seen.has(key)) continue;
+            seen.add(key);
+            merged.push({ providerId: item.providerId, model: item.model });
+          }
+          this.#modelPicker.items = merged;
+          const filtered = this.modelPickerItems();
+          if (this.#modelPicker.selectedIndex >= filtered.length) this.#modelPicker.selectedIndex = Math.max(0, filtered.length - 1);
+        }
+      } catch {
+        // Discovery is best-effort; the locally known models stay selectable.
+      } finally {
+        this.#modelPicker.loading = false;
+        this.#modelPickerListener?.();
+      }
+    })();
+    this.#modelPickerRefresh = run;
+    void run.finally(() => {
+      if (this.#modelPickerRefresh === run) this.#modelPickerRefresh = undefined;
+    });
+    return run;
+  }
+
+  /** Models matching the current picker filter (substring, case-insensitive). */
+  modelPickerItems(): ModelPickerItem[] {
+    const filter = this.#modelPicker.filter.trim().toLowerCase();
+    if (!filter) return [...this.#modelPicker.items];
+    return this.#modelPicker.items.filter((item) => `${item.providerId}/${item.model}`.toLowerCase().includes(filter));
+  }
+
+  selectedModelPickerItem(): ModelPickerItem | undefined {
+    const items = this.modelPickerItems();
+    if (items.length === 0) return undefined;
+    return items[Math.min(this.#modelPicker.selectedIndex, items.length - 1)];
+  }
+
+  moveModelPickerSelection(delta: number): ModelPickerItem | undefined {
+    const items = this.modelPickerItems();
+    if (items.length === 0) return undefined;
+    this.#modelPicker.selectedIndex = (this.#modelPicker.selectedIndex + delta + items.length) % items.length;
+    return this.selectedModelPickerItem();
+  }
+
+  setModelPickerFilter(filter: string): ModelPickerItem[] {
+    this.#modelPicker.filter = filter;
+    this.#modelPicker.selectedIndex = 0;
+    return this.modelPickerItems();
+  }
+
+  /**
+   * Apply the highlighted model to the session and close the picker. Adds a
+   * single confirmation line to the transcript — never the model list.
+   */
+  acceptModelPickerSelection(): SlashCommandResult | undefined {
+    const item = this.selectedModelPickerItem();
+    if (!item) return undefined;
+    this.closeModelPicker();
+    const result = !item.providerId || item.providerId === 'default'
+      ? this.setModelSelection(item.model)
+      : this.setModelSelection(`${item.providerId}/${item.model}`);
+    this.addTranscript(result.text);
+    return result;
+  }
+
+  closeModelPicker(): void {
+    this.#modelPicker.open = false;
+    this.#modelPicker.loading = false;
+  }
+
+  /** Crush-style centered "Switch Model" modal: filter line, provider right-aligned, highlighted selection bar. */
+  renderModelPicker(width = 72, maxVisible = 12): string {
+    if (!this.#modelPicker.open) return '';
+    const w = Math.max(46, Math.min(88, width));
+    const inner = w - 4;
+    const cap = Math.max(3, maxVisible);
+    const items = this.modelPickerItems();
+    const total = this.#modelPicker.items.length;
+    const filterText = this.#modelPicker.filter || 'Type to filter';
+    const lines = [
+      `╭${'─'.repeat(w - 2)}╮`,
+      `│ ${padVisibleEnd(`Switch Model  ${items.length}/${total}${this.#modelPicker.loading ? ' · loading…' : ''}`, inner)} │`,
+      `│ ${padVisibleEnd(`> ${filterText}`, inner)} │`,
+      `│ ${'─'.repeat(inner)} │`,
+    ];
+    if (items.length === 0) {
+      lines.push(`│ ${padVisibleEnd(this.#modelPicker.loading ? 'Loading models…' : total === 0 ? 'No models available — configure a provider, or set one with /models <provider>/<model>' : `No models match "${this.#modelPicker.filter}"`, inner)} │`);
+    } else {
+      const selected = Math.min(this.#modelPicker.selectedIndex, items.length - 1);
+      const start = Math.max(0, Math.min(selected - Math.floor(cap / 2), items.length - cap));
+      const visible = items.slice(start, start + cap);
+      for (const [offset, item] of visible.entries()) {
+        const index = start + offset;
+        const isSelected = index === selected;
+        const current = item.model === this.#model && (item.providerId === this.#providerId || !this.#providerId);
+        // The selected row is a full-width bar ([ … ]) inside the box; other
+        // rows keep the same inner width so the borders never shift.
+        const body = inner - (isSelected ? 2 : 0);
+        const label = `${isSelected ? '›' : ' '} ${item.model}${current ? ' ●' : ''}`;
+        const provider = item.providerId;
+        const labelBudget = Math.max(8, body - visibleWidth(provider) - 1);
+        const row = `${padVisibleEnd(fit(label, labelBudget), labelBudget)} ${fit(provider, body - labelBudget - 1)}`;
+        lines.push(isSelected ? `│ [${row}] │` : `│ ${padVisibleEnd(row, inner)} │`);
+      }
+      if (start + visible.length < items.length) lines.push(`│ ${padVisibleEnd(`… ${items.length - (start + visible.length)} more — type to filter`, inner)} │`);
+      if (start > 0) lines.push(`│ ${padVisibleEnd(`… ${start} above`, inner)} │`);
+    }
+    lines.push(`│ ${'─'.repeat(inner)} │`);
+    lines.push(`│ ${padVisibleEnd('↑/↓ choose · enter confirm · esc exit · type to filter', inner)} │`);
+    lines.push(`╰${'─'.repeat(w - 2)}╯`);
+    return lines.join('\n');
   }
 
   renderCommandPalette(width = 72): string {
@@ -674,20 +891,22 @@ export class InteractiveSession {
       const right = showSidebar ? padVisibleEnd(sidebar[i] ?? '', sidebarWidth) : '';
       screen.push(truncateVisible(showSidebar ? `${left} │ ${right}` : left, columns));
     }
-    if (this.#palette.open) {
-      const paletteWidth = Math.max(48, Math.min(76, mainWidth - 8, columns - 16));
-      const palette = this.renderCommandPalette(paletteWidth).split('\n');
-      const startRow = Math.max(1, Math.floor((contentRows - palette.length) / 2));
-      const startCol = Math.max(1, Math.floor((mainWidth - paletteWidth) / 2) + 1);
+    if (this.#palette.open || this.#modelPicker.open) {
+      const overlayLines = this.#modelPicker.open
+        ? this.renderModelPicker(Math.max(48, Math.min(84, mainWidth - 8, columns - 16)), Math.max(4, Math.min(16, contentRows - 10))).split('\n')
+        : this.renderCommandPalette(Math.max(48, Math.min(76, mainWidth - 8, columns - 16))).split('\n');
+      const overlayWidth = Math.max(...overlayLines.map((line) => visibleWidth(line)), 0);
+      const startRow = Math.max(1, Math.floor((contentRows - overlayLines.length) / 2));
+      const startCol = Math.max(1, Math.floor((mainWidth - overlayWidth) / 2) + 1);
       const clearFrom = Math.max(0, startCol - 2);
-      const clearTo = Math.min(columns, startCol + paletteWidth + 2);
-      for (let row = Math.max(0, startRow - 1); row < Math.min(contentRows, startRow + palette.length + 1); row++) {
+      const clearTo = Math.min(columns, startCol + overlayWidth + 2);
+      for (let row = Math.max(0, startRow - 1); row < Math.min(contentRows, startRow + overlayLines.length + 1); row++) {
         const base = screen[row] ?? '';
         screen[row] = truncateVisible(`${padVisibleEnd(sliceVisible(base, 0, clearFrom), clearFrom)}${' '.repeat(clearTo - clearFrom)}${sliceVisible(base, clearTo)}`, columns);
       }
-      for (let i = 0; i < palette.length && startRow + i < contentRows; i++) {
+      for (let i = 0; i < overlayLines.length && startRow + i < contentRows; i++) {
         const base = screen[startRow + i] ?? '';
-        const overlay = palette[i] ?? '';
+        const overlay = overlayLines[i] ?? '';
         screen[startRow + i] = truncateVisible(`${padVisibleEnd(sliceVisible(base, 0, startCol), startCol)}${overlay}${sliceVisible(base, startCol + visibleWidth(overlay))}`, columns);
       }
     }
@@ -699,6 +918,23 @@ export class InteractiveSession {
 
   handleKey(input: string, key: InteractiveKey = {}): InteractiveKeyAction {
     const name = key.name ?? '';
+    if (this.#modelPicker.open) {
+      if (name === 'escape' || input === '\u001b') { this.closeModelPicker(); return { action: 'model_close' }; }
+      if (name === 'up' || (key.ctrl && name === 'p')) { this.moveModelPickerSelection(-1); return { action: 'model_up' }; }
+      if (name === 'down' || (key.ctrl && name === 'n')) { this.moveModelPickerSelection(1); return { action: 'model_down' }; }
+      if (name === 'enter' || name === 'return') {
+        const result = this.acceptModelPickerSelection();
+        return result ? { action: 'model_accept', text: result.text, data: result } : { action: 'none' };
+      }
+      if (name === 'backspace') {
+        this.setModelPickerFilter(this.#modelPicker.filter.slice(0, -1));
+        return { action: 'model_filter', text: this.#modelPicker.filter };
+      }
+      if (input && !key.ctrl && !key.meta && input >= ' ') {
+        this.setModelPickerFilter(this.#modelPicker.filter + input);
+        return { action: 'model_filter', text: this.#modelPicker.filter };
+      }
+    }
     if (this.#palette.open) {
       if (name === 'escape' || input === '\u001b') { this.closeCommandPalette(); return { action: 'palette_close' }; }
       if (name === 'up') return { action: 'palette_up', command: this.movePaletteSelection(-1)?.command.name };
@@ -740,15 +976,52 @@ export class InteractiveSession {
       return { kind: 'slash', text: result.text, action: result.action, data: result.data };
     }
     if (trimmed.startsWith('/')) {
+      const parsed = this.commands.parse(trimmed);
+      // Bare /models opens the interactive picker overlay instead of dumping
+      // the (potentially hundreds-long) model list into the transcript.
+      if (parsed?.name === 'models' && parsed.args.length === 0) {
+        const items = await this.openModelPicker();
+        this.addTranscript(`> ${trimmed}`);
+        return { kind: 'slash', text: '', action: 'models', data: { picker: true, count: items.length } };
+      }
       const result = await this.commands.execute(trimmed, this.#slashContext());
       this.closeCommandPalette();
       this.addTranscript(`> ${trimmed}`);
-      this.addTranscript(result.text);
+      if (result.text) this.addTranscript(result.text);
       if (result.action === 'exit') this.#status = 'closed';
       return { kind: 'slash', text: result.text, action: result.action, data: result.data };
     }
     this.addTranscript(`> ${trimmed}`);
+    if (classifyChatIntent(trimmed) === 'conversational') {
+      // Casual chat ("hai", "kamu siapa", thanks, smalltalk) is answered
+      // directly — never planned, never a task, in every mode. Modes keep
+      // their semantics for real work only.
+      const reply = await this.#conversationalReply(trimmed);
+      this.#chatHistory.push(
+        { role: 'user', content: trimmed },
+        { role: 'assistant', content: reply },
+      );
+      if (this.#chatHistory.length > 12) this.#chatHistory.splice(0, this.#chatHistory.length - 12);
+      this.addTranscript(reply);
+      this.#status = 'idle';
+      return { kind: 'chat', text: reply };
+    }
     return { kind: 'task', text: trimmed };
+  }
+
+  /** Recent casual-chat history (oldest first), for hosts and tests. */
+  get chatHistory(): Message[] {
+    return [...this.#chatHistory];
+  }
+
+  async #conversationalReply(input: string): Promise<string> {
+    if (!this.#callbacks.chatReply) return conversationalFallbackReply();
+    try {
+      const reply = await this.#callbacks.chatReply({ input, history: [...this.#chatHistory] });
+      return reply.trim() ? reply : conversationalFallbackReply();
+    } catch {
+      return 'Maaf, saya gagal menjawab barusan (provider error). Coba lagi ya — atau langsung jelaskan tugas coding-nya kalau ada.';
+    }
   }
 
   async runTask(goal: string): Promise<string> {
