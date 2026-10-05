@@ -1,0 +1,71 @@
+{
+  "id": "eval-deterministic-feature-markdown-title",
+  "goal": "Add extractTitle(markdown) that returns the first level-one Markdown heading or an empty string.",
+  "repo_path": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-full/workspaces/feature-markdown-title",
+  "constraints": [],
+  "done_criteria": [
+    "Inspect the current Markdown helper",
+    "extractTitle() returns the first level-one heading and ignores lower-level headings"
+  ],
+  "created_at": "2026-10-05T08:00:07.110Z",
+  "mode": "auto",
+  "model": "scripted",
+  "turns": 2,
+  "plan": {
+    "id": "1227e656-56e6-4a3a-8812-2944fdba5aea",
+    "task_id": "eval-deterministic-feature-markdown-title",
+    "steps": [
+      {
+        "id": "eval-deterministic-feature-markdown-title-step-1",
+        "intent": "Satisfy: Inspect the current Markdown helper",
+        "status": "done",
+        "evidence": [
+          "ok: 1: export function firstLine(markdown) { return markdown.split('\\n')[0] ?? ''; }\n2: "
+        ]
+      },
+      {
+        "id": "eval-deterministic-feature-markdown-title-step-2",
+        "intent": "Satisfy: extractTitle() returns the first level-one heading and ignores lower-level headings",
+        "status": "done",
+        "evidence": [
+          "ok: wrote src/markdown.js"
+        ]
+      }
+    ],
+    "version": 1,
+    "status": "complete"
+  },
+  "steps": [
+    {
+      "id": "eval-deterministic-feature-markdown-title-step-1",
+      "intent": "Satisfy: Inspect the current Markdown helper",
+      "status": "done",
+      "evidence": [
+        "ok: 1: export function firstLine(markdown) { return markdown.split('\\n')[0] ?? ''; }\n2: "
+      ]
+    },
+    {
+      "id": "eval-deterministic-feature-markdown-title-step-2",
+      "intent": "Satisfy: extractTitle() returns the first level-one heading and ignores lower-level headings",
+      "status": "done",
+      "evidence": [
+        "ok: wrote src/markdown.js"
+      ]
+    }
+  ],
+  "status": "done",
+  "last_observation": "ok: wrote src/markdown.js",
+  "last_tool_call_id": "eval-call-2",
+  "tool_result": {
+    "call_id": "eval-call-2",
+    "status": "ok",
+    "output": "wrote src/markdown.js",
+    "truncated": false,
+    "meta": {
+      "path": "src/markdown.js",
+      "bytes": 239,
+      "tool": "write_file",
+      "mutating": true
+    }
+  }
+}

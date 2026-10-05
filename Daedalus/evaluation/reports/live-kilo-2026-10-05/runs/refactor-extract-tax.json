@@ -1,0 +1,63 @@
+{
+  "run_id": "eval-live-refactor-extract-tax",
+  "task_id": "refactor-extract-tax",
+  "title": "Extract tax calculation",
+  "category": "refactor",
+  "mode": "live",
+  "outcome": "partial",
+  "state_status": "active",
+  "turns": 6,
+  "iterations": 6,
+  "tool_calls": 6,
+  "tool_calls_by_name": {
+    "glob": 1,
+    "read_file": 2,
+    "list_dir": 3
+  },
+  "wall_clock_ms": 25901,
+  "retries": 3,
+  "recovery_events": 3,
+  "replans": 0,
+  "approvals": 0,
+  "events": 36,
+  "files_changed": 0,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/order.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "fail",
+      "exit_code": 1,
+      "summary": "failed"
+    }
+  ],
+  "checks_passed": 1,
+  "checks_failed": 1,
+  "final_diff": "",
+  "provider": {
+    "name": "provider-registry:nine-router",
+    "id": "nine-router",
+    "model": "kgw/kilo-auto/free"
+  },
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "model": "kgw/kilo-auto/free",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/refactor-extract-tax",
+  "event_log": "runs/refactor-extract-tax.events.jsonl",
+  "started_at": "2026-10-05T08:23:56.422Z",
+  "finished_at": "2026-10-05T08:24:22.325Z",
+  "failure_taxonomy": "validation_failed"
+}

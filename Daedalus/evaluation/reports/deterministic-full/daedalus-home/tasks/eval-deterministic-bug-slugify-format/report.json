@@ -1,0 +1,23 @@
+{
+  "task_id": "eval-deterministic-bug-slugify-format",
+  "outcome": "success",
+  "diff": "--- a/src/slug.js\n+++ b/src/slug.js\n@@ +1 -1 @@\n export function slugify(text) {\n-  return text.trim().replace(/^-+|-+$/g, '');\n+  return text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');\n }\n",
+  "evidence": [
+    "syntax: pass (node --check src/slug.js)",
+    "behavior: pass (node validate.mjs)",
+    "modified src/slug.js (+1/-1)"
+  ],
+  "metrics": {
+    "turns": 2,
+    "tool_calls": 2,
+    "events": 14,
+    "commands": 0,
+    "files_changed": 1,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 2,
+    "checks_failed": 0,
+    "duration_ms": 230
+  }
+}

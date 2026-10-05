@@ -1,0 +1,76 @@
+{
+  "run_id": "eval-live-bug-date-padding",
+  "task_id": "bug-date-padding",
+  "title": "Date formatter pads day",
+  "category": "bug_fix",
+  "mode": "live",
+  "outcome": "success",
+  "state_status": "done",
+  "turns": 3,
+  "iterations": 3,
+  "tool_calls": 3,
+  "tool_calls_by_name": {
+    "grep": 1,
+    "read_file": 1,
+    "edit_file": 1
+  },
+  "wall_clock_ms": 14748,
+  "retries": 0,
+  "recovery_events": 0,
+  "replans": 0,
+  "approvals": 0,
+  "events": 17,
+  "files_changed": 0,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/date.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    }
+  ],
+  "checks_passed": 2,
+  "checks_failed": 0,
+  "final_diff": "",
+  "provider": {
+    "name": "provider-registry:nine-router",
+    "id": "nine-router",
+    "model": "claude-lo",
+    "models": [
+      "claude-lo",
+      "kr/claude-sonnet-4-agentic",
+      "kr/qwen3-coder-next-agentic",
+      "cx/gpt-5.5"
+    ],
+    "modelStrategy": "round-robin"
+  },
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "models": [
+      "claude-lo",
+      "kr/claude-sonnet-4-agentic",
+      "kr/qwen3-coder-next-agentic",
+      "cx/gpt-5.5"
+    ],
+    "modelStrategy": "round-robin",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 20,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-full-2026-10-05/workspaces/bug-date-padding",
+  "event_log": "runs/bug-date-padding.events.jsonl",
+  "started_at": "2026-10-05T09:24:52.781Z",
+  "finished_at": "2026-10-05T09:25:07.530Z",
+  "failure_taxonomy": "none"
+}

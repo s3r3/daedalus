@@ -1,75 +1,38 @@
-# React + TypeScript + Vite
+# Daedalus Web
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React + Vite frontend for Daedalus. The Web UI is a thin client over `@daedalus/core` through the Node server in `../server/`; it renders workspaces, tasks, event timelines, plans, approvals, diffs, validation, reports, attachments, child tasks, and settings/providers.
 
-Currently, two official plugins are available:
+## Development
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+From the repository root (`Daedalus/`):
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+npm install
+bash scripts/dev.sh
 ```
 
-You can also install [eslint-plugin-react-x](https://npmx.dev/package/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://npmx.dev/package/eslint-plugin-react-dom) for React-specific lint rules:
+That starts the Daedalus server on `http://127.0.0.1:3080` and Vite on `http://127.0.0.1:5173`. `vite.config.ts` proxies REST calls and the `/tasks` WebSocket to `http://127.0.0.1:3080`; set `DAEDALUS_SERVER` to proxy to another gateway.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+Run only this package during frontend work:
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-
+```bash
+npm run dev --workspace daedalus-web
 ```
+
+## Build and test
+
+```bash
+npm run build --workspace daedalus-web
+npm run test --workspace daedalus-web
+```
+
+After `npm run build --workspaces` from the root, the Node server can also serve this package's `dist/` output from `/` for non-API browser routes.
+
+## Product surface
+
+- Workspace selection/creation plus folder/file create, rename, edit, upload, folder upload, ZIP upload, and image attachment.
+- Composer with the five shared agent modes, Shift+Tab cycling, provider/model picker, auto-approve state, attachments, and the same slash-command registry used by the CLI.
+- Settings/Providers UI with masked API-key state; raw keys are write-only form values sent to the server API and never rendered back.
+- Activity timeline, plan, diff, validation, recovery, final report, attachments, and orchestrator child-task panels derived from the server task/event model.
+
+See the root [README](../README.md), [architecture](../docs/architecture.md), and [demo scenarios](../docs/demo-scenarios.md).

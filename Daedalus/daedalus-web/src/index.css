@@ -57,6 +57,11 @@
   --color-yolo: var(--daedalus-yolo, #e8fe96);
   --color-plan: var(--daedalus-plan, #6b50ff);
   --color-plan-subtle: var(--daedalus-planSubtle, #8b75ff);
+  --color-mode-ask: var(--daedalus-modeAsk, #00a4ff);
+  --color-mode-manual: var(--daedalus-modeManual, #ff985a);
+  --color-mode-auto: var(--daedalus-modeAuto, #00ffb2);
+  --color-mode-plan: var(--daedalus-modePlan, #6b50ff);
+  --color-mode-orchestrator: var(--daedalus-modeOrchestrator, #ff60ff);
   --color-button: var(--daedalus-button, #ff60ff);
   --color-button-subtle: var(--daedalus-buttonSubtle, #3a3943);
   --color-button-inactive: var(--daedalus-buttonInactive, #4d4c57);
@@ -155,6 +160,11 @@
   --color-yolo: var(--daedalus-yolo, #8a7a00);
   --color-plan: var(--daedalus-plan, #5b40ec);
   --color-plan-subtle: var(--daedalus-planSubtle, #6b6a75);
+  --color-mode-ask: var(--daedalus-modeAsk, #0070b8);
+  --color-mode-manual: var(--daedalus-modeManual, #a34d00);
+  --color-mode-auto: var(--daedalus-modeAuto, #0a7a63);
+  --color-mode-plan: var(--daedalus-modePlan, #5b40ec);
+  --color-mode-orchestrator: var(--daedalus-modeOrchestrator, #d633d6);
   --color-button: var(--daedalus-button, #d633d6);
   --color-button-subtle: var(--daedalus-buttonSubtle, #e8e7ec);
   --color-button-inactive: var(--daedalus-buttonInactive, #d6d3dc);
@@ -243,6 +253,11 @@
   --color-info-muted: var(--info-muted);
   --color-attention: var(--color-attention);
   --color-busy: var(--color-busy);
+  --color-mode-ask: var(--color-mode-ask);
+  --color-mode-manual: var(--color-mode-manual);
+  --color-mode-auto: var(--color-mode-auto);
+  --color-mode-plan: var(--color-mode-plan);
+  --color-mode-orchestrator: var(--color-mode-orchestrator);
 
   --font-mono:
     ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;

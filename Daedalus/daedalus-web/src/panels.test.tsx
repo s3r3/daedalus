@@ -17,12 +17,18 @@ import { FilesChangedPanel, FinalReportView, ValidationSummary } from './compone
 const approve = vi.fn()
 const createTask = vi.fn()
 const listTasks = vi.fn()
+const task = vi.fn()
+const extensionsStatus = vi.fn()
+const updateSession = vi.fn()
 
 vi.mock('./api/client', () => ({
   api: {
     approve: (...args: unknown[]) => approve(...args),
     createTask: (...args: unknown[]) => createTask(...args),
     listTasks: (...args: unknown[]) => listTasks(...args),
+    task: (...args: unknown[]) => task(...args),
+    extensionsStatus: (...args: unknown[]) => extensionsStatus(...args),
+    updateSession: (...args: unknown[]) => updateSession(...args),
   },
 }))
 
@@ -50,6 +56,20 @@ beforeEach(() => {
   createTask.mockResolvedValue({ id: 'task-new', goal: 'do the thing' })
   listTasks.mockReset()
   listTasks.mockResolvedValue({ tasks: [] })
+  task.mockReset()
+  task.mockResolvedValue({ events: [], report: null, running: false })
+  extensionsStatus.mockReset()
+  extensionsStatus.mockResolvedValue({
+    root: '/workspace',
+    mcp: [{ name: 'demo', connected: true, toolCount: 3 }],
+    skills: [{ name: 'greeter', description: 'Greets users warmly' }],
+    lsp: [{ name: 'fake-lsp', extensions: ['.ts'], configured: true }],
+    problems: [],
+  })
+  updateSession.mockReset()
+  updateSession.mockImplementation(async (input: Record<string, unknown>) => ({
+    session: { mode: 'auto', autoApprove: false, thinking: true, workspaceRoot: '/workspace', ...input },
+  }))
   useDaedalusStore.getState().reset()
 })
 
@@ -74,6 +94,11 @@ describe('Composer', () => {
       repo_path: '',
       auto_approve: true,
       max_iterations: 7,
+      mode: 'auto',
+      thinking: true,
+      provider_id: undefined,
+      model: undefined,
+      attachments: [],
     })
   })
 
@@ -83,6 +108,44 @@ describe('Composer', () => {
     render(<Composer />)
     await userEvent.click(screen.getByTestId('composer-submit'))
     expect(textOf(await screen.findByRole('alert'))).toContain('workspace not found')
+  })
+
+  test('/mcp, /skills, and /lsp print real extension status from the gateway', async () => {
+    useDaedalusStore.getState().setWorkspace({ root: '/workspace' })
+    useDaedalusStore.getState().setComposer({ goal: '/mcp' })
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('composer-submit'))
+    expect(extensionsStatus).toHaveBeenCalledWith('/workspace')
+    expect(textOf(await screen.findByTestId('slash-output'))).toContain('demo: connected · 3 tools')
+
+    cleanup()
+    useDaedalusStore.getState().setWorkspace({ root: '/workspace' })
+    useDaedalusStore.getState().setComposer({ goal: '/skills' })
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('composer-submit'))
+    expect(textOf(await screen.findByTestId('slash-output'))).toContain('greeter — Greets users warmly')
+
+    cleanup()
+    useDaedalusStore.getState().setWorkspace({ root: '/workspace' })
+    useDaedalusStore.getState().setComposer({ goal: '/lsp' })
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('composer-submit'))
+    expect(textOf(await screen.findByTestId('slash-output'))).toContain('fake-lsp: configured · .ts')
+  })
+
+  test('thinking toggle persists through the session and /settings thinking works', async () => {
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('thinking-toggle'))
+    expect(updateSession).toHaveBeenCalledWith({ thinking: false })
+    expect(useDaedalusStore.getState().composer.thinking).toBe(false)
+    expect(textOf(await screen.findByTestId('slash-output'))).toContain('Thinking off')
+
+    cleanup()
+    useDaedalusStore.getState().setComposer({ goal: '/settings thinking on' })
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('composer-submit'))
+    expect(updateSession).toHaveBeenCalledWith({ thinking: true })
+    expect(useDaedalusStore.getState().composer.thinking).toBe(true)
   })
 })
 
@@ -212,6 +275,20 @@ describe('ActivityTimeline', () => {
     expect(textOf(panel)).toContain('hello there')
     expect(screen.getAllByTestId('tool-call')).toHaveLength(1)
   })
+
+  test('THOUGHT events render distinctly when thinking is on and are filtered when off', () => {
+    seed([ev('THOUGHT', { text: 'inspect the workspace first', source: 'provider_reasoning' })])
+    useDaedalusStore.getState().setComposer({ thinking: true })
+    render(<ActivityTimeline />)
+    expect(textOf(screen.getByTestId('activity-panel'))).toContain('thinking')
+    expect(textOf(screen.getByTestId('activity-panel'))).toContain('inspect the workspace first')
+
+    cleanup()
+    seed([ev('THOUGHT', { text: 'inspect the workspace first', source: 'provider_reasoning' })])
+    useDaedalusStore.getState().setComposer({ thinking: false })
+    render(<ActivityTimeline />)
+    expect(textOf(screen.getByTestId('activity-panel'))).not.toContain('inspect the workspace first')
+  })
 })
 
 describe('ValidationPanel', () => {
@@ -305,6 +382,14 @@ describe('ErrorPanel', () => {
 })
 
 describe('TopBar', () => {
+  test('the thinking toggle updates the shared session', async () => {
+    useDaedalusStore.getState().setComposer({ thinking: true })
+    render(<TopBar />)
+    await userEvent.click(screen.getByTestId('topbar-thinking-toggle'))
+    expect(updateSession).toHaveBeenCalledWith({ thinking: false })
+    expect(useDaedalusStore.getState().composer.thinking).toBe(false)
+  })
+
   test('the theme toggle carries an accessible label and flips the theme', async () => {
     useDaedalusStore.setState({ theme: 'daedalus-dark' })
     render(<TopBar />)

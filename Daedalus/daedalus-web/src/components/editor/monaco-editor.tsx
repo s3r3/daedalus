@@ -4,17 +4,34 @@ import type * as Monaco from 'monaco-editor'
 import type { PaletteName } from '@daedalus/core/palette'
 import { EDITOR_THEME_NAMES, editorTheme } from '../../theme/editor-theme'
 
-type EditorHandle = Pick<Monaco.editor.IStandaloneCodeEditor, 'getValue' | 'setValue'>
+type EditorHandle = Pick<Monaco.editor.IStandaloneCodeEditor, 'getValue' | 'setValue' | 'onDidChangeModelContent' | 'addCommand'>
 
 /**
  * Monaco editor surface, loaded on demand. Language services need their web
  * workers, so the worker map is registered once inside this chunk — nothing
  * Monaco-related is fetched until the user opens a file.
  */
-export function MonacoEditor({ value, language, path }: { value: string; language: string; path: string }) {
+export function MonacoEditor({
+  value,
+  language,
+  path,
+  onChange,
+  onSave,
+}: {
+  value: string
+  language: string
+  path: string
+  onChange?: (value: string) => void
+  onSave?: () => void
+}) {
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<EditorHandle | null>(null)
-  const initialValueRef = useRef(value)
+  const latestValueRef = useRef(value)
+  latestValueRef.current = value
+  const onChangeRef = useRef(onChange)
+  onChangeRef.current = onChange
+  const onSaveRef = useRef(onSave)
+  onSaveRef.current = onSave
   const disposedRef = useRef(false)
   const appliedThemeRef = useRef<string | null>(null)
   const theme = useDaedalusStore((state) => state.theme)
@@ -33,10 +50,10 @@ export function MonacoEditor({ value, language, path }: { value: string; languag
       if (disposed || !hostRef.current) return
       appliedThemeRef.current = applyEditorThemeName(mode)
       const editor = monaco.editor.create(hostRef.current, {
-        value: initialValueRef.current,
+        value: latestValueRef.current,
         language,
         theme: applyEditorTheme(monaco, mode),
-        readOnly: true,
+        readOnly: false,
         automaticLayout: true,
         minimap: { enabled: false },
         fontSize: 12,
@@ -46,6 +63,9 @@ export function MonacoEditor({ value, language, path }: { value: string; languag
         wordWrap: 'on',
       })
       editorRef.current = editor
+      editor.onDidChangeModelContent(() => onChangeRef.current?.(editor.getValue()))
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => onSaveRef.current?.())
+      if (editor.getValue() !== latestValueRef.current) editor.setValue(latestValueRef.current)
       dispose = () => {
         editor.dispose()
         editorRef.current = null

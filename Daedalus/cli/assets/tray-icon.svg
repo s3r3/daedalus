@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Daedalus">
+  <!--
+    Placeholder tray icon for Daedalus: a bold "D" in the accent style.
+    Original artwork; this is a temporary mark only — Farid will supply
+    the final tray icon design later. Keep the file name and the 64x64
+    viewBox when replacing it, and tray backends keep loading this path.
+  -->
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#14101f"/>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="none" stroke="#6b50ff" stroke-width="2"/>
+  <text x="32" y="43" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="30" font-weight="700" fill="#6b50ff">D</text>
+</svg>

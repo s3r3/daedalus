@@ -10,8 +10,10 @@ import { palette } from "./palette.ts";
 export {
   ansiPalette,
   getPalette,
+  modeAccent,
   palette,
   paletteLight,
+  type ModeAccentKey,
   type PaletteName,
 } from "./palette.ts";
 

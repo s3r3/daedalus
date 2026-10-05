@@ -1,18 +1,34 @@
-import type { Event, FinalReport, TaskSpec, TaskState, ToolCall, ToolResult, ValidationResult } from './contracts.ts';
+import type { AgentMode, Attachment, Event, FinalReport, ModelStrategy, ProviderConfig, TaskSpec, TaskState, ToolCall, ToolResult, ValidationResult } from './contracts.ts';
 import { EventBus, emitEvent } from './events.ts';
 import { TaskStore } from './persistence.ts';
 import { AgentLoop } from './agent/agent-loop.ts';
+import { DefaultContextManager } from './agent/context.ts';
 import { interpretTask } from './agent/interpreter.ts';
+import { createPlan } from './agent/planner.ts';
+import { loadProjectRules } from './agent/rules.ts';
+import { guardEditedFile } from './agent/edit-guard.ts';
+import { loadHooksConfig, runPostToolHooks, runPreToolHooks, type HooksConfig } from './agent/hooks.ts';
+import { loadAgents, workspaceAgentsDir, type AgentDefinition } from './agents/index.ts';
+import { createTaskWorktree, worktreeChangedFiles } from './worktree.ts';
 import { createDefaultRegistry } from './tools/index.ts';
 import { pathInWorkspace } from './tools/filesystem/index.ts';
 import type { ToolDefinition } from './tools/registry.ts';
 import { readFile } from 'node:fs/promises';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { changedLineCounts, diffLines, renderPatch } from './tools/filesystem/diff.ts';
 import { ApprovalBroker, ExecutionHarness, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
-import { CommandValidator, type ValidationCommand, type Validator } from './validation/index.ts';
+import { CommandValidator, validationPassed, type ValidationCommand, type Validator } from './validation/index.ts';
 import { createProviderFromSettings } from './providers/index.ts';
+import { OpenAICompatProvider } from './providers/llm/openai-compat.ts';
+import { ModelPoolProvider, normalizeModelList } from './providers/llm/model-pool.ts';
+import { ModeController } from './interaction/modes.ts';
+import { ProviderRegistry } from './interaction/providers.ts';
+import { OrchestratorRunner, decomposeTask, type ChildTaskInput } from './interaction/orchestrator.ts';
+import { McpManager, loadMcpConfig, type McpServerConfig, type McpServerStatus } from './mcp/index.ts';
+import { LspManager, loadLspConfig, type LspServerConfig, type LspServerStatus } from './lsp/index.ts';
+import { SkillRegistry, createReadSkillTool, loadSkills, workspaceSkillsDir, type SkillInfo } from './skills/index.ts';
 import type { LLMProvider } from './providers/llm/types.ts';
-import { loadSettings, type Settings } from './settings.ts';
+import { loadSettings, resolveDaedalusHome, type Settings } from './settings.ts';
 
 /**
  * Runtime facade (PLAN.md §3.0): the single entry point both thin clients —
@@ -34,19 +50,79 @@ export type TaskRunnerOptions = {
   settings?: Settings;
   workspaceRoot: string;
   provider?: LLMProvider;
+  providerRegistry?: ProviderRegistry;
+  providerId?: string;
+  model?: string;
+  models?: string[];
+  modelStrategy?: ModelStrategy;
+  mode?: AgentMode;
+  modeController?: ModeController;
+  autoApprove?: boolean;
+  /** Surface provider thought text as THOUGHT events. Defaults to settings.session.thinking (on). */
+  thinking?: boolean;
   bus?: EventBus;
   store?: TaskStore;
   harness?: Partial<HarnessConfig>;
   validator?: Validator;
   validationCommands?: ValidationCommand[];
-approvalPolicy?: ApprovalPolicy;
-maxIterations?: number;
-modelTimeoutMs?: number;
+  approvalPolicy?: ApprovalPolicy;
+  maxIterations?: number;
+  modelTimeoutMs?: number;
+  /** MCP servers to bridge as tools; defaults to `<workspace>/.daedalus/mcp.json`. */
+  mcpServers?: McpServerConfig[];
+  /** Language servers for lsp_diagnostics; defaults to `<workspace>/.daedalus/lsp.json`. */
+  lspServers?: LspServerConfig[];
+  /** Extra skill directories scanned in addition to `<workspace>/.daedalus/skills`. */
+  skillDirs?: string[];
+  /** Run each task in its own git worktree instead of the shared workspace (requires git). */
+  isolation?: 'worktree';
+  /** Run project hooks (.daedalus/hooks.json) around tool calls. Defaults to settings.hooks (on). */
+  hooks?: boolean;
+  /** Preloaded hooks config (worktree runs load it from the main workspace). */
+  hooksConfig?: HooksConfig;
+  /** Post-edit syntax/LSP guard on files the agent writes. Defaults to settings.editGuard (on). */
+  editGuard?: boolean;
+  /** Context-window token budget for the meter/condense. Defaults to settings.context.limitTokens (128k). */
+  contextLimitTokens?: number;
+  /** Condense older tool outputs past 70% of the context limit. Defaults to settings.context.condense (on). */
+  condense?: boolean;
+  /** Cheap helper model used only to title tasks (DAEDALUS_HELPER_MODEL). */
+  helperModel?: string;
+  /** Injected helper provider (tests); production builds one from settings. */
+  helperProvider?: LLMProvider;
+};
+
+/** Live snapshot of the extension systems (MCP / LSP / skills / agents) for UIs. */
+export type ExtensionStatus = {
+  mcp: McpServerStatus[];
+  lsp: LspServerStatus[];
+  skills: SkillInfo[];
+  agents: AgentDefinition[];
 };
 
 export type RunOptions = {
   goal: string;
   taskId?: string;
+  mode?: AgentMode;
+  thinking?: boolean;
+  providerId?: string;
+  model?: string;
+  models?: string[];
+  modelStrategy?: ModelStrategy;
+  attachments?: Attachment[];
+  parentTaskId?: string;
+  autoApprove?: boolean;
+  maxIterations?: number;
+  maxErrors?: number;
+  /** Name of a file-defined subagent (.daedalus/agents/<name>.md) running this task. */
+  agentName?: string;
+  /** Subagent definition already resolved by a parent run (worktree re-dispatch); set automatically. */
+  agentDefinition?: AgentDefinition;
+  /** Tool allowlist override; intersected with the mode's visible tools. Undefined = mode decides. */
+  toolAllowlist?: string[];
+  /** Run this task in its own git worktree (overrides TaskRunnerOptions.isolation). */
+  isolation?: 'worktree';
+  children?: Array<{ goal: string; mode?: AgentMode; budget?: { max_iterations: number; max_errors: number }; agent?: string; isolation?: 'worktree' }>;
   onEvent?: (event: Event) => void;
   onApproval?: (key: { taskId: string; tool: string; action: 'read' | 'write' | 'execute'; path?: string }) => Promise<{ decision: 'grant' | 'deny'; remember?: boolean }>;
 };
@@ -57,12 +133,18 @@ export function exitCodeFor(outcome: RunOutcome): number {
   return EXIT_CODES[outcome];
 }
 
+function settingsThinking(settings: Settings): boolean {
+  // loadSettings always supplies session.thinking; hand-built Settings objects
+  // in older fixtures may omit it, and thinking defaults on.
+  return settings.session?.thinking !== false;
+}
+
 const STOP_REASONS = new Set(['aborted', 'max_iterations', 'max_errors', 'no_progress', 'invalid_action']);
 
 /** Tools whose execution is a process → COMMAND_* events for the terminal surface. */
 const COMMAND_TOOLS = new Set(['run_command', 'git_status', 'git_diff']);
 /** Tools that target a workspace file → FILE_CHANGED diff evidence. */
-const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file']);
+const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'create_dir']);
 
 export class TaskRunner {
   readonly bus: EventBus;
@@ -70,19 +152,40 @@ export class TaskRunner {
   readonly approvals: ApprovalBroker;
   readonly harness: ExecutionHarness;
   readonly validator: Validator;
+  readonly modeController: ModeController;
+  readonly providerRegistry?: ProviderRegistry;
   readonly #settings: Settings;
   readonly #workspaceRoot: string;
   readonly #options: TaskRunnerOptions;
+  readonly #activeLoops = new Map<string, AgentLoop>();
+  #extensionStatus: ExtensionStatus = { mcp: [], lsp: [], skills: [], agents: [] };
+  /** Language servers of the in-flight run, used by the edit guard. */
+  #activeLsp: LspManager | undefined;
 
   constructor(options: TaskRunnerOptions) {
     this.#options = options;
     this.#settings = options.settings ?? loadSettings();
     this.#workspaceRoot = options.workspaceRoot;
     this.bus = options.bus ?? new EventBus();
-    this.store = options.store ?? new TaskStore(this.#settings.daedalusHome);
+    this.store = options.store ?? new TaskStore(resolveDaedalusHome(this.#settings.daedalusHome, options.workspaceRoot));
     this.approvals = new ApprovalBroker();
+    this.modeController = options.modeController ?? new ModeController(options.mode ?? 'auto', options.autoApprove ?? options.approvalPolicy === 'auto');
+    if (options.autoApprove !== undefined) this.modeController.setAutoApprove(options.autoApprove);
+    this.providerRegistry = options.providerRegistry;
+    const userPolicyFor = options.harness?.policyFor;
     this.harness = new ExecutionHarness(
-      { defaultApprovalPolicy: options.approvalPolicy ?? 'ask', ...options.harness },
+      {
+        defaultApprovalPolicy: options.approvalPolicy ?? 'ask',
+        ...options.harness,
+        policyFor: (key, tool) => {
+          const modePolicy = this.modeController.approvalFor(tool.name);
+          if (!modePolicy.visible) return 'deny';
+          if (key.action === 'read') return 'auto';
+          if (options.approvalPolicy === 'deny') return 'deny';
+          if (userPolicyFor) return userPolicyFor(key, tool);
+          return modePolicy.approval;
+        },
+      },
       { bus: this.bus, store: this.store },
     );
     this.harness.setApprovalCallback((key, policy) => this.approvals.request(key, policy));
@@ -91,6 +194,51 @@ export class TaskRunner {
 
   get workspaceRoot(): string {
     return this.#workspaceRoot;
+  }
+
+  /** Status of MCP servers, language servers, and skills from the latest run. */
+  get extensionStatus(): ExtensionStatus {
+    return this.#extensionStatus;
+  }
+
+  /**
+   * Connect the extension systems for one run: MCP servers become bridged
+   * tools, configured language servers back `lsp_diagnostics`, and skills on
+   * disk become a `read_skill` tool plus a context summary. Everything is
+   * best-effort — a broken extension is recorded in `extensionStatus`, never
+   * thrown — and `close()` must run when the run ends.
+   */
+  async #prepareExtensions(): Promise<{ tools: ToolDefinition[]; skills: SkillRegistry; lsp: LspManager; close: () => Promise<void> }> {
+    const mcpServers = this.#options.mcpServers ?? (await loadMcpConfig(this.#workspaceRoot)).servers;
+    const lspServers = this.#options.lspServers ?? (await loadLspConfig(this.#workspaceRoot)).servers;
+    const skillDirs = [workspaceSkillsDir(this.#workspaceRoot), ...(this.#options.skillDirs ?? [])];
+    const skills = await loadSkills(skillDirs);
+    const agents = await loadAgents([workspaceAgentsDir(this.#workspaceRoot)]);
+
+    const tools: ToolDefinition[] = [];
+    if (skills.size > 0) tools.push(createReadSkillTool(skills));
+
+    const mcp = new McpManager(mcpServers);
+    if (mcpServers.length > 0) {
+      await mcp.connectAll();
+      tools.push(...mcp.tools());
+    }
+
+    const lsp = new LspManager(lspServers);
+    if (lspServers.length > 0) tools.push(lsp.createDiagnosticsTool());
+
+    this.#extensionStatus = { mcp: mcp.status(), lsp: lsp.status(), skills: skills.list(), agents: agents.list() };
+
+    return {
+      tools,
+      skills,
+      lsp,
+      close: async () => {
+        await mcp.closeAll().catch(() => undefined);
+        await lsp.closeAll().catch(() => undefined);
+        this.#extensionStatus = { mcp: mcp.status(), lsp: lsp.status(), skills: skills.list(), agents: agents.list() };
+      },
+    };
   }
 
   /**
@@ -103,16 +251,103 @@ export class TaskRunner {
     return timeoutMs === null || timeoutMs === undefined ? undefined : { timeout_ms: timeoutMs };
   }
 
+  #editGuardEnabled(): boolean {
+    return this.#options.editGuard ?? (this.#settings.editGuard !== false);
+  }
+
+  /** Evidence lines for a validation result: profile warning first, then one line per check. */
+  #validationEvidence(validation: ValidationResult | undefined): string[] {
+    if (!validation) return [];
+    return [
+      ...(validation.warning ? [`validation profile warning: ${validation.warning}`] : []),
+      ...validation.checks.map((check) => `${check.name}: ${check.status} (${check.cmd})${check.source === 'profile' ? ' [profile]' : ''}`),
+    ];
+  }
+
+  /**
+   * Ask the configured helper model for a short task title. Deliberately
+   * fail-silent with a 15s cap (real routed providers often need more than
+   * a few seconds for a first token): a title is presentation sugar, and a
+   * slow or broken helper must never delay or fail the real task.
+   */
+  async #helperTitle(goal: string): Promise<string | undefined> {
+    const model = (this.#options.helperModel ?? this.#settings.llm.helperModel ?? '').trim();
+    if (!model && !this.#options.helperProvider) return undefined;
+    try {
+      const provider = this.#options.helperProvider ?? new OpenAICompatProvider({
+        baseUrl: this.#settings.llm.baseUrl,
+        apiKey: this.#settings.llm.apiKey,
+        model,
+      });
+      const response = await provider.chat(
+        [{ role: 'user', content: `Write a short title (3-6 words, no quotes, no trailing period) for this software engineering task:\n\n${goal}` }],
+        undefined,
+        { timeout_ms: 15_000 },
+      );
+      const text = typeof response.message.content === 'string' ? response.message.content : '';
+      const title = text.split('\n').map((line) => line.trim()).find((line) => line.length > 0)
+        ?.replace(/^["'`]+|["'`]+$/g, '').trim();
+      return title ? title.slice(0, 80) : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
   cancel(taskId: string): void {
     this.harness.cancelTask(taskId);
+    // A runner executes one user task at a time (plus its orchestrator
+    // children), so cancelling it stops every loop currently active here.
+    for (const [activeTaskId, loop] of this.#activeLoops) loop.stop(activeTaskId);
   }
 
   async run(options: RunOptions): Promise<RunResult> {
     const startedAt = Date.now();
+    // File-defined subagent (.daedalus/agents/<name>.md): an unknown name is
+    // a clear error, never a silent fallback to a default agent. A worktree
+    // re-dispatch passes the definition it already resolved, because the
+    // agents dir may only exist in the main workspace.
+    let agent: AgentDefinition | undefined = options.agentDefinition;
+    if (!agent && options.agentName) {
+      const registry = await loadAgents([workspaceAgentsDir(this.#workspaceRoot)]);
+      agent = registry.get(options.agentName);
+      if (!agent) {
+        const defined = registry.list().map((definition) => definition.name);
+        throw new Error(
+          `unknown agent "${options.agentName}": no .daedalus/agents/${options.agentName}.md exists in ${this.#workspaceRoot}` +
+          (defined.length ? ` (defined: ${defined.join(', ')})` : ' (no agents are defined in this workspace)'),
+        );
+      }
+    }
+    const effectiveMode = options.mode ?? agent?.mode;
+    const effectiveOptions: RunOptions = agent
+      ? { ...options, model: options.model ?? agent.model, mode: effectiveMode }
+      : options;
+    if (effectiveMode) this.modeController.set(effectiveMode);
+    if (options.autoApprove !== undefined) this.modeController.setAutoApprove(options.autoApprove);
+    const modelConfig = this.#modelConfig(effectiveOptions);
+    const rules = await loadProjectRules(this.#workspaceRoot, {
+      globalHome: resolveDaedalusHome(this.#settings.daedalusHome, this.#workspaceRoot),
+    });
     const spec: TaskSpec = await interpretTask(options.goal, {
       id: options.taskId,
       repo_path: this.#workspaceRoot,
+      mode: effectiveMode ?? this.modeController.mode,
+      provider_id: options.providerId ?? this.#options.providerId,
+      model: effectiveOptions.model ?? this.#options.model ?? modelConfig.models[0],
+      models: modelConfig.models.length > 0 ? modelConfig.models : undefined,
+      model_strategy: modelConfig.models.length > 1 ? modelConfig.strategy : undefined,
+      attachments: options.attachments,
+      parent_task_id: options.parentTaskId,
+      thinking: options.thinking ?? this.#options.thinking ?? settingsThinking(this.#settings),
+      rules_files: rules.files.length > 0 ? rules.files : undefined,
+      agent: options.agentName,
     });
+    // Helper-model title (fail-silent, 5s cap): purely cosmetic, so any
+    // failure leaves the run exactly as it was without one.
+    if (!options.parentTaskId && !spec.title) {
+      const title = await this.#helperTitle(spec.goal);
+      if (title) spec.title = title;
+    }
     const collected: Event[] = [];
     const listener = (event: Event): void => {
       collected.push(event);
@@ -120,26 +355,83 @@ export class TaskRunner {
     };
     this.bus.on('*', listener);
 
+    if (spec.mode === 'orchestrator' && !options.parentTaskId) {
+      return this.#runOrchestrated(options, spec, collected, startedAt);
+    }
+
+    const isolation = options.isolation ?? this.#options.isolation;
+    if (isolation === 'worktree') {
+      return this.#runInWorktree(options, spec, agent);
+    }
+
+    const extensions = await this.#prepareExtensions();
+    this.#activeLsp = extensions.lsp;
     const registry = createDefaultRegistry();
-    const provider = this.#options.provider ?? this.#provider();
+    for (const tool of extensions.tools) {
+      try {
+        registry.register(tool);
+      } catch {
+        // A name collision with a built-in tool is skipped, never fatal.
+      }
+    }
+    // Subagent tool allowlist: the model only sees allowed tools, and
+    // execution denies anything else (defence in depth — a hallucinated
+    // call name must not slip past the schema filter).
+    const allowlist = options.toolAllowlist ?? agent?.tools;
+    const toolSchemas = allowlist
+      ? registry.schemas().filter((schema) => allowlist.includes(schema.function.name))
+      : registry.schemas();
+    // Project hooks (.daedalus/hooks.json): trusted workspace config, on
+    // unless DAEDALUS_HOOKS=off; skipped for read-only ask/plan modes.
+    const hooksEnabled = (this.#options.hooks ?? (this.#settings.hooks !== false)) && spec.mode !== 'ask' && spec.mode !== 'plan';
+    const hooksConfig = hooksEnabled
+      ? this.#options.hooksConfig ?? (await loadHooksConfig(this.#workspaceRoot)).hooks
+      : undefined;
+    const provider = this.#options.provider ?? this.#providerFor(effectiveOptions, spec.id);
     const loop = new AgentLoop({
       provider,
       bus: this.bus,
       store: this.store,
+      context: new DefaultContextManager({
+        workspaceRoot: this.#workspaceRoot,
+        visionEnabled: this.#visionEnabledFor(effectiveOptions),
+        skills: extensions.skills.list(),
+        rules: rules.text ? rules.text : undefined,
+        rulesFiles: rules.files,
+        agentInstructions: agent?.instructions,
+        agentName: agent?.name,
+      }),
       validator: this.validator,
-      tools: registry.schemas(),
-      stopPolicy: { max_iterations: this.#options.maxIterations ?? 25, max_errors: 5 },
+      tools: toolSchemas,
+      stopPolicy: { max_iterations: options.maxIterations ?? this.#options.maxIterations ?? 25, max_errors: options.maxErrors ?? 5 },
       chatOptions: this.#chatOptions(),
+      modeController: this.modeController,
+      thinking: spec.thinking ?? options.thinking ?? this.#options.thinking ?? settingsThinking(this.#settings),
+      contextLimitTokens: this.#options.contextLimitTokens ?? this.#settings.context?.limitTokens,
+      condense: this.#options.condense ?? (this.#settings.context?.condense !== false),
       executeTool: async (call) => {
+        if (allowlist && !allowlist.includes(call.tool)) {
+          return {
+            call_id: call.id,
+            status: 'denied',
+            output: `tool ${call.tool} is not allowed for this run${agent ? ` (subagent "${agent.name}" allowlist: ${allowlist.join(', ')})` : ''}`,
+            truncated: false,
+            meta: { tool: call.tool, reason: 'tool_allowlist' },
+          };
+        }
         const tool = registry.get(call.tool);
-        return this.#executeWithObservability(call, tool, spec.id, call.turn_id || undefined);
+        return this.#executeWithObservability(call, tool, spec.id, call.turn_id || undefined, hooksConfig);
       },
     });
 
     let state: TaskState;
+    this.#activeLoops.set(spec.id, loop);
     try {
       state = await loop.run(spec);
     } finally {
+      this.#activeLoops.delete(spec.id);
+      this.#activeLsp = undefined;
+      await extensions.close();
       this.bus.on('*', listener); // no-op keeps handler identity stable for GC
     }
 
@@ -150,9 +442,12 @@ export class TaskRunner {
       outcome: outcome === 'success' ? 'success' : outcome === 'partial' ? 'partial' : 'failed',
       diff: this.#aggregateDiff(collected),
       evidence: [
-        ...(validation?.checks.map((c) => `${c.name}: ${c.status} (${c.cmd})`) ?? []),
+        ...this.#validationEvidence(validation),
         ...this.#fileChangeEvidence(collected),
       ],
+      ...(spec.title ? { title: spec.title } : {}),
+      ...(spec.rules_files?.length ? { rules_files: spec.rules_files } : {}),
+      ...(validation?.source ? { validation_source: validation.source } : {}),
       metrics: {
         turns: collected.filter((e) => e.type === 'TOOL_CALL_FINISHED').length,
         tool_calls: collected.filter((e) => e.type === 'TOOL_CALL_STARTED').length,
@@ -164,6 +459,208 @@ export class TaskRunner {
         approvals: collected.filter((e) => e.type === 'APPROVAL_REQUESTED').length,
         checks_passed: validation?.checks.filter((c) => c.status === 'pass').length ?? 0,
         checks_failed: validation?.checks.filter((c) => c.status !== 'pass').length ?? 0,
+        duration_ms: Date.now() - startedAt,
+      },
+    };
+    this.store.saveReport(spec.id, report);
+    return { state, events: collected, validation, outcome, report };
+  }
+
+  /**
+   * Run one task in its own git worktree (see worktree.ts). The task sees
+   * only the worktree checkout; when it finishes, the changed files are
+   * recorded on the report and the worktree + branch are kept for review —
+   * nothing is merged back automatically (`daedalus apply <task-id>` does
+   * that on demand). Extension configs are preloaded from the main
+   * workspace so MCP/LSP/skills/agents/hooks behave as in the real
+   * project even when their config files are not part of the checkout.
+   * Throws a clear error before anything runs when git is unavailable or
+   * the workspace is not a git repository.
+   */
+  async #runInWorktree(options: RunOptions, spec: TaskSpec, agent: AgentDefinition | undefined): Promise<RunResult> {
+    const record = await createTaskWorktree({
+      workspaceRoot: this.#workspaceRoot,
+      daedalusHome: this.store.root,
+      taskId: spec.id,
+    });
+    this.store.saveWorktreeRecord(spec.id, record);
+    const inner = new TaskRunner({
+      settings: this.#settings,
+      workspaceRoot: record.path,
+      store: this.store,
+      bus: this.bus,
+      modeController: this.modeController,
+      providerRegistry: this.providerRegistry,
+      provider: this.#options.provider,
+      providerId: this.#options.providerId,
+      harness: this.#options.harness,
+      validator: this.validator,
+      approvalPolicy: this.#options.approvalPolicy,
+      autoApprove: this.#options.autoApprove,
+      thinking: this.#options.thinking,
+      maxIterations: this.#options.maxIterations,
+      modelTimeoutMs: this.#options.modelTimeoutMs,
+      editGuard: this.#options.editGuard,
+      contextLimitTokens: this.#options.contextLimitTokens,
+      condense: this.#options.condense,
+      helperModel: this.#options.helperModel,
+      helperProvider: this.#options.helperProvider,
+      hooks: this.#options.hooks,
+      hooksConfig: this.#options.hooksConfig ?? (await loadHooksConfig(this.#workspaceRoot)).hooks,
+      mcpServers: (await loadMcpConfig(this.#workspaceRoot)).servers,
+      lspServers: (await loadLspConfig(this.#workspaceRoot)).servers,
+      skillDirs: [workspaceSkillsDir(this.#workspaceRoot)],
+    });
+    const innerResult = await inner.run({
+      ...options,
+      taskId: spec.id,
+      isolation: undefined,
+      onEvent: undefined,
+      agentDefinition: agent,
+    });
+    const filesChanged = await worktreeChangedFiles(record.path).catch(() => [] as string[]);
+    const report: FinalReport = {
+      ...innerResult.report,
+      worktree: { path: record.path, branch: record.branch, files_changed: filesChanged },
+    };
+    this.store.saveReport(spec.id, report);
+    return { ...innerResult, report };
+  }
+
+  async #runOrchestrated(options: RunOptions, spec: TaskSpec, collected: Event[], startedAt: number): Promise<RunResult> {
+    const target = { bus: this.bus, store: this.store };
+    const plan = await createPlan(spec);
+    let state: TaskState = {
+      ...spec,
+      mode: 'orchestrator',
+      turns: 0,
+      plan,
+      steps: plan.steps,
+      status: 'active',
+    };
+    emitEvent(target, spec.id, undefined, 'TASK_STARTED', { spec, orchestrated: true });
+    emitEvent(target, spec.id, undefined, 'PLAN_CREATED', { plan });
+    this.store.saveState(spec.id, state);
+
+    const decomposed = options.children ?? (await decomposeTask(spec)).map((child) => ({
+      goal: child.goal,
+      mode: child.mode,
+      budget: child.budget,
+      agent: child.agent,
+      isolation: child.isolation,
+    }));
+    // File-defined subagents are validated up front: a child naming an
+    // agent that does not exist fails the whole run with a clear error
+    // before any child starts, instead of half-running and degrading.
+    const agentRegistry = await loadAgents([workspaceAgentsDir(this.#workspaceRoot)]);
+    for (const child of decomposed) {
+      if (child.agent && !agentRegistry.get(child.agent)) {
+        const defined = agentRegistry.list().map((definition) => definition.name);
+        throw new Error(
+          `unknown agent "${child.agent}" named by an orchestrator child task: no .daedalus/agents/${child.agent}.md exists in ${this.#workspaceRoot}` +
+          (defined.length ? ` (defined: ${defined.join(', ')})` : ' (no agents are defined in this workspace)'),
+        );
+      }
+    }
+    const inputs: ChildTaskInput[] = decomposed.map((child) => ({
+      goal: child.goal,
+      mode: child.mode,
+      budget: child.budget,
+      ...(child.agent ? { agent: child.agent } : {}),
+      ...(child.isolation ? { isolation: child.isolation } : {}),
+    }));
+
+    const orchestrator = new OrchestratorRunner({
+      bus: this.bus,
+      store: this.store,
+      totalBudget: { max_iterations: options.maxIterations ?? this.#options.maxIterations ?? 25, max_errors: options.maxErrors ?? 5 },
+      executeChild: async (child) => {
+        const definition = child.agent ? agentRegistry.get(child.agent) : undefined;
+        const childResult = await this.run({
+          goal: child.goal,
+          taskId: child.id,
+          mode: child.mode ?? definition?.mode ?? 'auto',
+          parentTaskId: spec.id,
+          providerId: options.providerId,
+          model: options.model,
+          models: options.models ?? this.#options.models,
+          modelStrategy: options.modelStrategy ?? this.#options.modelStrategy,
+          attachments: options.attachments,
+          thinking: options.thinking ?? this.#options.thinking ?? settingsThinking(this.#settings),
+          autoApprove: options.autoApprove,
+          maxIterations: child.budget?.max_iterations,
+          maxErrors: child.budget?.max_errors,
+          agentName: child.agent,
+          agentDefinition: definition,
+          isolation: child.isolation,
+        });
+        return {
+          status: childResult.state.status === 'done' ? 'done' : childResult.state.status === 'failed' ? 'failed' : 'cancelled',
+          summary: childResult.state.last_observation ?? childResult.state.last_error ?? childResult.outcome,
+          diff: childResult.report.diff,
+          iterations: childResult.report.metrics.turns,
+          errors: childResult.state.status === 'failed' ? 1 : 0,
+        };
+      },
+    });
+
+    const orchestration = await orchestrator.run(spec.id, inputs);
+    this.modeController.set('orchestrator');
+
+    let validation: ValidationResult | undefined;
+    if (orchestration.status === 'done') {
+      emitEvent(target, spec.id, undefined, 'VALIDATION_STARTED', { task_id: spec.id, orchestrated: true });
+      validation = await this.validator.validate({ workspaceRoot: this.#workspaceRoot, commands: this.#options.validationCommands });
+      emitEvent(target, spec.id, undefined, validationPassed(validation) ? 'VALIDATION_PASSED' : 'VALIDATION_FAILED', { result: validation });
+    }
+
+    const validationFailedCombined = validation !== undefined && !validationPassed(validation);
+    state = {
+      ...state,
+      status: orchestration.status === 'done' && !validationFailedCombined ? 'done' : 'failed',
+      last_error: orchestration.no_progress ? 'no_progress' : orchestration.budget_exceeded ? 'budget_exceeded' : orchestration.status !== 'done' ? 'child_task_failed' : validationFailedCombined ? 'validation_failed' : undefined,
+      last_observation: orchestration.summary,
+      turns: orchestration.children.length,
+      steps: state.steps.map((step, index) => ({
+        ...step,
+        status: orchestration.children[index]?.status === 'done' ? 'done' : orchestration.status === 'done' && !validationFailedCombined ? 'done' : step.status,
+      })),
+    };
+    emitEvent(target, spec.id, undefined, 'TASK_COMPLETED', {
+      state,
+      outcome: state.status === 'done' ? 'success' : 'failed',
+      reason: state.last_error ?? 'completed',
+      children: orchestration.children,
+    });
+    this.store.saveState(spec.id, state);
+
+    const outcome = this.#outcome(state, validation);
+    const report: FinalReport = {
+      task_id: spec.id,
+      outcome: outcome === 'success' ? 'success' : outcome === 'partial' ? 'partial' : 'failed',
+      diff: orchestration.diff || this.#aggregateDiff(collected),
+      evidence: [
+        ...orchestration.children.map((child) => `child ${child.id} (${child.status}): ${child.result_summary ?? child.goal}`),
+        ...this.#validationEvidence(validation),
+        ...this.#fileChangeEvidence(collected),
+      ],
+      ...(spec.title ? { title: spec.title } : {}),
+      ...(spec.rules_files?.length ? { rules_files: spec.rules_files } : {}),
+      ...(validation?.source ? { validation_source: validation.source } : {}),
+      metrics: {
+        turns: collected.filter((e) => e.type === 'TOOL_CALL_FINISHED').length,
+        tool_calls: collected.filter((e) => e.type === 'TOOL_CALL_STARTED').length,
+        events: collected.length,
+        commands: collected.filter((e) => e.type === 'COMMAND_FINISHED').length,
+        files_changed: collected.filter((e) => e.type === 'FILE_CHANGED').length,
+        recoveries: collected.filter((e) => e.type === 'RECOVERY_STARTED').length,
+        replans: collected.filter((e) => e.type === 'REPLAN_CREATED').length,
+        approvals: collected.filter((e) => e.type === 'APPROVAL_REQUESTED').length,
+        checks_passed: validation?.checks.filter((c) => c.status === 'pass').length ?? 0,
+        checks_failed: validation?.checks.filter((c) => c.status !== 'pass').length ?? 0,
+        child_tasks: orchestration.children.length,
+        child_tasks_done: orchestration.children.filter((child) => child.status === 'done').length,
+        child_tasks_failed: orchestration.children.filter((child) => child.status === 'failed').length,
         duration_ms: Date.now() - startedAt,
       },
     };
@@ -192,6 +689,77 @@ export class TaskRunner {
     return createProviderFromSettings(this.#settings);
   }
 
+  #modelConfig(options: RunOptions): { models: string[]; strategy: ModelStrategy } {
+    const strategy = options.modelStrategy ?? this.#options.modelStrategy ?? this.#settings.llm.modelStrategy;
+    let models = normalizeModelList(options.models ?? this.#options.models);
+    if (models.length === 0 && !options.model && !this.#options.model) {
+      const selection = this.#providerSelection(options);
+      const explicitlyPooled = options.modelStrategy !== undefined || this.#options.modelStrategy !== undefined;
+      if (selection && explicitlyPooled && selection.config.models.length > 1) {
+        models = normalizeModelList(selection.config.models);
+      } else if (this.#settings.llm.models.length > 1) {
+        models = normalizeModelList(this.#settings.llm.models);
+      }
+    }
+    return { models, strategy };
+  }
+
+  #providerFor(options: RunOptions, taskId: string): LLMProvider {
+    const selection = this.#providerSelection(options);
+    const modelConfig = this.#modelConfig(options);
+    if (modelConfig.models.length > 1) {
+      const config = selection?.config;
+      const baseUrl = config?.baseUrl || this.#settings.llm.baseUrl;
+      const apiKey = config ? config.apiKey ?? '' : this.#settings.llm.apiKey;
+      return new ModelPoolProvider({
+        models: modelConfig.models,
+        strategy: modelConfig.strategy,
+        createProvider: (model) => new OpenAICompatProvider({ baseUrl, apiKey, model }),
+        onSwitch: (switched) => {
+          emitEvent({ bus: this.bus, store: this.store }, taskId, undefined, 'PROVIDER_CHANGED', {
+            from_model: switched.from,
+            to_model: switched.to,
+            from: switched.from,
+            to: switched.to,
+            model: switched.to,
+            provider_id: options.providerId ?? this.#options.providerId ?? config?.id,
+            strategy: switched.strategy,
+            reason: switched.reason,
+            error: switched.error,
+            attempt: switched.attempt,
+          });
+        },
+      });
+    }
+    if (!selection) return this.#provider();
+    const { config, model } = selection;
+    return new OpenAICompatProvider({
+      baseUrl: config.baseUrl || this.#settings.llm.baseUrl,
+      apiKey: config.apiKey ?? '',
+      model: modelConfig.models[0] ?? model,
+    });
+  }
+
+  #providerSelection(options: RunOptions): { config: ProviderConfig; model: string } | undefined {
+    const registry = this.providerRegistry;
+    if (!registry) return undefined;
+    const providerId = options.providerId ?? this.#options.providerId;
+    const config = providerId ? registry.get(providerId) : registry.listInternal().find((provider) => provider.enabled);
+    if (!config || !config.enabled) return undefined;
+    const model = options.model ?? this.#options.model ?? config.defaultModel ?? config.models[0] ?? this.#settings.llm.model;
+    return { config, model };
+  }
+
+  #visionEnabledFor(options: RunOptions): boolean {
+    const selection = this.#providerSelection(options);
+    if (!selection || !this.providerRegistry) return false;
+    const modelConfig = this.#modelConfig(options);
+    if (modelConfig.models.length > 0) {
+      return modelConfig.models.some((model) => this.providerRegistry!.modelSupportsVision(selection.config, model));
+    }
+    return this.providerRegistry.modelSupportsVision(selection.config, selection.model);
+  }
+
   /**
    * Dispatch one tool call through the harness while recording the observable
    * facts the interfaces need: command lifecycle + streamed output for the
@@ -202,6 +770,7 @@ export class TaskRunner {
     tool: ToolDefinition,
     taskId: string,
     turnId: string | undefined,
+    hooksConfig?: HooksConfig,
   ): Promise<ToolResult> {
     const target = { bus: this.bus, store: this.store };
     const isCommand = COMMAND_TOOLS.has(tool.name);
@@ -213,6 +782,26 @@ export class TaskRunner {
 
     if (isCommand) {
       emitEvent(target, taskId, turnId, 'COMMAND_STARTED', { call_id: call.id, command: commandLine, tool: tool.name, cwd: typeof args.cwd === 'string' ? args.cwd : this.#workspaceRoot });
+    }
+
+    // Project hooks (pre-tool): an explicit veto (exit 2, or a JSON
+    // {"block": true, "reason": ...} body) stops the call before the
+    // harness runs; the reason is returned to the model. Fail-open
+    // otherwise — timeouts and crashes are recorded, never blocking.
+    if (hooksConfig) {
+      const pre = await runPreToolHooks({ workspaceRoot: this.#workspaceRoot, hooks: hooksConfig, tool: tool.name, args: call.args });
+      for (const execution of pre.executions) {
+        emitEvent(target, taskId, turnId, 'HOOK_EXECUTED', { ...execution });
+      }
+      if (pre.blocked) {
+        return {
+          call_id: call.id,
+          status: 'denied',
+          output: `blocked by project hook (${pre.command ?? 'pre_tool'}): ${pre.reason ?? 'blocked'}`,
+          truncated: false,
+          meta: { tool: tool.name, mutating: tool.mutating, hook_blocked: true, hook_command: pre.command },
+        };
+      }
     }
 
     const result = await this.harness.execute(call, tool, {
@@ -238,7 +827,49 @@ export class TaskRunner {
       if (after !== null) this.#emitFileChanged(taskId, turnId, call.id, args.path, before, after, tool.name);
     }
 
-    return { ...result, call_id: call.id, meta: { ...result.meta, tool: tool.name, mutating: tool.mutating } };
+    let output = result.output;
+    if (result.status === 'ok' && (tool.name === 'write_file' || tool.name === 'edit_file') && typeof args.path === 'string') {
+      const effectivePath = typeof result.meta?.path === 'string' ? result.meta.path : args.path;
+      // Checkpoint: persist the pre-mutation content captured before
+      // execution (`before`); TaskStore keeps the first record per path, so a
+      // later restore rewinds to the state before this task touched the file.
+      // Skipped when the tool resolved the edit to a different file than the
+      // one whose "before" was read, so a backup can never hold wrong content.
+      if (effectivePath === args.path) {
+        const relativePath = isAbsolute(effectivePath) ? relative(resolve(this.#workspaceRoot), effectivePath) : effectivePath;
+        if (relativePath && !relativePath.startsWith('..') && !isAbsolute(relativePath)) {
+          try {
+            this.store.recordBackup(taskId, relativePath, before);
+          } catch { /* checkpoints are best-effort; a failure must not fail the edit */ }
+        }
+      }
+      // Edit guard: fast syntax/LSP feedback appended to the tool result so
+      // the model can repair a bad write in the same turn. Fail-open.
+      const guard = await guardEditedFile(
+        { workspaceRoot: this.#workspaceRoot, enabled: this.#editGuardEnabled(), lsp: this.#activeLsp ?? null },
+        effectivePath,
+      );
+      if (guard.note) output = `${output}\n${guard.note}`;
+    }
+
+    // Project hooks (post-tool): each matching hook's stdout (trimmed,
+    // capped) rides along with the tool result as `hook: …` lines so the
+    // model sees lint/format feedback in the same turn. Fail-open.
+    if (hooksConfig) {
+      const post = await runPostToolHooks({
+        workspaceRoot: this.#workspaceRoot,
+        hooks: hooksConfig,
+        tool: tool.name,
+        args: call.args,
+        result: { ...result, output },
+      });
+      for (const execution of post.executions) {
+        emitEvent(target, taskId, turnId, 'HOOK_EXECUTED', { ...execution });
+      }
+      for (const note of post.notes) output = output ? `${output}\nhook: ${note}` : `hook: ${note}`;
+    }
+
+    return { ...result, output, call_id: call.id, meta: { ...result.meta, tool: tool.name, mutating: tool.mutating } };
   }
 
   #emitFileChanged(taskId: string, turnId: string | undefined, callId: string, path: string, before: string | null, after: string, tool: string): void {

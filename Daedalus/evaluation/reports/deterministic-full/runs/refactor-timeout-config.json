@@ -1,0 +1,60 @@
+{
+  "run_id": "eval-deterministic-refactor-timeout-config",
+  "task_id": "refactor-timeout-config",
+  "title": "Move timeout to config",
+  "category": "refactor",
+  "mode": "deterministic",
+  "outcome": "success",
+  "state_status": "done",
+  "turns": 3,
+  "iterations": 3,
+  "tool_calls": 3,
+  "tool_calls_by_name": {
+    "read_file": 1,
+    "write_file": 2
+  },
+  "wall_clock_ms": 245,
+  "retries": 0,
+  "recovery_events": 0,
+  "replans": 0,
+  "approvals": 0,
+  "events": 19,
+  "files_changed": 2,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/jobs.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    }
+  ],
+  "checks_passed": 2,
+  "checks_failed": 0,
+  "final_diff": "--- a/src/config.js\n+++ b/src/config.js\n@@ +1 -0 @@\n+export const DEFAULT_TIMEOUT_MS = 30000;\n--- a/src/jobs.js\n+++ b/src/jobs.js\n@@ +2 -1 @@\n-export const DEFAULT_TIMEOUT_MS = 30000;\n+import { DEFAULT_TIMEOUT_MS } from './config.js';\n \n+export { DEFAULT_TIMEOUT_MS };\n export function timeoutFor(task) {\n   return task.fast ? 1000 : DEFAULT_TIMEOUT_MS;\n }\n",
+  "provider": {
+    "name": "deterministic-scripted",
+    "model": "scripted"
+  },
+  "config": {
+    "mode": "deterministic",
+    "providerName": "deterministic-scripted",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-full/workspaces/refactor-timeout-config",
+  "event_log": "runs/refactor-timeout-config.events.jsonl",
+  "started_at": "2026-10-05T08:00:08.091Z",
+  "finished_at": "2026-10-05T08:00:08.338Z",
+  "failure_taxonomy": "none"
+}

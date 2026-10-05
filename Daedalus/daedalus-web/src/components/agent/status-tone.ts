@@ -36,6 +36,9 @@ export const KIND_TONE: Record<string, Tone> = {
   file: 'success',
   completion: 'success',
   error: 'error',
+  system: 'info',
+  attachment: 'secondary',
+  orchestration: 'secondary',
 }
 
 export function toneForResult(status: string | undefined): Tone {

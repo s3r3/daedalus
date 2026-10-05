@@ -1,0 +1,54 @@
+# Example: run a Daedalus task headlessly in GitHub Actions.
+#
+# `daedalus run --ci` implies --json, never prompts (approvals for mutating
+# tools auto-deny unless --yolo is passed), and ends with one JSON line:
+#   {"outcome": "...", "exit_code": n, "report": {...}}
+# Exit codes: success 0, failed 1, partial 2, stopped 3.
+#
+# Copy this file to .github/workflows/daedalus.yml in your repo and set the
+# LLM_BASE_URL / LLM_MODEL / LLM_API_KEY repository secrets (or variables).
+name: daedalus-task
+
+on:
+  workflow_dispatch:
+    inputs:
+      goal:
+        description: "Task for Daedalus to run"
+        required: true
+        default: "Fix the failing tests"
+      yolo:
+        description: "Auto-approve mutating tools (required for the agent to edit files)"
+        type: boolean
+        default: true
+
+jobs:
+  daedalus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Daedalus (monorepo checkout)
+        run: |
+          git clone https://github.com/s3r3/daedalus.git /tmp/daedalus-repo
+          cd /tmp/daedalus-repo/Daedalus
+          npm install
+          npm link
+
+      - name: Run the task headlessly
+        env:
+          LLM_BASE_URL: ${{ secrets.LLM_BASE_URL }}
+          LLM_MODEL: ${{ vars.LLM_MODEL }}
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          daedalus run --ci ${{ inputs.yolo && '--yolo' || '' }} "${{ inputs.goal }}"
+
+      - name: Upload the task evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: daedalus-task
+          path: .daedalus/tasks

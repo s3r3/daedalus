@@ -1,0 +1,2 @@
+run_id,task_id,category,mode,outcome,state_status,failure_taxonomy,turns,iterations,tool_calls,wall_clock_ms,retries,recovery_events,replans,approvals,events,files_changed,commands,checks_passed,checks_failed,provider_name,provider_id,model,validation_summary,event_log
+eval-live-bug-fallback-greeting,bug-fallback-greeting,bug_fix,live,stopped,failed,error_budget_exceeded,3,3,0,1924,0,0,0,0,9,0,0,0,0,provider-registry:nine-router,nine-router,kr/auto,,runs/bug-fallback-greeting.events.jsonl

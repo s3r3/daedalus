@@ -1,8 +1,20 @@
-import type { FinalReport, PermissionKey } from '@daedalus/core'
+import type { AgentMode, Attachment, Event, FinalReport, PermissionKey } from '@daedalus/core'
 import type {
+  ChildTaskInput,
   FileChange,
+  ProviderInput,
+  ProviderConfigPublic,
+  ProviderModel,
+  ProviderPreset,
+  ProviderTestResult,
+  ReviewResponse,
+  SessionState,
+  SettingsResponse,
+  ExtensionStatus,
+  TaskAttachmentsResponse,
   TaskSnapshot,
   TaskSummary,
+  UploadResponse,
   WorkspaceEntry,
   WorkspaceFile,
   WorkspaceRoot,
@@ -26,9 +38,10 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const isFormData = typeof FormData !== 'undefined' && init?.body instanceof FormData
   const response = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+    headers: isFormData ? { ...(init?.headers ?? {}) } : { 'content-type': 'application/json', ...(init?.headers ?? {}) },
   })
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`
@@ -59,10 +72,59 @@ export type CreateTaskInput = {
   max_iterations?: number
   constraints?: string[]
   done_criteria?: string[]
+  mode?: AgentMode
+  thinking?: boolean
+  provider_id?: string
+  model?: string
+  attachments?: Attachment[]
+  children?: ChildTaskInput[]
+  isolation?: 'worktree'
 }
 
 export const api = {
   health: () => request<{ status: string; service: string; active_tasks: number }>('/health'),
+
+  settings: () => request<SettingsResponse>('/settings'),
+
+  updateSettings: (input: Record<string, unknown>) =>
+    request<SettingsResponse>('/settings', { method: 'PUT', body: JSON.stringify(input) }),
+
+  session: () => request<{ session: SessionState }>('/session'),
+
+  updateSession: (input: Partial<SessionState> & Record<string, unknown>) =>
+    request<{ session: SessionState }>('/session', { method: 'PUT', body: JSON.stringify(input) }),
+
+  setMode: (mode: AgentMode) =>
+    request<{ session: SessionState }>('/session/mode', { method: 'POST', body: JSON.stringify({ mode }) }),
+
+  cycleMode: () => request<{ session: SessionState }>('/session/mode', { method: 'POST', body: JSON.stringify({ cycle: true }) }),
+
+  setAutoApprove: (enabled: boolean) =>
+    request<{ session: SessionState }>('/session/auto-approve', { method: 'POST', body: JSON.stringify({ enabled }) }),
+
+  providers: () => request<{ providers: ProviderConfigPublic[]; presets: ProviderPreset[] }>('/providers'),
+
+  createProvider: (input: ProviderInput) =>
+    request<{ provider: ProviderConfigPublic }>('/providers', { method: 'POST', body: JSON.stringify(input) }),
+
+  updateProvider: (id: string, input: ProviderInput) =>
+    request<{ provider: ProviderConfigPublic }>(`/providers/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    }),
+
+  deleteProvider: (id: string) => request<{ removed: boolean; id: string }>(`/providers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+
+  setProviderEnabled: (id: string, enabled: boolean) =>
+    request<{ provider: ProviderConfigPublic }>(`/providers/${encodeURIComponent(id)}/enabled`, {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    }),
+
+  testProvider: (id: string) => request<ProviderTestResult>(`/providers/${encodeURIComponent(id)}/test`, { method: 'POST' }),
+
+  models: (providerId?: string) =>
+    request<{ models: ProviderModel[]; session: SessionState; count: number }>(`/models${query({ provider_id: providerId })}`),
 
   listTasks: () => request<{ tasks: TaskSummary[]; count: number }>('/tasks'),
 
@@ -74,9 +136,18 @@ export const api = {
 
   task: (taskId: string) => request<TaskSnapshot>(`/tasks/${encodeURIComponent(taskId)}`),
 
+  taskEvents: (taskId: string) => request<{ events: Event[]; count: number; task: TaskSummary }>(`/tasks/${encodeURIComponent(taskId)}/events`),
+
+  extensionsStatus: (root: string) => request<ExtensionStatus>(`/extensions/status${query({ root })}`),
+
+  review: (input: { root: string; task_id?: string; model?: string; provider_id?: string }) =>
+    request<ReviewResponse>('/review', { method: 'POST', body: JSON.stringify(input) }),
+
   report: (taskId: string) => request<{ report: FinalReport }>(`/tasks/${encodeURIComponent(taskId)}/report`),
 
   changes: (taskId: string) => request<{ changes: FileChange[]; count: number }>(`/tasks/${encodeURIComponent(taskId)}/changes`),
+
+  taskAttachments: (taskId: string) => request<TaskAttachmentsResponse>(`/tasks/${encodeURIComponent(taskId)}/attachments`),
 
   cancelTask: (taskId: string) =>
     request<{ cancelled: boolean; task_id: string }>(`/tasks/${encodeURIComponent(taskId)}/cancel`, { method: 'POST' }),
@@ -95,6 +166,40 @@ export const api = {
   list: (root: string, path = '.') => request<{ path: string; items: WorkspaceEntry[] }>(`/workspace/list${query({ root, path })}`),
 
   file: (root: string, path: string) => request<WorkspaceFile>(`/workspace/file${query({ root, path })}`),
+
+  createWorkspace: (input: { root?: string; path?: string; name?: string }) =>
+    request<{ path: string; name: string; root?: string; session: SessionState }>('/workspace/create', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  createFolder: (root: string, path: string) =>
+    request<{ path: string; absolute: string; root: string }>('/workspace/folders', {
+      method: 'POST',
+      body: JSON.stringify({ root, path }),
+    }),
+
+  createFile: (root: string, path: string, content = '', overwrite = false) =>
+    request<{ path: string; absolute: string; root: string; size: number }>('/workspace/files', {
+      method: 'POST',
+      body: JSON.stringify({ root, path, content, overwrite }),
+    }),
+
+  renameWorkspaceEntry: (root: string, from: string, to: string) =>
+    request<{ from: string; to: string; root: string }>('/workspace/rename', {
+      method: 'POST',
+      body: JSON.stringify({ root, from, to }),
+    }),
+
+  saveFile: (root: string, path: string, content: string) =>
+    request<{ path: string; absolute: string; root: string }>('/workspace/file', {
+      method: 'PUT',
+      body: JSON.stringify({ root, path, content }),
+    }),
+
+  upload: (form: FormData) => request<UploadResponse>('/uploads', { method: 'POST', body: form }),
+
+  uploadJson: (input: Record<string, unknown>) => request<UploadResponse>('/uploads', { method: 'POST', body: JSON.stringify(input) }),
 }
 
 export const apiBase = BASE

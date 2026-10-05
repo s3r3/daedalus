@@ -1,0 +1,23 @@
+{
+  "task_id": "eval-deterministic-bug-cart-quantity-total",
+  "outcome": "success",
+  "diff": "--- a/src/cart.js\n+++ b/src/cart.js\n@@ +1 -1 @@\n export function total(items) {\n-  return items.reduce((sum, item) => sum + item.price, 0);\n+  return items.reduce((sum, item) => sum + item.price * item.quantity, 0);\n }\n",
+  "evidence": [
+    "syntax: pass (node --check src/cart.js)",
+    "behavior: pass (node validate.mjs)",
+    "modified src/cart.js (+1/-1)"
+  ],
+  "metrics": {
+    "turns": 2,
+    "tool_calls": 2,
+    "events": 14,
+    "commands": 0,
+    "files_changed": 1,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 2,
+    "checks_failed": 0,
+    "duration_ms": 267
+  }
+}

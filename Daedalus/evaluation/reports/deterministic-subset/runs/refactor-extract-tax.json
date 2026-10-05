@@ -1,0 +1,60 @@
+{
+  "run_id": "eval-deterministic-refactor-extract-tax",
+  "task_id": "refactor-extract-tax",
+  "title": "Extract tax calculation",
+  "category": "refactor",
+  "mode": "deterministic",
+  "outcome": "success",
+  "state_status": "done",
+  "turns": 3,
+  "iterations": 3,
+  "tool_calls": 3,
+  "tool_calls_by_name": {
+    "read_file": 1,
+    "write_file": 2
+  },
+  "wall_clock_ms": 268,
+  "retries": 0,
+  "recovery_events": 0,
+  "replans": 0,
+  "approvals": 0,
+  "events": 19,
+  "files_changed": 2,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/order.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    }
+  ],
+  "checks_passed": 2,
+  "checks_failed": 0,
+  "final_diff": "--- a/src/tax.js\n+++ b/src/tax.js\n@@ +1 -0 @@\n+export function calculateTax(subtotal) { return subtotal * 0.2; }\n--- a/src/order.js\n+++ b/src/order.js\n@@ +3 -2 @@\n+import { calculateTax } from './tax.js';\n+\n export function totalWithTax(subtotal) {\n-  const tax = subtotal * 0.2;\n-  return subtotal + tax;\n+  return subtotal + calculateTax(subtotal);\n }\n",
+  "provider": {
+    "name": "deterministic-scripted",
+    "model": "scripted"
+  },
+  "config": {
+    "mode": "deterministic",
+    "providerName": "deterministic-scripted",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-subset/workspaces/refactor-extract-tax",
+  "event_log": "runs/refactor-extract-tax.events.jsonl",
+  "started_at": "2026-10-05T08:00:02.345Z",
+  "finished_at": "2026-10-05T08:00:02.615Z",
+  "failure_taxonomy": "none"
+}
