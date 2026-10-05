@@ -577,7 +577,7 @@ export class InteractiveSession {
         const shortcut = item.shortcut ?? '';
         const label = `${marker} ${commandTitle(item.command.name)}  /${item.command.name}`;
         const available = Math.max(8, inner - shortcut.length - 1);
-        lines.push(`│ ${fit(label, available).padEnd(available, ' ')}${shortcut ? ` ${fit(shortcut, inner - available - 1)}` : ''} │`);
+        lines.push(`│ ${padVisibleEnd(fit(label, available), available)}${shortcut ? ` ${fit(shortcut, inner - available - 1)}` : ''} │`);
       }
       if (start + visible.length < items.length) lines.push(`│ ${fit(`… ${items.length - (start + visible.length)} more`, inner)} │`);
     }
@@ -640,25 +640,27 @@ export class InteractiveSession {
   }
 
   renderScreen(options: { transcript?: string[]; input?: string; cursor?: number; columns?: number; rows?: number } = {}): string {
-    const columns = Math.max(60, Math.min(220, options.columns ?? 132));
+    const columns = Math.max(40, Math.min(220, options.columns ?? 132));
     const rows = Math.max(18, Math.min(80, options.rows ?? 36));
     const showSidebar = this.#sidebarVisible && columns >= 92;
     const sidebarWidth = showSidebar ? Math.max(30, Math.min(40, Math.floor(columns * 0.27))) : 0;
     const mainWidth = showSidebar ? columns - sidebarWidth - 4 : columns;
     const rawInput = options.input ?? '';
     const cursor = Math.max(0, Math.min(rawInput.length, options.cursor ?? rawInput.length));
-    const shownInput = `${rawInput.slice(0, cursor)}█${rawInput.slice(cursor)}`;
+    const shownInput = sanitizeTerminalText(`${rawInput.slice(0, cursor)}█${rawInput.slice(cursor)}`.replace(/[\r\n]+/g, ' '));
     const composerWidth = Math.max(32, columns - 2);
     const composerLabel = ` Daedalus · ${modeLabel(this.mode)} · ${this.#providerId ?? 'default'}/${this.activePoolModel ?? this.#model ?? 'default'} `;
+    const composerTitle = fit(composerLabel, composerWidth - 2);
     const footerLines = [
-      `╭${fit(composerLabel, composerWidth - 2).padEnd(composerWidth - 2, '─')}╮`,
-      `│ > ${fit(shownInput, composerWidth - 6).padEnd(composerWidth - 6, ' ')} │`,
+      `╭${composerTitle}${'─'.repeat(Math.max(0, composerWidth - 2 - visibleWidth(composerTitle)))}╮`,
+      `│ > ${padVisibleEnd(shownInput, composerWidth - 6)} │`,
       `╰${'─'.repeat(composerWidth - 2)}╯`,
       'tab focus chat · shift+tab mode · / or ctrl+p commands · ctrl+m models · ctrl+b toggle sidebar · shift+enter newline · ctrl+c quit',
     ];
     const contentRows = Math.max(6, rows - footerLines.length);
     const transcript = options.transcript ?? this.#transcript;
-    const displayTranscript = (transcript.length ? transcript : ['Type a goal below, or press / for commands.']).map((line) => line.startsWith('> ') ? `│ ${line.slice(2)}` : line);
+    const displayTranscript = (transcript.length ? transcript : ['Type a goal below, or press / for commands.'])
+      .map((line) => sanitizeTerminalText(line.startsWith('> ') ? `│ ${line.slice(2)}` : line));
     const wrapped: string[] = [];
     for (const line of displayTranscript) {
       wrapped.push(...wrapText(line, Math.max(20, mainWidth - 4)));
@@ -668,9 +670,9 @@ export class InteractiveSession {
     const sidebar = showSidebar ? this.renderSidebarLines(sidebarWidth) : [];
     const screen: string[] = [];
     for (let i = 0; i < contentRows; i++) {
-      const left = `  ${(visible[i] ?? '')}`.padEnd(mainWidth, ' ');
-      const right = showSidebar ? (sidebar[i] ?? '').padEnd(sidebarWidth, ' ') : '';
-      screen.push(showSidebar ? `${left} │ ${right}`.trimEnd() : left.trimEnd());
+      const left = padVisibleEnd(`  ${visible[i] ?? ''}`, mainWidth);
+      const right = showSidebar ? padVisibleEnd(sidebar[i] ?? '', sidebarWidth) : '';
+      screen.push(truncateVisible(showSidebar ? `${left} │ ${right}` : left, columns));
     }
     if (this.#palette.open) {
       const paletteWidth = Math.max(48, Math.min(76, mainWidth - 8, columns - 16));
@@ -680,17 +682,19 @@ export class InteractiveSession {
       const clearFrom = Math.max(0, startCol - 2);
       const clearTo = Math.min(columns, startCol + paletteWidth + 2);
       for (let row = Math.max(0, startRow - 1); row < Math.min(contentRows, startRow + palette.length + 1); row++) {
-        const base = (screen[row] ?? '').padEnd(columns, ' ');
-        screen[row] = `${base.slice(0, clearFrom)}${' '.repeat(clearTo - clearFrom)}${base.slice(clearTo)}`.trimEnd();
+        const base = screen[row] ?? '';
+        screen[row] = truncateVisible(`${padVisibleEnd(sliceVisible(base, 0, clearFrom), clearFrom)}${' '.repeat(clearTo - clearFrom)}${sliceVisible(base, clearTo)}`, columns);
       }
       for (let i = 0; i < palette.length && startRow + i < contentRows; i++) {
-        const base = (screen[startRow + i] ?? '').padEnd(columns, ' ');
+        const base = screen[startRow + i] ?? '';
         const overlay = palette[i] ?? '';
-        screen[startRow + i] = `${base.slice(0, startCol)}${overlay}${base.slice(startCol + overlay.length)}`.trimEnd();
+        screen[startRow + i] = truncateVisible(`${padVisibleEnd(sliceVisible(base, 0, startCol), startCol)}${overlay}${sliceVisible(base, startCol + visibleWidth(overlay))}`, columns);
       }
     }
-    screen.push(...footerLines.map((line) => fit(line, columns)));
-    return screen.slice(0, rows).join('\n');
+    screen.push(...footerLines);
+    // Final guarantee: no composed line ever exceeds the terminal width, so a
+    // repaint can never wrap, scroll the alternate screen, or leave ghosts.
+    return screen.slice(0, rows).map((line) => truncateVisible(line, columns)).join('\n');
   }
 
   handleKey(input: string, key: InteractiveKey = {}): InteractiveKeyAction {
@@ -888,11 +892,100 @@ export class InteractiveSession {
 }
 
 function fit(text: string, width: number): string {
-  const clean = text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trimEnd();
+  return truncateVisible(collapseSpaces(text), width);
+}
+
+/** Collapse newlines/whitespace runs the way single-line frame text needs. */
+function collapseSpaces(text: string): string {
+  return text.replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trimEnd();
+}
+
+const ANSI_PATTERN = /\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
+
+/**
+ * Remove ANSI escape sequences and terminal control characters from text that
+ * is about to be composed into a frame line. A stray `\r` or a half-sliced
+ * escape sequence inside a repainted frame overwrites painted text and breaks
+ * every following frame, so frame content is always rendered as plain text;
+ * coloring is applied to whole composed lines afterwards by the caller.
+ */
+export function sanitizeTerminalText(text: string): string {
+  return text
+    .replace(ANSI_PATTERN, '')
+    .replace(/\t/g, '  ')
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+}
+
+/** Terminal cell width of one code point (combining = 0, East Asian wide/fullwidth and emoji = 2). */
+function charCellWidth(codePoint: number): number {
+  if (codePoint === 0) return 0;
+  if (codePoint < 0x20 || (codePoint >= 0x7f && codePoint < 0xa0)) return 0;
+  if (codePoint >= 0x0300 && codePoint <= 0x036f) return 0; // combining diacriticals
+  if (
+    (codePoint >= 0x1100 && codePoint <= 0x115f) // Hangul Jamo
+    || (codePoint >= 0x2e80 && codePoint <= 0xa4cf) // CJK radicals, kana, han
+    || (codePoint >= 0xac00 && codePoint <= 0xd7a3) // Hangul syllables
+    || (codePoint >= 0xf900 && codePoint <= 0xfaff) // CJK compatibility ideographs
+    || (codePoint >= 0xfe30 && codePoint <= 0xfe6f) // CJK compatibility forms
+    || (codePoint >= 0xff00 && codePoint <= 0xff60) // fullwidth forms
+    || (codePoint >= 0xffe0 && codePoint <= 0xffe6) // fullwidth signs
+    || (codePoint >= 0x1f300 && codePoint <= 0x1faff) // emoji and pictographs
+    || (codePoint >= 0x20000 && codePoint <= 0x2fffd) // CJK extension planes
+    || (codePoint >= 0x30000 && codePoint <= 0x3fffd)
+  ) return 2;
+  return 1;
+}
+
+/** Visible terminal-cell width of `text`, ignoring ANSI escapes and control bytes. */
+export function visibleWidth(text: string): number {
+  let width = 0;
+  for (const ch of sanitizeTerminalText(text)) width += charCellWidth(ch.codePointAt(0) ?? 0);
+  return width;
+}
+
+/**
+ * Truncate `text` to at most `width` terminal cells (ellipsis when cut).
+ * Escape sequences are stripped rather than sliced, so the result can never
+ * contain a partial escape or exceed the cell budget on a real terminal.
+ */
+export function truncateVisible(text: string, width: number): string {
   if (width <= 0) return '';
-  if (clean.length <= width) return clean;
-  if (width <= 1) return '…'.slice(0, width);
-  return `${clean.slice(0, width - 1)}…`;
+  const clean = sanitizeTerminalText(text.replace(/[\r\n]+/g, ' '));
+  if (visibleWidth(clean) <= width) return clean;
+  if (width === 1) return '…';
+  const budget = width - 1;
+  let used = 0;
+  let out = '';
+  for (const ch of clean) {
+    const w = charCellWidth(ch.codePointAt(0) ?? 0);
+    if (used + w > budget) break;
+    used += w;
+    out += ch;
+  }
+  return `${out.trimEnd()}…`;
+}
+
+/** Truncate to `width` cells, then pad with spaces to exactly `width` visible cells. */
+export function padVisibleEnd(text: string, width: number): string {
+  if (width <= 0) return '';
+  const truncated = truncateVisible(text, width);
+  const gap = width - visibleWidth(truncated);
+  return gap > 0 ? `${truncated}${' '.repeat(gap)}` : truncated;
+}
+
+/** Slice `text` by visible-cell offsets [start, end). Wide glyphs straddling a cut become nothing. */
+export function sliceVisible(text: string, start: number, end?: number): string {
+  const clean = sanitizeTerminalText(text);
+  const limit = end ?? Number.POSITIVE_INFINITY;
+  let col = 0;
+  let out = '';
+  for (const ch of clean) {
+    const w = charCellWidth(ch.codePointAt(0) ?? 0);
+    if (col >= start && col + w <= limit) out += ch;
+    col += w;
+    if (col >= limit) break;
+  }
+  return out;
 }
 
 function titleCase(value: string): string {
@@ -930,15 +1023,31 @@ function commandTitle(name: string): string {
 }
 
 function wrapText(text: string, width: number): string[] {
-  const clean = text.replace(/[\r\n]+/g, ' ');
-  if (clean.length === 0) return [''];
+  const clean = sanitizeTerminalText(text);
+  if (visibleWidth(clean) === 0) return [''];
   const lines: string[] = [];
   let rest = clean;
-  while (rest.length > width) {
-    let breakAt = rest.lastIndexOf(' ', width);
-    if (breakAt < Math.floor(width * 0.45)) breakAt = width;
-    lines.push(rest.slice(0, breakAt).trimEnd());
-    rest = rest.slice(breakAt).trimStart();
+  while (visibleWidth(rest) > width) {
+    const chars = [...rest];
+    // Walk to the last cell that still fits, remembering the last space seen.
+    let used = 0;
+    let fitCount = 0;
+    let lastSpaceIndex = -1;
+    for (const ch of chars) {
+      const w = charCellWidth(ch.codePointAt(0) ?? 0);
+      if (used + w > width) break;
+      used += w;
+      fitCount++;
+      if (ch === ' ') lastSpaceIndex = fitCount - 1;
+    }
+    if (fitCount === 0) break; // a single glyph wider than the budget
+    if (lastSpaceIndex >= Math.floor(width * 0.45)) {
+      lines.push(chars.slice(0, lastSpaceIndex).join('').trimEnd());
+      rest = chars.slice(lastSpaceIndex + 1).join('').trimStart();
+    } else {
+      lines.push(chars.slice(0, fitCount).join('').trimEnd());
+      rest = chars.slice(fitCount).join('').trimStart();
+    }
   }
   if (rest) lines.push(rest);
   return lines.length ? lines : [''];

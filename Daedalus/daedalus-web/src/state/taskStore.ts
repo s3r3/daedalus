@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { AgentMode, Attachment, Event, FinalReport, ProviderConfigPublic } from '@daedalus/core'
 import type { StreamStatus } from '../api/eventStream'
 import type { ProviderModel, ProviderPreset, SessionState, TaskSummary } from '../api/types'
+import { composerPrefsOf, saveComposerPrefs } from './prefs'
 
 /**
  * Client state for the control plane. Only genuinely shared state lives here
@@ -23,6 +24,9 @@ export type ComposerState = {
   mode: AgentMode
   providerId: string
   model: string
+  /** Comma-separated model pool; with 2+ models the task runs against the pool. */
+  modelPool: string
+  modelStrategy: 'failover' | 'round-robin'
   autoApprove: boolean
   thinking: boolean
   maxIterations: number
@@ -79,6 +83,8 @@ const initialComposer: ComposerState = {
   mode: 'auto',
   providerId: '',
   model: '',
+  modelPool: '',
+  modelStrategy: 'failover',
   autoApprove: false,
   thinking: true,
   maxIterations: 25,
@@ -193,3 +199,11 @@ export function selectTaskEvents(state: DaedalusState): Event[] {
   if (!state.taskId) return []
   return state.events.filter((event) => event.task_id === state.taskId).sort((a, b) => a.seq - b.seq)
 }
+
+// Run defaults persist in this browser (see prefs.ts): every composer change
+// is saved, and App hydrates them back on load before the gateway session
+// overlays its shared values, so what the settings panel shows is what the
+// next task payload carries.
+useDaedalusStore.subscribe((state, previous) => {
+  if (state.composer !== previous.composer) saveComposerPrefs(composerPrefsOf(state.composer))
+})

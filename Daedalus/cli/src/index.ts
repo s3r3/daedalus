@@ -339,17 +339,39 @@ async function runFullscreenChat(options: {
   let currentTaskId: string | undefined;
   let pendingApproval: PermissionKey | undefined;
 
+  let forceFullClear = true;
+  let lastColumns = 0;
+  let lastRows = 0;
+
   const draw = (): void => {
     if (closed) return;
-    const screen = session.renderScreen({ input, cursor, columns: stdout.columns || 132, rows: stdout.rows || 36 });
-    stdout.write(`\x1b[H${colorizeScreen(screen)}\x1b[J`);
+    const columns = stdout.columns || 132;
+    const rows = stdout.rows || 36;
+    const screen = session.renderScreen({ input, cursor, columns, rows });
+    // Deterministic full-frame repaint: cursor HOME (never counted line-ups),
+    // every composed line is cell-truncated by renderScreen so nothing can
+    // wrap or scroll the alternate screen, each line erases its own tail
+    // (\x1b[K), and \x1b[J clears anything below the frame. A size change (or
+    // the first frame) starts from a fully cleared screen so no ghost of a
+    // previous geometry can survive.
+    const sizeChanged = columns !== lastColumns || rows !== lastRows;
+    lastColumns = columns;
+    lastRows = rows;
+    const painted = colorizeScreen(screen).split("\n").map((line) => `${line}\x1b[K`).join("\r\n");
+    stdout.write(`${forceFullClear || sizeChanged ? "\x1b[2J" : ""}\x1b[H${painted}\x1b[J`);
+    forceFullClear = false;
+  };
+
+  const onResize = (): void => {
+    forceFullClear = true;
+    draw();
   };
 
   const cleanup = (): void => {
     if (closed) return;
     closed = true;
     stdin.off("keypress", onKeypress);
-    stdout.off("resize", draw);
+    stdout.off("resize", onResize);
     stdin.setRawMode?.(false);
     stdin.pause();
     stdout.write("\x1b[?25h\x1b[?1049l");
@@ -545,9 +567,9 @@ async function runFullscreenChat(options: {
   stdin.setRawMode?.(true);
   emitKeypressEvents(stdin);
   stdin.resume();
-  stdout.write("\x1b[?1049h\x1b[?25l");
+  stdout.write("\x1b[?1049h\x1b[2J\x1b[?25l");
   stdin.on("keypress", onKeypress);
-  stdout.on("resize", draw);
+  stdout.on("resize", onResize);
   draw();
   await new Promise<void>((resolve) => {
     const timer = setInterval(() => { if (closed) { clearInterval(timer); resolve(); } }, 50);

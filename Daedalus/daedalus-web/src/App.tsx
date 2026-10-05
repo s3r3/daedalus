@@ -2,12 +2,13 @@ import { useEffect } from 'react'
 import { TopBar } from './components/layout/top-bar'
 import { Composer } from './components/composer/composer'
 import { WorkspacePanel } from './components/workspace/workspace-panel'
-import { SettingsPanel } from './components/settings/settings-panel'
+import { SettingsDialog } from './components/settings/settings-dialog'
 import { ExtensionsPanel } from './components/settings/extensions-panel'
 import { EditorPane } from './components/editor/editor-pane'
 import { DiffViewer } from './components/editor/diff-viewer'
 import { PlanPanel } from './components/agent/plan-panel'
 import { ActivityTimeline } from './components/agent/activity-timeline'
+import { ChatPanel } from './components/agent/chat-panel'
 import { TerminalPane } from './components/terminal/terminal-pane'
 import { ValidationPanel } from './components/validation/validation-panel'
 import { ErrorPanel, RecoveryPanel } from './components/recovery/recovery-panel'
@@ -18,6 +19,7 @@ import { useEventStream } from './api/useEventStream'
 import { api } from './api/client'
 import { readStoredTheme, applyPaletteVars } from './theme/theme'
 import { useDaedalusStore } from './state/taskStore'
+import { loadComposerPrefs } from './state/prefs'
 import { VERSION } from '@daedalus/core/version'
 
 /**
@@ -41,10 +43,20 @@ export function App() {
   const setModels = useDaedalusStore((state) => state.setModels)
   const setWorkspace = useDaedalusStore((state) => state.setWorkspace)
   const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
+  const setComposer = useDaedalusStore((state) => state.setComposer)
 
   useEffect(() => {
     setTheme(readStoredTheme())
   }, [setTheme])
+
+  // Browser-persisted run defaults (mode/model/pool/max-iterations…) seed the
+  // composer first; the gateway session fetch below then overlays the values
+  // it shares with the CLI, so the server stays the source of truth and the
+  // browser values only fill gaps (or a disconnected gateway).
+  useEffect(() => {
+    const prefs = loadComposerPrefs()
+    if (Object.keys(prefs).length > 0) setComposer(prefs)
+  }, [setComposer])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -80,7 +92,6 @@ export function App() {
           <ScrollArea className="min-h-[240px] lg:min-h-0 lg:flex-1">
             <div className="flex flex-col gap-2 pr-1">
               <ExtensionsPanel />
-              {settingsOpen ? <SettingsPanel /> : null}
               <PlanPanel />
               <ApprovalCard />
               <ActivityTimeline />
@@ -108,8 +119,9 @@ export function App() {
           <TerminalPane />
         </section>
 
-        {/* Right: changes + final result */}
+        {/* Right: conversation + changes + final result */}
         <aside className="flex min-h-0 flex-col gap-2 lg:overflow-hidden">
+          <ChatPanel />
           <ScrollArea className="min-h-[320px] lg:min-h-0 lg:flex-1">
             <div className="flex flex-col gap-2 pr-1">
               <DiffViewer />
@@ -123,6 +135,8 @@ export function App() {
           </ScrollArea>
         </aside>
       </main>
+
+      {settingsOpen ? <SettingsDialog /> : null}
     </div>
   )
 }
