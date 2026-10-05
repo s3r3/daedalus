@@ -39,6 +39,7 @@ import {
   type PermissionKey,
 } from "@daedalus/core";
 import {
+  createInPlaceFrameRenderer,
   ensureDaemon,
   fetchDaemonWorkspace,
   getDaemonStatus,
@@ -888,6 +889,7 @@ export async function runInteractiveChat(options: {
 
 export type CliProgramDeps = {
   ensureDaemon?: typeof ensureDaemon;
+  stopDaemon?: typeof stopDaemon;
   openBrowser?: typeof openBrowser;
   runInteractiveChat?: (options: { cwd: string }) => Promise<void>;
   readChoice?: () => Promise<string | null>;
@@ -972,14 +974,31 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
     const stdin = process.stdin as NodeJS.ReadStream;
     const stdout = process.stdout as NodeJS.WriteStream;
     const isTTY = Boolean(stdin.isTTY && stdout.isTTY);
+    // Exit in the launcher shuts the daemon down through the exact same
+    // mechanism as `daedalus stop`, anchored at this invocation directory.
+    const stopServer = async (): Promise<{ stopped: boolean; pid?: number; reason: string }> => {
+      const result = await (deps.stopDaemon ?? stopDaemon)({ cwd });
+      return { stopped: result.stopped, pid: result.pid, reason: result.reason };
+    };
     if (isTTY) {
       const keys = createLauncherKeyReader(stdin);
-      let drawnLines = 0;
+      const renderer = createInPlaceFrameRenderer({
+        write: (text) => {
+          stdout.write(text);
+        },
+        columns: () => stdout.columns ?? 80,
+      });
       try {
         await runLauncherMenu({
           status: ensured.status,
-          print,
+          // Close the in-place frame before anything prints, so messages
+          // land below the one clean menu copy left in the scrollback.
+          print: (text) => {
+            renderer.close();
+            print(text);
+          },
           openCli: async () => {
+            renderer.close();
             keys.setSuspended(true);
             try {
               await openCli();
@@ -987,16 +1006,17 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
               keys.setSuspended(false);
             }
           },
-          openWeb,
-          hideToTray,
-          render: (frame: string) => {
-            if (drawnLines > 0) stdout.write(`\x1b[${drawnLines}A`);
-            stdout.write(`\x1b[J${frame}\n`);
-            drawnLines = frame.split("\n").length;
+          openWeb: async () => {
+            renderer.close();
+            await openWeb();
           },
+          hideToTray,
+          stopServer,
+          render: renderer.paint,
           readKey: keys.readKey,
         });
       } finally {
+        renderer.close();
         keys.close();
       }
       return;
@@ -1018,6 +1038,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
         await openWeb();
       },
       hideToTray,
+      stopServer,
     });
   });
 
