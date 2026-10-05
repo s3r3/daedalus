@@ -1,0 +1,60 @@
+{
+  "run_id": "eval-deterministic-feature-unique-array",
+  "task_id": "feature-unique-array",
+  "title": "Add unique array helper",
+  "category": "feature_addition",
+  "mode": "deterministic",
+  "outcome": "success",
+  "state_status": "done",
+  "turns": 2,
+  "iterations": 2,
+  "tool_calls": 2,
+  "tool_calls_by_name": {
+    "read_file": 1,
+    "write_file": 1
+  },
+  "wall_clock_ms": 230,
+  "retries": 0,
+  "recovery_events": 0,
+  "replans": 0,
+  "approvals": 0,
+  "events": 14,
+  "files_changed": 1,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/arrays.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    }
+  ],
+  "checks_passed": 2,
+  "checks_failed": 0,
+  "final_diff": "--- a/src/arrays.js\n+++ b/src/arrays.js\n@@ +1 -0 @@\n export function first(values) { return values[0]; }\n+export function unique(values) { return [...new Set(values)]; }\n",
+  "provider": {
+    "name": "deterministic-scripted",
+    "model": "scripted"
+  },
+  "config": {
+    "mode": "deterministic",
+    "providerName": "deterministic-scripted",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-full/workspaces/feature-unique-array",
+  "event_log": "runs/feature-unique-array.events.jsonl",
+  "started_at": "2026-10-05T08:00:06.631Z",
+  "finished_at": "2026-10-05T08:00:06.862Z",
+  "failure_taxonomy": "none"
+}

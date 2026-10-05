@@ -1,0 +1,24 @@
+{
+  "task_id": "eval-live-refactor-extract-price-format",
+  "outcome": "success",
+  "diff": "--- a/src/format.js\n+++ b/src/format.js\n@@ +3 -0 @@\n+export function formatPrice(cents) {\n+  return '$' + (cents / 100).toFixed(2);\n+}\n--- a/src/receipt.js\n+++ b/src/receipt.js\n@@ +3 -2 @@\n+import { formatPrice } from './format.js';\n+\n export function receiptLine(name, cents) {\n-  const price = '$' + (cents / 100).toFixed(2);\n-  return `${name}: ${price}`;\n+  return `${name}: ${formatPrice(cents)}`;\n }\n",
+  "evidence": [
+    "syntax: pass (node --check src/receipt.js)",
+    "behavior: pass (node validate.mjs)",
+    "created src/format.js (+3/-0)",
+    "modified src/receipt.js (+3/-2)"
+  ],
+  "metrics": {
+    "turns": 33,
+    "tool_calls": 33,
+    "events": 115,
+    "commands": 1,
+    "files_changed": 2,
+    "recoveries": 1,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 2,
+    "checks_failed": 0,
+    "duration_ms": 76678
+  }
+}

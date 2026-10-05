@@ -1,0 +1,4 @@
+run_id,task_id,category,mode,outcome,state_status,failure_taxonomy,turns,iterations,tool_calls,wall_clock_ms,retries,recovery_events,replans,approvals,events,files_changed,commands,checks_passed,checks_failed,provider_name,provider_id,model,validation_summary,event_log
+eval-deterministic-bug-fallback-greeting,bug-fallback-greeting,bug_fix,deterministic,success,done,none,2,2,2,258,0,0,0,0,14,1,0,2,0,deterministic-scripted,,scripted,syntax:pass;behavior:pass,runs/bug-fallback-greeting.events.jsonl
+eval-deterministic-feature-clamp-number,feature-clamp-number,feature_addition,deterministic,success,done,none,2,2,2,233,0,0,0,0,14,1,0,2,0,deterministic-scripted,,scripted,syntax:pass;behavior:pass,runs/feature-clamp-number.events.jsonl
+eval-deterministic-refactor-extract-tax,refactor-extract-tax,refactor,deterministic,success,done,none,3,3,3,268,0,0,0,0,19,2,0,2,0,deterministic-scripted,,scripted,syntax:pass;behavior:pass,runs/refactor-extract-tax.events.jsonl

@@ -1,4 +1,5 @@
 import { getPalette, type PaletteName } from '@daedalus/core/palette'
+import type { AgentMode } from '@daedalus/core'
 import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import { useDaedalusStore } from '../state/taskStore'
 
@@ -21,6 +22,27 @@ export function applyPaletteVars(theme: PaletteName): void {
   for (const [key, hex] of Object.entries(getPalette(theme))) {
     root.style.setProperty(`--daedalus-${key}`, hex)
   }
+}
+
+const MODE_VAR_KEYS: Record<AgentMode, string> = {
+  ask: 'modeAsk',
+  manual: 'modeManual',
+  auto: 'modeAuto',
+  plan: 'modePlan',
+  orchestrator: 'modeOrchestrator',
+}
+
+/** CSS variable for a mode accent; the value itself always comes from core. */
+export function modeCssVar(mode: AgentMode): string {
+  return `var(--daedalus-${MODE_VAR_KEYS[mode]})`
+}
+
+export const MODE_LABELS: Record<AgentMode, string> = {
+  ask: 'Ask',
+  manual: 'Manual',
+  auto: 'Auto',
+  plan: 'Plan',
+  orchestrator: 'Orchestrator',
 }
 
 /** Applies the §3.4 token set to <html data-theme>; components never style colors. */

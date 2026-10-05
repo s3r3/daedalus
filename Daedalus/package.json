@@ -7,6 +7,18 @@
   "engines": {
     "node": ">=22"
   },
+  "bin": {
+    "daedalus": "./cli/src/index.ts"
+  },
+  "files": [
+    "core/src",
+    "cli/src",
+    "cli/assets",
+    "server/src",
+    "daedalus-web/src",
+    "skills",
+    "docs"
+  ],
   "workspaces": [
     "core",
     "cli",

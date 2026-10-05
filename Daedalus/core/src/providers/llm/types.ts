@@ -25,6 +25,10 @@ export type Message = {
   name?: string;
   tool_call_id?: string;
   tool_calls?: ToolCall[];
+  /** Provider-supplied reasoning text (OpenAI-compatible variants), when present. */
+  reasoning_content?: string;
+  reasoning?: string;
+  thinking?: string;
 };
 
 export type ToolDefinition = {

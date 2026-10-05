@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "kind": "daedalus-evaluation-dataset",
+  "mode": "live",
+  "label": "Live provider evaluation",
+  "generated_at": "2026-10-05T08:57:30.206Z",
+  "node": "v24.20.0",
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "models": [
+      "kgw/kilo-auto/free",
+      "claude-lo",
+      "kr/qwen3-coder-next-agentic"
+    ],
+    "modelStrategy": "round-robin",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "selected_tasks": [
+    "bug-fallback-greeting",
+    "feature-clamp-number",
+    "refactor-extract-tax"
+  ],
+  "caveat": "These runs use the configured live provider. Provider nondeterminism may still apply."
+}

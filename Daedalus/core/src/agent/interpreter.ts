@@ -25,5 +25,16 @@ export async function interpretTask(input: string, options: Partial<Omit<TaskSpe
     constraints,
     done_criteria: doneCriteria,
     created_at: options.created_at ?? new Date().toISOString(),
+    mode: options.mode,
+    parent_task_id: options.parent_task_id,
+    attachments: options.attachments,
+    provider_id: options.provider_id,
+    model: options.model,
+    models: options.models,
+    model_strategy: options.model_strategy,
+    thinking: options.thinking,
+    title: options.title,
+    rules_files: options.rules_files,
+    agent: options.agent,
   };
 }

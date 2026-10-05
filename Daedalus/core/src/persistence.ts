@@ -1,6 +1,7 @@
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import type { Event, EventType } from "./contracts.ts";
+import type { WorktreeRecord } from "./worktree.ts";
 
 /**
  * Per-task persistence per ADR-0003:
@@ -80,6 +81,21 @@ export class TaskStore {
     }
   }
 
+  /** Persist where an isolated task's worktree lives so `daedalus apply` can find it later. */
+  saveWorktreeRecord(taskId: string, record: WorktreeRecord): void {
+    const dir = this.taskDir(taskId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "worktree.json"), JSON.stringify(record, null, 2), "utf8");
+  }
+
+  loadWorktreeRecord(taskId: string): WorktreeRecord | undefined {
+    try {
+      return JSON.parse(readFileSync(join(this.taskDir(taskId), "worktree.json"), "utf8")) as WorktreeRecord;
+    } catch {
+      return undefined;
+    }
+  }
+
   /** Cross-process cancellation: `daedalus cancel <id>` writes a marker the runner polls. */
   requestCancel(taskId: string): void {
     const dir = this.taskDir(taskId);
@@ -95,6 +111,104 @@ export class TaskStore {
       return false;
     }
   }
+
+  // --- Checkpoints -------------------------------------------------------
+  // Before a task mutates a workspace file for the first time, the runner
+  // records the pre-mutation content here (or a "created" marker when the
+  // file did not exist). `restoreTask` can then rewind the workspace to the
+  // task's starting state, touching only files the task itself recorded.
+
+  backupsDir(taskId: string): string {
+    return join(this.taskDir(taskId), "backups");
+  }
+
+  #manifestPath(taskId: string): string {
+    return join(this.backupsDir(taskId), "index.json");
+  }
+
+  #readManifest(taskId: string): BackupEntry[] {
+    try {
+      const parsed = JSON.parse(readFileSync(this.#manifestPath(taskId), "utf8")) as unknown;
+      if (!Array.isArray(parsed)) return [];
+      return parsed.filter((entry): entry is BackupEntry =>
+        typeof entry === "object" && entry !== null
+        && typeof (entry as BackupEntry).path === "string"
+        && typeof (entry as BackupEntry).created === "boolean");
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Record the pre-mutation state of one workspace file. The first record
+   * for a path wins; later mutations in the same task keep the original.
+   * `content === null` means the file did not exist before the task.
+   */
+  recordBackup(taskId: string, relativePath: string, content: string | null): void {
+    const entries = this.#readManifest(taskId);
+    if (entries.some((entry) => entry.path === relativePath)) return;
+    const dir = this.backupsDir(taskId);
+    mkdirSync(dir, { recursive: true });
+    if (content !== null) {
+      const target = join(dir, relativePath);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, content, "utf8");
+    }
+    entries.push({ path: relativePath, created: content === null });
+    writeFileSync(this.#manifestPath(taskId), JSON.stringify(entries, null, 2), "utf8");
+  }
+
+  /** Files this task can rewind: each entry is a workspace-relative path. */
+  listBackups(taskId: string): Array<{ path: string; created: boolean }> {
+    return this.#readManifest(taskId).map(({ path, created }) => ({ path, created }));
+  }
+
+  /**
+   * Rewind the workspace to the state recorded by `recordBackup`: backed-up
+   * files are overwritten with their original content and files the task
+   * created are deleted. Only recorded files are touched. Every target is
+   * validated to stay inside the workspace root before anything is written;
+   * a single escaping path refuses the whole restore.
+   */
+  restoreTask(taskId: string, workspaceRoot?: string): { restored: string[]; deleted: string[] } {
+    const entries = this.#readManifest(taskId);
+    if (entries.length === 0) return { restored: [], deleted: [] };
+    const state = this.loadState<{ repo_path?: string }>(taskId);
+    const base = workspaceRoot ?? state?.repo_path;
+    if (!base) throw new Error(`cannot restore task ${taskId}: workspace root unknown (no recorded repo_path)`);
+    const root = resolve(base);
+    const targets = entries.map((entry) => {
+      const target = resolve(root, entry.path);
+      if (target === root || !target.startsWith(root + sep)) {
+        throw new Error(`refusing to restore ${entry.path}: escapes workspace root`);
+      }
+      return { entry, target };
+    });
+    const restored: string[] = [];
+    const deleted: string[] = [];
+    for (const { entry, target } of targets) {
+      if (entry.created) {
+        try {
+          if (statSync(target).isDirectory()) continue;
+        } catch { /* already gone */ }
+        rmSync(target, { force: true });
+        deleted.push(entry.path);
+        continue;
+      }
+      let content: string;
+      try {
+        content = readFileSync(join(this.backupsDir(taskId), entry.path), "utf8");
+      } catch {
+        throw new Error(`cannot restore task ${taskId}: backup content missing for ${entry.path}`);
+      }
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, content, "utf8");
+      restored.push(entry.path);
+    }
+    return { restored, deleted };
+  }
 }
+
+type BackupEntry = { path: string; created: boolean };
 
 export type { EventType };

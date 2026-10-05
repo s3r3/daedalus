@@ -1,0 +1,2 @@
+run_id,task_id,category,mode,outcome,state_status,failure_taxonomy,turns,iterations,tool_calls,wall_clock_ms,retries,recovery_events,replans,approvals,events,files_changed,commands,checks_passed,checks_failed,provider_name,provider_id,model,validation_summary,event_log
+eval-live-bug-fallback-greeting,bug-fallback-greeting,bug_fix,live,partial,active,validation_failed,4,4,4,17015,3,3,0,0,28,0,0,1,1,provider-registry:nine-router,nine-router,kgw/kilo-auto/free,syntax:pass;behavior:fail,runs/bug-fallback-greeting.events.jsonl

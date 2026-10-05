@@ -1,0 +1,63 @@
+{
+  "run_id": "eval-live-refactor-extract-tax",
+  "task_id": "refactor-extract-tax",
+  "title": "Extract tax calculation",
+  "category": "refactor",
+  "mode": "live",
+  "outcome": "stopped",
+  "state_status": "failed",
+  "last_error": "max_iterations",
+  "turns": 12,
+  "iterations": 12,
+  "tool_calls": 18,
+  "tool_calls_by_name": {
+    "list_dir": 7,
+    "read_file": 9,
+    "glob": 1,
+    "write_file": 1
+  },
+  "wall_clock_ms": 51038,
+  "retries": 0,
+  "recovery_events": 0,
+  "replans": 0,
+  "approvals": 0,
+  "events": 64,
+  "files_changed": 1,
+  "commands": 0,
+  "validation": [],
+  "checks_passed": 0,
+  "checks_failed": 0,
+  "final_diff": "--- a/src/tax.js\n+++ b/src/tax.js\n@@ +3 -0 @@\n+export function calculateTax(subtotal, taxRate) {\n+  return subtotal * taxRate;\n+}\n",
+  "provider": {
+    "name": "provider-registry:nine-router",
+    "id": "nine-router",
+    "model": "claude-lo",
+    "models": [
+      "claude-lo",
+      "kr/claude-sonnet-4-agentic",
+      "kr/qwen3-coder-next-agentic",
+      "cx/gpt-5.5"
+    ],
+    "modelStrategy": "round-robin"
+  },
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "models": [
+      "claude-lo",
+      "kr/claude-sonnet-4-agentic",
+      "kr/qwen3-coder-next-agentic",
+      "cx/gpt-5.5"
+    ],
+    "modelStrategy": "round-robin",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-subset-v3-2026-10-05/workspaces/refactor-extract-tax",
+  "event_log": "runs/refactor-extract-tax.events.jsonl",
+  "started_at": "2026-10-05T09:11:13.701Z",
+  "finished_at": "2026-10-05T09:12:04.740Z",
+  "failure_taxonomy": "budget_exceeded"
+}

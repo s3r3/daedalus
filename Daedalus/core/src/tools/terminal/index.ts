@@ -27,8 +27,11 @@ export function run(command: string, args: string[], cwd: string, opts: { timeou
     const consume = (chunk: Buffer) => { const text = chunk.toString(); output += text; opts.onOutput?.(text); if (output.length > limit * 2 && !killed) { killed = true; killGroup(child); } };
     child.stdout?.on('data', consume); child.stderr?.on('data', consume);
     opts.signal?.addEventListener('abort', () => { killed = true; killGroup(child); }, { once: true });
+    // A signal that aborted before the spawn (sticky cancel) never fires
+    // the listener above; honour it immediately instead of running on.
+    if (opts.signal?.aborted) { killed = true; killGroup(child); }
     child.on('error', (error) => finish({ status: killed ? 'timeout' : 'error', output: killed ? 'execution cancelled or timed out' : String(error), truncated: false, meta: { killed } }));
-    child.on('close', (code) => { const truncated = output.length > limit; finish({ status: killed ? 'timeout' : code === 0 ? 'ok' : 'error', output: truncated ? `${output.slice(0, limit)}\n…[truncated]` : output, truncated, meta: { exit_code: code, killed, pid: child.pid } }); });
+    child.on('close', (code, signal) => { const truncated = output.length > limit; finish({ status: killed ? 'timeout' : code === 0 ? 'ok' : 'error', output: truncated ? `${output.slice(0, limit)}\n…[truncated]` : output, truncated, meta: { exit_code: code, signal, killed, pid: child.pid } }); });
   });
 }
 

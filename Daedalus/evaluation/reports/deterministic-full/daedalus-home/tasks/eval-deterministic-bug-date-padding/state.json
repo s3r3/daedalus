@@ -1,0 +1,71 @@
+{
+  "id": "eval-deterministic-bug-date-padding",
+  "goal": "Fix formatDate() so both month and day are two digits in YYYY-MM-DD output.",
+  "repo_path": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-full/workspaces/bug-date-padding",
+  "constraints": [],
+  "done_criteria": [
+    "Inspect the current date formatting implementation",
+    "formatDate() pads the day as well as the month"
+  ],
+  "created_at": "2026-10-05T08:00:06.067Z",
+  "mode": "auto",
+  "model": "scripted",
+  "turns": 2,
+  "plan": {
+    "id": "35402e3f-6db4-4ab9-94d2-f657c9ff2514",
+    "task_id": "eval-deterministic-bug-date-padding",
+    "steps": [
+      {
+        "id": "eval-deterministic-bug-date-padding-step-1",
+        "intent": "Satisfy: Inspect the current date formatting implementation",
+        "status": "done",
+        "evidence": [
+          "ok: 1: export function formatDate(date) {\n2:   const month = String(date.getMonth() + 1).padStart(2, '0');\n3:   const day = String(date.getDate());\n4:   return `${date.getFullYear()}-${month}-${day}`;\n5: }\n6: "
+        ]
+      },
+      {
+        "id": "eval-deterministic-bug-date-padding-step-2",
+        "intent": "Satisfy: formatDate() pads the day as well as the month",
+        "status": "done",
+        "evidence": [
+          "ok: edited src/date.js"
+        ]
+      }
+    ],
+    "version": 1,
+    "status": "complete"
+  },
+  "steps": [
+    {
+      "id": "eval-deterministic-bug-date-padding-step-1",
+      "intent": "Satisfy: Inspect the current date formatting implementation",
+      "status": "done",
+      "evidence": [
+        "ok: 1: export function formatDate(date) {\n2:   const month = String(date.getMonth() + 1).padStart(2, '0');\n3:   const day = String(date.getDate());\n4:   return `${date.getFullYear()}-${month}-${day}`;\n5: }\n6: "
+      ]
+    },
+    {
+      "id": "eval-deterministic-bug-date-padding-step-2",
+      "intent": "Satisfy: formatDate() pads the day as well as the month",
+      "status": "done",
+      "evidence": [
+        "ok: edited src/date.js"
+      ]
+    }
+  ],
+  "status": "done",
+  "last_observation": "ok: edited src/date.js",
+  "last_tool_call_id": "eval-call-2",
+  "tool_result": {
+    "call_id": "eval-call-2",
+    "status": "ok",
+    "output": "edited src/date.js",
+    "truncated": false,
+    "meta": {
+      "path": "src/date.js",
+      "replacements": 1,
+      "tool": "edit_file",
+      "mutating": true
+    }
+  }
+}

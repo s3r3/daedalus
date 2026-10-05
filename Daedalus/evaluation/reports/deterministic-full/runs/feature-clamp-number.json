@@ -1,0 +1,60 @@
+{
+  "run_id": "eval-deterministic-feature-clamp-number",
+  "task_id": "feature-clamp-number",
+  "title": "Add numeric clamp helper",
+  "category": "feature_addition",
+  "mode": "deterministic",
+  "outcome": "success",
+  "state_status": "done",
+  "turns": 2,
+  "iterations": 2,
+  "tool_calls": 2,
+  "tool_calls_by_name": {
+    "read_file": 1,
+    "write_file": 1
+  },
+  "wall_clock_ms": 268,
+  "retries": 0,
+  "recovery_events": 0,
+  "replans": 0,
+  "approvals": 0,
+  "events": 14,
+  "files_changed": 1,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/math.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    }
+  ],
+  "checks_passed": 2,
+  "checks_failed": 0,
+  "final_diff": "--- a/src/math.js\n+++ b/src/math.js\n@@ +1 -0 @@\n export function add(a, b) { return a + b; }\n export function subtract(a, b) { return a - b; }\n+export function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }\n",
+  "provider": {
+    "name": "deterministic-scripted",
+    "model": "scripted"
+  },
+  "config": {
+    "mode": "deterministic",
+    "providerName": "deterministic-scripted",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-full/workspaces/feature-clamp-number",
+  "event_log": "runs/feature-clamp-number.events.jsonl",
+  "started_at": "2026-10-05T08:00:06.358Z",
+  "finished_at": "2026-10-05T08:00:06.627Z",
+  "failure_taxonomy": "none"
+}

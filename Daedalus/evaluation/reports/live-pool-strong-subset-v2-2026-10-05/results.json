@@ -1,0 +1,188 @@
+[
+  {
+    "run_id": "eval-live-bug-fallback-greeting",
+    "task_id": "bug-fallback-greeting",
+    "title": "Fallback greeting name",
+    "category": "bug_fix",
+    "mode": "live",
+    "outcome": "stopped",
+    "state_status": "failed",
+    "last_error": "max_iterations",
+    "turns": 12,
+    "iterations": 12,
+    "tool_calls": 12,
+    "tool_calls_by_name": {
+      "list_dir": 6,
+      "read_file": 5,
+      "glob": 1
+    },
+    "wall_clock_ms": 55934,
+    "retries": 0,
+    "recovery_events": 0,
+    "replans": 0,
+    "approvals": 0,
+    "events": 54,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [],
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "claude-lo",
+      "models": [
+        "claude-lo",
+        "kr/claude-sonnet-4-agentic",
+        "kr/qwen3-coder-next-agentic",
+        "cx/gpt-5.5"
+      ],
+      "modelStrategy": "round-robin"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "models": [
+        "claude-lo",
+        "kr/claude-sonnet-4-agentic",
+        "kr/qwen3-coder-next-agentic",
+        "cx/gpt-5.5"
+      ],
+      "modelStrategy": "round-robin",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-subset-v2-2026-10-05/workspaces/bug-fallback-greeting",
+    "event_log": "runs/bug-fallback-greeting.events.jsonl",
+    "started_at": "2026-10-05T09:05:53.980Z",
+    "finished_at": "2026-10-05T09:06:49.916Z",
+    "failure_taxonomy": "budget_exceeded"
+  },
+  {
+    "run_id": "eval-live-feature-clamp-number",
+    "task_id": "feature-clamp-number",
+    "title": "Add numeric clamp helper",
+    "category": "feature_addition",
+    "mode": "live",
+    "outcome": "stopped",
+    "state_status": "failed",
+    "last_error": "max_iterations",
+    "turns": 12,
+    "iterations": 12,
+    "tool_calls": 17,
+    "tool_calls_by_name": {
+      "list_dir": 8,
+      "read_file": 8,
+      "edit_file": 1
+    },
+    "wall_clock_ms": 50145,
+    "retries": 0,
+    "recovery_events": 0,
+    "replans": 0,
+    "approvals": 0,
+    "events": 62,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [],
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "claude-lo",
+      "models": [
+        "claude-lo",
+        "kr/claude-sonnet-4-agentic",
+        "kr/qwen3-coder-next-agentic",
+        "cx/gpt-5.5"
+      ],
+      "modelStrategy": "round-robin"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "models": [
+        "claude-lo",
+        "kr/claude-sonnet-4-agentic",
+        "kr/qwen3-coder-next-agentic",
+        "cx/gpt-5.5"
+      ],
+      "modelStrategy": "round-robin",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-subset-v2-2026-10-05/workspaces/feature-clamp-number",
+    "event_log": "runs/feature-clamp-number.events.jsonl",
+    "started_at": "2026-10-05T09:06:49.918Z",
+    "finished_at": "2026-10-05T09:07:40.064Z",
+    "failure_taxonomy": "budget_exceeded"
+  },
+  {
+    "run_id": "eval-live-refactor-extract-tax",
+    "task_id": "refactor-extract-tax",
+    "title": "Extract tax calculation",
+    "category": "refactor",
+    "mode": "live",
+    "outcome": "stopped",
+    "state_status": "failed",
+    "last_error": "max_iterations",
+    "turns": 12,
+    "iterations": 12,
+    "tool_calls": 16,
+    "tool_calls_by_name": {
+      "list_dir": 7,
+      "read_file": 7,
+      "glob": 2
+    },
+    "wall_clock_ms": 55238,
+    "retries": 0,
+    "recovery_events": 0,
+    "replans": 0,
+    "approvals": 0,
+    "events": 59,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [],
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "claude-lo",
+      "models": [
+        "claude-lo",
+        "kr/claude-sonnet-4-agentic",
+        "kr/qwen3-coder-next-agentic",
+        "cx/gpt-5.5"
+      ],
+      "modelStrategy": "round-robin"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "models": [
+        "claude-lo",
+        "kr/claude-sonnet-4-agentic",
+        "kr/qwen3-coder-next-agentic",
+        "cx/gpt-5.5"
+      ],
+      "modelStrategy": "round-robin",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-subset-v2-2026-10-05/workspaces/refactor-extract-tax",
+    "event_log": "runs/refactor-extract-tax.events.jsonl",
+    "started_at": "2026-10-05T09:07:40.071Z",
+    "finished_at": "2026-10-05T09:08:35.309Z",
+    "failure_taxonomy": "budget_exceeded"
+  }
+]

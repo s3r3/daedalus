@@ -79,7 +79,10 @@ export function decideRecovery(error: NormalizedError, context: RecoveryContext,
 }
 
 export function validationPassed(result: ValidationResult): boolean {
-  return result.checks.length > 0 && result.checks.every((check) => check.status === 'pass');
+  // Checks marked `required: false` (workspace validation profile) report
+  // their outcome but never block completion; everything else must pass.
+  const blocking = result.checks.filter((check) => check.required !== false);
+  return result.checks.length > 0 && blocking.every((check) => check.status === 'pass');
 }
 
 export function validationFailed(result: ValidationResult): ValidationCheck[] {
