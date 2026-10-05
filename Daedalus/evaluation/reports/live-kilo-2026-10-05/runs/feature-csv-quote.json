@@ -1,0 +1,63 @@
+{
+  "run_id": "eval-live-feature-csv-quote",
+  "task_id": "feature-csv-quote",
+  "title": "Add CSV cell quoting",
+  "category": "feature_addition",
+  "mode": "live",
+  "outcome": "partial",
+  "state_status": "active",
+  "turns": 5,
+  "iterations": 5,
+  "tool_calls": 5,
+  "tool_calls_by_name": {
+    "list_dir": 3,
+    "read_file": 1,
+    "run_command": 1
+  },
+  "wall_clock_ms": 16310,
+  "retries": 3,
+  "recovery_events": 3,
+  "replans": 0,
+  "approvals": 0,
+  "events": 35,
+  "files_changed": 0,
+  "commands": 1,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/csv.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "fail",
+      "exit_code": 1,
+      "summary": "failed"
+    }
+  ],
+  "checks_passed": 1,
+  "checks_failed": 1,
+  "final_diff": "",
+  "provider": {
+    "name": "provider-registry:nine-router",
+    "id": "nine-router",
+    "model": "kgw/kilo-auto/free"
+  },
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "model": "kgw/kilo-auto/free",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/feature-csv-quote",
+  "event_log": "runs/feature-csv-quote.events.jsonl",
+  "started_at": "2026-10-05T08:23:21.397Z",
+  "finished_at": "2026-10-05T08:23:37.710Z",
+  "failure_taxonomy": "validation_failed"
+}

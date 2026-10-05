@@ -1,4 +1,4 @@
-import { OpenAICompatProvider, registerProvider, type LLMProvider, type Message } from "./llm/index.ts";
+import { ModelPoolProvider, OpenAICompatProvider, registerProvider, type LLMProvider, type Message } from "./llm/index.ts";
 import { loadSettings, type Settings } from "../settings.ts";
 
 export type PromptSection = { id: string; content: string };
@@ -12,13 +12,33 @@ export function buildPrompt(template: PromptTemplate): string {
 
 /** Reads LLM_* settings and registers the default OpenAI-compatible provider. */
 export function createProviderFromSettings(settings: Settings = loadSettings()): LLMProvider {
-  const provider = new OpenAICompatProvider({
-    baseUrl: settings.llm.baseUrl,
-    apiKey: settings.llm.apiKey,
-    model: settings.llm.model,
-  });
+  const models = settings.llm.models.length > 0 ? settings.llm.models : settings.llm.model ? [settings.llm.model] : [];
+  const provider = models.length > 1
+    ? new ModelPoolProvider({
+        models,
+        strategy: settings.llm.modelStrategy,
+        createProvider: (model) => new OpenAICompatProvider({
+          baseUrl: settings.llm.baseUrl,
+          apiKey: settings.llm.apiKey,
+          model,
+        }),
+      })
+    : new OpenAICompatProvider({
+        baseUrl: settings.llm.baseUrl,
+        apiKey: settings.llm.apiKey,
+        model: settings.llm.model || models[0] || "",
+      });
   registerProvider(provider);
   return provider;
+}
+
+/** Build a provider for one stored provider configuration + model (single-model, no pool). */
+export function createProviderForConfig(config: { baseUrl?: string; apiKey?: string } | undefined, model: string): LLMProvider {
+  return new OpenAICompatProvider({
+    baseUrl: config?.baseUrl ?? "",
+    apiKey: config?.apiKey ?? "",
+    model,
+  });
 }
 
 export function defaultTemplate(input: { goal: string; repoPath: string }): PromptTemplate {

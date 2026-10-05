@@ -11,6 +11,13 @@ export default defineConfig({
   server: {
     proxy: {
       '/health': { target: gateway, changeOrigin: true },
+      '/settings': { target: gateway, changeOrigin: true },
+      '/session': { target: gateway, changeOrigin: true },
+      '/providers': { target: gateway, changeOrigin: true },
+      '/models': { target: gateway, changeOrigin: true },
+      '/uploads': { target: gateway, changeOrigin: true },
+      '/upload': { target: gateway, changeOrigin: true },
+      '/attachments': { target: gateway, changeOrigin: true },
       '/tasks': { target: gateway, changeOrigin: true, ws: true },
       '/workspace': { target: gateway, changeOrigin: true },
     },

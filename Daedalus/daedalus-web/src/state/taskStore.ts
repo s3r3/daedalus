@@ -1,7 +1,7 @@
 import { create } from 'zustand'
-import type { Event, FinalReport } from '@daedalus/core'
+import type { AgentMode, Attachment, Event, FinalReport, ProviderConfigPublic } from '@daedalus/core'
 import type { StreamStatus } from '../api/eventStream'
-import type { TaskSummary } from '../api/types'
+import type { ProviderModel, ProviderPreset, SessionState, TaskSummary } from '../api/types'
 
 /**
  * Client state for the control plane. Only genuinely shared state lives here
@@ -20,8 +20,13 @@ export type WorkspaceState = {
 
 export type ComposerState = {
   goal: string
+  mode: AgentMode
+  providerId: string
+  model: string
   autoApprove: boolean
+  thinking: boolean
   maxIterations: number
+  attachments: Attachment[]
   submitting: boolean
   error: string | null
 }
@@ -35,6 +40,13 @@ export type DaedalusState = {
   report: FinalReport | null
   workspace: WorkspaceState
   composer: ComposerState
+  session: SessionState | null
+  providers: ProviderConfigPublic[]
+  providerPresets: ProviderPreset[]
+  models: ProviderModel[]
+  taskAttachments: Attachment[]
+  settingsOpen: boolean
+  workspaceRevision: number
   theme: 'daedalus-dark' | 'daedalus-light'
   openFilePath: string | null
   error: string | null
@@ -47,6 +59,14 @@ export type DaedalusState = {
   setReport: (report: FinalReport | null) => void
   setWorkspace: (patch: Partial<WorkspaceState>) => void
   setComposer: (patch: Partial<ComposerState>) => void
+  setSession: (session: SessionState | null) => void
+  setProviders: (providers: ProviderConfigPublic[], presets?: ProviderPreset[]) => void
+  setModels: (models: ProviderModel[]) => void
+  setTaskAttachments: (attachments: Attachment[]) => void
+  addAttachments: (attachments: Attachment[]) => void
+  removeAttachment: (id: string) => void
+  setSettingsOpen: (open: boolean) => void
+  bumpWorkspaceRevision: () => void
   setTheme: (theme: 'daedalus-dark' | 'daedalus-light') => void
   setOpenFile: (path: string | null) => void
   setError: (error: string | null) => void
@@ -54,7 +74,18 @@ export type DaedalusState = {
 }
 
 const initialWorkspace: WorkspaceState = { root: '', path: '', content: '', loading: false, error: null, size: 0 }
-const initialComposer: ComposerState = { goal: '', autoApprove: false, maxIterations: 25, submitting: false, error: null }
+const initialComposer: ComposerState = {
+  goal: '',
+  mode: 'auto',
+  providerId: '',
+  model: '',
+  autoApprove: false,
+  thinking: true,
+  maxIterations: 25,
+  attachments: [],
+  submitting: false,
+  error: null,
+}
 
 export const useDaedalusStore = create<DaedalusState>((set) => ({
   connection: 'idle',
@@ -65,6 +96,13 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   report: null,
   workspace: initialWorkspace,
   composer: initialComposer,
+  session: null,
+  providers: [],
+  providerPresets: [],
+  models: [],
+  taskAttachments: [],
+  settingsOpen: false,
+  workspaceRevision: 0,
   theme: 'daedalus-dark',
   openFilePath: null,
   error: null,
@@ -76,6 +114,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
       taskId,
       events: [],
       report: null,
+      taskAttachments: [],
       openFilePath: null,
       workspace: { ...initialWorkspace, root: state.workspace.root },
       ...(goal === undefined ? {} : { composer: { ...state.composer, goal } }),
@@ -94,6 +133,36 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   setReport: (report) => set({ report }),
   setWorkspace: (patch) => set((state) => ({ workspace: { ...state.workspace, ...patch } })),
   setComposer: (patch) => set((state) => ({ composer: { ...state.composer, ...patch } })),
+  setSession: (session) =>
+    set((state) => ({
+      session,
+      ...(session
+        ? {
+            composer: {
+              ...state.composer,
+              mode: session.mode,
+              autoApprove: session.autoApprove,
+              thinking: session.thinking !== false,
+              providerId: session.providerId ?? state.composer.providerId,
+              model: session.model ?? state.composer.model,
+            },
+            workspace: { ...state.workspace, root: session.workspaceRoot || state.workspace.root },
+          }
+        : {}),
+    })),
+  setProviders: (providers, presets) =>
+    set(() => ({ providers, ...(presets ? { providerPresets: presets } : {}) })),
+  setModels: (models) => set({ models }),
+  setTaskAttachments: (taskAttachments) => set({ taskAttachments }),
+  addAttachments: (attachments) =>
+    set((state) => {
+      const known = new Set(state.composer.attachments.map((attachment) => attachment.id))
+      return { composer: { ...state.composer, attachments: [...state.composer.attachments, ...attachments.filter((a) => !known.has(a.id))] } }
+    }),
+  removeAttachment: (id) =>
+    set((state) => ({ composer: { ...state.composer, attachments: state.composer.attachments.filter((attachment) => attachment.id !== id) } })),
+  setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  bumpWorkspaceRevision: () => set((state) => ({ workspaceRevision: state.workspaceRevision + 1 })),
   setTheme: (theme) => set({ theme }),
   setOpenFile: (openFilePath) => set({ openFilePath }),
   setError: (error) => set({ error }),
@@ -101,11 +170,19 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
     set({
       connection: 'idle',
       reconnectAttempt: 0,
+      tasks: [],
       taskId: null,
       events: [],
       report: null,
       workspace: initialWorkspace,
       composer: initialComposer,
+      session: null,
+      providers: [],
+      providerPresets: [],
+      models: [],
+      taskAttachments: [],
+      settingsOpen: false,
+      workspaceRevision: 0,
       openFilePath: null,
       error: null,
     }),

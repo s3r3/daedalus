@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, File as FileIcon, Folder, FolderOpen } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { ChevronDown, ChevronRight, File as FileIcon, Folder, FolderOpen, ImagePlus, UploadCloud } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
+import { Input } from '../ui/input'
 import { ErrorState, LoadingState, Panel } from '../common/panel'
 import { api } from '../../api/client'
 import type { WorkspaceEntry, WorkspaceRoot, WorkspaceTreeNode } from '../../api/types'
@@ -14,8 +15,12 @@ import { useDaedalusStore } from '../../state/taskStore'
 export function WorkspacePanel() {
   const workspace = useDaedalusStore((state) => state.workspace)
   const setWorkspace = useDaedalusStore((state) => state.setWorkspace)
+  const setSession = useDaedalusStore((state) => state.setSession)
+  const workspaceRevision = useDaedalusStore((state) => state.workspaceRevision)
   const openFilePath = useDaedalusStore((state) => state.openFilePath)
   const setOpenFile = useDaedalusStore((state) => state.setOpenFile)
+  const activeTaskId = useDaedalusStore((state) => state.taskId)
+  const addAttachments = useDaedalusStore((state) => state.addAttachments)
   const [roots, setRoots] = useState<WorkspaceRoot[]>([])
   const [rootError, setRootError] = useState<string | null>(null)
   const [tree, setTree] = useState<WorkspaceTreeNode | null>(null)
@@ -24,6 +29,23 @@ export function WorkspacePanel() {
   const [expanded, setExpanded] = useState<string[]>(['.'])
   const [children, setChildren] = useState<Record<string, WorkspaceEntry[]>>({})
   const [loadingPath, setLoadingPath] = useState<string | null>(null)
+  const [workspaceName, setWorkspaceName] = useState('')
+  const [folderPath, setFolderPath] = useState('')
+  const [filePath, setFilePath] = useState('')
+  const [fileContent, setFileContent] = useState('')
+  const [renameFrom, setRenameFrom] = useState('')
+  const [renameTo, setRenameTo] = useState('')
+  const [mutationStatus, setMutationStatus] = useState<string | null>(null)
+  const [mutationError, setMutationError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+  const folderInputRef = useRef<HTMLInputElement>(null)
+  const imageInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    folderInputRef.current?.setAttribute('webkitdirectory', '')
+    folderInputRef.current?.setAttribute('directory', '')
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -77,6 +99,109 @@ export function WorkspacePanel() {
     (nextRoot: string) => void readRoot(nextRoot).then(applyRoot(nextRoot)),
     [readRoot, applyRoot],
   )
+
+  const refreshTree = useCallback((): void => {
+    if (!root) return
+    setChildren({})
+    setExpanded(['.'])
+    loadRoot(root)
+  }, [loadRoot, root])
+
+  // Editor saves and other Web mutations bump this revision; reloading the
+  // tree makes the same on-disk workspace (shared with the CLI) visible
+  // without any export/import step.
+  useEffect(() => {
+    if (workspaceRevision > 0) refreshTree()
+  }, [refreshTree, workspaceRevision])
+
+  const runMutation = async (action: () => Promise<string>): Promise<void> => {
+    setBusy(true)
+    setMutationError(null)
+    try {
+      const message = await action()
+      setMutationStatus(message)
+      refreshTree()
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const createWorkspace = async (): Promise<void> => {
+    const name = workspaceName.trim()
+    if (!name) {
+      setMutationError('workspace name is required')
+      return
+    }
+    await runMutation(async () => {
+      const created = await api.createWorkspace({ root: root || undefined, name })
+      setRoots((current) => (current.some((entry) => entry.path === created.path) ? current : [...current, { path: created.path, name: created.name }]))
+      setWorkspace({ root: created.path, content: '', path: '' })
+      setWorkspaceName('')
+      return `Workspace ready: ${created.path}`
+    })
+  }
+
+  const createFolder = async (): Promise<void> => {
+    const path = folderPath.trim()
+    if (!path) {
+      setMutationError('folder path is required')
+      return
+    }
+    await runMutation(async () => {
+      await api.createFolder(root, path)
+      setFolderPath('')
+      return `Folder created: ${path}`
+    })
+  }
+
+  const createFile = async (): Promise<void> => {
+    const path = filePath.trim()
+    if (!path) {
+      setMutationError('file path is required')
+      return
+    }
+    await runMutation(async () => {
+      await api.createFile(root, path, fileContent)
+      setFilePath('')
+      setFileContent('')
+      return `File created: ${path}`
+    })
+  }
+
+  const renameEntry = async (): Promise<void> => {
+    const from = renameFrom.trim()
+    const to = renameTo.trim()
+    if (!from || !to) {
+      setMutationError('rename source and destination are required')
+      return
+    }
+    await runMutation(async () => {
+      await api.renameWorkspaceEntry(root, from, to)
+      setRenameFrom('')
+      setRenameTo('')
+      return `Renamed ${from} → ${to}`
+    })
+  }
+
+  const uploadFiles = async (files: FileList | File[], kind: 'file' | 'folder' | 'image' | 'zip'): Promise<void> => {
+    const list = [...files]
+    if (list.length === 0) return
+    await runMutation(async () => {
+      const form = new FormData()
+      form.set('root', root)
+      form.set('kind', kind)
+      if (activeTaskId) form.set('task_id', activeTaskId)
+      for (const file of list) {
+        const path = kind === 'folder' ? relativePathOf(file) : file.name
+        form.append('files', new File([file], path, { type: file.type, lastModified: file.lastModified }))
+      }
+      const response = await api.upload(form)
+      addAttachments(response.attachments)
+      return `Uploaded ${response.files.length} file(s) to ${response.destination}; ${response.attachments.length} attachment(s) staged.`
+    })
+  }
 
   useEffect(() => {
     if (root.length === 0) return
@@ -145,7 +270,15 @@ export function WorkspacePanel() {
           data-testid="workspace-root"
           className="h-7 w-full rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
           value={workspace.root}
-          onChange={(event) => setWorkspace({ root: event.target.value, content: '', path: '' })}
+          onChange={(event) => {
+            const nextRoot = event.target.value
+            setWorkspace({ root: nextRoot, content: '', path: '' })
+            setOpenFile(null)
+            void api
+              .updateSession({ workspaceRoot: nextRoot })
+              .then((response) => setSession(response.session))
+              .catch((error: unknown) => setMutationError(error instanceof Error ? error.message : String(error)))
+          }}
         >
           {roots_.length === 0 ? <option value="">{root || 'loading…'}</option> : null}
           {roots_.map((candidate) => (
@@ -155,6 +288,66 @@ export function WorkspacePanel() {
           ))}
         </select>
       </label>
+
+      <div className="flex flex-col gap-2 border-t border-line pt-2" data-testid="workspace-actions">
+        <div className="flex gap-1">
+          <Input aria-label="new workspace name" placeholder="new workspace folder" value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} />
+          <Button type="button" size="sm" onClick={() => void createWorkspace()} disabled={busy || !workspaceName.trim()} data-testid="workspace-create">
+            create workspace
+          </Button>
+        </div>
+        <div className="flex gap-1">
+          <Input aria-label="new folder path" placeholder="folder path e.g. src/components" value={folderPath} onChange={(event) => setFolderPath(event.target.value)} />
+          <Button type="button" variant="outline" size="sm" onClick={() => void createFolder()} disabled={busy || !root || !folderPath.trim()} data-testid="workspace-create-folder">
+            folder
+          </Button>
+        </div>
+        <div className="flex flex-col gap-1">
+          <div className="flex gap-1">
+            <Input aria-label="new file path" placeholder="file path e.g. src/index.ts" value={filePath} onChange={(event) => setFilePath(event.target.value)} />
+            <Button type="button" variant="outline" size="sm" onClick={() => void createFile()} disabled={busy || !root || !filePath.trim()} data-testid="workspace-create-file">
+              file
+            </Button>
+          </div>
+          <textarea
+            aria-label="new file content"
+            className="min-h-12 w-full rounded-md border border-line bg-surface px-2 py-1 text-[11px] text-foreground placeholder:text-muted"
+            placeholder="initial file content (optional)"
+            value={fileContent}
+            onChange={(event) => setFileContent(event.target.value)}
+          />
+        </div>
+        <div className="flex gap-1">
+          <Input aria-label="rename from path" placeholder="rename from" value={renameFrom} onChange={(event) => setRenameFrom(event.target.value)} />
+          <Input aria-label="rename to path" placeholder="rename to" value={renameTo} onChange={(event) => setRenameTo(event.target.value)} />
+          <Button type="button" variant="ghost" size="sm" onClick={() => void renameEntry()} disabled={busy || !root || !renameFrom.trim() || !renameTo.trim()} data-testid="workspace-rename">
+            rename
+          </Button>
+        </div>
+        <div className="flex flex-wrap gap-1">
+          <Button type="button" variant="outline" size="sm" onClick={() => fileInputRef.current?.click()} disabled={busy || !root} data-testid="workspace-upload">
+            <UploadCloud /> upload files/ZIP
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => folderInputRef.current?.click()} disabled={busy || !root} data-testid="workspace-upload-folder">
+            <Folder /> upload folder
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => imageInputRef.current?.click()} disabled={busy || !root} data-testid="workspace-upload-image">
+            <ImagePlus /> image
+          </Button>
+          <Button type="button" variant="ghost" size="sm" onClick={refreshTree} disabled={!root}>
+            refresh
+          </Button>
+        </div>
+        <input ref={fileInputRef} type="file" multiple className="hidden" data-testid="workspace-file-input" onChange={(event) => void uploadFiles(event.target.files ?? [], 'file')} />
+        <input ref={folderInputRef} type="file" multiple className="hidden" data-testid="workspace-folder-input" onChange={(event) => void uploadFiles(event.target.files ?? [], 'folder')} />
+        <input ref={imageInputRef} type="file" multiple accept="image/*" className="hidden" data-testid="workspace-image-input" onChange={(event) => void uploadFiles(event.target.files ?? [], 'image')} />
+        {mutationStatus ? <p className="text-[11px] text-success" data-testid="workspace-status">{mutationStatus}</p> : null}
+        {mutationError ? (
+          <p role="alert" className="text-[11px] text-error">
+            {mutationError}
+          </p>
+        ) : null}
+      </div>
 
       {rootError ? <ErrorState title="cannot list repositories" message={rootError} /> : null}
       {treeError ? <ErrorState title="cannot read workspace" message={treeError} onRetry={() => void loadRoot(root)} /> : null}
@@ -187,6 +380,11 @@ export function WorkspacePanel() {
       ) : null}
     </Panel>
   )
+}
+
+function relativePathOf(file: File): string {
+  const withPath = file as File & { webkitRelativePath?: string }
+  return withPath.webkitRelativePath && withPath.webkitRelativePath.length > 0 ? withPath.webkitRelativePath : file.name
 }
 
 function TreeRow({

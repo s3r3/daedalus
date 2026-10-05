@@ -1,0 +1,78 @@
+{
+  "run_id": "eval-live-bug-slugify-format",
+  "task_id": "bug-slugify-format",
+  "title": "Slugify produces URL-safe slugs",
+  "category": "bug_fix",
+  "mode": "live",
+  "outcome": "success",
+  "state_status": "done",
+  "turns": 16,
+  "iterations": 16,
+  "tool_calls": 25,
+  "tool_calls_by_name": {
+    "grep": 1,
+    "list_dir": 5,
+    "read_file": 17,
+    "write_file": 1,
+    "edit_file": 1
+  },
+  "wall_clock_ms": 103517,
+  "retries": 1,
+  "recovery_events": 1,
+  "replans": 0,
+  "approvals": 0,
+  "events": 91,
+  "files_changed": 1,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/slug.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    }
+  ],
+  "checks_passed": 2,
+  "checks_failed": 0,
+  "final_diff": "--- a//home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-full-2026-10-05/workspaces/bug-slugify-format/index.js\n+++ b//home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-full-2026-10-05/workspaces/bug-slugify-format/index.js\n@@ +7 -0 @@\n+export function slugify(text) {\n+  return text\n+    .toLowerCase()\n+    .trim()\n+    .replace(/[^a-z0-9]+/g, '-')\n+    .replace(/^-+|-+$/g, '');\n+}\n",
+  "provider": {
+    "name": "provider-registry:nine-router",
+    "id": "nine-router",
+    "model": "claude-lo",
+    "models": [
+      "claude-lo",
+      "kr/claude-sonnet-4-agentic",
+      "kr/qwen3-coder-next-agentic",
+      "cx/gpt-5.5"
+    ],
+    "modelStrategy": "round-robin"
+  },
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "models": [
+      "claude-lo",
+      "kr/claude-sonnet-4-agentic",
+      "kr/qwen3-coder-next-agentic",
+      "cx/gpt-5.5"
+    ],
+    "modelStrategy": "round-robin",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 20,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-full-2026-10-05/workspaces/bug-slugify-format",
+  "event_log": "runs/bug-slugify-format.events.jsonl",
+  "started_at": "2026-10-05T09:23:09.259Z",
+  "finished_at": "2026-10-05T09:24:52.778Z",
+  "failure_taxonomy": "none"
+}

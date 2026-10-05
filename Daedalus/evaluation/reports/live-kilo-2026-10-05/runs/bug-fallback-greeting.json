@@ -1,0 +1,61 @@
+{
+  "run_id": "eval-live-bug-fallback-greeting",
+  "task_id": "bug-fallback-greeting",
+  "title": "Fallback greeting name",
+  "category": "bug_fix",
+  "mode": "live",
+  "outcome": "partial",
+  "state_status": "active",
+  "turns": 4,
+  "iterations": 4,
+  "tool_calls": 4,
+  "tool_calls_by_name": {
+    "list_dir": 4
+  },
+  "wall_clock_ms": 15428,
+  "retries": 3,
+  "recovery_events": 3,
+  "replans": 0,
+  "approvals": 0,
+  "events": 28,
+  "files_changed": 0,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/greeting.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "fail",
+      "exit_code": 1,
+      "summary": "failed"
+    }
+  ],
+  "checks_passed": 1,
+  "checks_failed": 1,
+  "final_diff": "",
+  "provider": {
+    "name": "provider-registry:nine-router",
+    "id": "nine-router",
+    "model": "kgw/kilo-auto/free"
+  },
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "model": "kgw/kilo-auto/free",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/bug-fallback-greeting",
+  "event_log": "runs/bug-fallback-greeting.events.jsonl",
+  "started_at": "2026-10-05T08:21:42.700Z",
+  "finished_at": "2026-10-05T08:21:58.131Z",
+  "failure_taxonomy": "validation_failed"
+}

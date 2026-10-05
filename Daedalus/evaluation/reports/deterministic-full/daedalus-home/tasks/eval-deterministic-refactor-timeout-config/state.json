@@ -1,0 +1,88 @@
+{
+  "id": "eval-deterministic-refactor-timeout-config",
+  "goal": "Refactor the default timeout constant into src/config.js while preserving the jobs module behavior and compatibility export.",
+  "repo_path": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-full/workspaces/refactor-timeout-config",
+  "constraints": [],
+  "done_criteria": [
+    "Inspect the current jobs timeout implementation",
+    "src/config.js exports DEFAULT_TIMEOUT_MS",
+    "jobs.js imports/re-exports the configured timeout and preserves timeoutFor behavior"
+  ],
+  "created_at": "2026-10-05T08:00:08.091Z",
+  "mode": "auto",
+  "model": "scripted",
+  "turns": 3,
+  "plan": {
+    "id": "8bd8cf53-8ed9-4715-ace2-c7bea21597d6",
+    "task_id": "eval-deterministic-refactor-timeout-config",
+    "steps": [
+      {
+        "id": "eval-deterministic-refactor-timeout-config-step-1",
+        "intent": "Satisfy: Inspect the current jobs timeout implementation",
+        "status": "done",
+        "evidence": [
+          "ok: 1: export const DEFAULT_TIMEOUT_MS = 30000;\n2: \n3: export function timeoutFor(task) {\n4:   return task.fast ? 1000 : DEFAULT_TIMEOUT_MS;\n5: }\n6: "
+        ]
+      },
+      {
+        "id": "eval-deterministic-refactor-timeout-config-step-2",
+        "intent": "Satisfy: src/config.js exports DEFAULT_TIMEOUT_MS",
+        "status": "done",
+        "evidence": [
+          "ok: wrote src/config.js"
+        ]
+      },
+      {
+        "id": "eval-deterministic-refactor-timeout-config-step-3",
+        "intent": "Satisfy: jobs.js imports/re-exports the configured timeout and preserves timeoutFor behavior",
+        "status": "done",
+        "evidence": [
+          "ok: wrote src/jobs.js"
+        ]
+      }
+    ],
+    "version": 1,
+    "status": "complete"
+  },
+  "steps": [
+    {
+      "id": "eval-deterministic-refactor-timeout-config-step-1",
+      "intent": "Satisfy: Inspect the current jobs timeout implementation",
+      "status": "done",
+      "evidence": [
+        "ok: 1: export const DEFAULT_TIMEOUT_MS = 30000;\n2: \n3: export function timeoutFor(task) {\n4:   return task.fast ? 1000 : DEFAULT_TIMEOUT_MS;\n5: }\n6: "
+      ]
+    },
+    {
+      "id": "eval-deterministic-refactor-timeout-config-step-2",
+      "intent": "Satisfy: src/config.js exports DEFAULT_TIMEOUT_MS",
+      "status": "done",
+      "evidence": [
+        "ok: wrote src/config.js"
+      ]
+    },
+    {
+      "id": "eval-deterministic-refactor-timeout-config-step-3",
+      "intent": "Satisfy: jobs.js imports/re-exports the configured timeout and preserves timeoutFor behavior",
+      "status": "done",
+      "evidence": [
+        "ok: wrote src/jobs.js"
+      ]
+    }
+  ],
+  "status": "done",
+  "last_observation": "ok: wrote src/jobs.js",
+  "last_tool_call_id": "eval-call-3",
+  "tool_result": {
+    "call_id": "eval-call-3",
+    "status": "ok",
+    "output": "wrote src/jobs.js",
+    "truncated": false,
+    "meta": {
+      "path": "src/jobs.js",
+      "bytes": 167,
+      "tool": "write_file",
+      "mutating": true
+    }
+  }
+}

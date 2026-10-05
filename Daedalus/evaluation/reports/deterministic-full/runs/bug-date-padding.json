@@ -1,0 +1,60 @@
+{
+  "run_id": "eval-deterministic-bug-date-padding",
+  "task_id": "bug-date-padding",
+  "title": "Date formatter pads day",
+  "category": "bug_fix",
+  "mode": "deterministic",
+  "outcome": "success",
+  "state_status": "done",
+  "turns": 2,
+  "iterations": 2,
+  "tool_calls": 2,
+  "tool_calls_by_name": {
+    "read_file": 1,
+    "edit_file": 1
+  },
+  "wall_clock_ms": 288,
+  "retries": 0,
+  "recovery_events": 0,
+  "replans": 0,
+  "approvals": 0,
+  "events": 14,
+  "files_changed": 1,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/date.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    }
+  ],
+  "checks_passed": 2,
+  "checks_failed": 0,
+  "final_diff": "--- a/src/date.js\n+++ b/src/date.js\n@@ +1 -1 @@\n export function formatDate(date) {\n   const month = String(date.getMonth() + 1).padStart(2, '0');\n-  const day = String(date.getDate());\n+  const day = String(date.getDate()).padStart(2, '0');\n   return `${date.getFullYear()}-${month}-${day}`;\n }\n",
+  "provider": {
+    "name": "deterministic-scripted",
+    "model": "scripted"
+  },
+  "config": {
+    "mode": "deterministic",
+    "providerName": "deterministic-scripted",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-full/workspaces/bug-date-padding",
+  "event_log": "runs/bug-date-padding.events.jsonl",
+  "started_at": "2026-10-05T08:00:06.067Z",
+  "finished_at": "2026-10-05T08:00:06.356Z",
+  "failure_taxonomy": "none"
+}

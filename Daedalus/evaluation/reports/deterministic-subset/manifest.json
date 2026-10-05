@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "kind": "daedalus-evaluation-dataset",
+  "mode": "deterministic",
+  "label": "Deterministic harness validation (scripted provider; not a live model evaluation)",
+  "generated_at": "2026-10-05T08:00:01.845Z",
+  "node": "v24.20.0",
+  "config": {
+    "mode": "deterministic",
+    "providerName": "deterministic-scripted",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "selected_tasks": [
+    "bug-fallback-greeting",
+    "feature-clamp-number",
+    "refactor-extract-tax"
+  ],
+  "caveat": "These runs validate the evaluation harness and Daedalus loop with a scripted provider. They must not be reported as live LLM performance."
+}

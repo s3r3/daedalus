@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "kind": "daedalus-evaluation-dataset",
+  "mode": "live",
+  "label": "Live provider evaluation",
+  "generated_at": "2026-10-05T09:22:45.543Z",
+  "node": "v24.20.0",
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "models": [
+      "claude-lo",
+      "kr/claude-sonnet-4-agentic",
+      "kr/qwen3-coder-next-agentic",
+      "cx/gpt-5.5"
+    ],
+    "modelStrategy": "round-robin",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 20,
+    "maxErrors": 3
+  },
+  "selected_tasks": [
+    "bug-fallback-greeting",
+    "bug-cart-quantity-total",
+    "bug-slugify-format",
+    "bug-date-padding",
+    "feature-clamp-number",
+    "feature-unique-array",
+    "feature-csv-quote",
+    "feature-markdown-title",
+    "refactor-extract-tax",
+    "refactor-normalize-name",
+    "refactor-extract-price-format",
+    "refactor-timeout-config"
+  ],
+  "caveat": "These runs use the configured live provider. Provider nondeterminism may still apply."
+}

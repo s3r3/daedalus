@@ -1,0 +1,62 @@
+{
+  "run_id": "eval-live-refactor-extract-price-format",
+  "task_id": "refactor-extract-price-format",
+  "title": "Extract price formatter",
+  "category": "refactor",
+  "mode": "live",
+  "outcome": "partial",
+  "state_status": "active",
+  "turns": 5,
+  "iterations": 5,
+  "tool_calls": 5,
+  "tool_calls_by_name": {
+    "list_dir": 4,
+    "read_file": 1
+  },
+  "wall_clock_ms": 19617,
+  "retries": 3,
+  "recovery_events": 3,
+  "replans": 0,
+  "approvals": 0,
+  "events": 32,
+  "files_changed": 0,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/receipt.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "fail",
+      "exit_code": 1,
+      "summary": "failed"
+    }
+  ],
+  "checks_passed": 1,
+  "checks_failed": 1,
+  "final_diff": "",
+  "provider": {
+    "name": "provider-registry:nine-router",
+    "id": "nine-router",
+    "model": "kgw/kilo-auto/free"
+  },
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "model": "kgw/kilo-auto/free",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/refactor-extract-price-format",
+  "event_log": "runs/refactor-extract-price-format.events.jsonl",
+  "started_at": "2026-10-05T08:24:38.855Z",
+  "finished_at": "2026-10-05T08:24:58.473Z",
+  "failure_taxonomy": "validation_failed"
+}

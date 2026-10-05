@@ -1,0 +1,62 @@
+{
+  "run_id": "eval-live-feature-clamp-number",
+  "task_id": "feature-clamp-number",
+  "title": "Add numeric clamp helper",
+  "category": "feature_addition",
+  "mode": "live",
+  "outcome": "partial",
+  "state_status": "active",
+  "turns": 4,
+  "iterations": 4,
+  "tool_calls": 4,
+  "tool_calls_by_name": {
+    "list_dir": 2,
+    "git_status": 2
+  },
+  "wall_clock_ms": 15040,
+  "retries": 3,
+  "recovery_events": 3,
+  "replans": 0,
+  "approvals": 0,
+  "events": 34,
+  "files_changed": 0,
+  "commands": 2,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/math.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "fail",
+      "exit_code": 1,
+      "summary": "failed"
+    }
+  ],
+  "checks_passed": 1,
+  "checks_failed": 1,
+  "final_diff": "",
+  "provider": {
+    "name": "provider-registry:nine-router",
+    "id": "nine-router",
+    "model": "kgw/kilo-auto/free"
+  },
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "model": "kgw/kilo-auto/free",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/feature-clamp-number",
+  "event_log": "runs/feature-clamp-number.events.jsonl",
+  "started_at": "2026-10-05T08:22:45.788Z",
+  "finished_at": "2026-10-05T08:23:00.829Z",
+  "failure_taxonomy": "validation_failed"
+}

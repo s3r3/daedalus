@@ -1,0 +1,22 @@
+{
+  "task_id": "eval-live-feature-csv-quote",
+  "outcome": "partial",
+  "diff": "",
+  "evidence": [
+    "syntax: pass (node --check src/csv.js)",
+    "behavior: fail (node validate.mjs)"
+  ],
+  "metrics": {
+    "turns": 5,
+    "tool_calls": 5,
+    "events": 35,
+    "commands": 1,
+    "files_changed": 0,
+    "recoveries": 3,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "duration_ms": 16309
+  }
+}

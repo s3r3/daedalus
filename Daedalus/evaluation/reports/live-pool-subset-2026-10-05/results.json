@@ -1,0 +1,215 @@
+[
+  {
+    "run_id": "eval-live-bug-fallback-greeting",
+    "task_id": "bug-fallback-greeting",
+    "title": "Fallback greeting name",
+    "category": "bug_fix",
+    "mode": "live",
+    "outcome": "stopped",
+    "state_status": "failed",
+    "last_error": "max_iterations",
+    "turns": 12,
+    "iterations": 12,
+    "tool_calls": 8,
+    "tool_calls_by_name": {
+      "list_dir": 4,
+      "glob": 3,
+      "read_file": 1
+    },
+    "wall_clock_ms": 94014,
+    "retries": 0,
+    "recovery_events": 0,
+    "replans": 0,
+    "approvals": 0,
+    "events": 43,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [],
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free",
+      "models": [
+        "kgw/kilo-auto/free",
+        "claude-lo",
+        "kr/qwen3-coder-next-agentic"
+      ],
+      "modelStrategy": "round-robin"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "models": [
+        "kgw/kilo-auto/free",
+        "claude-lo",
+        "kr/qwen3-coder-next-agentic"
+      ],
+      "modelStrategy": "round-robin",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/bug-fallback-greeting",
+    "event_log": "runs/bug-fallback-greeting.events.jsonl",
+    "started_at": "2026-10-05T08:57:30.221Z",
+    "finished_at": "2026-10-05T08:59:04.236Z",
+    "failure_taxonomy": "budget_exceeded"
+  },
+  {
+    "run_id": "eval-live-feature-clamp-number",
+    "task_id": "feature-clamp-number",
+    "title": "Add numeric clamp helper",
+    "category": "feature_addition",
+    "mode": "live",
+    "outcome": "stopped",
+    "state_status": "failed",
+    "last_error": "max_iterations",
+    "turns": 12,
+    "iterations": 12,
+    "tool_calls": 11,
+    "tool_calls_by_name": {
+      "glob": 3,
+      "read_file": 2,
+      "write_file": 2,
+      "run_command": 2,
+      "list_dir": 2
+    },
+    "wall_clock_ms": 62537,
+    "retries": 2,
+    "recovery_events": 2,
+    "replans": 0,
+    "approvals": 0,
+    "events": 63,
+    "files_changed": 2,
+    "commands": 2,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/math.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "--- a/implementation.py\n+++ b/implementation.py\n@@ +1 -0 @@\n+def add(a, b):\\n return a + b\\n\\ndef subtract(a, b):\\n return a - b\n--- a//home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/feature-clamp-number/src/math.mjs\n+++ b//home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/feature-clamp-number/src/math.mjs\n@@ +3 -0 @@\n+export function clamp(value, min, max) {\n+    return Math.min(Math.max(value, min), max);\n+}\n",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free",
+      "models": [
+        "kgw/kilo-auto/free",
+        "claude-lo",
+        "kr/qwen3-coder-next-agentic"
+      ],
+      "modelStrategy": "round-robin"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "models": [
+        "kgw/kilo-auto/free",
+        "claude-lo",
+        "kr/qwen3-coder-next-agentic"
+      ],
+      "modelStrategy": "round-robin",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/feature-clamp-number",
+    "event_log": "runs/feature-clamp-number.events.jsonl",
+    "started_at": "2026-10-05T08:59:04.238Z",
+    "finished_at": "2026-10-05T09:00:06.776Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-refactor-extract-tax",
+    "task_id": "refactor-extract-tax",
+    "title": "Extract tax calculation",
+    "category": "refactor",
+    "mode": "live",
+    "outcome": "stopped",
+    "state_status": "failed",
+    "last_error": "max_iterations",
+    "turns": 12,
+    "iterations": 12,
+    "tool_calls": 10,
+    "tool_calls_by_name": {
+      "list_dir": 3,
+      "validate": 1,
+      "read_file": 4,
+      "write_file": 2
+    },
+    "wall_clock_ms": 43246,
+    "retries": 2,
+    "recovery_events": 2,
+    "replans": 0,
+    "approvals": 0,
+    "events": 56,
+    "files_changed": 2,
+    "commands": 0,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/order.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "--- a//home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/refactor-extract-tax/src/tax.js\n+++ b//home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/refactor-extract-tax/src/tax.js\n@@ +1 -0 @@\n+function totalWithTax(subtotal) {\\n  const tax = subtotal * 0.2;\\n  return subtotal + tax;\\n}\\n\\nfunction calculateTax(subtotal) {\\n  return subtotal * 0.2;\\n}\n--- a/src/tax.js\n+++ b/src/tax.js\n@@ +3 -1 @@\n-function totalWithTax(subtotal) {\\n  const tax = subtotal * 0.2;\\n  return subtotal + tax;\\n}\\n\\nfunction calculateTax(subtotal) {\\n  return subtotal * 0.2;\\n}\n+export function calculateTax() {\n+    // tax calculation logic\n+}\n",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free",
+      "models": [
+        "kgw/kilo-auto/free",
+        "claude-lo",
+        "kr/qwen3-coder-next-agentic"
+      ],
+      "modelStrategy": "round-robin"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "models": [
+        "kgw/kilo-auto/free",
+        "claude-lo",
+        "kr/qwen3-coder-next-agentic"
+      ],
+      "modelStrategy": "round-robin",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/refactor-extract-tax",
+    "event_log": "runs/refactor-extract-tax.events.jsonl",
+    "started_at": "2026-10-05T09:00:06.777Z",
+    "finished_at": "2026-10-05T09:00:50.024Z",
+    "failure_taxonomy": "validation_failed"
+  }
+]

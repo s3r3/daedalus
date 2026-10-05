@@ -1,0 +1,4 @@
+run_id,task_id,category,mode,outcome,state_status,failure_taxonomy,turns,iterations,tool_calls,wall_clock_ms,retries,recovery_events,replans,approvals,events,files_changed,commands,checks_passed,checks_failed,provider_name,provider_id,model,validation_summary,event_log
+eval-live-bug-fallback-greeting,bug-fallback-greeting,bug_fix,live,stopped,failed,budget_exceeded,12,12,14,53629,0,0,0,0,55,0,0,0,0,provider-registry:nine-router,nine-router,claude-lo,,runs/bug-fallback-greeting.events.jsonl
+eval-live-feature-clamp-number,feature-clamp-number,feature_addition,live,stopped,failed,budget_exceeded,12,12,14,68891,0,0,0,0,55,0,0,0,0,provider-registry:nine-router,nine-router,claude-lo,,runs/feature-clamp-number.events.jsonl
+eval-live-refactor-extract-tax,refactor-extract-tax,refactor,live,stopped,failed,budget_exceeded,12,12,18,51038,0,0,0,0,64,1,0,0,0,provider-registry:nine-router,nine-router,claude-lo,,runs/refactor-extract-tax.events.jsonl

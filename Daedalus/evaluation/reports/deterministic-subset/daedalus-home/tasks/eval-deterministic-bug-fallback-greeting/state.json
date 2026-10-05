@@ -1,0 +1,71 @@
+{
+  "id": "eval-deterministic-bug-fallback-greeting",
+  "goal": "Fix greet() so empty or missing names use a friendly fallback without changing normal greetings.",
+  "repo_path": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-subset/workspaces/bug-fallback-greeting",
+  "constraints": [],
+  "done_criteria": [
+    "Inspect the current greeting implementation",
+    "greet() returns the fallback for empty or missing names and preserves normal names"
+  ],
+  "created_at": "2026-10-05T08:00:01.850Z",
+  "mode": "auto",
+  "model": "scripted",
+  "turns": 2,
+  "plan": {
+    "id": "4924da12-e12a-4f12-8bdc-152e93e2925a",
+    "task_id": "eval-deterministic-bug-fallback-greeting",
+    "steps": [
+      {
+        "id": "eval-deterministic-bug-fallback-greeting-step-1",
+        "intent": "Satisfy: Inspect the current greeting implementation",
+        "status": "done",
+        "evidence": [
+          "ok: 1: export function greet(name) {\n2:   return 'Hello, ' + name;\n3: }\n4: "
+        ]
+      },
+      {
+        "id": "eval-deterministic-bug-fallback-greeting-step-2",
+        "intent": "Satisfy: greet() returns the fallback for empty or missing names and preserves normal names",
+        "status": "done",
+        "evidence": [
+          "ok: edited src/greeting.js"
+        ]
+      }
+    ],
+    "version": 1,
+    "status": "complete"
+  },
+  "steps": [
+    {
+      "id": "eval-deterministic-bug-fallback-greeting-step-1",
+      "intent": "Satisfy: Inspect the current greeting implementation",
+      "status": "done",
+      "evidence": [
+        "ok: 1: export function greet(name) {\n2:   return 'Hello, ' + name;\n3: }\n4: "
+      ]
+    },
+    {
+      "id": "eval-deterministic-bug-fallback-greeting-step-2",
+      "intent": "Satisfy: greet() returns the fallback for empty or missing names and preserves normal names",
+      "status": "done",
+      "evidence": [
+        "ok: edited src/greeting.js"
+      ]
+    }
+  ],
+  "status": "done",
+  "last_observation": "ok: edited src/greeting.js",
+  "last_tool_call_id": "eval-call-2",
+  "tool_result": {
+    "call_id": "eval-call-2",
+    "status": "ok",
+    "output": "edited src/greeting.js",
+    "truncated": false,
+    "meta": {
+      "path": "src/greeting.js",
+      "replacements": 1,
+      "tool": "edit_file",
+      "mutating": true
+    }
+  }
+}

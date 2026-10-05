@@ -1,0 +1,22 @@
+{
+  "task_id": "eval-live-bug-cart-quantity-total",
+  "outcome": "success",
+  "diff": "",
+  "evidence": [
+    "syntax: pass (node --check src/cart.js)",
+    "behavior: pass (node validate.mjs)"
+  ],
+  "metrics": {
+    "turns": 3,
+    "tool_calls": 3,
+    "events": 17,
+    "commands": 0,
+    "files_changed": 0,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 2,
+    "checks_failed": 0,
+    "duration_ms": 10114
+  }
+}

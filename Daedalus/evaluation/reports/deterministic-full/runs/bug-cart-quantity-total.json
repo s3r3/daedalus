@@ -1,0 +1,60 @@
+{
+  "run_id": "eval-deterministic-bug-cart-quantity-total",
+  "task_id": "bug-cart-quantity-total",
+  "title": "Cart total respects quantity",
+  "category": "bug_fix",
+  "mode": "deterministic",
+  "outcome": "success",
+  "state_status": "done",
+  "turns": 2,
+  "iterations": 2,
+  "tool_calls": 2,
+  "tool_calls_by_name": {
+    "read_file": 1,
+    "edit_file": 1
+  },
+  "wall_clock_ms": 267,
+  "retries": 0,
+  "recovery_events": 0,
+  "replans": 0,
+  "approvals": 0,
+  "events": 14,
+  "files_changed": 1,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/cart.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    }
+  ],
+  "checks_passed": 2,
+  "checks_failed": 0,
+  "final_diff": "--- a/src/cart.js\n+++ b/src/cart.js\n@@ +1 -1 @@\n export function total(items) {\n-  return items.reduce((sum, item) => sum + item.price, 0);\n+  return items.reduce((sum, item) => sum + item.price * item.quantity, 0);\n }\n",
+  "provider": {
+    "name": "deterministic-scripted",
+    "model": "scripted"
+  },
+  "config": {
+    "mode": "deterministic",
+    "providerName": "deterministic-scripted",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-full/workspaces/bug-cart-quantity-total",
+  "event_log": "runs/bug-cart-quantity-total.events.jsonl",
+  "started_at": "2026-10-05T08:00:05.564Z",
+  "finished_at": "2026-10-05T08:00:05.832Z",
+  "failure_taxonomy": "none"
+}

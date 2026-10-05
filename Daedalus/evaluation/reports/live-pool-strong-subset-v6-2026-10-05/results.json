@@ -1,0 +1,233 @@
+[
+  {
+    "run_id": "eval-live-bug-fallback-greeting",
+    "task_id": "bug-fallback-greeting",
+    "title": "Fallback greeting name",
+    "category": "bug_fix",
+    "mode": "live",
+    "outcome": "stopped",
+    "state_status": "failed",
+    "last_error": "max_iterations",
+    "turns": 12,
+    "iterations": 12,
+    "tool_calls": 11,
+    "tool_calls_by_name": {
+      "list_dir": 5,
+      "read_file": 5,
+      "edit_file": 1
+    },
+    "wall_clock_ms": 65501,
+    "retries": 1,
+    "recovery_events": 1,
+    "replans": 0,
+    "approvals": 0,
+    "events": 52,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/greeting.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "claude-lo",
+      "models": [
+        "claude-lo",
+        "kr/claude-sonnet-4-agentic",
+        "kr/qwen3-coder-next-agentic",
+        "cx/gpt-5.5"
+      ],
+      "modelStrategy": "round-robin"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "models": [
+        "claude-lo",
+        "kr/claude-sonnet-4-agentic",
+        "kr/qwen3-coder-next-agentic",
+        "cx/gpt-5.5"
+      ],
+      "modelStrategy": "round-robin",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-subset-v6-2026-10-05/workspaces/bug-fallback-greeting",
+    "event_log": "runs/bug-fallback-greeting.events.jsonl",
+    "started_at": "2026-10-05T09:19:48.284Z",
+    "finished_at": "2026-10-05T09:20:53.786Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-feature-clamp-number",
+    "task_id": "feature-clamp-number",
+    "title": "Add numeric clamp helper",
+    "category": "feature_addition",
+    "mode": "live",
+    "outcome": "success",
+    "state_status": "done",
+    "turns": 4,
+    "iterations": 4,
+    "tool_calls": 4,
+    "tool_calls_by_name": {
+      "list_dir": 1,
+      "read_file": 2,
+      "edit_file": 1
+    },
+    "wall_clock_ms": 15225,
+    "retries": 0,
+    "recovery_events": 0,
+    "replans": 0,
+    "approvals": 0,
+    "events": 21,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/math.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      }
+    ],
+    "checks_passed": 2,
+    "checks_failed": 0,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "claude-lo",
+      "models": [
+        "claude-lo",
+        "kr/claude-sonnet-4-agentic",
+        "kr/qwen3-coder-next-agentic",
+        "cx/gpt-5.5"
+      ],
+      "modelStrategy": "round-robin"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "models": [
+        "claude-lo",
+        "kr/claude-sonnet-4-agentic",
+        "kr/qwen3-coder-next-agentic",
+        "cx/gpt-5.5"
+      ],
+      "modelStrategy": "round-robin",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-subset-v6-2026-10-05/workspaces/feature-clamp-number",
+    "event_log": "runs/feature-clamp-number.events.jsonl",
+    "started_at": "2026-10-05T09:20:53.788Z",
+    "finished_at": "2026-10-05T09:21:09.015Z",
+    "failure_taxonomy": "none"
+  },
+  {
+    "run_id": "eval-live-refactor-extract-tax",
+    "task_id": "refactor-extract-tax",
+    "title": "Extract tax calculation",
+    "category": "refactor",
+    "mode": "live",
+    "outcome": "stopped",
+    "state_status": "failed",
+    "last_error": "max_iterations",
+    "turns": 12,
+    "iterations": 12,
+    "tool_calls": 18,
+    "tool_calls_by_name": {
+      "list_dir": 5,
+      "read_file": 11,
+      "grep": 1,
+      "write_file": 1
+    },
+    "wall_clock_ms": 73888,
+    "retries": 1,
+    "recovery_events": 1,
+    "replans": 0,
+    "approvals": 0,
+    "events": 67,
+    "files_changed": 1,
+    "commands": 0,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/order.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "--- a/src/tax.js\n+++ b/src/tax.js\n@@ +3 -0 @@\n+export function calculateTax(subtotal) {\n+  return subtotal * 0.2;\n+}\n",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "claude-lo",
+      "models": [
+        "claude-lo",
+        "kr/claude-sonnet-4-agentic",
+        "kr/qwen3-coder-next-agentic",
+        "cx/gpt-5.5"
+      ],
+      "modelStrategy": "round-robin"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "models": [
+        "claude-lo",
+        "kr/claude-sonnet-4-agentic",
+        "kr/qwen3-coder-next-agentic",
+        "cx/gpt-5.5"
+      ],
+      "modelStrategy": "round-robin",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-subset-v6-2026-10-05/workspaces/refactor-extract-tax",
+    "event_log": "runs/refactor-extract-tax.events.jsonl",
+    "started_at": "2026-10-05T09:21:09.018Z",
+    "finished_at": "2026-10-05T09:22:22.906Z",
+    "failure_taxonomy": "validation_failed"
+  }
+]

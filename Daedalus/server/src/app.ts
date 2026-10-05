@@ -1,22 +1,64 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { readFileSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdir, rename, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { basename, extname, join, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   EventBus,
+  McpManager,
+  PROVIDER_PRESETS,
+  ProviderRegistryStore,
   TaskStore,
   TaskRunner,
   createLogger,
+  createProviderForConfig,
+  emitEvent,
+  loadAgents,
+  loadLspConfig,
+  loadProjectRules,
+  loadMcpConfig,
   loadSettings,
+  loadSkills,
+  redactSettings,
+  resolveDaedalusHome,
+  reviewDiff,
+  seedProviderFromSettings,
+  unstagedDiff,
+  workspaceAgentsDir,
+  workspaceSkillsDir,
+  type AgentMode,
+  type Attachment,
   type Event,
   type FinalReport,
   type PermissionKey,
+  type Settings,
 } from "@daedalus/core";
 import { collectRoots, listDirectory, buildTree, resolveInside, MAX_FILE_BYTES } from "./workspace.ts";
+import { UPLOAD_LIMITS, extractZipEntries, guessMimeType, parseMultipart, sanitizeRelativePath, type UploadPart } from "./uploads.ts";
 
 /**
  * REST + WebSocket gateway (PLAN.md §3.0, §3.6). Commands and reads only —
  * no agent, tool, or LLM logic lives here; the core owns execution.
  */
+
+export type SessionState = {
+  mode: AgentMode;
+  autoApprove: boolean;
+  thinking: boolean;
+  providerId?: string;
+  model?: string;
+  workspaceRoot: string;
+};
+
+export type ExtensionStatus = {
+  root: string;
+  mcp: Array<{ name: string; connected: boolean; toolCount: number; error?: string }>;
+  skills: Array<{ name: string; description: string }>;
+  agents: Array<{ name: string; description: string; model?: string; mode?: string; tools?: string[] }>;
+  lsp: Array<{ name: string; extensions: string[]; configured: boolean; running?: boolean; error?: string }>;
+  problems: string[];
+};
 
 export type AppContext = {
   bus: EventBus;
@@ -25,18 +67,44 @@ export type AppContext = {
   startedAt: number;
   cwd: string;
   activeRunners: Map<string, TaskRunner>;
+  settings: Settings;
+  providerStore: ProviderRegistryStore;
+  session: SessionState;
+  workspaces: Set<string>;
+  providersReady?: Promise<void>;
+  webDist?: string;
+  extensionStatusCache?: Map<string, { expiresAt: number; value: ExtensionStatus }>;
 };
 
 export function createContext(overrides: Partial<AppContext> = {}): AppContext {
-  const settings = loadSettings();
+  const settings = overrides.settings ?? loadSettings();
+  const cwd = overrides.cwd ?? process.cwd();
+  // The daemon launcher anchors the session to the directory `daedalus`
+  // was invoked in (DAEDALUS_WORKSPACE); the server process cwd is only
+  // the fallback. An explicit session override still wins.
+  const anchoredWorkspace = process.env.DAEDALUS_WORKSPACE ? resolve(process.env.DAEDALUS_WORKSPACE) : cwd;
+  const session = overrides.session ?? { mode: "auto", autoApprove: false, thinking: settings.session?.thinking ?? true, workspaceRoot: anchoredWorkspace };
   return {
     bus: overrides.bus ?? new EventBus(),
-    store: overrides.store ?? new TaskStore(settings.daedalusHome),
+    store: overrides.store ?? new TaskStore(resolveDaedalusHome(settings.daedalusHome, cwd)),
     log: overrides.log ?? createLogger({ base: { service: "daedalus-server" } }),
     startedAt: overrides.startedAt ?? Date.now(),
-    cwd: overrides.cwd ?? process.cwd(),
+    cwd,
     activeRunners: overrides.activeRunners ?? new Map<string, TaskRunner>(),
+    settings,
+    providerStore: overrides.providerStore ?? new ProviderRegistryStore(resolveDaedalusHome(settings.daedalusHome, cwd)),
+    session,
+    workspaces: overrides.workspaces ?? new Set<string>([resolve(cwd), resolve(session.workspaceRoot)]),
+    webDist: overrides.webDist,
+    extensionStatusCache: overrides.extensionStatusCache ?? new Map(),
   };
+}
+
+export async function ensureProvidersLoaded(ctx: AppContext): Promise<void> {
+  ctx.providersReady ??= (async () => {
+    await ctx.providerStore.load(seedProviderFromSettings(ctx.settings));
+  })();
+  await ctx.providersReady;
 }
 
 const CORS_HEADERS = {
@@ -49,6 +117,77 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   const data = JSON.stringify(body);
   res.writeHead(status, { "content-type": "application/json; charset=utf-8", "content-length": Buffer.byteLength(data), ...CORS_HEADERS });
   res.end(data);
+}
+
+const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workspace", "/uploads", "/upload", "/attachments", "/extensions", "/review"];
+
+function webContentType(path: string): string {
+  switch (extname(path).toLowerCase()) {
+    case ".html": return "text/html; charset=utf-8";
+    case ".js": case ".mjs": return "text/javascript; charset=utf-8";
+    case ".css": return "text/css; charset=utf-8";
+    case ".json": case ".map": return "application/json; charset=utf-8";
+    case ".svg": return "image/svg+xml";
+    case ".png": return "image/png";
+    case ".jpg": case ".jpeg": return "image/jpeg";
+    case ".gif": return "image/gif";
+    case ".webp": return "image/webp";
+    case ".ico": return "image/x-icon";
+    case ".woff": return "font/woff";
+    case ".woff2": return "font/woff2";
+    default: return "application/octet-stream";
+  }
+}
+
+function webDistPath(ctx: AppContext): string | undefined {
+  const candidates = [
+    ctx.webDist ? resolve(ctx.webDist) : undefined,
+    join(resolve(ctx.cwd), "daedalus-web", "dist"),
+    fileURLToPath(new URL("../../daedalus-web/dist/", import.meta.url)),
+    join(resolve(ctx.cwd), "dist"),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+  for (const candidate of candidates) {
+    try {
+      if (statSync(join(candidate, "index.html")).isFile()) return resolve(candidate);
+    } catch { /* try next candidate */ }
+  }
+  return undefined;
+}
+
+function serveWebAsset(ctx: AppContext, res: ServerResponse, pathname: string, accept = ""): boolean {
+  if (WEB_API_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) return false;
+  const dist = webDistPath(ctx);
+  if (!dist) return false;
+
+  let relative: string;
+  try {
+    relative = decodeURIComponent(pathname).replace(/^\/+/, "");
+  } catch {
+    return false;
+  }
+  if (!relative) relative = "index.html";
+
+  let absolute = resolve(dist, relative);
+  if (absolute !== dist && !absolute.startsWith(dist + sep)) return false;
+  try {
+    if (!statSync(absolute).isFile()) {
+      if (extname(relative) || !accept.includes("text/html")) return false;
+      absolute = join(dist, "index.html");
+    }
+  } catch {
+    // SPA fallback: browser navigations to extensionless routes get the app shell.
+    if (extname(relative) || !accept.includes("text/html")) return false;
+    absolute = join(dist, "index.html");
+  }
+
+  try {
+    const data = readFileSync(absolute);
+    res.writeHead(200, { "content-type": webContentType(absolute), "content-length": data.length, "cache-control": "no-store", ...CORS_HEADERS });
+    res.end(data);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -71,6 +210,546 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown> |
   }
 }
 
+async function readRawBody(req: IncomingMessage, maxBytes = UPLOAD_LIMITS.maxTotalBytes): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBytes) throw new Error(`request body too large (limit ${maxBytes} bytes)`);
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
+const AGENT_MODES: AgentMode[] = ["ask", "manual", "auto", "plan", "orchestrator"];
+
+function parseMode(value: unknown): AgentMode | undefined {
+  return typeof value === "string" && AGENT_MODES.includes(value as AgentMode) ? (value as AgentMode) : undefined;
+}
+
+function allowedRoots(ctx: AppContext): string[] {
+  const roots = new Set<string>();
+  roots.add(resolve(ctx.cwd));
+  roots.add(resolve(ctx.session.workspaceRoot));
+  for (const workspace of ctx.workspaces) roots.add(resolve(workspace));
+  for (const recorded of recordedRoots(ctx)) roots.add(resolve(recorded));
+  return [...roots];
+}
+
+function isInside(root: string, target: string): boolean {
+  const resolvedRoot = resolve(root);
+  const resolvedTarget = resolve(target);
+  return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(resolvedRoot + sep);
+}
+
+function resolveAllowedRoot(ctx: AppContext, rootValue: unknown): string {
+  const candidate = resolve(typeof rootValue === "string" && rootValue.length > 0 ? rootValue : ctx.session.workspaceRoot || ctx.cwd);
+  if (allowedRoots(ctx).some((root) => isInside(root, candidate) || isInside(candidate, root) && candidate === root)) return candidate;
+  // A created workspace is allowed because create routes record it in ctx.workspaces;
+  // arbitrary filesystem roots are not exposed by this local gateway.
+  throw new Error("workspace root is not allowed");
+}
+
+function recordWorkspace(ctx: AppContext, absolute: string): void {
+  const resolved = resolve(absolute);
+  ctx.workspaces.add(resolved);
+  ctx.session.workspaceRoot = resolved;
+}
+
+function resolveTaskRepo(ctx: AppContext, repoValue: unknown): string {
+  if (typeof repoValue !== "string" || repoValue.length === 0) return resolveAllowedRoot(ctx, ctx.session.workspaceRoot);
+  const candidate = resolve(ctx.cwd, repoValue);
+  if (isInside(ctx.cwd, candidate)) return candidate;
+  if (allowedRoots(ctx).some((root) => candidate === root)) return candidate;
+  throw new Error("repo_path is outside the allowed workspace roots");
+}
+
+function publicSession(ctx: AppContext): SessionState {
+  return { ...ctx.session };
+}
+
+function attachmentFromStored(options: {
+  taskId?: string;
+  root: string;
+  absolute: string;
+  name: string;
+  kind: Attachment["kind"];
+  mimeType?: string;
+  data: Buffer;
+}): Attachment {
+  return {
+    id: crypto.randomUUID(),
+    ...(options.taskId ? { taskId: options.taskId } : {}),
+    workspacePath: options.absolute.startsWith(resolve(options.root) + sep) ? options.absolute.slice(resolve(options.root).length + 1) : basename(options.absolute),
+    name: options.name,
+    kind: options.kind,
+    mimeType: options.mimeType ?? guessMimeType(options.name),
+    size: options.data.length,
+    sha256: createHash("sha256").update(options.data).digest("hex"),
+    createdAt: new Date().toISOString(),
+    path: options.absolute,
+  };
+}
+
+function emitAttachment(ctx: AppContext, attachment: Attachment): void {
+  if (!attachment.taskId) return;
+  emitEvent({ bus: ctx.bus, store: ctx.store }, attachment.taskId, undefined, "ATTACHMENT_ADDED", { attachment });
+  void ctx.bus.drain();
+}
+
+function errorStatus(error: unknown): number {
+  const message = errorMessage(error);
+  if (/not allowed|outside the allowed|escapes workspace/.test(message)) return 403;
+  if (/too large|too many|limit/.test(message)) return 413;
+  if (/not found|no such file|ENOENT/.test(message)) return 404;
+  return 400;
+}
+
+function nextMode(current: AgentMode): AgentMode {
+  const index = AGENT_MODES.indexOf(current);
+  return AGENT_MODES[(index + 1 + AGENT_MODES.length) % AGENT_MODES.length] as AgentMode;
+}
+
+function applySessionUpdate(ctx: AppContext, parsed: Record<string, unknown>): void {
+  const mode = parseMode(parsed.mode);
+  if (parsed.mode !== undefined && !mode) throw new Error(`invalid mode: ${String(parsed.mode)}`);
+  if (mode) ctx.session.mode = mode;
+  if (parsed.autoApprove !== undefined) {
+    if (typeof parsed.autoApprove !== "boolean") throw new Error("autoApprove must be a boolean");
+    ctx.session.autoApprove = parsed.autoApprove;
+  }
+  if (parsed.thinking !== undefined) {
+    if (typeof parsed.thinking !== "boolean") throw new Error("thinking must be a boolean");
+    ctx.session.thinking = parsed.thinking;
+    if (ctx.settings.session) ctx.settings.session.thinking = parsed.thinking;
+    else (ctx.settings as { session?: { thinking: boolean } }).session = { thinking: parsed.thinking };
+  }
+  if (typeof parsed.providerId === "string") ctx.session.providerId = parsed.providerId;
+  if (typeof parsed.provider_id === "string") ctx.session.providerId = parsed.provider_id;
+  if (typeof parsed.model === "string") ctx.session.model = parsed.model;
+  if (typeof parsed.workspaceRoot === "string") recordWorkspace(ctx, resolveAllowedRoot(ctx, parsed.workspaceRoot));
+  if (typeof parsed.workspace_root === "string") recordWorkspace(ctx, resolveAllowedRoot(ctx, parsed.workspace_root));
+}
+
+function applySettingsUpdate(ctx: AppContext, parsed: Record<string, unknown>): void {
+  applySessionUpdate(ctx, parsed);
+  const session = typeof parsed.session === "object" && parsed.session !== null ? (parsed.session as Record<string, unknown>) : undefined;
+  if (session) applySessionUpdate(ctx, session);
+  const llm = typeof parsed.llm === "object" && parsed.llm !== null ? (parsed.llm as Record<string, unknown>) : undefined;
+  if (llm) {
+    if (typeof llm.baseUrl === "string") ctx.settings.llm.baseUrl = llm.baseUrl;
+    if (typeof llm.base_url === "string") ctx.settings.llm.baseUrl = llm.base_url;
+    if (typeof llm.model === "string") {
+      ctx.settings.llm.model = llm.model;
+      ctx.session.model = llm.model;
+    }
+  }
+  if (typeof parsed.model === "string") ctx.session.model = parsed.model;
+  if (typeof parsed.providerId === "string") ctx.session.providerId = parsed.providerId;
+  if (typeof parsed.provider_id === "string") ctx.session.providerId = parsed.provider_id;
+}
+
+async function handleProviders(ctx: AppContext, req: IncomingMessage, res: ServerResponse, url: URL, method: string, requestId: string): Promise<void> {
+  try {
+    await ensureProvidersLoaded(ctx);
+    const registry = ctx.providerStore.registry;
+
+    if (method === "GET" && url.pathname === "/providers") {
+      sendJson(res, 200, { providers: registry.list(), presets: PROVIDER_PRESETS });
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/providers") {
+      const parsed = await readJson(req);
+      if (!parsed) {
+        sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+        return;
+      }
+      const provider = registry.upsert(providerInput(parsed) as never);
+      await ctx.providerStore.save();
+      sendJson(res, 201, { provider });
+      return;
+    }
+
+    const testMatch = /^\/providers\/([^/]+)\/test$/.exec(url.pathname);
+    if (method === "POST" && testMatch?.[1]) {
+      const result = await registry.testConnection(decodeURIComponent(testMatch[1]));
+      if (result.ok) await ctx.providerStore.save();
+      sendJson(res, result.ok ? 200 : 502, result);
+      return;
+    }
+
+    const enabledMatch = /^\/providers\/([^/]+)\/enabled$/.exec(url.pathname);
+    if ((method === "POST" || method === "PUT" || method === "PATCH") && enabledMatch?.[1]) {
+      const parsed = await readJson(req);
+      if (!parsed || typeof parsed.enabled !== "boolean") {
+        sendJson(res, 400, { error: "enabled_boolean_required", request_id: requestId });
+        return;
+      }
+      const provider = registry.setEnabled(decodeURIComponent(enabledMatch[1]), parsed.enabled);
+      if (!provider) {
+        sendJson(res, 404, { error: "provider_not_found", request_id: requestId });
+        return;
+      }
+      await ctx.providerStore.save();
+      sendJson(res, 200, { provider });
+      return;
+    }
+
+    const providerMatch = /^\/providers\/([^/]+)$/.exec(url.pathname);
+    if (providerMatch?.[1]) {
+      const id = decodeURIComponent(providerMatch[1]);
+      if (method === "GET") {
+        const provider = registry.getPublic(id);
+        if (!provider) sendJson(res, 404, { error: "provider_not_found", request_id: requestId });
+        else sendJson(res, 200, { provider });
+        return;
+      }
+      if (method === "PUT" || method === "PATCH" || method === "POST") {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        const provider = registry.upsert(providerInput({ ...parsed, id }) as never);
+        await ctx.providerStore.save();
+        sendJson(res, 200, { provider });
+        return;
+      }
+      if (method === "DELETE") {
+        const removed = registry.remove(id);
+        if (!removed) {
+          sendJson(res, 404, { error: "provider_not_found", request_id: requestId });
+          return;
+        }
+        await ctx.providerStore.save();
+        sendJson(res, 200, { removed: true, id });
+        return;
+      }
+    }
+
+    sendJson(res, 404, { error: "not_found", request_id: requestId });
+  } catch (error) {
+    sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+  }
+}
+
+function providerInput(parsed: Record<string, unknown>): Record<string, unknown> {
+  const input: Record<string, unknown> = { ...parsed };
+  if (typeof input.base_url === "string" && typeof input.baseUrl !== "string") input.baseUrl = input.base_url;
+  if (typeof input.api_key === "string" && typeof input.apiKey !== "string") input.apiKey = input.api_key;
+  if (input.apiKey === "") delete input.apiKey;
+  delete input.apiKeyMasked;
+  delete input.api_key;
+  delete input.base_url;
+  delete input.hasApiKey;
+  return input;
+}
+
+function parseAttachments(value: unknown): Attachment[] {
+  if (!Array.isArray(value)) return [];
+  const kinds = new Set(["file", "folder", "image", "zip"]);
+  return value.flatMap((item) => {
+    if (typeof item !== "object" || item === null) return [];
+    const record = item as Record<string, unknown>;
+    const workspacePath = typeof record.workspacePath === "string" ? record.workspacePath : typeof record.workspace_path === "string" ? record.workspace_path : undefined;
+    const name = typeof record.name === "string" ? record.name : workspacePath ? basename(workspacePath) : undefined;
+    if (!workspacePath || !name) return [];
+    return [{
+      id: typeof record.id === "string" ? record.id : crypto.randomUUID(),
+      ...(typeof record.taskId === "string" ? { taskId: record.taskId } : typeof record.task_id === "string" ? { taskId: record.task_id } : {}),
+      workspacePath,
+      name,
+      kind: typeof record.kind === "string" && kinds.has(record.kind) ? (record.kind as Attachment["kind"]) : "file",
+      ...(typeof record.mimeType === "string" ? { mimeType: record.mimeType } : typeof record.mime_type === "string" ? { mimeType: record.mime_type } : {}),
+      size: typeof record.size === "number" ? record.size : 0,
+      ...(typeof record.sha256 === "string" ? { sha256: record.sha256 } : {}),
+      createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString(),
+      ...(typeof record.path === "string" ? { path: record.path } : {}),
+    }];
+  });
+}
+
+function parseChildren(value: unknown): Array<{ goal: string; mode?: AgentMode; budget?: { max_iterations: number; max_errors: number }; agent?: string; isolation?: "worktree" }> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item !== "object" || item === null) return [];
+    const record = item as Record<string, unknown>;
+    if (typeof record.goal !== "string" || !record.goal.trim()) return [];
+    const budgetRecord = typeof record.budget === "object" && record.budget !== null ? (record.budget as Record<string, unknown>) : undefined;
+    const budget = budgetRecord && typeof budgetRecord.max_iterations === "number" && typeof budgetRecord.max_errors === "number"
+      ? { max_iterations: budgetRecord.max_iterations, max_errors: budgetRecord.max_errors }
+      : undefined;
+    return [{
+      goal: record.goal,
+      mode: parseMode(record.mode),
+      ...(budget ? { budget } : {}),
+      ...(typeof record.agent === "string" && record.agent.trim() ? { agent: record.agent } : {}),
+      ...(record.isolation === "worktree" ? { isolation: "worktree" as const } : {}),
+    }];
+  });
+}
+
+type IncomingUploadFile = { name: string; path: string; mimeType?: string; data: Buffer };
+
+async function handleUpload(ctx: AppContext, req: IncomingMessage, res: ServerResponse, requestId: string): Promise<void> {
+  try {
+    const body = await readRawBody(req);
+    const contentType = req.headers["content-type"] ?? "";
+    const fields = new Map<string, string>();
+    const files: IncomingUploadFile[] = [];
+
+    if (contentType.includes("multipart/form-data")) {
+      const parts = parseMultipart(body, contentType);
+      for (const part of parts) {
+        if (part.filename !== undefined && part.filename.length > 0) {
+          files.push({ name: basename(part.filename), path: part.filename, mimeType: part.contentType, data: part.data });
+        } else {
+          fields.set(part.name, part.data.toString("utf8"));
+        }
+      }
+    } else {
+      const parsed = JSON.parse(body.toString("utf8") || "{}") as Record<string, unknown>;
+      for (const [key, value] of Object.entries(parsed)) {
+        if (key !== "files" && typeof value === "string") fields.set(key, value);
+        if (key !== "files" && typeof value === "boolean") fields.set(key, String(value));
+      }
+      const rawFiles = Array.isArray(parsed.files) ? parsed.files : [];
+      for (const raw of rawFiles) {
+        if (typeof raw !== "object" || raw === null) continue;
+        const record = raw as Record<string, unknown>;
+        const name = typeof record.name === "string" ? record.name : "upload.bin";
+        const relativePath = typeof record.path === "string" ? record.path : name;
+        const base64 = typeof record.contentBase64 === "string" ? record.contentBase64 : typeof record.content_base64 === "string" ? record.content_base64 : "";
+        files.push({ name, path: relativePath, mimeType: typeof record.mimeType === "string" ? record.mimeType : undefined, data: Buffer.from(base64, "base64") });
+      }
+      if (typeof parsed.task_id === "string") fields.set("task_id", parsed.task_id);
+      if (typeof parsed.taskId === "string") fields.set("task_id", parsed.taskId);
+      if (typeof parsed.root === "string") fields.set("root", parsed.root);
+      if (typeof parsed.destination === "string") fields.set("destination", parsed.destination);
+      if (typeof parsed.kind === "string") fields.set("kind", parsed.kind);
+    }
+
+    if (!files.length) {
+      sendJson(res, 400, { error: "file_required", request_id: requestId });
+      return;
+    }
+    if (files.length > UPLOAD_LIMITS.maxFiles) {
+      sendJson(res, 413, { error: `too many files (limit ${UPLOAD_LIMITS.maxFiles})`, request_id: requestId });
+      return;
+    }
+
+    const root = resolveAllowedRoot(ctx, fields.get("root"));
+    const taskIdRaw = fields.get("task_id") ?? fields.get("taskId");
+    const taskId = taskIdRaw && /^[a-zA-Z0-9_-]+$/.test(taskIdRaw) ? taskIdRaw : undefined;
+    const requestedKind = fields.get("kind");
+    const destination = sanitizeRelativePath(fields.get("destination") ?? (taskId ? `.daedalus/attachments/${taskId}` : ".daedalus/attachments/uploads"));
+    const destinationAbs = resolveInside(root, destination);
+    await mkdir(destinationAbs, { recursive: true });
+
+    const attachments: Attachment[] = [];
+    const storedFiles: Array<{ path: string; size: number }> = [];
+    let total = 0;
+
+    for (const file of files) {
+      total += file.data.length;
+      if (file.data.length > UPLOAD_LIMITS.maxFileBytes) throw new Error(`file too large: ${file.name} (limit ${UPLOAD_LIMITS.maxFileBytes} bytes)`);
+      if (total > UPLOAD_LIMITS.maxTotalBytes) throw new Error(`upload too large (limit ${UPLOAD_LIMITS.maxTotalBytes} bytes)`);
+      const relativePath = sanitizeRelativePath(file.path || file.name);
+      const isZip = requestedKind === "zip" || relativePath.toLowerCase().endsWith(".zip") || file.mimeType === "application/zip";
+      if (isZip) {
+        const zipAbs = resolveInside(root, join(destination, relativePath));
+        await mkdir(join(zipAbs, ".."), { recursive: true });
+        await writeFile(zipAbs, file.data);
+        const zipAttachment = attachmentFromStored({ taskId, root, absolute: zipAbs, name: basename(relativePath), kind: "zip", mimeType: "application/zip", data: file.data });
+        attachments.push(zipAttachment);
+        emitAttachment(ctx, zipAttachment);
+        storedFiles.push({ path: relativeToRoot(root, zipAbs), size: file.data.length });
+        const extractDirName = basename(relativePath).replace(/\.zip$/i, "") || "archive";
+        const extractAbs = resolveInside(root, join(destination, extractDirName));
+        await mkdir(extractAbs, { recursive: true });
+        for (const entry of extractZipEntries(file.data)) {
+          const entryAbs = resolveInside(extractAbs, entry.path);
+          await mkdir(join(entryAbs, ".."), { recursive: true });
+          await writeFile(entryAbs, entry.data);
+          storedFiles.push({ path: relativeToRoot(root, entryAbs), size: entry.data.length });
+        }
+        continue;
+      }
+
+      const absolute = resolveInside(root, join(destination, relativePath));
+      await mkdir(join(absolute, ".."), { recursive: true });
+      await writeFile(absolute, file.data);
+      const mimeType = file.mimeType ?? guessMimeType(relativePath);
+      const kind: Attachment["kind"] = requestedKind === "folder" ? "file" : mimeType.startsWith("image/") || requestedKind === "image" ? "image" : "file";
+      const attachment = attachmentFromStored({ taskId, root, absolute, name: basename(relativePath), kind, mimeType, data: file.data });
+      attachments.push(attachment);
+      emitAttachment(ctx, attachment);
+      storedFiles.push({ path: relativeToRoot(root, absolute), size: file.data.length });
+    }
+
+    if (requestedKind === "folder" && storedFiles.length) {
+      const folderAttachment: Attachment = {
+        id: crypto.randomUUID(),
+        ...(taskId ? { taskId } : {}),
+        workspacePath: destination,
+        name: basename(destination) || destination,
+        kind: "folder",
+        size: storedFiles.reduce((sum, file) => sum + file.size, 0),
+        createdAt: new Date().toISOString(),
+        path: destinationAbs,
+      };
+      attachments.push(folderAttachment);
+      emitAttachment(ctx, folderAttachment);
+    }
+
+    sendJson(res, 201, { attachments, files: storedFiles, limits: UPLOAD_LIMITS, destination });
+  } catch (error) {
+    sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+  }
+}
+
+function relativeToRoot(root: string, absolute: string): string {
+  const resolvedRoot = resolve(root);
+  return absolute.startsWith(resolvedRoot + sep) ? absolute.slice(resolvedRoot.length + 1) : basename(absolute);
+}
+
+type TaskLookup = { store: TaskStore; state: Record<string, unknown> };
+
+/**
+ * Stores the gateway may read for monitoring. The primary store is always
+ * included; in addition, every allowed workspace root contributes its local
+ * `<workspace>/.daedalus` store. That is what lets the Web monitor a task the
+ * CLI started in the same shared workspace (CLI and server resolve the same
+ * home for that root) without exposing arbitrary directories.
+ */
+function taskStores(ctx: AppContext): TaskStore[] {
+  const stores: TaskStore[] = [];
+  const seen = new Set<string>();
+  const add = (store: TaskStore) => {
+    const key = resolve(store.root);
+    if (seen.has(key)) return;
+    seen.add(key);
+    stores.push(store);
+  };
+  add(ctx.store);
+  for (const root of allowedRoots(ctx)) add(new TaskStore(resolveDaedalusHome(ctx.settings.daedalusHome, root)));
+  return stores;
+}
+
+function findTask(ctx: AppContext, taskId: string): TaskLookup | undefined {
+  for (const store of taskStores(ctx)) {
+    const state = store.loadState<Record<string, unknown>>(taskId);
+    if (state !== undefined) return { store, state };
+    if (store.replay(taskId).length > 0) return { store, state: {} };
+  }
+  return undefined;
+}
+
+function allTaskIds(ctx: AppContext): string[] {
+  const ids = new Set<string>();
+  for (const store of taskStores(ctx)) {
+    for (const id of store.listTasks()) ids.add(id);
+  }
+  return [...ids];
+}
+
+function summarizeFrom(ctx: AppContext, lookup: TaskLookup, taskId: string): Record<string, unknown> {
+  const { store, state } = lookup;
+  const spec = (state.spec && typeof state.spec === "object" ? state.spec : state) as Record<string, unknown>;
+  const events = store.replay(taskId);
+  const report = store.loadReport<{ outcome?: string }>(taskId);
+  const last = events.at(-1);
+  const stateStatus = typeof state.status === "string" ? state.status : "unknown";
+  const outcome = typeof report?.outcome === "string" ? report.outcome : stateStatus === "unknown" ? undefined : stateStatus;
+  const activeStatus = ["created", "pending", "active", "running"].includes(stateStatus);
+  return {
+    id: taskId,
+    goal: typeof spec.goal === "string" ? spec.goal : undefined,
+    title: typeof state.title === "string" ? state.title : typeof spec.title === "string" ? spec.title : undefined,
+    repo_path: typeof spec.repo_path === "string" ? spec.repo_path : typeof state.repo_path === "string" ? state.repo_path : undefined,
+    status: report?.outcome ?? stateStatus,
+    ...(outcome ? { outcome } : {}),
+    mode: typeof state.mode === "string" ? state.mode : typeof spec.mode === "string" ? spec.mode : undefined,
+    thinking: typeof state.thinking === "boolean" ? state.thinking : typeof spec.thinking === "boolean" ? spec.thinking : undefined,
+    created_at: typeof spec.created_at === "string" ? spec.created_at : typeof state.created_at === "string" ? state.created_at : events[0]?.ts ?? null,
+    event_count: events.length,
+    last_seq: last?.seq ?? 0,
+    last_event: last?.type ?? null,
+    updated_at: last?.ts ?? (typeof spec.created_at === "string" ? spec.created_at : null),
+    running: ctx.activeRunners.has(taskId) || (activeStatus && !report),
+    store_root: store.root,
+  };
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolvePromise, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+const EXTENSION_STATUS_CACHE_MS = 5_000;
+const MCP_STATUS_TIMEOUT_MS = 2_000;
+
+async function extensionStatus(ctx: AppContext, rootValue: unknown): Promise<ExtensionStatus> {
+  const root = resolveAllowedRoot(ctx, rootValue);
+  ctx.extensionStatusCache ??= new Map();
+  const cached = ctx.extensionStatusCache.get(root);
+  if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+  const [mcpConfig, skillRegistry, agentRegistry, lspConfig] = await Promise.all([
+    loadMcpConfig(root),
+    loadSkills([workspaceSkillsDir(root)]),
+    loadAgents([workspaceAgentsDir(root)]),
+    loadLspConfig(root),
+  ]);
+
+  let mcp: ExtensionStatus["mcp"] = mcpConfig.servers.map((server) => ({ name: server.name, connected: false, toolCount: 0 }));
+  if (mcpConfig.servers.length > 0) {
+    const capped = mcpConfig.servers.map((server) => ({ ...server, timeoutMs: Math.min(server.timeoutMs ?? MCP_STATUS_TIMEOUT_MS, MCP_STATUS_TIMEOUT_MS) }));
+    const manager = new McpManager(capped);
+    try {
+      const statuses = await withTimeout(manager.connectAll(), MCP_STATUS_TIMEOUT_MS + 500, "MCP status check");
+      // McpManager.closeAll() flips its live status objects to disconnected;
+      // snapshot the probe result before cleanup so the endpoint reports the
+      // connection that actually happened.
+      mcp = statuses.map((status) => ({ ...status }));
+    } catch (error) {
+      const message = errorMessage(error);
+      mcp = capped.map((server) => ({ name: server.name, connected: false, toolCount: 0, error: message }));
+    } finally {
+      await manager.closeAll().catch(() => undefined);
+    }
+  }
+
+  const value: ExtensionStatus = {
+    root,
+    mcp,
+    skills: skillRegistry.list().map((skill) => ({ name: skill.name, description: skill.description })),
+    agents: agentRegistry.list().map((agent) => ({
+      name: agent.name,
+      description: agent.description,
+      ...(agent.model ? { model: agent.model } : {}),
+      ...(agent.mode ? { mode: agent.mode } : {}),
+      ...(agent.tools ? { tools: agent.tools } : {}),
+    })),
+    lsp: lspConfig.servers.map((server) => ({ name: server.name, extensions: [...server.extensions], configured: true, running: false })),
+    problems: [...mcpConfig.problems, ...lspConfig.problems],
+  };
+  ctx.extensionStatusCache.set(root, { expiresAt: Date.now() + EXTENSION_STATUS_CACHE_MS, value });
+  return value;
+}
+
 export function createApp(ctx: AppContext) {
   return createServer((req, res) => {
     const requestId = crypto.randomUUID();
@@ -89,67 +768,293 @@ export function createApp(ctx: AppContext) {
         service: "daedalus-server",
         uptime_ms: Date.now() - ctx.startedAt,
         active_tasks: ctx.activeRunners.size,
+        workspace_root: ctx.session.workspaceRoot,
         request_id: requestId,
       });
       return;
     }
 
-    if (method === "GET" && url.pathname === "/tasks") {
-      const tasks = ctx.store.listTasks().map((id) => summarize(ctx, id));
-      sendJson(res, 200, { tasks, count: tasks.length });
+    if (method === "GET" && serveWebAsset(ctx, res, url.pathname, req.headers.accept ?? "")) {
       return;
     }
 
-    if (method === "POST" && url.pathname === "/tasks") {
+    if (method === "GET" && url.pathname === "/") {
+      sendJson(res, 200, {
+        service: "daedalus-server",
+        status: "ok",
+        health: "/health",
+        web: "Run the Daedalus Web UI and point it at this server URL.",
+        session: publicSession(ctx),
+        request_id: requestId,
+      });
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/settings") {
+      void (async () => {
+        await ensureProvidersLoaded(ctx);
+        sendJson(res, 200, { settings: redactSettings(ctx.settings), session: publicSession(ctx), providers: ctx.providerStore.registry.list() });
+      })();
+      return;
+    }
+
+    if ((method === "PUT" || method === "PATCH" || method === "POST") && url.pathname === "/settings") {
       void (async () => {
         const parsed = await readJson(req);
         if (!parsed) {
           sendJson(res, 400, { error: "invalid_json", request_id: requestId });
           return;
         }
-        const goal = typeof parsed.goal === "string" ? parsed.goal.trim() : "";
-        if (goal === "") {
-          sendJson(res, 400, { error: "goal_required", request_id: requestId });
+        try {
+          applySettingsUpdate(ctx, parsed);
+          sendJson(res, 200, { settings: redactSettings(ctx.settings), session: publicSession(ctx) });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/session") {
+      sendJson(res, 200, { session: publicSession(ctx) });
+      return;
+    }
+
+    if ((method === "PUT" || method === "PATCH" || method === "POST") && url.pathname === "/session") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
           return;
         }
+        try {
+          applySessionUpdate(ctx, parsed);
+          sendJson(res, 200, { session: publicSession(ctx) });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
 
-        const taskId = crypto.randomUUID();
-        const repoPath = typeof parsed.repo_path === "string" && parsed.repo_path.length > 0 ? resolveInside(ctx.cwd, parsed.repo_path) : ctx.cwd;
-        const autoApprove = parsed.auto_approve === true;
-        const maxIterations = typeof parsed.max_iterations === "number" ? parsed.max_iterations : 25;
+    if (method === "POST" && url.pathname === "/session/mode") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        const mode = parsed.cycle === true ? nextMode(ctx.session.mode) : parseMode(parsed.mode);
+        if (!mode) {
+          sendJson(res, 400, { error: "invalid_mode", modes: AGENT_MODES, request_id: requestId });
+          return;
+        }
+        ctx.session.mode = mode;
+        sendJson(res, 200, { session: publicSession(ctx) });
+      })();
+      return;
+    }
 
-        const runner = new TaskRunner({
-          workspaceRoot: repoPath,
-          approvalPolicy: autoApprove ? "auto" : "ask",
-          maxIterations,
-          bus: ctx.bus,
-          store: ctx.store,
-        });
-        ctx.activeRunners.set(taskId, runner);
+    if (method === "POST" && url.pathname === "/session/auto-approve") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed || typeof parsed.enabled !== "boolean") {
+          sendJson(res, 400, { error: "enabled_boolean_required", request_id: requestId });
+          return;
+        }
+        ctx.session.autoApprove = parsed.enabled;
+        sendJson(res, 200, { session: publicSession(ctx) });
+      })();
+      return;
+    }
 
-        const task = {
-          id: taskId,
-          goal,
-          repo_path: repoPath,
-          constraints: stringList(parsed.constraints),
-          done_criteria: stringList(parsed.done_criteria),
-          created_at: new Date().toISOString(),
-        };
-        ctx.store.saveState(taskId, {
-          ...task,
-          plan: { id: `${taskId}-plan`, task_id: taskId, steps: [], version: 0, status: "draft" },
-          steps: [],
-          status: "created",
-        });
-        ctx.log.info("task created", { task_id: taskId, request_id: requestId, repo_path: repoPath });
+    if (url.pathname === "/providers" || url.pathname.startsWith("/providers/")) {
+      void handleProviders(ctx, req, res, url, method, requestId);
+      return;
+    }
 
-        runner
-          .run({ goal, taskId })
-          .then((result) => ctx.log.info("task finished", { task_id: taskId, outcome: result.outcome }))
-          .catch((error: unknown) => ctx.log.error("task run error", { task_id: taskId, error: String(error) }))
-          .finally(() => ctx.activeRunners.delete(taskId));
+    if (method === "GET" && url.pathname === "/models") {
+      void (async () => {
+        await ensureProvidersLoaded(ctx);
+        const providerId = url.searchParams.get("provider_id") ?? url.searchParams.get("providerId") ?? undefined;
+        const models = await ctx.providerStore.registry.listModels(providerId);
+        sendJson(res, 200, { models, session: publicSession(ctx), count: models.length });
+      })();
+      return;
+    }
 
-        sendJson(res, 201, task);
+    if (method === "GET" && url.pathname === "/extensions/status") {
+      void (async () => {
+        try {
+          const status = await extensionStatus(ctx, url.searchParams.get("root") || ctx.session.workspaceRoot || ctx.cwd);
+          sendJson(res, 200, status);
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/tasks") {
+      const tasks = allTaskIds(ctx).flatMap((id) => {
+        const lookup = findTask(ctx, id);
+        return lookup ? [summarizeFrom(ctx, lookup, id)] : [];
+      });
+      sendJson(res, 200, { tasks, count: tasks.length });
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/tasks") {
+      void (async () => {
+        try {
+          const parsed = await readJson(req);
+          if (!parsed) {
+            sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+            return;
+          }
+          const goal = typeof parsed.goal === "string" ? parsed.goal.trim() : "";
+          if (goal === "") {
+            sendJson(res, 400, { error: "goal_required", request_id: requestId });
+            return;
+          }
+          if (parsed.mode !== undefined && !parseMode(parsed.mode)) {
+            sendJson(res, 400, { error: "invalid_mode", modes: AGENT_MODES, request_id: requestId });
+            return;
+          }
+          if (parsed.isolation !== undefined && parsed.isolation !== "worktree") {
+            sendJson(res, 400, { error: "invalid_isolation", request_id: requestId });
+            return;
+          }
+          const isolation = parsed.isolation === "worktree" ? ("worktree" as const) : undefined;
+
+          await ensureProvidersLoaded(ctx);
+          const taskId = crypto.randomUUID();
+          const repoPath = resolveTaskRepo(ctx, parsed.repo_path ?? parsed.repoPath);
+          const constraints = stringList(parsed.constraints);
+          const doneCriteria = stringList(parsed.done_criteria ?? parsed.doneCriteria);
+          const mode = parseMode(parsed.mode) ?? ctx.session.mode;
+          const autoApprove = typeof parsed.auto_approve === "boolean" ? parsed.auto_approve : typeof parsed.autoApprove === "boolean" ? parsed.autoApprove : ctx.session.autoApprove;
+          const maxIterations = typeof parsed.max_iterations === "number" ? parsed.max_iterations : typeof parsed.maxIterations === "number" ? parsed.maxIterations : 25;
+          const providerId = typeof parsed.provider_id === "string" ? parsed.provider_id : typeof parsed.providerId === "string" ? parsed.providerId : ctx.session.providerId;
+          const model = typeof parsed.model === "string" ? parsed.model : ctx.session.model;
+          const thinking = typeof parsed.thinking === "boolean" ? parsed.thinking : ctx.session.thinking;
+          const attachments = parseAttachments(parsed.attachments);
+          const children = parseChildren(parsed.children);
+          const taskStore = new TaskStore(resolveDaedalusHome(ctx.settings.daedalusHome, repoPath));
+
+          const runner = new TaskRunner({
+            workspaceRoot: repoPath,
+            approvalPolicy: autoApprove ? "auto" : "ask",
+            maxIterations,
+            bus: ctx.bus,
+            store: taskStore,
+            settings: ctx.settings,
+            providerRegistry: ctx.providerStore.registry,
+            mode,
+            autoApprove,
+            thinking,
+            ...(providerId ? { providerId } : {}),
+            ...(model ? { model } : {}),
+          });
+          ctx.activeRunners.set(taskId, runner);
+
+          const task = {
+            id: taskId,
+            goal,
+            repo_path: repoPath,
+            constraints,
+            done_criteria: doneCriteria,
+            mode,
+            auto_approve: autoApprove,
+            thinking,
+            ...(providerId ? { provider_id: providerId } : {}),
+            ...(model ? { model } : {}),
+            attachments,
+            ...(children.length ? { children } : {}),
+            ...(isolation ? { isolation } : {}),
+            created_at: new Date().toISOString(),
+          };
+          taskStore.saveState(taskId, {
+            ...task,
+            plan: { id: `${taskId}-plan`, task_id: taskId, steps: [], version: 0, status: "draft" },
+            steps: [],
+            status: "created",
+          });
+          ctx.log.info("task created", { task_id: taskId, request_id: requestId, repo_path: repoPath, mode });
+
+          const goalText = [goal, ...constraints.map((constraint) => `constraint: ${constraint}`), ...doneCriteria.map((criterion) => `done: ${criterion}`)].join("\n");
+          runner
+            .run({
+              goal: goalText,
+              taskId,
+              mode,
+              autoApprove,
+              thinking,
+              attachments,
+              ...(isolation ? { isolation } : {}),
+              ...(providerId ? { providerId } : {}),
+              ...(model ? { model } : {}),
+              ...(children.length ? { children } : {}),
+            })
+            .then((result) => ctx.log.info("task finished", { task_id: taskId, outcome: result.outcome }))
+            .catch((error: unknown) => ctx.log.error("task run error", { task_id: taskId, error: String(error) }))
+            .finally(() => ctx.activeRunners.delete(taskId));
+
+          sendJson(res, 201, task);
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/review") {
+      void (async () => {
+        try {
+          const parsed = await readJson(req);
+          if (!parsed) {
+            sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+            return;
+          }
+          await ensureProvidersLoaded(ctx);
+          const workspaceRoot = resolveAllowedRoot(ctx, parsed.root ?? parsed.workspaceRoot ?? parsed.repo_path);
+          const taskId = typeof parsed.task_id === "string" ? parsed.task_id : typeof parsed.taskId === "string" ? parsed.taskId : undefined;
+          let diffText = "";
+          let source: "task-diff" | "unstaged" | "provided" = "unstaged";
+          if (typeof parsed.diff === "string" && parsed.diff.trim().length > 0) {
+            diffText = parsed.diff;
+            source = "provided";
+          }
+          if (!diffText && taskId) {
+            const lookup = findTask(ctx, taskId);
+            const report = lookup?.store.loadReport<FinalReport>(taskId);
+            if (report?.diff && report.diff.trim().length > 0) {
+              diffText = report.diff;
+              source = "task-diff";
+            }
+          }
+          if (!diffText) diffText = await unstagedDiff(workspaceRoot);
+          if (!diffText.trim()) {
+            sendJson(res, 200, { findings: [], raw: "No diff to review.", source, truncated: false, request_id: requestId });
+            return;
+          }
+          const registry = ctx.providerStore.registry;
+          const providerId = typeof parsed.provider_id === "string" ? parsed.provider_id : typeof parsed.providerId === "string" ? parsed.providerId : ctx.session.providerId;
+          const config = (providerId ? registry.get(providerId) : undefined) ?? registry.listInternal().find((provider) => provider.enabled);
+          const model = typeof parsed.model === "string" ? parsed.model : ctx.session.model ?? config?.defaultModel ?? config?.models[0] ?? ctx.settings.llm.model;
+          if (!config && !ctx.settings.llm.baseUrl) {
+            sendJson(res, 400, { error: "no_provider_configured", request_id: requestId });
+            return;
+          }
+          const provider = config
+            ? createProviderForConfig(config, model)
+            : createProviderForConfig({ baseUrl: ctx.settings.llm.baseUrl, apiKey: ctx.settings.llm.apiKey }, model);
+          const rules = await loadProjectRules(workspaceRoot, { globalHome: resolveDaedalusHome(ctx.settings.daedalusHome, workspaceRoot) });
+          const result = await reviewDiff({ provider, diff: diffText, rulesText: rules.text ? rules.text : undefined, source });
+          sendJson(res, 200, { ...result, request_id: requestId });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
       })();
       return;
     }
@@ -191,15 +1096,31 @@ export function createApp(ctx: AppContext) {
     if (method === "POST" && cancelMatch?.[1] !== undefined) {
       const taskId = cancelMatch[1] as string;
       const runner = ctx.activeRunners.get(taskId);
-      ctx.store.requestCancel(taskId);
+      const lookup = findTask(ctx, taskId);
+      (lookup?.store ?? ctx.store).requestCancel(taskId);
       runner?.cancel(taskId);
       sendJson(res, 200, { cancelled: runner !== undefined, task_id: taskId });
       return;
     }
 
+    const eventsMatch = /^\/tasks\/([^/]+)\/events$/.exec(url.pathname);
+    if (method === "GET" && eventsMatch?.[1] !== undefined) {
+      const taskId = eventsMatch[1] as string;
+      const lookup = findTask(ctx, taskId);
+      if (!lookup) {
+        sendJson(res, 404, { error: "not_found", request_id: requestId });
+        return;
+      }
+      const events = lookup.store.replay(taskId);
+      sendJson(res, 200, { events, count: events.length, task: summarizeFrom(ctx, lookup, taskId) });
+      return;
+    }
+
     const reportMatch = /^\/tasks\/([^/]+)\/report$/.exec(url.pathname);
     if (method === "GET" && reportMatch?.[1] !== undefined) {
-      const report = ctx.store.loadReport<FinalReport>(reportMatch[1] as string);
+      const taskId = reportMatch[1] as string;
+      const lookup = findTask(ctx, taskId);
+      const report = lookup?.store.loadReport<FinalReport>(taskId);
       if (!report) {
         sendJson(res, 404, { error: "report_not_found" });
         return;
@@ -210,67 +1131,199 @@ export function createApp(ctx: AppContext) {
 
     const changesMatch = /^\/tasks\/([^/]+)\/changes$/.exec(url.pathname);
     if (method === "GET" && changesMatch?.[1] !== undefined) {
-      const changes = ctx.store
-        .replay(changesMatch[1] as string)
+      const taskId = changesMatch[1] as string;
+      const lookup = findTask(ctx, taskId);
+      const changes = (lookup?.store.replay(taskId) ?? [])
         .filter((event) => event.type === "FILE_CHANGED")
         .map((event) => event.payload);
       sendJson(res, 200, { changes, count: changes.length });
       return;
     }
 
+    const attachmentsMatch = /^\/tasks\/([^/]+)\/attachments$/.exec(url.pathname);
+    if (method === "GET" && attachmentsMatch?.[1] !== undefined) {
+      const taskId = attachmentsMatch[1] as string;
+      const lookup = findTask(ctx, taskId);
+      const attachments = (lookup?.store.replay(taskId) ?? [])
+        .filter((event) => event.type === "ATTACHMENT_ADDED")
+        .map((event) => (event.payload as { attachment?: Attachment }).attachment)
+        .filter((attachment): attachment is Attachment => Boolean(attachment));
+      sendJson(res, 200, { attachments, count: attachments.length });
+      return;
+    }
+
     const taskMatch = /^\/tasks\/([^/]+)$/.exec(url.pathname);
     if (method === "GET" && taskMatch?.[1] !== undefined) {
       const taskId = taskMatch[1] as string;
-      const state = ctx.store.loadState(taskId);
-      if (state === undefined) {
+      const lookup = findTask(ctx, taskId);
+      if (!lookup) {
         sendJson(res, 404, { error: "not_found", request_id: requestId });
         return;
       }
       sendJson(res, 200, {
-        state,
-        events: ctx.store.replay(taskId),
-        report: ctx.store.loadReport<FinalReport>(taskId) ?? null,
-        running: ctx.activeRunners.has(taskId),
+        state: lookup.state,
+        events: lookup.store.replay(taskId),
+        report: lookup.store.loadReport<FinalReport>(taskId) ?? null,
+        running: ctx.activeRunners.has(taskId) || summarizeFrom(ctx, lookup, taskId).running === true,
+        task: summarizeFrom(ctx, lookup, taskId),
       });
       return;
     }
 
+    if (method === "POST" && url.pathname === "/workspace/create") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const target = typeof parsed.path === "string" ? parsed.path : typeof parsed.name === "string" ? parsed.name : "";
+          if (!target) throw new Error("workspace path or name is required");
+          const absolute = resolveInside(root, sanitizeRelativePath(target));
+          await mkdir(absolute, { recursive: true });
+          recordWorkspace(ctx, absolute);
+          sendJson(res, 201, { path: absolute, name: basename(absolute), root, session: publicSession(ctx) });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && (url.pathname === "/workspace/folders" || url.pathname === "/workspace/folder" || url.pathname === "/workspace/directories")) {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const target = typeof parsed.path === "string" ? parsed.path : "";
+          const absolute = resolveInside(root, sanitizeRelativePath(target));
+          await mkdir(absolute, { recursive: true });
+          sendJson(res, 201, { path: target, absolute, root });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && (url.pathname === "/workspace/files" || url.pathname === "/workspace/file/create")) {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const target = typeof parsed.path === "string" ? parsed.path : "";
+          const absolute = resolveInside(root, sanitizeRelativePath(target));
+          const existing = await stat(absolute).catch(() => undefined);
+          if (existing && parsed.overwrite !== true) {
+            sendJson(res, 409, { error: "file_exists", request_id: requestId });
+            return;
+          }
+          await mkdir(join(absolute, ".."), { recursive: true });
+          await writeFile(absolute, typeof parsed.content === "string" ? parsed.content : "", "utf8");
+          sendJson(res, 201, { path: target, absolute, root, size: Buffer.byteLength(typeof parsed.content === "string" ? parsed.content : "") });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/workspace/rename") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const from = typeof parsed.from === "string" ? parsed.from : typeof parsed.path === "string" ? parsed.path : "";
+          const to = typeof parsed.to === "string" ? parsed.to : typeof parsed.name === "string" ? parsed.name : "";
+          const fromAbs = resolveInside(root, sanitizeRelativePath(from));
+          const toAbs = resolveInside(root, sanitizeRelativePath(to));
+          await mkdir(join(toAbs, ".."), { recursive: true });
+          await rename(fromAbs, toAbs);
+          if (resolve(ctx.session.workspaceRoot) === fromAbs) recordWorkspace(ctx, toAbs);
+          sendJson(res, 200, { from, to, root });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "PUT" && url.pathname === "/workspace/file") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const target = typeof parsed.path === "string" ? parsed.path : "";
+          const absolute = resolveInside(root, sanitizeRelativePath(target));
+          await mkdir(join(absolute, ".."), { recursive: true });
+          await writeFile(absolute, typeof parsed.content === "string" ? parsed.content : "", "utf8");
+          sendJson(res, 200, { path: target, absolute, root });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && (url.pathname === "/uploads" || url.pathname === "/upload" || url.pathname === "/attachments")) {
+      void handleUpload(ctx, req, res, requestId);
+      return;
+    }
+
     if (method === "GET" && url.pathname === "/workspace/roots") {
-      sendJson(res, 200, { roots: collectRoots(ctx.cwd, recordedRoots(ctx)), cwd: ctx.cwd });
+      sendJson(res, 200, { roots: collectRoots(ctx.cwd, [...recordedRoots(ctx), ...ctx.workspaces]), cwd: ctx.cwd, session: publicSession(ctx) });
       return;
     }
 
     if (method === "GET" && url.pathname === "/workspace/tree") {
-      const root = url.searchParams.get("root") || ctx.cwd;
-      const path = url.searchParams.get("path") || ".";
       const depth = clampDepth(url.searchParams.get("depth"));
       try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+        const path = url.searchParams.get("path") || ".";
         sendJson(res, 200, buildTree(root, path, depth));
       } catch (error) {
-        sendJson(res, 400, { error: errorMessage(error) });
+        sendJson(res, errorStatus(error), { error: errorMessage(error) });
       }
       return;
     }
 
     if (method === "GET" && url.pathname === "/workspace/list") {
-      const root = url.searchParams.get("root") || ctx.cwd;
       const path = url.searchParams.get("path") || ".";
       try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
         sendJson(res, 200, { path, items: listDirectory(root, path) });
       } catch (error) {
-        sendJson(res, 400, { error: errorMessage(error) });
+        sendJson(res, errorStatus(error), { error: errorMessage(error) });
       }
       return;
     }
 
     if (method === "GET" && url.pathname === "/workspace/file") {
-      const root = url.searchParams.get("root") || ctx.cwd;
       const targetRel = url.searchParams.get("path") || "";
       if (!targetRel) {
         sendJson(res, 400, { error: "path_required" });
         return;
       }
       try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
         const absolute = resolveInside(root, targetRel);
         const stat = statSync(absolute);
         if (stat.isDirectory()) {
@@ -283,30 +1336,13 @@ export function createApp(ctx: AppContext) {
         }
         sendJson(res, 200, { path: targetRel, content: readFileSync(absolute, "utf8"), size: stat.size });
       } catch (error) {
-        sendJson(res, 404, { error: errorMessage(error) });
+        sendJson(res, errorMessage(error).includes("escapes workspace") ? 404 : errorStatus(error), { error: errorMessage(error) });
       }
       return;
     }
 
     sendJson(res, 404, { error: "not_found", request_id: requestId });
   });
-}
-
-function summarize(ctx: AppContext, taskId: string): Record<string, unknown> {
-  const state = ctx.store.loadState<Record<string, unknown>>(taskId);
-  const events = ctx.store.replay(taskId);
-  const last = events.at(-1);
-  return {
-    id: taskId,
-    goal: typeof state?.goal === "string" ? state.goal : (state?.spec as { goal?: string } | undefined)?.goal,
-    repo_path: state?.repo_path ?? (state?.spec as { repo_path?: string } | undefined)?.repo_path,
-    status: typeof state?.status === "string" ? state.status : "unknown",
-    event_count: events.length,
-    last_seq: last?.seq ?? 0,
-    last_event: last?.type ?? null,
-    updated_at: last?.ts ?? null,
-    running: ctx.activeRunners.has(taskId),
-  };
 }
 
 function recordedRoots(ctx: AppContext): string[] {

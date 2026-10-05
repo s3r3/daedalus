@@ -1,4 +1,4 @@
-import { LLMAuthError, LLMError, LLMFormatError, LLMRateLimitError, LLMTimeoutError } from "./errors.ts";
+import { LLMAuthError, LLMContentPolicyError, LLMError, LLMFormatError, LLMRateLimitError, LLMTimeoutError } from "./errors.ts";
 import type { ChatOptions, ChatResponse, LLMProvider, Message, StreamChunk, ToolDefinition, ToolCall, Usage } from "./types.ts";
 
 export type OpenAICompatOptions = {
@@ -11,12 +11,12 @@ export type OpenAICompatOptions = {
 
 type OpenAIResponse = {
   choices?: Array<{
-    message?: { role?: string; content?: string | null; tool_calls?: ToolCall[] };
-    delta?: { content?: string | null; tool_calls?: Partial<ToolCall>[] };
+    message?: { role?: string; content?: string | null; tool_calls?: ToolCall[]; reasoning_content?: unknown; reasoning?: unknown; thinking?: unknown };
+    delta?: { content?: string | null; tool_calls?: Partial<ToolCall>[]; reasoning_content?: unknown; reasoning?: unknown; thinking?: unknown };
     finish_reason?: string | null;
   }>;
   usage?: Partial<Usage>;
-  error?: { message?: string };
+  error?: { message?: string; code?: string; type?: string };
 };
 
 /** OpenAI Chat Completions-compatible provider without an SDK dependency. */
@@ -38,15 +38,22 @@ export class OpenAICompatProvider implements LLMProvider {
 
   async chat(messages: Message[], tools?: ToolDefinition[], options: ChatOptions = {}): Promise<ChatResponse> {
     const response = await this.#request(messages, tools, options, false);
-    const json = (await response.json()) as OpenAIResponse;
-    if (!response.ok) throw providerHttpError(response.status, json, response.headers.get("retry-after"));
+    if (!response.ok) {
+      const json = (await response.json().catch(() => ({}))) as OpenAIResponse;
+      throw providerHttpError(response.status, json, response.headers.get("retry-after"));
+    }
+    const json = (await response.json().catch(() => {
+      throw new LLMFormatError("provider response is not valid JSON");
+    })) as OpenAIResponse;
     const choice = json.choices?.[0];
     if (!choice?.message) throw new LLMFormatError("provider response has no choice message");
+    if (choice.finish_reason === "content_filter") throw new LLMContentPolicyError("provider refused the request (content_filter)");
     return {
       message: {
         role: toRole(choice.message.role),
         content: choice.message.content ?? "",
         tool_calls: choice.message.tool_calls,
+        ...reasoningFields(choice.message),
       },
       usage: normalizeUsage(json.usage),
       finish_reason: choice.finish_reason ?? undefined,
@@ -107,9 +114,20 @@ export class OpenAICompatProvider implements LLMProvider {
   }
 }
 
+function reasoningFields(message: { reasoning_content?: unknown; reasoning?: unknown; thinking?: unknown }): Pick<Message, "reasoning_content" | "reasoning" | "thinking"> {
+  const fields: Pick<Message, "reasoning_content" | "reasoning" | "thinking"> = {};
+  if (typeof message.reasoning_content === "string" && message.reasoning_content.trim()) fields.reasoning_content = message.reasoning_content;
+  if (typeof message.reasoning === "string" && message.reasoning.trim()) fields.reasoning = message.reasoning;
+  if (typeof message.thinking === "string" && message.thinking.trim()) fields.thinking = message.thinking;
+  return fields;
+}
+
 function timeoutSignal(parent: AbortSignal | undefined, timeoutMs: number): AbortSignal {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // The abort deadline must not by itself keep a short-lived CLI process
+  // alive after the provider has already answered.
+  timer.unref?.();
   parent?.addEventListener("abort", () => controller.abort(), { once: true });
   controller.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
   return controller.signal;
@@ -127,6 +145,10 @@ function normalizeUsage(usage: Partial<Usage> | undefined): Usage | undefined {
 
 function providerHttpError(status: number, body: OpenAIResponse, retryAfter: string | null): LLMError {
   const message = body.error?.message ?? `provider returned HTTP ${status}`;
+  const marker = `${body.error?.code ?? ""} ${body.error?.type ?? ""} ${message}`.toLowerCase();
+  if (marker.includes("content_policy") || marker.includes("content policy") || marker.includes("content_filter") || marker.includes("refusal")) {
+    return new LLMContentPolicyError(message);
+  }
   if (status === 401 || status === 403) return new LLMAuthError(message);
   if (status === 429) return new LLMRateLimitError(message, { retryAfterMs: retryAfter ? Number(retryAfter) * 1000 : undefined });
   return new LLMError(message, { code: status >= 500 ? "transient" : "provider" });

@@ -1,0 +1,594 @@
+[
+  {
+    "id": "bug-fallback-greeting",
+    "category": "bug_fix",
+    "title": "Fallback greeting name",
+    "goal": "Fix greet() so empty or missing names use a friendly fallback without changing normal greetings.",
+    "doneCriteria": [
+      "Inspect the current greeting implementation",
+      "greet() returns the fallback for empty or missing names and preserves normal names"
+    ],
+    "setupFiles": {
+      "package.json": "{\n  \"type\": \"module\"\n}\n",
+      "src/greeting.js": "export function greet(name) {\n  return 'Hello, ' + name;\n}\n",
+      "validate.mjs": "import assert from 'node:assert/strict';\nimport { greet } from './src/greeting.js';\nassert.equal(greet('Farid'), 'Hello, Farid');\nassert.equal(greet(''), 'Hello, friend');\nassert.equal(greet(null), 'Hello, friend');\nassert.equal(greet(undefined), 'Hello, friend');\nconsole.log('greeting validation passed');\n"
+    },
+    "validationCommands": [
+      {
+        "name": "syntax",
+        "cmd": "node",
+        "args": [
+          "--check",
+          "src/greeting.js"
+        ]
+      },
+      {
+        "name": "behavior",
+        "cmd": "node",
+        "args": [
+          "validate.mjs"
+        ]
+      }
+    ],
+    "deterministicScript": [
+      {
+        "tool": "read_file",
+        "args": {
+          "path": "src/greeting.js"
+        }
+      },
+      {
+        "tool": "edit_file",
+        "args": {
+          "path": "src/greeting.js",
+          "old_string": "return 'Hello, ' + name;",
+          "new_string": "return 'Hello, ' + (name || 'friend');"
+        }
+      }
+    ]
+  },
+  {
+    "id": "bug-cart-quantity-total",
+    "category": "bug_fix",
+    "title": "Cart total respects quantity",
+    "goal": "Fix total() so each cart line contributes price multiplied by quantity.",
+    "doneCriteria": [
+      "Inspect the current cart total implementation",
+      "total() multiplies each price by its quantity"
+    ],
+    "setupFiles": {
+      "package.json": "{\n  \"type\": \"module\"\n}\n",
+      "src/cart.js": "export function total(items) {\n  return items.reduce((sum, item) => sum + item.price, 0);\n}\n",
+      "validate.mjs": "import assert from 'node:assert/strict';\nimport { total } from './src/cart.js';\nassert.equal(total([]), 0);\nassert.equal(total([{ price: 10, quantity: 2 }, { price: 5, quantity: 3 }]), 35);\nconsole.log('cart validation passed');\n"
+    },
+    "validationCommands": [
+      {
+        "name": "syntax",
+        "cmd": "node",
+        "args": [
+          "--check",
+          "src/cart.js"
+        ]
+      },
+      {
+        "name": "behavior",
+        "cmd": "node",
+        "args": [
+          "validate.mjs"
+        ]
+      }
+    ],
+    "deterministicScript": [
+      {
+        "tool": "read_file",
+        "args": {
+          "path": "src/cart.js"
+        }
+      },
+      {
+        "tool": "edit_file",
+        "args": {
+          "path": "src/cart.js",
+          "old_string": "sum + item.price",
+          "new_string": "sum + item.price * item.quantity"
+        }
+      }
+    ]
+  },
+  {
+    "id": "bug-slugify-format",
+    "category": "bug_fix",
+    "title": "Slugify produces URL-safe slugs",
+    "goal": "Fix slugify() so titles become lowercase, hyphen-separated, URL-safe slugs.",
+    "doneCriteria": [
+      "Inspect the current slugify implementation",
+      "slugify() lowercases text, replaces non-alphanumeric runs with one hyphen, and trims hyphens"
+    ],
+    "setupFiles": {
+      "package.json": "{\n  \"type\": \"module\"\n}\n",
+      "src/slug.js": "export function slugify(text) {\n  return text.trim().replace(/^-+|-+$/g, '');\n}\n",
+      "validate.mjs": "import assert from 'node:assert/strict';\nimport { slugify } from './src/slug.js';\nassert.equal(slugify(' Hello Daedalus World! '), 'hello-daedalus-world');\nassert.equal(slugify('Modes, Tools & Validation'), 'modes-tools-validation');\nassert.equal(slugify('---Already--Safe---'), 'already-safe');\nconsole.log('slug validation passed');\n"
+    },
+    "validationCommands": [
+      {
+        "name": "syntax",
+        "cmd": "node",
+        "args": [
+          "--check",
+          "src/slug.js"
+        ]
+      },
+      {
+        "name": "behavior",
+        "cmd": "node",
+        "args": [
+          "validate.mjs"
+        ]
+      }
+    ],
+    "deterministicScript": [
+      {
+        "tool": "read_file",
+        "args": {
+          "path": "src/slug.js"
+        }
+      },
+      {
+        "tool": "edit_file",
+        "args": {
+          "path": "src/slug.js",
+          "old_string": "return text.trim().replace(/^-+|-+$/g, '');",
+          "new_string": "return text.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');"
+        }
+      }
+    ]
+  },
+  {
+    "id": "bug-date-padding",
+    "category": "bug_fix",
+    "title": "Date formatter pads day",
+    "goal": "Fix formatDate() so both month and day are two digits in YYYY-MM-DD output.",
+    "doneCriteria": [
+      "Inspect the current date formatting implementation",
+      "formatDate() pads the day as well as the month"
+    ],
+    "setupFiles": {
+      "package.json": "{\n  \"type\": \"module\"\n}\n",
+      "src/date.js": "export function formatDate(date) {\n  const month = String(date.getMonth() + 1).padStart(2, '0');\n  const day = String(date.getDate());\n  return `${date.getFullYear()}-${month}-${day}`;\n}\n",
+      "validate.mjs": "import assert from 'node:assert/strict';\nimport { formatDate } from './src/date.js';\nassert.equal(formatDate(new Date(2026, 0, 5)), '2026-01-05');\nassert.equal(formatDate(new Date(2026, 11, 25)), '2026-12-25');\nconsole.log('date validation passed');\n"
+    },
+    "validationCommands": [
+      {
+        "name": "syntax",
+        "cmd": "node",
+        "args": [
+          "--check",
+          "src/date.js"
+        ]
+      },
+      {
+        "name": "behavior",
+        "cmd": "node",
+        "args": [
+          "validate.mjs"
+        ]
+      }
+    ],
+    "deterministicScript": [
+      {
+        "tool": "read_file",
+        "args": {
+          "path": "src/date.js"
+        }
+      },
+      {
+        "tool": "edit_file",
+        "args": {
+          "path": "src/date.js",
+          "old_string": "const day = String(date.getDate());",
+          "new_string": "const day = String(date.getDate()).padStart(2, '0');"
+        }
+      }
+    ]
+  },
+  {
+    "id": "feature-clamp-number",
+    "category": "feature_addition",
+    "title": "Add numeric clamp helper",
+    "goal": "Add a clamp(value, min, max) helper to the math module without changing existing add/subtract behavior.",
+    "doneCriteria": [
+      "Inspect the current math module",
+      "clamp() is exported and bounds values inclusively"
+    ],
+    "setupFiles": {
+      "package.json": "{\n  \"type\": \"module\"\n}\n",
+      "src/math.js": "export function add(a, b) { return a + b; }\nexport function subtract(a, b) { return a - b; }\n",
+      "validate.mjs": "import assert from 'node:assert/strict';\nimport { add, subtract, clamp } from './src/math.js';\nassert.equal(add(2, 3), 5);\nassert.equal(subtract(5, 3), 2);\nassert.equal(clamp(5, 0, 10), 5);\nassert.equal(clamp(-1, 0, 10), 0);\nassert.equal(clamp(99, 0, 10), 10);\nconsole.log('clamp validation passed');\n"
+    },
+    "validationCommands": [
+      {
+        "name": "syntax",
+        "cmd": "node",
+        "args": [
+          "--check",
+          "src/math.js"
+        ]
+      },
+      {
+        "name": "behavior",
+        "cmd": "node",
+        "args": [
+          "validate.mjs"
+        ]
+      }
+    ],
+    "deterministicScript": [
+      {
+        "tool": "read_file",
+        "args": {
+          "path": "src/math.js"
+        }
+      },
+      {
+        "tool": "write_file",
+        "args": {
+          "path": "src/math.js",
+          "content": "export function add(a, b) { return a + b; }\nexport function subtract(a, b) { return a - b; }\nexport function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }\n"
+        }
+      }
+    ]
+  },
+  {
+    "id": "feature-unique-array",
+    "category": "feature_addition",
+    "title": "Add unique array helper",
+    "goal": "Add a unique(values) helper that removes duplicates while preserving first-seen order.",
+    "doneCriteria": [
+      "Inspect the current array helpers",
+      "unique() is exported, removes duplicates, and preserves first-seen order"
+    ],
+    "setupFiles": {
+      "package.json": "{\n  \"type\": \"module\"\n}\n",
+      "src/arrays.js": "export function first(values) { return values[0]; }\n",
+      "validate.mjs": "import assert from 'node:assert/strict';\nimport { first, unique } from './src/arrays.js';\nassert.equal(first(['a', 'b']), 'a');\nassert.deepEqual(unique(['a', 'b', 'a', 'c', 'b']), ['a', 'b', 'c']);\nassert.deepEqual(unique([]), []);\nconsole.log('unique validation passed');\n"
+    },
+    "validationCommands": [
+      {
+        "name": "syntax",
+        "cmd": "node",
+        "args": [
+          "--check",
+          "src/arrays.js"
+        ]
+      },
+      {
+        "name": "behavior",
+        "cmd": "node",
+        "args": [
+          "validate.mjs"
+        ]
+      }
+    ],
+    "deterministicScript": [
+      {
+        "tool": "read_file",
+        "args": {
+          "path": "src/arrays.js"
+        }
+      },
+      {
+        "tool": "write_file",
+        "args": {
+          "path": "src/arrays.js",
+          "content": "export function first(values) { return values[0]; }\nexport function unique(values) { return [...new Set(values)]; }\n"
+        }
+      }
+    ]
+  },
+  {
+    "id": "feature-csv-quote",
+    "category": "feature_addition",
+    "title": "Add CSV cell quoting",
+    "goal": "Add quoteCsvCell(value) that quotes cells containing commas, quotes, or newlines and escapes embedded quotes.",
+    "doneCriteria": [
+      "Inspect the current CSV helper",
+      "quoteCsvCell() quotes special cells and doubles embedded quotes"
+    ],
+    "setupFiles": {
+      "package.json": "{\n  \"type\": \"module\"\n}\n",
+      "src/csv.js": "export function csvRow(values) { return values.map(String).join(','); }\n",
+      "validate.mjs": "import assert from 'node:assert/strict';\nimport { csvRow, quoteCsvCell } from './src/csv.js';\nassert.equal(csvRow(['a', 'b']), 'a,b');\nassert.equal(quoteCsvCell('plain'), 'plain');\nassert.equal(quoteCsvCell('a,b'), '\"a,b\"');\nassert.equal(quoteCsvCell('say \"hi\"'), '\"say \"\"hi\"\"\"');\nassert.equal(quoteCsvCell('line1\\nline2'), '\"line1\\nline2\"');\nconsole.log('csv validation passed');\n"
+    },
+    "validationCommands": [
+      {
+        "name": "syntax",
+        "cmd": "node",
+        "args": [
+          "--check",
+          "src/csv.js"
+        ]
+      },
+      {
+        "name": "behavior",
+        "cmd": "node",
+        "args": [
+          "validate.mjs"
+        ]
+      }
+    ],
+    "deterministicScript": [
+      {
+        "tool": "read_file",
+        "args": {
+          "path": "src/csv.js"
+        }
+      },
+      {
+        "tool": "write_file",
+        "args": {
+          "path": "src/csv.js",
+          "content": "export function quoteCsvCell(value) {\n  const text = String(value);\n  return /[\",\\n\\r]/.test(text) ? `\"${text.replace(/\"/g, '\"\"')}\"` : text;\n}\nexport function csvRow(values) { return values.map(quoteCsvCell).join(','); }\n"
+        }
+      }
+    ]
+  },
+  {
+    "id": "feature-markdown-title",
+    "category": "feature_addition",
+    "title": "Extract Markdown title",
+    "goal": "Add extractTitle(markdown) that returns the first level-one Markdown heading or an empty string.",
+    "doneCriteria": [
+      "Inspect the current Markdown helper",
+      "extractTitle() returns the first level-one heading and ignores lower-level headings"
+    ],
+    "setupFiles": {
+      "package.json": "{\n  \"type\": \"module\"\n}\n",
+      "src/markdown.js": "export function firstLine(markdown) { return markdown.split('\\n')[0] ?? ''; }\n",
+      "validate.mjs": "import assert from 'node:assert/strict';\nimport { firstLine, extractTitle } from './src/markdown.js';\nassert.equal(firstLine('# Hello\\nbody'), '# Hello');\nassert.equal(extractTitle('intro\\n# Daedalus Report\\n## Details'), 'Daedalus Report');\nassert.equal(extractTitle('## Not level one\\nbody'), '');\nconsole.log('markdown validation passed');\n"
+    },
+    "validationCommands": [
+      {
+        "name": "syntax",
+        "cmd": "node",
+        "args": [
+          "--check",
+          "src/markdown.js"
+        ]
+      },
+      {
+        "name": "behavior",
+        "cmd": "node",
+        "args": [
+          "validate.mjs"
+        ]
+      }
+    ],
+    "deterministicScript": [
+      {
+        "tool": "read_file",
+        "args": {
+          "path": "src/markdown.js"
+        }
+      },
+      {
+        "tool": "write_file",
+        "args": {
+          "path": "src/markdown.js",
+          "content": "export function firstLine(markdown) { return markdown.split('\\n')[0] ?? ''; }\nexport function extractTitle(markdown) {\n  const line = markdown.split('\\n').find((item) => item.startsWith('# '));\n  return line ? line.slice(2).trim() : '';\n}\n"
+        }
+      }
+    ]
+  },
+  {
+    "id": "refactor-extract-tax",
+    "category": "refactor",
+    "title": "Extract tax calculation",
+    "goal": "Refactor order pricing so tax calculation lives in src/tax.js and order.js uses it, preserving totals.",
+    "doneCriteria": [
+      "Inspect the current order pricing implementation",
+      "src/tax.js exports calculateTax()",
+      "order.js uses calculateTax() and preserves the total-with-tax behavior"
+    ],
+    "setupFiles": {
+      "package.json": "{\n  \"type\": \"module\"\n}\n",
+      "src/order.js": "export function totalWithTax(subtotal) {\n  const tax = subtotal * 0.2;\n  return subtotal + tax;\n}\n",
+      "validate.mjs": "import assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\nimport { totalWithTax } from './src/order.js';\nimport { calculateTax } from './src/tax.js';\nassert.equal(calculateTax(100), 20);\nassert.equal(totalWithTax(100), 120);\nassert.match(readFileSync('./src/order.js', 'utf8'), /calculateTax/);\nassert.doesNotMatch(readFileSync('./src/order.js', 'utf8'), /\\* 0\\.2/);\nconsole.log('tax refactor validation passed');\n"
+    },
+    "validationCommands": [
+      {
+        "name": "syntax",
+        "cmd": "node",
+        "args": [
+          "--check",
+          "src/order.js"
+        ]
+      },
+      {
+        "name": "behavior",
+        "cmd": "node",
+        "args": [
+          "validate.mjs"
+        ]
+      }
+    ],
+    "deterministicScript": [
+      {
+        "tool": "read_file",
+        "args": {
+          "path": "src/order.js"
+        }
+      },
+      {
+        "tool": "write_file",
+        "args": {
+          "path": "src/tax.js",
+          "content": "export function calculateTax(subtotal) { return subtotal * 0.2; }\n"
+        }
+      },
+      {
+        "tool": "write_file",
+        "args": {
+          "path": "src/order.js",
+          "content": "import { calculateTax } from './tax.js';\n\nexport function totalWithTax(subtotal) {\n  return subtotal + calculateTax(subtotal);\n}\n"
+        }
+      }
+    ]
+  },
+  {
+    "id": "refactor-normalize-name",
+    "category": "refactor",
+    "title": "Rename normalize helper safely",
+    "goal": "Refactor normalize_input to the canonical camel-case normalizeInput while keeping normalize_input as a compatibility alias.",
+    "doneCriteria": [
+      "Inspect the current input normalization helper",
+      "normalizeInput is the canonical export and normalize_input remains as a compatibility alias"
+    ],
+    "setupFiles": {
+      "package.json": "{\n  \"type\": \"module\"\n}\n",
+      "src/input.js": "export function normalize_input(value) {\n  return String(value).trim().toLowerCase();\n}\n",
+      "validate.mjs": "import assert from 'node:assert/strict';\nimport { normalizeInput, normalize_input } from './src/input.js';\nassert.equal(normalizeInput('  Daedalus '), 'daedalus');\nassert.equal(normalize_input('  CORE '), 'core');\nconsole.log('normalize refactor validation passed');\n"
+    },
+    "validationCommands": [
+      {
+        "name": "syntax",
+        "cmd": "node",
+        "args": [
+          "--check",
+          "src/input.js"
+        ]
+      },
+      {
+        "name": "behavior",
+        "cmd": "node",
+        "args": [
+          "validate.mjs"
+        ]
+      }
+    ],
+    "deterministicScript": [
+      {
+        "tool": "read_file",
+        "args": {
+          "path": "src/input.js"
+        }
+      },
+      {
+        "tool": "write_file",
+        "args": {
+          "path": "src/input.js",
+          "content": "export function normalizeInput(value) {\n  return String(value).trim().toLowerCase();\n}\nexport const normalize_input = normalizeInput;\n"
+        }
+      }
+    ]
+  },
+  {
+    "id": "refactor-extract-price-format",
+    "category": "refactor",
+    "title": "Extract price formatter",
+    "goal": "Refactor receipt formatting so price formatting lives in src/format.js and receipt.js uses it, preserving output.",
+    "doneCriteria": [
+      "Inspect the current receipt formatting implementation",
+      "src/format.js exports formatPrice()",
+      "receipt.js uses formatPrice() and preserves receipt line output"
+    ],
+    "setupFiles": {
+      "package.json": "{\n  \"type\": \"module\"\n}\n",
+      "src/receipt.js": "export function receiptLine(name, cents) {\n  const price = '$' + (cents / 100).toFixed(2);\n  return `${name}: ${price}`;\n}\n",
+      "validate.mjs": "import assert from 'node:assert/strict';\nimport { readFileSync } from 'node:fs';\nimport { receiptLine } from './src/receipt.js';\nimport { formatPrice } from './src/format.js';\nassert.equal(formatPrice(1234), '$12.34');\nassert.equal(receiptLine('Coffee', 350), 'Coffee: $3.50');\nassert.match(readFileSync('./src/receipt.js', 'utf8'), /formatPrice/);\nconsole.log('price format refactor validation passed');\n"
+    },
+    "validationCommands": [
+      {
+        "name": "syntax",
+        "cmd": "node",
+        "args": [
+          "--check",
+          "src/receipt.js"
+        ]
+      },
+      {
+        "name": "behavior",
+        "cmd": "node",
+        "args": [
+          "validate.mjs"
+        ]
+      }
+    ],
+    "deterministicScript": [
+      {
+        "tool": "read_file",
+        "args": {
+          "path": "src/receipt.js"
+        }
+      },
+      {
+        "tool": "write_file",
+        "args": {
+          "path": "src/format.js",
+          "content": "export function formatPrice(cents) { return '$' + (cents / 100).toFixed(2); }\n"
+        }
+      },
+      {
+        "tool": "write_file",
+        "args": {
+          "path": "src/receipt.js",
+          "content": "import { formatPrice } from './format.js';\n\nexport function receiptLine(name, cents) {\n  return `${name}: ${formatPrice(cents)}`;\n}\n"
+        }
+      }
+    ]
+  },
+  {
+    "id": "refactor-timeout-config",
+    "category": "refactor",
+    "title": "Move timeout to config",
+    "goal": "Refactor the default timeout constant into src/config.js while preserving the jobs module behavior and compatibility export.",
+    "doneCriteria": [
+      "Inspect the current jobs timeout implementation",
+      "src/config.js exports DEFAULT_TIMEOUT_MS",
+      "jobs.js imports/re-exports the configured timeout and preserves timeoutFor behavior"
+    ],
+    "setupFiles": {
+      "package.json": "{\n  \"type\": \"module\"\n}\n",
+      "src/jobs.js": "export const DEFAULT_TIMEOUT_MS = 30000;\n\nexport function timeoutFor(task) {\n  return task.fast ? 1000 : DEFAULT_TIMEOUT_MS;\n}\n",
+      "validate.mjs": "import assert from 'node:assert/strict';\nimport { DEFAULT_TIMEOUT_MS, timeoutFor } from './src/jobs.js';\nimport { DEFAULT_TIMEOUT_MS as CONFIG_TIMEOUT } from './src/config.js';\nassert.equal(CONFIG_TIMEOUT, 30000);\nassert.equal(DEFAULT_TIMEOUT_MS, 30000);\nassert.equal(timeoutFor({ fast: true }), 1000);\nassert.equal(timeoutFor({}), 30000);\nconsole.log('timeout config refactor validation passed');\n"
+    },
+    "validationCommands": [
+      {
+        "name": "syntax",
+        "cmd": "node",
+        "args": [
+          "--check",
+          "src/jobs.js"
+        ]
+      },
+      {
+        "name": "behavior",
+        "cmd": "node",
+        "args": [
+          "validate.mjs"
+        ]
+      }
+    ],
+    "deterministicScript": [
+      {
+        "tool": "read_file",
+        "args": {
+          "path": "src/jobs.js"
+        }
+      },
+      {
+        "tool": "write_file",
+        "args": {
+          "path": "src/config.js",
+          "content": "export const DEFAULT_TIMEOUT_MS = 30000;\n"
+        }
+      },
+      {
+        "tool": "write_file",
+        "args": {
+          "path": "src/jobs.js",
+          "content": "import { DEFAULT_TIMEOUT_MS } from './config.js';\n\nexport { DEFAULT_TIMEOUT_MS };\nexport function timeoutFor(task) {\n  return task.fast ? 1000 : DEFAULT_TIMEOUT_MS;\n}\n"
+        }
+      }
+    ]
+  }
+]
