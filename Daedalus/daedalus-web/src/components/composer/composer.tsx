@@ -7,7 +7,7 @@ import { Button } from '../ui/button'
 import { Textarea } from '../ui/input'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useTaskEvents } from '../../state/hooks'
-import { fileChanges, latestPlan, validation } from '../../state/selectors'
+import { fileChanges, latestPlan, parseModelPool, validation } from '../../state/selectors'
 import { api } from '../../api/client'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 
@@ -358,6 +358,10 @@ export function Composer() {
     setComposer({ submitting: true, error: null })
     try {
       const attachmentsForTask = visionWarning ? composer.attachments.filter((attachment) => attachment.kind !== 'image') : composer.attachments
+      // A configured pool (settings → model pool) replaces the single-model
+      // pick for this task; the provider still selects the connection, and
+      // core routes across the pool with the chosen strategy.
+      const pool = parseModelPool(composer.modelPool)
       const created = await api.createTask({
         goal,
         repo_path: workspaceRoot,
@@ -366,7 +370,8 @@ export function Composer() {
         mode: composer.mode,
         thinking: composer.thinking,
         provider_id: composer.providerId || undefined,
-        model: composer.model || undefined,
+        ...(pool.length > 0 ? { models: pool } : { model: composer.model || undefined }),
+        ...(pool.length > 1 ? { model_strategy: composer.modelStrategy } : {}),
         attachments: attachmentsForTask,
       })
       setTask(created.id, goal)
