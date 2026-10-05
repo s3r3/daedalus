@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { InteractiveSession } from '../src/interactive.ts';
+import { InteractiveSession, padVisibleEnd, sanitizeTerminalText, truncateVisible, visibleWidth } from '../src/interactive.ts';
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -281,5 +281,84 @@ describe('InteractiveSession', () => {
     const on = await session.handleInput('/settings thinking on');
     expect(on.text).toContain('Thinking on');
     expect(session.thinking).toBe(true);
+  });
+});
+
+describe('frame renderer safety (ghosting regression)', () => {
+  test('visible width ignores ANSI escapes and counts wide glyphs as two cells', () => {
+    expect(visibleWidth('\x1b[38;2;255;0;0mab\x1b[0m')).toBe(2);
+    expect(visibleWidth('hello')).toBe(5);
+    expect(visibleWidth('你好世界')).toBe(8);
+    expect(visibleWidth('a\rb')).toBe(2);
+  });
+
+  test('sanitize strips escapes and control bytes but keeps text', () => {
+    expect(sanitizeTerminalText('\x1b[31mred\x1b[0m plain')).toBe('red plain');
+    expect(sanitizeTerminalText('a\rb\tc')).toBe('ab  c');
+    expect(sanitizeTerminalText('up\x1b[2Aover')).toBe('upover');
+  });
+
+  test('truncateVisible caps cell width and never slices an escape sequence', () => {
+    const truncated = truncateVisible('\x1b[31mabcdefghij\x1b[0m', 4);
+    expect(truncated).not.toContain('\x1b');
+    expect(visibleWidth(truncated)).toBeLessThanOrEqual(4);
+    expect(truncateVisible('abcdefghij', 12)).toBe('abcdefghij');
+    expect(visibleWidth(truncateVisible('你好世界你好', 5))).toBeLessThanOrEqual(5);
+  });
+
+  test('padVisibleEnd pads by visible width with ANSI or wide glyphs present', () => {
+    expect(visibleWidth(padVisibleEnd('\x1b[31mab\x1b[0m', 6))).toBe(6);
+    expect(visibleWidth(padVisibleEnd('你好', 6))).toBe(6);
+    expect(visibleWidth(padVisibleEnd('abcdefghij', 4))).toBeLessThanOrEqual(4);
+  });
+
+  test('no frame line exceeds the terminal width at narrow or wide sizes', () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace(), providerId: 'nine-router', model: 'claude-lo' });
+    // ANSI-laden, control-laden, and wide-glyph transcript lines: exactly what
+    // live formatted events push into the transcript.
+    session.addTranscript(`\x1b[38;2;107;80;255m⠋\x1b[0m list_dir ${JSON.stringify({ path: '/home/xyconix11x/Ayid/xyconix11x/Skripsi/Daedalus/.daedalus/tasks/2417ea7f-7b82-4cf2-ba2c-b1425deb0ebd' })}`);
+    session.addTranscript('thinking · Hai! Saya Kiro, AI coding assistant. Kamu siapa?\r');
+    session.addTranscript('你好世界，这是一个很长的中文句子，用来验证宽字符不会把侧边栏挤出屏幕外面去。');
+    session.addTranscript(`✔ list_dir -> ${'.daedalus/tasks/'.repeat(12)}`);
+    for (const columns of [100, 132, 200]) {
+      const screen = session.renderScreen({ input: 'saya siapa kamu siapa?', columns, rows: 30 });
+      const lines = screen.split('\n');
+      expect(lines).toHaveLength(30);
+      for (const line of lines) {
+        expect(line).not.toContain('\x1b');
+        expect(line).not.toContain('\r');
+        expect(visibleWidth(line)).toBeLessThanOrEqual(columns);
+      }
+    }
+  });
+
+  test('sidebar separator stays at a fixed visible column on every content row', () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace(), providerId: 'nine-router', model: 'claude-lo' });
+    session.addTranscript('short line');
+    session.addTranscript(`long ${'lorem ipsum dolor sit amet '.repeat(8)}`);
+    const columns = 132;
+    const screen = session.renderScreen({ input: '', columns, rows: 34 });
+    const lines = screen.split('\n');
+    const contentRows = lines.slice(0, lines.length - 4);
+    const offsets = new Set<number>();
+    for (const line of contentRows) {
+      const sep = line.lastIndexOf('│');
+      expect(sep).toBeGreaterThan(0);
+      offsets.add(visibleWidth(line.slice(0, sep)));
+    }
+    // 132 cols → sidebar 35, main 93: separator sits at visible cell 94 always.
+    expect(offsets).toEqual(new Set([94]));
+  });
+
+  test('composer and palette overlays stay within the terminal width', () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace() });
+    session.addTranscript('palette test');
+    session.openCommandPalette('mo');
+    const screen = session.renderScreen({ input: '/mo', columns: 100, rows: 30 });
+    for (const line of screen.split('\n')) {
+      expect(line).not.toContain('\x1b');
+      expect(visibleWidth(line)).toBeLessThanOrEqual(100);
+    }
+    expect(screen).toContain('Commands /mo');
   });
 });

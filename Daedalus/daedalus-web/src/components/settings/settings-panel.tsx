@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, PlugZap, RefreshCw, Save, Trash2 } from 'lucide-react'
+import { CheckCircle2, PlugZap, RefreshCw, Save, Trash2, X } from 'lucide-react'
 import type { AgentMode, ProviderConfigPublic } from '@daedalus/core'
 import { AGENT_MODE_ORDER } from '@daedalus/core/interaction/modes'
 import { api } from '../../api/client'
@@ -38,7 +38,7 @@ const EMPTY_FORM: ProviderForm = {
  * key to the gateway, while every provider shown back to the browser is the
  * masked public view returned by the server.
  */
-export function SettingsPanel() {
+export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
   const providers = useDaedalusStore((state) => state.providers)
   const presets = useDaedalusStore((state) => state.providerPresets)
   const models = useDaedalusStore((state) => state.models)
@@ -212,14 +212,38 @@ export function SettingsPanel() {
     }
   }
 
+  const changeThinking = async (enabled: boolean): Promise<void> => {
+    setComposer({ thinking: enabled })
+    try {
+      const response = await api.updateSession({ thinking: enabled })
+      setSession(response.session)
+    } catch (caught) {
+      setError(errorMessage(caught))
+    }
+  }
+
+  // Max iterations and the model pool are Web-side run defaults: they live in
+  // the composer (persisted in this browser, see state/prefs.ts) and are sent
+  // with every task, which is where they take effect.
+  const changeMaxIterations = (value: number): void => {
+    setComposer({ maxIterations: Math.min(100, Math.max(1, Math.round(value) || 1)) })
+  }
+
   return (
     <Panel
       title="settings & providers"
       data-testid="settings-panel"
       action={
-        <Button variant="ghost" size="sm" onClick={() => void loadAll()} disabled={busy} aria-label="refresh settings">
-          <RefreshCw /> refresh
-        </Button>
+        <span className="flex items-center gap-1">
+          <Button variant="ghost" size="sm" onClick={() => void loadAll()} disabled={busy} aria-label="refresh settings">
+            <RefreshCw /> refresh
+          </Button>
+          {onClose ? (
+            <Button variant="ghost" size="sm" onClick={onClose} aria-label="close settings" data-testid="settings-close">
+              <X />
+            </Button>
+          ) : null}
+        </span>
       }
       bodyClassName="flex flex-col gap-3"
     >
@@ -268,6 +292,64 @@ export function SettingsPanel() {
             ))}
           </select>
         </label>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+            <input
+              type="checkbox"
+              className="size-3 accent-primary"
+              checked={composer.thinking}
+              onChange={(event) => void changeThinking(event.target.checked)}
+              data-testid="settings-thinking"
+              aria-label="thinking"
+            />
+            thinking
+          </label>
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+            max iterations
+            <input
+              type="number"
+              min={1}
+              max={100}
+              aria-label="settings max iterations"
+              data-testid="settings-max-iterations"
+              className="h-6 w-16 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
+              value={composer.maxIterations}
+              onChange={(event) => changeMaxIterations(Number(event.target.value))}
+            />
+          </label>
+          <span className="text-[10px] normal-case text-muted">default for new tasks; saved in this browser and sent with every task you run</span>
+        </div>
+        <div className="flex flex-col gap-1" data-testid="model-pool-settings">
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex min-w-[220px] flex-1 items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+              model pool
+              <Input
+                aria-label="model pool"
+                data-testid="settings-model-pool"
+                placeholder="model-a, model-b, model-c"
+                value={composer.modelPool}
+                onChange={(event) => setComposer({ modelPool: event.target.value })}
+              />
+            </label>
+            <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+              strategy
+              <select
+                aria-label="model pool strategy"
+                data-testid="settings-model-strategy"
+                className="h-6 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
+                value={composer.modelStrategy}
+                onChange={(event) => setComposer({ modelStrategy: event.target.value as 'failover' | 'round-robin' })}
+              >
+                <option value="failover">failover</option>
+                <option value="round-robin">round-robin</option>
+              </select>
+            </label>
+          </div>
+          <p className="text-[10px] text-muted">
+            With 2+ models, tasks run against the pool on the selected provider instead of the single model above (failover: switch on
+            error · round-robin: rotate per request). Saved in this browser and sent with every task; leave empty to use the session model.
+          </p>
+        </div>
         <p className="text-[10px] text-muted">
           {enabledProviders.length} enabled provider(s) · {models.length} model(s) · workspace {session?.workspaceRoot ?? 'not loaded'}
         </p>

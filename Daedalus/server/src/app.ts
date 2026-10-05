@@ -20,6 +20,7 @@ import {
   loadMcpConfig,
   loadSettings,
   loadSkills,
+  parseModelStrategy,
   redactSettings,
   resolveDaedalusHome,
   reviewDiff,
@@ -31,6 +32,7 @@ import {
   type Attachment,
   type Event,
   type FinalReport,
+  type ModelStrategy,
   type PermissionKey,
   type Settings,
 } from "@daedalus/core";
@@ -938,6 +940,12 @@ export function createApp(ctx: AppContext) {
           const providerId = typeof parsed.provider_id === "string" ? parsed.provider_id : typeof parsed.providerId === "string" ? parsed.providerId : ctx.session.providerId;
           const model = typeof parsed.model === "string" ? parsed.model : ctx.session.model;
           const thinking = typeof parsed.thinking === "boolean" ? parsed.thinking : ctx.session.thinking;
+          // Model pool (Web settings → task payload): core's TaskRunner already
+          // routes across models[] with a strategy; until now only the CLI/env
+          // could supply one. parseModelStrategy rejects unknown strategies.
+          const poolModels = stringList(parsed.models).map((entry) => entry.trim()).filter(Boolean);
+          const strategyInput = typeof parsed.model_strategy === "string" ? parsed.model_strategy : typeof parsed.modelStrategy === "string" ? parsed.modelStrategy : undefined;
+          const modelStrategy: ModelStrategy | undefined = poolModels.length > 1 ? parseModelStrategy(strategyInput, "model_strategy") : undefined;
           const attachments = parseAttachments(parsed.attachments);
           const children = parseChildren(parsed.children);
           const taskStore = new TaskStore(resolveDaedalusHome(ctx.settings.daedalusHome, repoPath));
@@ -955,6 +963,8 @@ export function createApp(ctx: AppContext) {
             thinking,
             ...(providerId ? { providerId } : {}),
             ...(model ? { model } : {}),
+            ...(poolModels.length ? { models: poolModels } : {}),
+            ...(modelStrategy ? { modelStrategy } : {}),
           });
           ctx.activeRunners.set(taskId, runner);
 
@@ -969,6 +979,8 @@ export function createApp(ctx: AppContext) {
             thinking,
             ...(providerId ? { provider_id: providerId } : {}),
             ...(model ? { model } : {}),
+            ...(poolModels.length ? { models: poolModels } : {}),
+            ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
             attachments,
             ...(children.length ? { children } : {}),
             ...(isolation ? { isolation } : {}),
@@ -994,6 +1006,8 @@ export function createApp(ctx: AppContext) {
               ...(isolation ? { isolation } : {}),
               ...(providerId ? { providerId } : {}),
               ...(model ? { model } : {}),
+              ...(poolModels.length ? { models: poolModels } : {}),
+              ...(modelStrategy ? { modelStrategy } : {}),
               ...(children.length ? { children } : {}),
             })
             .then((result) => ctx.log.info("task finished", { task_id: taskId, outcome: result.outcome }))

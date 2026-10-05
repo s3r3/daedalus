@@ -7,6 +7,8 @@ import { SLASH_COMMANDS, SlashCommandRegistry, slashCommandSuggestions } from '@
 import { useDaedalusStore } from './state/taskStore'
 import { Composer } from './components/composer/composer'
 import { SettingsPanel } from './components/settings/settings-panel'
+import { SettingsDialog } from './components/settings/settings-dialog'
+import { loadComposerPrefs } from './state/prefs'
 import { WorkspacePanel } from './components/workspace/workspace-panel'
 import { TopBar } from './components/layout/top-bar'
 import { AttachmentsPanel, ChildTasksPanel } from './components/report/report-panels'
@@ -238,6 +240,74 @@ describe('SettingsPanel Phase 8.5', () => {
     await userEvent.click(screen.getByText('add provider'))
     expect(mocks.createProvider).toHaveBeenCalledWith(expect.objectContaining({ apiKey: 'new-secret-value', baseUrl: 'https://example.test/v1' }))
     expect((screen.getByLabelText('provider API key') as HTMLInputElement).value).toBe('')
+  })
+})
+
+describe('SettingsDialog and functional settings', () => {
+  test('the dialog shows the settings panel and closes via its button and backdrop', async () => {
+    useDaedalusStore.getState().setSettingsOpen(true)
+    render(<SettingsDialog />)
+    expect(screen.getByTestId('settings-dialog')).toBeTruthy()
+    expect(screen.getByTestId('settings-panel')).toBeTruthy()
+    await userEvent.click(screen.getByTestId('settings-close'))
+    expect(useDaedalusStore.getState().settingsOpen).toBe(false)
+
+    cleanup()
+    useDaedalusStore.getState().setSettingsOpen(true)
+    render(<SettingsDialog />)
+    await userEvent.click(screen.getByTestId('settings-backdrop'))
+    expect(useDaedalusStore.getState().settingsOpen).toBe(false)
+  })
+
+  test('Escape closes the dialog', () => {
+    useDaedalusStore.getState().setSettingsOpen(true)
+    render(<SettingsDialog />)
+    fireEvent.keyDown(window, { key: 'Escape' })
+    expect(useDaedalusStore.getState().settingsOpen).toBe(false)
+  })
+
+  test('the thinking toggle writes through to the gateway session and the composer', async () => {
+    render(<SettingsPanel />)
+    await screen.findByTestId('provider-row')
+    const toggle = screen.getByTestId('settings-thinking') as HTMLInputElement
+    expect(toggle.checked).toBe(true)
+    await userEvent.click(toggle)
+    expect(mocks.updateSession).toHaveBeenCalledWith({ thinking: false })
+    expect(useDaedalusStore.getState().composer.thinking).toBe(false)
+  })
+
+  test('max iterations persists in the browser and flows into the next task payload', async () => {
+    localStorage.clear()
+    render(<SettingsPanel />)
+    await screen.findByTestId('provider-row')
+    fireEvent.change(screen.getByTestId('settings-max-iterations'), { target: { value: '9' } })
+    expect(useDaedalusStore.getState().composer.maxIterations).toBe(9)
+    expect(loadComposerPrefs().maxIterations).toBe(9)
+
+    cleanup()
+    useDaedalusStore.getState().setComposer({ goal: 'ship it' })
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('composer-submit'))
+    expect(mocks.createTask).toHaveBeenCalledWith(expect.objectContaining({ goal: 'ship it', max_iterations: 9 }))
+  })
+
+  test('a saved model pool flows into the next task payload with its strategy', async () => {
+    localStorage.clear()
+    render(<SettingsPanel />)
+    await screen.findByTestId('provider-row')
+    await userEvent.type(screen.getByTestId('settings-model-pool'), 'alpha-model, beta-model')
+    await userEvent.selectOptions(screen.getByTestId('settings-model-strategy'), 'round-robin')
+    expect(useDaedalusStore.getState().composer.modelPool).toBe('alpha-model, beta-model')
+    expect(useDaedalusStore.getState().composer.modelStrategy).toBe('round-robin')
+    expect(loadComposerPrefs().modelPool).toBe('alpha-model, beta-model')
+
+    cleanup()
+    useDaedalusStore.getState().setComposer({ goal: 'pool task' })
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('composer-submit'))
+    expect(mocks.createTask).toHaveBeenCalledWith(
+      expect.objectContaining({ goal: 'pool task', models: ['alpha-model', 'beta-model'], model_strategy: 'round-robin' }),
+    )
   })
 })
 
