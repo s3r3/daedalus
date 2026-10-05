@@ -76,6 +76,13 @@ export class ExecutionHarness {
   #deps: { bus?: EventBus; store?: TaskStore };
   #approval?: ApprovalCallback;
   #controllers = new Map<string, AbortController>();
+  /**
+   * Tasks a cancel was requested for. Cancellation is sticky: a cancel that
+   * arrives a hair before an execution registers its controller (the event
+   * bus delivers COMMAND_STARTED asynchronously) must still abort the
+   * in-flight tool instead of being dropped on the floor.
+   */
+  #cancelled = new Set<string>();
   #remembered = new Map<string, ApprovalDecision>();
   #audit = new Map<string, HarnessEvent[]>();
   #usage: ResourceUsage = { activeProcesses: 0, outputBytes: 0, diskWrites: 0 };
@@ -88,7 +95,7 @@ export class ExecutionHarness {
   setApprovalCallback(callback: ApprovalCallback): void { this.#approval = callback; }
   getResourceUsage(): ResourceUsage { return { ...this.#usage }; }
   getAuditTrail(taskId: string): HarnessEvent[] { return [...(this.#audit.get(taskId) ?? [])]; }
-  cancelTask(taskId: string): void { this.#controllers.get(taskId)?.abort(); this.#record('cancel_requested', taskId); }
+  cancelTask(taskId: string): void { this.#cancelled.add(taskId); this.#controllers.get(taskId)?.abort(); this.#record('cancel_requested', taskId); }
 
   async execute(call: ToolCall, tool: ToolDefinition, context: HarnessContext): Promise<ToolResult> {
     const action: PermissionKey['action'] = tool.mutating ? 'write' : tool.name === 'run_command' ? 'execute' : 'read';
@@ -100,6 +107,7 @@ export class ExecutionHarness {
     if (this.#usage.activeProcesses >= this.#config.maxConcurrentProcesses) { const result = denied(call.id, 'process limit exceeded'); this.#record('resource_limit_exceeded', context.taskId, tool.name); return result; }
     if (this.#usage.diskWrites >= this.#config.maxDiskWrites) { const result = denied(call.id, 'disk write cap exceeded'); this.#record('resource_limit_exceeded', context.taskId, tool.name); return result; }
     const controller = new AbortController(); this.#controllers.set(context.taskId, controller); this.#usage.activeProcesses++;
+    if (this.#cancelled.has(context.taskId)) controller.abort();
     const timeoutMs = context.timeoutMs ?? tool.timeoutMs ?? this.#config.defaultTimeoutMs;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {

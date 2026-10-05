@@ -1,0 +1,77 @@
+{
+  "run_id": "eval-live-feature-clamp-number",
+  "task_id": "feature-clamp-number",
+  "title": "Add numeric clamp helper",
+  "category": "feature_addition",
+  "mode": "live",
+  "outcome": "stopped",
+  "state_status": "failed",
+  "last_error": "max_iterations",
+  "turns": 12,
+  "iterations": 12,
+  "tool_calls": 11,
+  "tool_calls_by_name": {
+    "glob": 3,
+    "read_file": 2,
+    "write_file": 2,
+    "run_command": 2,
+    "list_dir": 2
+  },
+  "wall_clock_ms": 62537,
+  "retries": 2,
+  "recovery_events": 2,
+  "replans": 0,
+  "approvals": 0,
+  "events": 63,
+  "files_changed": 2,
+  "commands": 2,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/math.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "fail",
+      "exit_code": 1,
+      "summary": "failed"
+    }
+  ],
+  "checks_passed": 1,
+  "checks_failed": 1,
+  "final_diff": "--- a/implementation.py\n+++ b/implementation.py\n@@ +1 -0 @@\n+def add(a, b):\\n return a + b\\n\\ndef subtract(a, b):\\n return a - b\n--- a//home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/feature-clamp-number/src/math.mjs\n+++ b//home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/feature-clamp-number/src/math.mjs\n@@ +3 -0 @@\n+export function clamp(value, min, max) {\n+    return Math.min(Math.max(value, min), max);\n+}\n",
+  "provider": {
+    "name": "provider-registry:nine-router",
+    "id": "nine-router",
+    "model": "kgw/kilo-auto/free",
+    "models": [
+      "kgw/kilo-auto/free",
+      "claude-lo",
+      "kr/qwen3-coder-next-agentic"
+    ],
+    "modelStrategy": "round-robin"
+  },
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "models": [
+      "kgw/kilo-auto/free",
+      "claude-lo",
+      "kr/qwen3-coder-next-agentic"
+    ],
+    "modelStrategy": "round-robin",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/feature-clamp-number",
+  "event_log": "runs/feature-clamp-number.events.jsonl",
+  "started_at": "2026-10-05T08:59:04.238Z",
+  "finished_at": "2026-10-05T09:00:06.776Z",
+  "failure_taxonomy": "validation_failed"
+}

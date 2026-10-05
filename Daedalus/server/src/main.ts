@@ -1,8 +1,9 @@
 import { loadSettings } from "@daedalus/core";
-import { attachWebSocket, createContext, createApp } from "./app.ts";
+import { attachWebSocket, createContext, createApp, ensureProvidersLoaded } from "./app.ts";
 
 const settings = loadSettings();
 const ctx = createContext();
+await ensureProvidersLoaded(ctx);
 const server = createApp(ctx);
 const channel = attachWebSocket(ctx, server);
 

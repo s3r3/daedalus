@@ -4,6 +4,7 @@ import { ScrollArea } from '../ui/scroll-area'
 import { EmptyState, Panel } from '../common/panel'
 import { Spinner } from '../common/spinner'
 import { useTaskEvents } from '../../state/hooks'
+import { useDaedalusStore } from '../../state/taskStore'
 import { activity, toolCalls } from '../../state/selectors'
 import { KIND_TONE, toneForResult } from './status-tone'
 
@@ -18,6 +19,9 @@ const KIND_LABEL: Record<string, string> = {
   file: 'file',
   completion: 'task',
   error: 'error',
+  system: 'system',
+  attachment: 'attach',
+  orchestration: 'child',
 }
 
 /**
@@ -27,7 +31,8 @@ const KIND_LABEL: Record<string, string> = {
  */
 export function ActivityTimeline() {
   const events = useTaskEvents()
-  const entries = useMemo(() => activity(events), [events])
+  const thinking = useDaedalusStore((state) => state.composer.thinking)
+  const entries = useMemo(() => activity(events, thinking), [events, thinking])
   const calls = useMemo(() => toolCalls(events), [events])
 
   return (

@@ -1,0 +1,112 @@
+{
+  "generated_at": "2026-10-05T08:25:37.878Z",
+  "total_runs": 24,
+  "by_mode": [
+    {
+      "mode": "all",
+      "status": "recorded",
+      "total": 24,
+      "success": 12,
+      "partial": 12,
+      "failed": 0,
+      "stopped": 0,
+      "success_rate": 50,
+      "avg_turns": 3.33,
+      "avg_tool_calls": 3.33,
+      "avg_wall_clock_ms": 9005.17,
+      "total_recovery_events": 36
+    },
+    {
+      "mode": "deterministic",
+      "status": "recorded",
+      "total": 12,
+      "success": 12,
+      "partial": 0,
+      "failed": 0,
+      "stopped": 0,
+      "success_rate": 100,
+      "avg_turns": 2.25,
+      "avg_tool_calls": 2.25,
+      "avg_wall_clock_ms": 252.33,
+      "total_recovery_events": 0
+    },
+    {
+      "mode": "live",
+      "status": "recorded",
+      "total": 12,
+      "success": 0,
+      "partial": 12,
+      "failed": 0,
+      "stopped": 0,
+      "success_rate": 0,
+      "avg_turns": 4.42,
+      "avg_tool_calls": 4.42,
+      "avg_wall_clock_ms": 17758,
+      "total_recovery_events": 36
+    }
+  ],
+  "comparison": [
+    {
+      "mode": "deterministic",
+      "status": "recorded",
+      "total": 12,
+      "success": 12,
+      "partial": 0,
+      "failed": 0,
+      "stopped": 0,
+      "success_rate": 100,
+      "avg_turns": 2.25,
+      "avg_tool_calls": 2.25,
+      "avg_wall_clock_ms": 252.33,
+      "total_recovery_events": 0
+    },
+    {
+      "mode": "live",
+      "status": "recorded",
+      "total": 12,
+      "success": 0,
+      "partial": 12,
+      "failed": 0,
+      "stopped": 0,
+      "success_rate": 0,
+      "avg_turns": 4.42,
+      "avg_tool_calls": 4.42,
+      "avg_wall_clock_ms": 17758,
+      "total_recovery_events": 36
+    }
+  ],
+  "by_category": [
+    {
+      "category": "bug_fix",
+      "total": 8,
+      "success": 4,
+      "success_rate": 50,
+      "avg_tool_calls": 3,
+      "avg_wall_clock_ms": 8018
+    },
+    {
+      "category": "feature_addition",
+      "total": 8,
+      "success": 4,
+      "success_rate": 50,
+      "avg_tool_calls": 3.13,
+      "avg_wall_clock_ms": 8950
+    },
+    {
+      "category": "refactor",
+      "total": 8,
+      "success": 4,
+      "success_rate": 50,
+      "avg_tool_calls": 3.88,
+      "avg_wall_clock_ms": 10047
+    }
+  ],
+  "failure_taxonomy": {
+    "validation_failed": 12
+  },
+  "caveats": [
+    "Deterministic runs use a scripted provider and validate the harness/loop; they are not live LLM performance.",
+    "Live runs are included in this aggregate.",
+    "Fixture tasks are small synthetic repositories; results do not generalize directly to large real-world projects."
+  ]
+}

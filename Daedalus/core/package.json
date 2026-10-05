@@ -7,7 +7,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./palette": "./src/palette.ts",
-    "./version": "./src/version.ts"
+    "./version": "./src/version.ts",
+    "./interaction/modes": "./src/interaction/modes.ts",
+    "./interaction/slash-commands": "./src/interaction/slash-commands.ts"
   },
   "engines": {
     "node": ">=22"

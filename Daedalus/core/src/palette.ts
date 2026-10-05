@@ -59,6 +59,11 @@ export const palette = {
   yolo: '#e8fe96',    // charmtone.zest
   plan: '#6b50ff',   // charmtone.charple
   planSubtle: '#8b75ff', // charmtone.hazy
+  modeAsk: '#00a4ff',        // charmtone.malibu
+  modeManual: '#ff985a',     // charmtone.tang
+  modeAuto: '#00ffb2',       // charmtone.julep
+  modePlan: '#6b50ff',       // charmtone.charple
+  modeOrchestrator: '#ff60ff', // charmtone.dolly
 
   // Button fills; foregrounds come from onPrimary / fgBase
   button: '#ff60ff',        // charmtone.dolly
@@ -160,6 +165,11 @@ export const paletteLight = {
   yolo: '#8a7a00',
   plan: '#5b40ec',
   planSubtle: '#6b6a75',
+  modeAsk: '#0070b8',
+  modeManual: '#a34d00',
+  modeAuto: '#0a7a63',
+  modePlan: '#5b40ec',
+  modeOrchestrator: '#d633d6',
 
   button: '#d633d6',
   buttonSubtle: '#e8e7ec',
@@ -222,7 +232,20 @@ const ANSI_KEYS = [
   'ansiBrightBlue', 'ansiBrightMagenta', 'ansiBrightCyan', 'ansiBrightWhite',
 ] as const
 
-/** The 16 ANSI slots in terminal order (0-7 normal, 8-15 bright). */
+export type ModeAccentKey = 'modeAsk' | 'modeManual' | 'modeAuto' | 'modePlan' | 'modeOrchestrator';
+
+export function modeAccent(mode: string, name: PaletteName = 'dark'): string {
+  const p = getPalette(name) as Record<string, string>;
+  switch (mode) {
+    case 'ask': return p.modeAsk as string;
+    case 'manual': return p.modeManual as string;
+    case 'auto': return p.modeAuto as string;
+    case 'orchestrator': return p.modeOrchestrator as string;
+    case 'plan':
+    default: return p.modePlan as string;
+  }
+}
+
 export function ansiPalette(name: PaletteName): string[] {
   const p = getPalette(name)
   return ANSI_KEYS.map((key) => p[key])

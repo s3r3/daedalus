@@ -1,0 +1,23 @@
+{
+  "task_id": "eval-deterministic-feature-clamp-number",
+  "outcome": "success",
+  "diff": "--- a/src/math.js\n+++ b/src/math.js\n@@ +1 -0 @@\n export function add(a, b) { return a + b; }\n export function subtract(a, b) { return a - b; }\n+export function clamp(value, min, max) { return Math.min(max, Math.max(min, value)); }\n",
+  "evidence": [
+    "syntax: pass (node --check src/math.js)",
+    "behavior: pass (node validate.mjs)",
+    "modified src/math.js (+1/-0)"
+  ],
+  "metrics": {
+    "turns": 2,
+    "tool_calls": 2,
+    "events": 14,
+    "commands": 0,
+    "files_changed": 1,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 2,
+    "checks_failed": 0,
+    "duration_ms": 233
+  }
+}

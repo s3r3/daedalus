@@ -1,4 +1,4 @@
-import type { Event, FinalReport, Plan, PlanStep, ToolCall, ToolResult, ValidationResult } from '@daedalus/core'
+import type { Attachment, ChildTask, Event, FinalReport, Plan, PlanStep, ToolCall, ToolResult, ValidationResult } from '@daedalus/core'
 import { payloadOf, type ApprovalRequested, type CommandFinished, type CommandStarted, type FileChange, type RecoveryStarted } from '../api/types'
 
 /**
@@ -20,7 +20,7 @@ export type ActivityEntry = {
   seq: number
   ts: string
   turnId?: string
-  kind: 'thought' | 'action' | 'observation' | 'plan' | 'validation' | 'recovery' | 'approval' | 'file' | 'completion' | 'error'
+  kind: 'thought' | 'action' | 'observation' | 'plan' | 'validation' | 'recovery' | 'approval' | 'file' | 'completion' | 'error' | 'system' | 'attachment' | 'orchestration'
   title: string
   detail?: string
   status?: 'ok' | 'error' | 'denied' | 'timeout' | 'running' | 'info' | 'warning'
@@ -150,6 +150,33 @@ export function fileChanges(events: Event[]): FileChange[] {
   return [...merged.values()]
 }
 
+export function attachmentsFromEvents(events: Event[]): Attachment[] {
+  const merged = new Map<string, Attachment>()
+  for (const event of events) {
+    const payload = payloadOf(event, 'ATTACHMENT_ADDED')
+    if (payload?.attachment) merged.set(payload.attachment.id, payload.attachment)
+  }
+  return [...merged.values()]
+}
+
+export function childTasks(events: Event[]): ChildTask[] {
+  const merged = new Map<string, ChildTask>()
+  for (const event of events) {
+    const started = payloadOf(event, 'CHILD_TASK_STARTED')
+    const finished = payloadOf(event, 'CHILD_TASK_FINISHED')
+    const child = finished?.child ?? started?.child
+    if (child) merged.set(child.id, child)
+  }
+  return [...merged.values()]
+}
+
+export function modeChanges(events: Event[]): Array<{ from: string; to: string; replanRequired: boolean }> {
+  return events.flatMap((event) => {
+    const payload = payloadOf(event, 'MODE_CHANGED')
+    return payload ? [{ from: payload.from, to: payload.to, replanRequired: payload.replan_required }] : []
+  })
+}
+
 export function validation(events: Event[]): { result: ValidationResult | null; running: boolean; passed: boolean | null } {
   let result: ValidationResult | null = null
   let running = false
@@ -251,7 +278,7 @@ export function errors(events: Event[]): ErrorEntry[] {
   return entries
 }
 
-export function activity(events: Event[]): ActivityEntry[] {
+export function activity(events: Event[], thinking = true): ActivityEntry[] {
   const entries: ActivityEntry[] = []
   for (const event of events) {
     const push = (entry: Omit<ActivityEntry, 'seq' | 'ts' | 'turnId'>): void => {
@@ -267,9 +294,31 @@ export function activity(events: Event[]): ActivityEntry[] {
       case 'REPLAN_CREATED':
         push({ kind: 'plan', title: 'Plan revised', detail: (event.payload as { reason?: string }).reason })
         break
-      case 'MODEL_REQUEST_STARTED':
-        push({ kind: 'thought', title: 'Thinking', detail: `${(event.payload as { provider?: string }).provider ?? 'model'} · ${(event.payload as { messages?: number }).messages ?? 0} messages` })
+      case 'MODEL_REQUEST_STARTED': {
+        const started = payloadOf(event, 'MODEL_REQUEST_STARTED')
+        push({
+          kind: 'thought',
+          title: 'Thinking',
+          detail: `${started?.provider ?? 'model'} · ${started?.messages ?? 0} messages${typeof started?.context_percent === 'number' ? ` · ctx ${started.context_percent}%` : ''}`,
+        })
         break
+      }
+      case 'LOOP_WARNING': {
+        const warning = payloadOf(event, 'LOOP_WARNING')
+        push({
+          kind: 'recovery',
+          title: `loop warning${warning?.suppressed ? ' · repeat suppressed' : ''}`,
+          detail: `${warning?.tool ?? 'tool'} repeated ${warning?.repeats ?? 0}× with the same arguments`,
+          status: 'warning',
+        })
+        break
+      }
+      case 'THOUGHT': {
+        if (!thinking) break
+        const thought = payloadOf(event, 'THOUGHT')
+        if (thought?.text) push({ kind: 'thought', title: 'thinking', detail: thought.text.slice(0, 500), status: 'info' })
+        break
+      }
       case 'MODEL_REQUEST_FINISHED': {
         const message = (event.payload as { message?: { content?: string } })?.message?.content ?? ''
         push({ kind: 'thought', title: 'Model replied', detail: message.slice(0, 240) || undefined })
@@ -329,11 +378,57 @@ export function activity(events: Event[]): ActivityEntry[] {
       case 'MODEL_REQUEST_FAILED':
         push({ kind: 'error', title: 'model request failed', detail: payloadOf(event, 'MODEL_REQUEST_FAILED')?.error, status: 'error' })
         break
+      case 'MODE_CHANGED': {
+        const changed = payloadOf(event, 'MODE_CHANGED')
+        push({
+          kind: 'system',
+          title: `mode ${changed?.from ?? '?'} → ${changed?.to ?? '?'}`,
+          detail: changed?.replan_required ? 'applies at the next turn boundary · re-plan required' : 'applies at the next turn boundary',
+          status: 'info',
+        })
+        break
+      }
+      case 'PROVIDER_CHANGED': {
+        const changed = payloadOf(event, 'PROVIDER_CHANGED')
+        push({ kind: 'system', title: 'provider changed', detail: `${changed?.providerId ?? changed?.provider_id ?? 'default'}${changed?.model ? `/${changed.model}` : ''}`, status: 'info' })
+        break
+      }
+      case 'ATTACHMENT_ADDED': {
+        const attachment = payloadOf(event, 'ATTACHMENT_ADDED')?.attachment
+        push({ kind: 'attachment', title: `attached ${attachment?.kind ?? 'file'}`, detail: attachment ? `${attachment.name} · ${attachment.workspacePath}` : undefined, status: 'info' })
+        break
+      }
+      case 'CHILD_TASK_STARTED': {
+        const child = payloadOf(event, 'CHILD_TASK_STARTED')?.child
+        push({ kind: 'orchestration', title: 'child task started', detail: child?.goal, status: 'running' })
+        break
+      }
+      case 'CHILD_TASK_FINISHED': {
+        const child = payloadOf(event, 'CHILD_TASK_FINISHED')?.child
+        push({ kind: 'orchestration', title: `child task ${child?.status ?? 'finished'}`, detail: child?.result_summary ?? child?.goal, status: child?.status === 'done' ? 'ok' : 'warning' })
+        break
+      }
+      case 'SLASH_COMMAND_EXECUTED': {
+        const executed = payloadOf(event, 'SLASH_COMMAND_EXECUTED')
+        push({ kind: 'system', title: `/${executed?.command ?? 'command'}`, detail: executed?.text, status: 'info' })
+        break
+      }
       default:
         break
     }
   }
   return entries
+}
+
+/** Context-meter reading from the newest MODEL_REQUEST_* event that carries one. */
+export function latestContextPercent(events: Event[]): number | undefined {
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]
+    if (!event || (event.type !== 'MODEL_REQUEST_STARTED' && event.type !== 'MODEL_REQUEST_FINISHED')) continue
+    const payload = event.payload as { context_percent?: unknown }
+    if (typeof payload.context_percent === 'number') return payload.context_percent
+  }
+  return undefined
 }
 
 export function taskStatus(events: Event[], pendingApprovalsCount: number): TaskStatus {

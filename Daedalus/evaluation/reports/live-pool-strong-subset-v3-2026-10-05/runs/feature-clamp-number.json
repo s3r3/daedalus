@@ -1,0 +1,62 @@
+{
+  "run_id": "eval-live-feature-clamp-number",
+  "task_id": "feature-clamp-number",
+  "title": "Add numeric clamp helper",
+  "category": "feature_addition",
+  "mode": "live",
+  "outcome": "stopped",
+  "state_status": "failed",
+  "last_error": "max_iterations",
+  "turns": 12,
+  "iterations": 12,
+  "tool_calls": 14,
+  "tool_calls_by_name": {
+    "list_dir": 5,
+    "read_file": 8,
+    "edit_file": 1
+  },
+  "wall_clock_ms": 68891,
+  "retries": 0,
+  "recovery_events": 0,
+  "replans": 0,
+  "approvals": 0,
+  "events": 55,
+  "files_changed": 0,
+  "commands": 0,
+  "validation": [],
+  "checks_passed": 0,
+  "checks_failed": 0,
+  "final_diff": "",
+  "provider": {
+    "name": "provider-registry:nine-router",
+    "id": "nine-router",
+    "model": "claude-lo",
+    "models": [
+      "claude-lo",
+      "kr/claude-sonnet-4-agentic",
+      "kr/qwen3-coder-next-agentic",
+      "cx/gpt-5.5"
+    ],
+    "modelStrategy": "round-robin"
+  },
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "models": [
+      "claude-lo",
+      "kr/claude-sonnet-4-agentic",
+      "kr/qwen3-coder-next-agentic",
+      "cx/gpt-5.5"
+    ],
+    "modelStrategy": "round-robin",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-subset-v3-2026-10-05/workspaces/feature-clamp-number",
+  "event_log": "runs/feature-clamp-number.events.jsonl",
+  "started_at": "2026-10-05T09:10:04.800Z",
+  "finished_at": "2026-10-05T09:11:13.696Z",
+  "failure_taxonomy": "budget_exceeded"
+}

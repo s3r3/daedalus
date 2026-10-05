@@ -1,0 +1,62 @@
+{
+  "run_id": "eval-live-feature-csv-quote",
+  "task_id": "feature-csv-quote",
+  "title": "Add CSV cell quoting",
+  "category": "feature_addition",
+  "mode": "live",
+  "outcome": "stopped",
+  "state_status": "failed",
+  "last_error": "max_iterations",
+  "turns": 20,
+  "iterations": 20,
+  "tool_calls": 26,
+  "tool_calls_by_name": {
+    "list_dir": 6,
+    "read_file": 18,
+    "grep": 2
+  },
+  "wall_clock_ms": 92611,
+  "retries": 0,
+  "recovery_events": 0,
+  "replans": 0,
+  "approvals": 0,
+  "events": 95,
+  "files_changed": 0,
+  "commands": 0,
+  "validation": [],
+  "checks_passed": 0,
+  "checks_failed": 0,
+  "final_diff": "",
+  "provider": {
+    "name": "provider-registry:nine-router",
+    "id": "nine-router",
+    "model": "claude-lo",
+    "models": [
+      "claude-lo",
+      "kr/claude-sonnet-4-agentic",
+      "kr/qwen3-coder-next-agentic",
+      "cx/gpt-5.5"
+    ],
+    "modelStrategy": "round-robin"
+  },
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "models": [
+      "claude-lo",
+      "kr/claude-sonnet-4-agentic",
+      "kr/qwen3-coder-next-agentic",
+      "cx/gpt-5.5"
+    ],
+    "modelStrategy": "round-robin",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 20,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-strong-full-2026-10-05/workspaces/feature-csv-quote",
+  "event_log": "runs/feature-csv-quote.events.jsonl",
+  "started_at": "2026-10-05T09:27:45.236Z",
+  "finished_at": "2026-10-05T09:29:17.848Z",
+  "failure_taxonomy": "budget_exceeded"
+}

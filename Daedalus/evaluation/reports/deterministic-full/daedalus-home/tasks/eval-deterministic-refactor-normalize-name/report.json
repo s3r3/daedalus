@@ -1,0 +1,23 @@
+{
+  "task_id": "eval-deterministic-refactor-normalize-name",
+  "outcome": "success",
+  "diff": "--- a/src/input.js\n+++ b/src/input.js\n@@ +2 -1 @@\n-export function normalize_input(value) {\n+export function normalizeInput(value) {\n   return String(value).trim().toLowerCase();\n }\n+export const normalize_input = normalizeInput;\n",
+  "evidence": [
+    "syntax: pass (node --check src/input.js)",
+    "behavior: pass (node validate.mjs)",
+    "modified src/input.js (+2/-1)"
+  ],
+  "metrics": {
+    "turns": 2,
+    "tool_calls": 2,
+    "events": 14,
+    "commands": 0,
+    "files_changed": 1,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 2,
+    "checks_failed": 0,
+    "duration_ms": 226
+  }
+}

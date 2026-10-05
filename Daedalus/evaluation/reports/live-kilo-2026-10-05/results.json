@@ -1,0 +1,746 @@
+[
+  {
+    "run_id": "eval-live-bug-fallback-greeting",
+    "task_id": "bug-fallback-greeting",
+    "title": "Fallback greeting name",
+    "category": "bug_fix",
+    "mode": "live",
+    "outcome": "partial",
+    "state_status": "active",
+    "turns": 4,
+    "iterations": 4,
+    "tool_calls": 4,
+    "tool_calls_by_name": {
+      "list_dir": 4
+    },
+    "wall_clock_ms": 15428,
+    "retries": 3,
+    "recovery_events": 3,
+    "replans": 0,
+    "approvals": 0,
+    "events": 28,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/greeting.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "model": "kgw/kilo-auto/free",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/bug-fallback-greeting",
+    "event_log": "runs/bug-fallback-greeting.events.jsonl",
+    "started_at": "2026-10-05T08:21:42.700Z",
+    "finished_at": "2026-10-05T08:21:58.131Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-bug-cart-quantity-total",
+    "task_id": "bug-cart-quantity-total",
+    "title": "Cart total respects quantity",
+    "category": "bug_fix",
+    "mode": "live",
+    "outcome": "partial",
+    "state_status": "active",
+    "turns": 4,
+    "iterations": 4,
+    "tool_calls": 4,
+    "tool_calls_by_name": {
+      "list_dir": 4
+    },
+    "wall_clock_ms": 16905,
+    "retries": 3,
+    "recovery_events": 3,
+    "replans": 0,
+    "approvals": 0,
+    "events": 28,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/cart.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "model": "kgw/kilo-auto/free",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/bug-cart-quantity-total",
+    "event_log": "runs/bug-cart-quantity-total.events.jsonl",
+    "started_at": "2026-10-05T08:21:58.133Z",
+    "finished_at": "2026-10-05T08:22:15.039Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-bug-slugify-format",
+    "task_id": "bug-slugify-format",
+    "title": "Slugify produces URL-safe slugs",
+    "category": "bug_fix",
+    "mode": "live",
+    "outcome": "partial",
+    "state_status": "active",
+    "turns": 4,
+    "iterations": 4,
+    "tool_calls": 4,
+    "tool_calls_by_name": {
+      "grep": 1,
+      "read_file": 1,
+      "list_dir": 2
+    },
+    "wall_clock_ms": 15468,
+    "retries": 3,
+    "recovery_events": 3,
+    "replans": 0,
+    "approvals": 0,
+    "events": 28,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/slug.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "model": "kgw/kilo-auto/free",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/bug-slugify-format",
+    "event_log": "runs/bug-slugify-format.events.jsonl",
+    "started_at": "2026-10-05T08:22:15.041Z",
+    "finished_at": "2026-10-05T08:22:30.510Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-bug-date-padding",
+    "task_id": "bug-date-padding",
+    "title": "Date formatter pads day",
+    "category": "bug_fix",
+    "mode": "live",
+    "outcome": "partial",
+    "state_status": "active",
+    "turns": 4,
+    "iterations": 4,
+    "tool_calls": 4,
+    "tool_calls_by_name": {
+      "list_dir": 4
+    },
+    "wall_clock_ms": 15272,
+    "retries": 3,
+    "recovery_events": 3,
+    "replans": 0,
+    "approvals": 0,
+    "events": 28,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/date.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "model": "kgw/kilo-auto/free",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/bug-date-padding",
+    "event_log": "runs/bug-date-padding.events.jsonl",
+    "started_at": "2026-10-05T08:22:30.512Z",
+    "finished_at": "2026-10-05T08:22:45.786Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-feature-clamp-number",
+    "task_id": "feature-clamp-number",
+    "title": "Add numeric clamp helper",
+    "category": "feature_addition",
+    "mode": "live",
+    "outcome": "partial",
+    "state_status": "active",
+    "turns": 4,
+    "iterations": 4,
+    "tool_calls": 4,
+    "tool_calls_by_name": {
+      "list_dir": 2,
+      "git_status": 2
+    },
+    "wall_clock_ms": 15040,
+    "retries": 3,
+    "recovery_events": 3,
+    "replans": 0,
+    "approvals": 0,
+    "events": 34,
+    "files_changed": 0,
+    "commands": 2,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/math.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "model": "kgw/kilo-auto/free",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/feature-clamp-number",
+    "event_log": "runs/feature-clamp-number.events.jsonl",
+    "started_at": "2026-10-05T08:22:45.788Z",
+    "finished_at": "2026-10-05T08:23:00.829Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-feature-unique-array",
+    "task_id": "feature-unique-array",
+    "title": "Add unique array helper",
+    "category": "feature_addition",
+    "mode": "live",
+    "outcome": "partial",
+    "state_status": "active",
+    "turns": 4,
+    "iterations": 4,
+    "tool_calls": 4,
+    "tool_calls_by_name": {
+      "list_dir": 4
+    },
+    "wall_clock_ms": 20563,
+    "retries": 3,
+    "recovery_events": 3,
+    "replans": 0,
+    "approvals": 0,
+    "events": 28,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/arrays.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "model": "kgw/kilo-auto/free",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/feature-unique-array",
+    "event_log": "runs/feature-unique-array.events.jsonl",
+    "started_at": "2026-10-05T08:23:00.832Z",
+    "finished_at": "2026-10-05T08:23:21.396Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-feature-csv-quote",
+    "task_id": "feature-csv-quote",
+    "title": "Add CSV cell quoting",
+    "category": "feature_addition",
+    "mode": "live",
+    "outcome": "partial",
+    "state_status": "active",
+    "turns": 5,
+    "iterations": 5,
+    "tool_calls": 5,
+    "tool_calls_by_name": {
+      "list_dir": 3,
+      "read_file": 1,
+      "run_command": 1
+    },
+    "wall_clock_ms": 16310,
+    "retries": 3,
+    "recovery_events": 3,
+    "replans": 0,
+    "approvals": 0,
+    "events": 35,
+    "files_changed": 0,
+    "commands": 1,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/csv.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "model": "kgw/kilo-auto/free",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/feature-csv-quote",
+    "event_log": "runs/feature-csv-quote.events.jsonl",
+    "started_at": "2026-10-05T08:23:21.397Z",
+    "finished_at": "2026-10-05T08:23:37.710Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-feature-markdown-title",
+    "task_id": "feature-markdown-title",
+    "title": "Extract Markdown title",
+    "category": "feature_addition",
+    "mode": "live",
+    "outcome": "partial",
+    "state_status": "active",
+    "turns": 4,
+    "iterations": 4,
+    "tool_calls": 4,
+    "tool_calls_by_name": {
+      "list_dir": 3,
+      "run_command": 1
+    },
+    "wall_clock_ms": 18707,
+    "retries": 3,
+    "recovery_events": 3,
+    "replans": 0,
+    "approvals": 0,
+    "events": 31,
+    "files_changed": 0,
+    "commands": 1,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/markdown.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "model": "kgw/kilo-auto/free",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/feature-markdown-title",
+    "event_log": "runs/feature-markdown-title.events.jsonl",
+    "started_at": "2026-10-05T08:23:37.713Z",
+    "finished_at": "2026-10-05T08:23:56.421Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-refactor-extract-tax",
+    "task_id": "refactor-extract-tax",
+    "title": "Extract tax calculation",
+    "category": "refactor",
+    "mode": "live",
+    "outcome": "partial",
+    "state_status": "active",
+    "turns": 6,
+    "iterations": 6,
+    "tool_calls": 6,
+    "tool_calls_by_name": {
+      "glob": 1,
+      "read_file": 2,
+      "list_dir": 3
+    },
+    "wall_clock_ms": 25901,
+    "retries": 3,
+    "recovery_events": 3,
+    "replans": 0,
+    "approvals": 0,
+    "events": 36,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/order.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "model": "kgw/kilo-auto/free",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/refactor-extract-tax",
+    "event_log": "runs/refactor-extract-tax.events.jsonl",
+    "started_at": "2026-10-05T08:23:56.422Z",
+    "finished_at": "2026-10-05T08:24:22.325Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-refactor-normalize-name",
+    "task_id": "refactor-normalize-name",
+    "title": "Rename normalize helper safely",
+    "category": "refactor",
+    "mode": "live",
+    "outcome": "partial",
+    "state_status": "active",
+    "turns": 4,
+    "iterations": 4,
+    "tool_calls": 4,
+    "tool_calls_by_name": {
+      "grep": 1,
+      "read_file": 1,
+      "list_dir": 2
+    },
+    "wall_clock_ms": 16524,
+    "retries": 3,
+    "recovery_events": 3,
+    "replans": 0,
+    "approvals": 0,
+    "events": 28,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/input.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "model": "kgw/kilo-auto/free",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/refactor-normalize-name",
+    "event_log": "runs/refactor-normalize-name.events.jsonl",
+    "started_at": "2026-10-05T08:24:22.328Z",
+    "finished_at": "2026-10-05T08:24:38.852Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-refactor-extract-price-format",
+    "task_id": "refactor-extract-price-format",
+    "title": "Extract price formatter",
+    "category": "refactor",
+    "mode": "live",
+    "outcome": "partial",
+    "state_status": "active",
+    "turns": 5,
+    "iterations": 5,
+    "tool_calls": 5,
+    "tool_calls_by_name": {
+      "list_dir": 4,
+      "read_file": 1
+    },
+    "wall_clock_ms": 19617,
+    "retries": 3,
+    "recovery_events": 3,
+    "replans": 0,
+    "approvals": 0,
+    "events": 32,
+    "files_changed": 0,
+    "commands": 0,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/receipt.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "model": "kgw/kilo-auto/free",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/refactor-extract-price-format",
+    "event_log": "runs/refactor-extract-price-format.events.jsonl",
+    "started_at": "2026-10-05T08:24:38.855Z",
+    "finished_at": "2026-10-05T08:24:58.473Z",
+    "failure_taxonomy": "validation_failed"
+  },
+  {
+    "run_id": "eval-live-refactor-timeout-config",
+    "task_id": "refactor-timeout-config",
+    "title": "Move timeout to config",
+    "category": "refactor",
+    "mode": "live",
+    "outcome": "partial",
+    "state_status": "active",
+    "turns": 5,
+    "iterations": 5,
+    "tool_calls": 5,
+    "tool_calls_by_name": {
+      "list_dir": 4,
+      "git_status": 1
+    },
+    "wall_clock_ms": 17361,
+    "retries": 3,
+    "recovery_events": 3,
+    "replans": 0,
+    "approvals": 0,
+    "events": 35,
+    "files_changed": 0,
+    "commands": 1,
+    "validation": [
+      {
+        "name": "syntax",
+        "cmd": "node --check src/jobs.js",
+        "status": "pass",
+        "exit_code": 0,
+        "summary": "passed"
+      },
+      {
+        "name": "behavior",
+        "cmd": "node validate.mjs",
+        "status": "fail",
+        "exit_code": 1,
+        "summary": "failed"
+      }
+    ],
+    "checks_passed": 1,
+    "checks_failed": 1,
+    "final_diff": "",
+    "provider": {
+      "name": "provider-registry:nine-router",
+      "id": "nine-router",
+      "model": "kgw/kilo-auto/free"
+    },
+    "config": {
+      "mode": "live",
+      "providerName": "configured-live-provider",
+      "model": "kgw/kilo-auto/free",
+      "seed": 42,
+      "temperature": 0,
+      "maxIterations": 12,
+      "maxErrors": 3
+    },
+    "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-kilo-2026-10-05/workspaces/refactor-timeout-config",
+    "event_log": "runs/refactor-timeout-config.events.jsonl",
+    "started_at": "2026-10-05T08:24:58.475Z",
+    "finished_at": "2026-10-05T08:25:15.837Z",
+    "failure_taxonomy": "validation_failed"
+  }
+]

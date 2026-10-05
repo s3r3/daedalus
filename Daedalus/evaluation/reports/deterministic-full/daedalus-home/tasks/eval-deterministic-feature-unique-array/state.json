@@ -1,0 +1,71 @@
+{
+  "id": "eval-deterministic-feature-unique-array",
+  "goal": "Add a unique(values) helper that removes duplicates while preserving first-seen order.",
+  "repo_path": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-full/workspaces/feature-unique-array",
+  "constraints": [],
+  "done_criteria": [
+    "Inspect the current array helpers",
+    "unique() is exported, removes duplicates, and preserves first-seen order"
+  ],
+  "created_at": "2026-10-05T08:00:06.631Z",
+  "mode": "auto",
+  "model": "scripted",
+  "turns": 2,
+  "plan": {
+    "id": "12a57975-9103-40f4-b67b-af07aaad3f88",
+    "task_id": "eval-deterministic-feature-unique-array",
+    "steps": [
+      {
+        "id": "eval-deterministic-feature-unique-array-step-1",
+        "intent": "Satisfy: Inspect the current array helpers",
+        "status": "done",
+        "evidence": [
+          "ok: 1: export function first(values) { return values[0]; }\n2: "
+        ]
+      },
+      {
+        "id": "eval-deterministic-feature-unique-array-step-2",
+        "intent": "Satisfy: unique() is exported, removes duplicates, and preserves first-seen order",
+        "status": "done",
+        "evidence": [
+          "ok: wrote src/arrays.js"
+        ]
+      }
+    ],
+    "version": 1,
+    "status": "complete"
+  },
+  "steps": [
+    {
+      "id": "eval-deterministic-feature-unique-array-step-1",
+      "intent": "Satisfy: Inspect the current array helpers",
+      "status": "done",
+      "evidence": [
+        "ok: 1: export function first(values) { return values[0]; }\n2: "
+      ]
+    },
+    {
+      "id": "eval-deterministic-feature-unique-array-step-2",
+      "intent": "Satisfy: unique() is exported, removes duplicates, and preserves first-seen order",
+      "status": "done",
+      "evidence": [
+        "ok: wrote src/arrays.js"
+      ]
+    }
+  ],
+  "status": "done",
+  "last_observation": "ok: wrote src/arrays.js",
+  "last_tool_call_id": "eval-call-2",
+  "tool_result": {
+    "call_id": "eval-call-2",
+    "status": "ok",
+    "output": "wrote src/arrays.js",
+    "truncated": false,
+    "meta": {
+      "path": "src/arrays.js",
+      "bytes": 116,
+      "tool": "write_file",
+      "mutating": true
+    }
+  }
+}

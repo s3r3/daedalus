@@ -1,0 +1,60 @@
+{
+  "run_id": "eval-deterministic-refactor-normalize-name",
+  "task_id": "refactor-normalize-name",
+  "title": "Rename normalize helper safely",
+  "category": "refactor",
+  "mode": "deterministic",
+  "outcome": "success",
+  "state_status": "done",
+  "turns": 2,
+  "iterations": 2,
+  "tool_calls": 2,
+  "tool_calls_by_name": {
+    "read_file": 1,
+    "write_file": 1
+  },
+  "wall_clock_ms": 227,
+  "retries": 0,
+  "recovery_events": 0,
+  "replans": 0,
+  "approvals": 0,
+  "events": 14,
+  "files_changed": 1,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/input.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    }
+  ],
+  "checks_passed": 2,
+  "checks_failed": 0,
+  "final_diff": "--- a/src/input.js\n+++ b/src/input.js\n@@ +2 -1 @@\n-export function normalize_input(value) {\n+export function normalizeInput(value) {\n   return String(value).trim().toLowerCase();\n }\n+export const normalize_input = normalizeInput;\n",
+  "provider": {
+    "name": "deterministic-scripted",
+    "model": "scripted"
+  },
+  "config": {
+    "mode": "deterministic",
+    "providerName": "deterministic-scripted",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-full/workspaces/refactor-normalize-name",
+  "event_log": "runs/refactor-normalize-name.events.jsonl",
+  "started_at": "2026-10-05T08:00:07.610Z",
+  "finished_at": "2026-10-05T08:00:07.838Z",
+  "failure_taxonomy": "none"
+}

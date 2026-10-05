@@ -1,0 +1,88 @@
+{
+  "id": "eval-deterministic-refactor-extract-tax",
+  "goal": "Refactor order pricing so tax calculation lives in src/tax.js and order.js uses it, preserving totals.",
+  "repo_path": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/deterministic-subset/workspaces/refactor-extract-tax",
+  "constraints": [],
+  "done_criteria": [
+    "Inspect the current order pricing implementation",
+    "src/tax.js exports calculateTax()",
+    "order.js uses calculateTax() and preserves the total-with-tax behavior"
+  ],
+  "created_at": "2026-10-05T08:00:02.345Z",
+  "mode": "auto",
+  "model": "scripted",
+  "turns": 3,
+  "plan": {
+    "id": "837fd779-10de-4893-bcd1-37c267e7ce52",
+    "task_id": "eval-deterministic-refactor-extract-tax",
+    "steps": [
+      {
+        "id": "eval-deterministic-refactor-extract-tax-step-1",
+        "intent": "Satisfy: Inspect the current order pricing implementation",
+        "status": "done",
+        "evidence": [
+          "ok: 1: export function totalWithTax(subtotal) {\n2:   const tax = subtotal * 0.2;\n3:   return subtotal + tax;\n4: }\n5: "
+        ]
+      },
+      {
+        "id": "eval-deterministic-refactor-extract-tax-step-2",
+        "intent": "Satisfy: src/tax.js exports calculateTax()",
+        "status": "done",
+        "evidence": [
+          "ok: wrote src/tax.js"
+        ]
+      },
+      {
+        "id": "eval-deterministic-refactor-extract-tax-step-3",
+        "intent": "Satisfy: order.js uses calculateTax() and preserves the total-with-tax behavior",
+        "status": "done",
+        "evidence": [
+          "ok: wrote src/order.js"
+        ]
+      }
+    ],
+    "version": 1,
+    "status": "complete"
+  },
+  "steps": [
+    {
+      "id": "eval-deterministic-refactor-extract-tax-step-1",
+      "intent": "Satisfy: Inspect the current order pricing implementation",
+      "status": "done",
+      "evidence": [
+        "ok: 1: export function totalWithTax(subtotal) {\n2:   const tax = subtotal * 0.2;\n3:   return subtotal + tax;\n4: }\n5: "
+      ]
+    },
+    {
+      "id": "eval-deterministic-refactor-extract-tax-step-2",
+      "intent": "Satisfy: src/tax.js exports calculateTax()",
+      "status": "done",
+      "evidence": [
+        "ok: wrote src/tax.js"
+      ]
+    },
+    {
+      "id": "eval-deterministic-refactor-extract-tax-step-3",
+      "intent": "Satisfy: order.js uses calculateTax() and preserves the total-with-tax behavior",
+      "status": "done",
+      "evidence": [
+        "ok: wrote src/order.js"
+      ]
+    }
+  ],
+  "status": "done",
+  "last_observation": "ok: wrote src/order.js",
+  "last_tool_call_id": "eval-call-3",
+  "tool_result": {
+    "call_id": "eval-call-3",
+    "status": "ok",
+    "output": "wrote src/order.js",
+    "truncated": false,
+    "meta": {
+      "path": "src/order.js",
+      "bytes": 129,
+      "tool": "write_file",
+      "mutating": true
+    }
+  }
+}

@@ -36,6 +36,10 @@ describe('CLI', () => {
     expect(written.join('')).toContain('Usage:')
     expect(written.join('')).toContain('health')
     expect(written.join('')).toContain('run')
+    expect(written.join('')).toContain('serve')
+    expect(written.join('')).toContain('status')
+    expect(written.join('')).toContain('stop')
+    expect(written.join('')).toContain('chat')
     expect(written.join('')).toContain('ask')
   })
 
@@ -124,6 +128,13 @@ test('PLAN_CREATED uses ✦ glyph, never 📋', () => {
       expect(out).toContain('✦')
       expect(out).toContain('step one')
     })
+
+    test('THOUGHT renders as a dim thinking line', () => {
+      process.env.NO_COLOR = '1'
+      delete process.env.FORCE_COLOR
+      const out = formatEvent({ type: 'THOUGHT', task_id: 't', payload: { text: 'inspect first', source: 'provider_reasoning' } })
+      expect(out).toContain('thinking · inspect first')
+    })
   })
 
 describe('run flags', () => {
@@ -145,7 +156,7 @@ describe('run flags', () => {
 
   test('run --help advertises every execution flag', () => {
     const help = helpFor(['run', '--help'])
-    for (const flag of ['--cwd', '--json', '--yolo', '--max-iterations', '--model', '--provider', '--timeout', '--verbose']) {
+    for (const flag of ['--cwd', '--json', '--yolo', '--max-iterations', '--model', '--provider', '--provider-id', '--mode', '--timeout', '--verbose']) {
       expect(help).toContain(flag)
     }
   })

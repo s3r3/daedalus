@@ -1,0 +1,76 @@
+{
+  "run_id": "eval-live-refactor-extract-tax",
+  "task_id": "refactor-extract-tax",
+  "title": "Extract tax calculation",
+  "category": "refactor",
+  "mode": "live",
+  "outcome": "stopped",
+  "state_status": "failed",
+  "last_error": "max_iterations",
+  "turns": 12,
+  "iterations": 12,
+  "tool_calls": 10,
+  "tool_calls_by_name": {
+    "list_dir": 3,
+    "validate": 1,
+    "read_file": 4,
+    "write_file": 2
+  },
+  "wall_clock_ms": 43246,
+  "retries": 2,
+  "recovery_events": 2,
+  "replans": 0,
+  "approvals": 0,
+  "events": 56,
+  "files_changed": 2,
+  "commands": 0,
+  "validation": [
+    {
+      "name": "syntax",
+      "cmd": "node --check src/order.js",
+      "status": "pass",
+      "exit_code": 0,
+      "summary": "passed"
+    },
+    {
+      "name": "behavior",
+      "cmd": "node validate.mjs",
+      "status": "fail",
+      "exit_code": 1,
+      "summary": "failed"
+    }
+  ],
+  "checks_passed": 1,
+  "checks_failed": 1,
+  "final_diff": "--- a//home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/refactor-extract-tax/src/tax.js\n+++ b//home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/refactor-extract-tax/src/tax.js\n@@ +1 -0 @@\n+function totalWithTax(subtotal) {\\n  const tax = subtotal * 0.2;\\n  return subtotal + tax;\\n}\\n\\nfunction calculateTax(subtotal) {\\n  return subtotal * 0.2;\\n}\n--- a/src/tax.js\n+++ b/src/tax.js\n@@ +3 -1 @@\n-function totalWithTax(subtotal) {\\n  const tax = subtotal * 0.2;\\n  return subtotal + tax;\\n}\\n\\nfunction calculateTax(subtotal) {\\n  return subtotal * 0.2;\\n}\n+export function calculateTax() {\n+    // tax calculation logic\n+}\n",
+  "provider": {
+    "name": "provider-registry:nine-router",
+    "id": "nine-router",
+    "model": "kgw/kilo-auto/free",
+    "models": [
+      "kgw/kilo-auto/free",
+      "claude-lo",
+      "kr/qwen3-coder-next-agentic"
+    ],
+    "modelStrategy": "round-robin"
+  },
+  "config": {
+    "mode": "live",
+    "providerName": "configured-live-provider",
+    "models": [
+      "kgw/kilo-auto/free",
+      "claude-lo",
+      "kr/qwen3-coder-next-agentic"
+    ],
+    "modelStrategy": "round-robin",
+    "seed": 42,
+    "temperature": 0,
+    "maxIterations": 12,
+    "maxErrors": 3
+  },
+  "workspace": "/home/hatch/workspace/repos/daedalus/Daedalus/evaluation/reports/live-pool-subset-2026-10-05/workspaces/refactor-extract-tax",
+  "event_log": "runs/refactor-extract-tax.events.jsonl",
+  "started_at": "2026-10-05T09:00:06.777Z",
+  "finished_at": "2026-10-05T09:00:50.024Z",
+  "failure_taxonomy": "validation_failed"
+}
