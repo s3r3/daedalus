@@ -75,6 +75,35 @@ describe('server', () => {
     expect(res.status).toBe(400)
   })
 
+  test('POST /tasks accepts a model pool and records it on the task', async () => {
+    const { base } = await listen()
+    const created = await fetch(new URL('/tasks', base), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ goal: 'pool task', models: ['model-a', 'model-b'], model_strategy: 'round-robin' }),
+    })
+    expect(created.status).toBe(201)
+    const task = (await created.json()) as { id: string; models?: string[]; model_strategy?: string }
+    expect(task.models).toEqual(['model-a', 'model-b'])
+    expect(task.model_strategy).toBe('round-robin')
+
+    const fetched = await fetch(new URL(`/tasks/${task.id}`, base))
+    expect(fetched.status).toBe(200)
+    const body = (await fetched.json()) as { state: { models?: string[]; model_strategy?: string } }
+    expect(body.state?.models).toEqual(['model-a', 'model-b'])
+    expect(body.state?.model_strategy).toBe('round-robin')
+  })
+
+  test('POST /tasks rejects an unknown model strategy instead of guessing', async () => {
+    const { base } = await listen()
+    const res = await fetch(new URL('/tasks', base), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ goal: 'pool task', models: ['model-a', 'model-b'], model_strategy: 'random' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
   test('unknown route returns 404', async () => {
     const { base } = await listen()
     const res = await fetch(new URL('/nope', base))

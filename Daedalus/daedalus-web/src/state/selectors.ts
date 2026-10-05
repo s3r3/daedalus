@@ -486,6 +486,174 @@ export function commandStartedPayload(event: Event): CommandStarted | undefined 
   return payloadOf(event, 'COMMAND_STARTED')
 }
 
+export type ChatEntry = {
+  seq: number
+  ts: string
+  role: 'user' | 'assistant' | 'thought' | 'tool' | 'status' | 'approval'
+  text: string
+  detail?: string
+  status?: ActivityEntry['status']
+  tool?: string
+}
+
+/**
+ * The conversation view over the same event log: the user's prompt, provider
+ * thoughts, assistant replies, tool calls with short results, and the status
+ * lines a chat reader needs (approvals, validation, completion). Derived only
+ * from recorded events, exactly like `activity()`; tool calls reuse the
+ * `toolCalls()` pairing so a started/finished pair renders as one entry whose
+ * status/output come from the recorded result.
+ */
+export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
+  const views = new Map(toolCalls(events).map((view) => [view.call.id, view]))
+  const entries: ChatEntry[] = []
+  for (const event of events) {
+    const base = { seq: event.seq, ts: event.ts }
+    switch (event.type) {
+      case 'TASK_STARTED': {
+        const goal = payloadOf(event, 'TASK_STARTED')?.spec.goal?.trim()
+        if (goal) entries.push({ ...base, role: 'user', text: goal })
+        break
+      }
+      case 'SLASH_COMMAND_EXECUTED': {
+        const executed = payloadOf(event, 'SLASH_COMMAND_EXECUTED')
+        if (executed?.command) {
+          entries.push({ ...base, role: 'user', text: `/${executed.command}${executed.text ? ` — ${executed.text}` : ''}` })
+        }
+        break
+      }
+      case 'THOUGHT': {
+        if (!thinking) break
+        const text = payloadOf(event, 'THOUGHT')?.text?.trim()
+        if (text) entries.push({ ...base, role: 'thought', text: truncateChat(text, 4000) })
+        break
+      }
+      case 'MODEL_REQUEST_FINISHED': {
+        const content = payloadOf(event, 'MODEL_REQUEST_FINISHED')?.message?.content?.trim()
+        if (content) entries.push({ ...base, role: 'assistant', text: truncateChat(content, 8000) })
+        break
+      }
+      case 'TOOL_CALL_STARTED': {
+        const call = payloadOf(event, 'TOOL_CALL_STARTED')?.call
+        if (!call) break
+        const result = views.get(call.id)?.result
+        entries.push({
+          ...base,
+          role: 'tool',
+          tool: call.tool,
+          text: summarizeArgs(call.args) ?? '',
+          detail: result?.output ? truncateChat(result.output.trim(), 400) : undefined,
+          status: result ? toolStatus(result.status) : 'running',
+        })
+        break
+      }
+      case 'APPROVAL_REQUESTED': {
+        const requested = payloadOf(event, 'APPROVAL_REQUESTED')
+        entries.push({
+          ...base,
+          role: 'approval',
+          text: `approval requested — ${approvalLabel(requested?.key)}`,
+          detail: requested?.policy ? `policy: ${requested.policy}` : undefined,
+          status: 'warning',
+        })
+        break
+      }
+      case 'APPROVAL_DECIDED': {
+        const decided = payloadOf(event, 'APPROVAL_DECIDED')
+        entries.push({
+          ...base,
+          role: 'approval',
+          text: `approval ${decided?.decision ?? 'decided'} — ${approvalLabel(decided?.key)}`,
+          status: decided?.decision === 'grant' ? 'ok' : 'error',
+        })
+        break
+      }
+      case 'PLAN_CREATED': {
+        const plan = payloadOf(event, 'PLAN_CREATED')?.plan
+        entries.push({ ...base, role: 'status', text: `plan created · ${plan?.steps.length ?? 0} steps`, status: 'info' })
+        break
+      }
+      case 'REPLAN_CREATED':
+        entries.push({ ...base, role: 'status', text: 'plan revised', detail: payloadOf(event, 'REPLAN_CREATED')?.reason, status: 'info' })
+        break
+      case 'LOOP_WARNING': {
+        const warning = payloadOf(event, 'LOOP_WARNING')
+        entries.push({
+          ...base,
+          role: 'status',
+          text: `loop warning — ${warning?.tool ?? 'tool'} repeated ${warning?.repeats ?? 0}×${warning?.suppressed ? ' · repeat suppressed' : ''}`,
+          status: 'warning',
+        })
+        break
+      }
+      case 'VALIDATION_PASSED':
+        entries.push({ ...base, role: 'status', text: 'validation passed', status: 'ok' })
+        break
+      case 'VALIDATION_FAILED':
+        entries.push({ ...base, role: 'status', text: 'validation failed', detail: failingChecks(event), status: 'error' })
+        break
+      case 'RECOVERY_STARTED': {
+        const recovery = payloadOf(event, 'RECOVERY_STARTED')
+        entries.push({ ...base, role: 'status', text: `recovery ${recovery?.strategy ?? ''} — ${recovery?.reason ?? ''}`, detail: `attempt ${recovery?.attempt ?? 0}`, status: 'warning' })
+        break
+      }
+      case 'MODEL_REQUEST_FAILED':
+        entries.push({ ...base, role: 'status', text: 'model request failed', detail: payloadOf(event, 'MODEL_REQUEST_FAILED')?.error, status: 'error' })
+        break
+      case 'MODE_CHANGED': {
+        const changed = payloadOf(event, 'MODE_CHANGED')
+        entries.push({ ...base, role: 'status', text: `mode ${changed?.from ?? '?'} → ${changed?.to ?? '?'}`, status: 'info' })
+        break
+      }
+      case 'CHILD_TASK_STARTED': {
+        const child = payloadOf(event, 'CHILD_TASK_STARTED')?.child
+        entries.push({ ...base, role: 'status', text: 'child task started', detail: child?.goal, status: 'running' })
+        break
+      }
+      case 'CHILD_TASK_FINISHED': {
+        const child = payloadOf(event, 'CHILD_TASK_FINISHED')?.child
+        entries.push({ ...base, role: 'status', text: `child task ${child?.status ?? 'finished'}`, detail: child?.result_summary ?? child?.goal, status: child?.status === 'done' ? 'ok' : 'warning' })
+        break
+      }
+      case 'TASK_COMPLETED': {
+        const completed = payloadOf(event, 'TASK_COMPLETED')
+        entries.push({
+          ...base,
+          role: 'status',
+          text: `task ${completed?.outcome ?? 'done'}`,
+          detail: completed?.reason,
+          status: completed?.outcome === 'success' ? 'ok' : completed?.outcome === 'partial' ? 'warning' : 'error',
+        })
+        break
+      }
+      default:
+        break
+    }
+  }
+  return entries
+}
+
+function toolStatus(status: string): ActivityEntry['status'] {
+  if (status === 'ok') return 'ok'
+  if (status === 'denied') return 'denied'
+  if (status === 'timeout') return 'timeout'
+  return 'error'
+}
+
+function truncateChat(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text
+}
+
+/** Parse the comma/newline-separated model-pool setting into a clean list. */
+export function parseModelPool(text: string): string[] {
+  const seen = new Set<string>()
+  for (const part of text.split(/[,\n]/)) {
+    const model = part.trim()
+    if (model) seen.add(model)
+  }
+  return [...seen]
+}
+
 function failingChecks(event: Event): string {
   const payload = payloadOf(event, 'VALIDATION_FAILED')
   const failing = payload?.result.checks.filter((check) => check.status !== 'pass') ?? []

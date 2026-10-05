@@ -76,6 +76,9 @@ export type CreateTaskInput = {
   thinking?: boolean
   provider_id?: string
   model?: string
+  /** Model pool (2+ models): core routes across them with model_strategy. */
+  models?: string[]
+  model_strategy?: 'failover' | 'round-robin'
   attachments?: Attachment[]
   children?: ChildTaskInput[]
   isolation?: 'worktree'
