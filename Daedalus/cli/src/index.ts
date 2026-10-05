@@ -7,7 +7,9 @@ import {
   ProviderRegistryStore,
   TaskRunner,
   TaskStore,
+  answerConversational,
   applyTaskWorktree,
+  conversationalFallbackReply,
   createProviderForConfig,
   exitCodeFor,
   loadAgents,
@@ -367,6 +369,8 @@ async function runFullscreenChat(options: {
     draw();
   };
 
+  session.setModelPickerListener(() => draw());
+
   const cleanup = (): void => {
     if (closed) return;
     closed = true;
@@ -395,6 +399,7 @@ async function runFullscreenChat(options: {
       draw();
       return;
     }
+    if (handled.kind === "chat") { draw(); return; }
 
     running = true;
     session.setStatus("running");
@@ -480,9 +485,32 @@ async function runFullscreenChat(options: {
       return;
     }
     if (key.ctrl && name === "m") {
-      input = "/models";
-      cursor = input.length;
       session.closeCommandPalette();
+      void session.openModelPicker();
+      draw();
+      return;
+    }
+
+    if (session.modelPickerOpen) {
+      if (name === "escape") { session.closeModelPicker(); draw(); return; }
+      if (name === "up" || (key.ctrl && name === "p")) { session.moveModelPickerSelection(-1); draw(); return; }
+      if (name === "down" || (key.ctrl && name === "n")) { session.moveModelPickerSelection(1); draw(); return; }
+      if (name === "return" || name === "enter") {
+        // acceptModelPickerSelection records the single confirmation line.
+        if (session.acceptModelPickerSelection()) { input = ""; cursor = 0; }
+        draw();
+        return;
+      }
+      if (name === "backspace") {
+        session.setModelPickerFilter(session.modelPickerFilter.slice(0, -1));
+        draw();
+        return;
+      }
+      if (str && !key.ctrl && !key.meta && str >= " ") {
+        session.setModelPickerFilter(session.modelPickerFilter + str);
+        draw();
+        return;
+      }
       draw();
       return;
     }
@@ -641,6 +669,17 @@ export async function runInteractiveChat(options: {
 
   let currentTaskId: string | undefined;
   session.setCallbacks({
+    chatReply: async ({ input, history }) => {
+      // Casual chat: one tool-less provider call with the currently selected
+      // provider/model — same resolution the /review command uses. No
+      // provider yet means a friendly local fallback, never a fake task.
+      const config = providerStore.registry.listInternal().find((provider) => provider.id === session.providerId && provider.enabled)
+        ?? providerStore.registry.listInternal().find((provider) => provider.enabled);
+      const model = session.model ?? config?.defaultModel ?? config?.models[0] ?? settings.llm.model;
+      if (!model) return conversationalFallbackReply();
+      const provider = config ? createProviderForConfig(config, model) : createProviderFromSettings(settings);
+      return answerConversational(provider, input, history);
+    },
     cancel: async () => {
       if (!currentTaskId) return { text: "No running task to cancel.", action: "cancel" };
       runner.cancel(currentTaskId);
@@ -746,9 +785,14 @@ export async function runInteractiveChat(options: {
         rl.prompt();
       } else if (handledKey.action === "open_models") {
         void session.handleInput("/models").then((result) => {
-          process.stdout.write(`\n${result.text}\n`);
+          // No overlay in this view: close the picker state and point at the typed form.
+          session.closeModelPicker();
+          process.stdout.write(`\n${result.text || "Use /models <provider>/<model> to switch models in this view."}\n`);
           rl.prompt();
         });
+      } else if (handledKey.action === "model_accept") {
+        process.stdout.write(`\n${handledKey.text ?? "Model updated."}\n`);
+        rl.prompt();
       } else if (handledKey.action === "cancel" && currentTaskId) {
         runner.cancel(currentTaskId);
         process.stdout.write(`\nCancellation requested for task ${currentTaskId}.\n`);
@@ -784,8 +828,17 @@ export async function runInteractiveChat(options: {
       const handled = await session.handleInput(line);
       if (handled.kind === "empty") continue;
       if (handled.kind === "slash") {
-        process.stdout.write(`${handled.text}\n`);
+        if ((handled.data as { picker?: boolean } | undefined)?.picker) {
+          session.closeModelPicker();
+          process.stdout.write(`${handled.text || "Use /models <provider>/<model> to switch models in this view."}\n`);
+        } else {
+          process.stdout.write(`${handled.text}\n`);
+        }
         if (handled.action === "exit") break;
+        continue;
+      }
+      if (handled.kind === "chat") {
+        process.stdout.write(`${handled.text}\n`);
         continue;
       }
 
