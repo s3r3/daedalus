@@ -64,6 +64,18 @@ export {
   type ChatIntent,
 } from './conversation.ts';
 export { handleObservation } from './observation.ts';
+export {
+  DEFAULT_TOOL_OUTPUT_LIMITS,
+  TOOL_OUTPUT_HEAD_RATIO,
+  TOOL_OUTPUT_MAX_CHARS,
+  TOOL_OUTPUT_MAX_LINES,
+  resolveToolOutputLimits,
+  shapeToolOutput,
+  truncateHeadTail,
+  type ShapeToolOutputOptions,
+  type ShapedToolOutput,
+  type ToolOutputLimits,
+} from './tool-output.ts';
 export { evaluateStopConditions, noProgressCondition } from './stop.ts';
 export type {
   Action,

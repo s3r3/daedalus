@@ -1,10 +1,11 @@
+import { join } from 'node:path';
 import type { EventBus } from '../events.ts';
 import { emitEvent } from '../events.ts';
 import type { TaskStore } from '../persistence.ts';
 import type { LLMProvider, Message } from '../providers/llm/types.ts';
 import { classifyLLMError, LLMAuthError, LLMContentPolicyError, type LLMErrorKind } from '../providers/llm/errors.ts';
 import { modelPoolFailureReason } from '../providers/llm/model-pool.ts';
-import type { Event, Plan, PlanStep, TaskSpec, TaskState, ToolCall } from '../contracts.ts';
+import type { Event, Plan, PlanStep, TaskSpec, TaskState, ToolCall, ToolResult } from '../contracts.ts';
 import type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor } from './types.ts';
 import type { Validator } from '../validation/index.ts';
 import { completionGate, normalizeError, validationFailed } from '../validation/index.ts';
@@ -13,6 +14,7 @@ import { createPlan, replan } from './planner.ts';
 import { DefaultContextManager, condenseToolOutputs, contextMeter } from './context.ts';
 import { LoopGuard, REPEAT_SUPPRESSED_OUTPUT, loopGuidanceNote } from './loop-guard.ts';
 import { handleObservation } from './observation.ts';
+import { resolveToolOutputLimits, shapeToolOutput, type ToolOutputLimits } from './tool-output.ts';
 import { evaluateStopConditions, noProgressCondition } from './stop.ts';
 import { ModeController, isToolVisible } from '../interaction/modes.ts';
 
@@ -46,6 +48,12 @@ export type AgentLoopOptions = {
   contextLimitTokens?: number;
   /** Condense older tool outputs when over 70% of the context limit. Default: on. */
   condense?: boolean;
+  /**
+   * Hard caps + spill files for tool outputs before they enter the model
+   * context (head+tail kept, full text under the task store). Defaults:
+   * 50k chars / 2k lines, spill on — see agent/tool-output.ts.
+   */
+  toolOutput?: Partial<ToolOutputLimits>;
 };
 
 
@@ -77,6 +85,8 @@ export class AgentLoop {
   readonly #thinking: boolean;
   readonly #contextLimitTokens: number;
   readonly #condense: boolean;
+  readonly #toolOutputLimits: ToolOutputLimits;
+  readonly #spillCounters = new Map<string, number>();
   readonly #loopGuards = new Map<string, LoopGuard>();
   readonly #pendingGuidance = new Map<string, string>();
   readonly #modelFailures = new Map<string, ModelFailure>();
@@ -104,6 +114,7 @@ export class AgentLoop {
     this.#thinking = options.thinking !== false;
     this.#contextLimitTokens = options.contextLimitTokens && options.contextLimitTokens > 0 ? options.contextLimitTokens : 128_000;
     this.#condense = options.condense !== false;
+    this.#toolOutputLimits = resolveToolOutputLimits(options.toolOutput);
   }
 
   get modeController(): ModeController {
@@ -122,6 +133,7 @@ export class AgentLoop {
       this.#loopGuards.delete(spec.id);
       this.#pendingGuidance.delete(spec.id);
       this.#modelFailures.delete(spec.id);
+      this.#spillCounters.delete(spec.id);
     }
   }
 
@@ -409,8 +421,40 @@ export class AgentLoop {
               meta: { tool: call.tool, mode: turnMode, reason: 'repeat_suppressed', repeats: guardCall.repeats, mutating: false, ...(guardCall.repeatKind ? { repeat_kind: guardCall.repeatKind } : {}) },
             }
           : await this.#executeTool(call);
-      await this.#emit(state.id, turnId, 'TOOL_CALL_FINISHED', { call, result });
-      current = { ...this.#observe.handle({ kind: 'tool_result', result }, current), mode: turnMode, last_tool_call_id: call.id, tool_result: result };
+      // Shape the result before it enters the model context (the single
+      // choke point every tool's output passes through): over-cap output is
+      // kept head+tail with the full text spilled to the task store, so a
+      // huge command dump or minified-file grep can neither flood the next
+      // request nor lose its tail, where failures summarize. The event log
+      // keeps the executor's untouched result — only the model-facing copy
+      // is shortened — and the event gains additive truncation flags so the
+      // Web can show that shaping happened.
+      const shaped = await shapeToolOutput(result.output, {
+        tool: call.tool,
+        limits: this.#toolOutputLimits,
+        spillPathFor: (tool) => this.#spillPathFor(state.id, tool),
+      });
+      const modelResult: ToolResult = shaped.truncated
+        ? {
+            ...result,
+            output: shaped.output,
+            truncated: true,
+            meta: {
+              ...result.meta,
+              output_truncated: true,
+              ...(shaped.spillPath ? { spill_path: shaped.spillPath } : {}),
+              output_original_chars: shaped.totalChars,
+              output_original_lines: shaped.totalLines,
+              output_shown_lines: shaped.shownLines,
+            },
+          }
+        : result;
+      await this.#emit(state.id, turnId, 'TOOL_CALL_FINISHED', {
+        call,
+        result,
+        ...(shaped.truncated ? { output_truncated: true, ...(shaped.spillPath ? { spill_path: shaped.spillPath } : {}) } : {}),
+      });
+      current = { ...this.#observe.handle({ kind: 'tool_result', result: modelResult }, current), mode: turnMode, last_tool_call_id: call.id, tool_result: modelResult };
     }
     this.#invalidActions.delete(state.id);
     this.#store.saveState(state.id, current);
@@ -426,6 +470,18 @@ export class AgentLoop {
       this.#loopGuards.set(state.id, guard);
     }
     return guard;
+  }
+
+  /**
+   * Next spill-file path for a task: `<daedalus-home>/tasks/<id>/tool-output/
+   * <n>-<tool>.txt`, numbered per task in execution order. Only minted when
+   * an output actually spills, so numbering has no gaps in practice.
+   */
+  #spillPathFor(taskId: string, tool: string): string {
+    const next = (this.#spillCounters.get(taskId) ?? 0) + 1;
+    this.#spillCounters.set(taskId, next);
+    const stem = tool.replace(/[^A-Za-z0-9._-]+/g, '_');
+    return join(this.#store.taskDir(taskId), 'tool-output', `${next}-${stem}.txt`);
   }
 
   async #emitThought(taskId: string, turnId: string, message: Message): Promise<void> {

@@ -188,7 +188,7 @@ export type EventPayloads = {
   LOOP_WARNING: { tool: string; repeats: number; suppressed: boolean }
   REPLAN_CREATED: { plan: Plan; previous_plan?: Plan; reason?: string }
   TOOL_CALL_STARTED: { call: ToolCall }
-  TOOL_CALL_FINISHED: { call: ToolCall; result: ToolResult }
+  TOOL_CALL_FINISHED: { call: ToolCall; result: ToolResult; output_truncated?: boolean; spill_path?: string }
   COMMAND_STARTED: CommandStarted
   COMMAND_OUTPUT: CommandOutput
   COMMAND_FINISHED: CommandFinished

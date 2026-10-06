@@ -338,7 +338,10 @@ export function activity(events: Event[], thinking = true): ActivityEntry[] {
         push({
           kind: 'observation',
           title: `${finished?.call.tool ?? 'tool'} ${finished?.result.status ?? 'result'}`,
-          detail: (finished?.result.output ?? '').trim().slice(0, 240) || undefined,
+          detail: [
+            (finished?.result.output ?? '').trim().slice(0, 240) || undefined,
+            finished?.output_truncated ? '(output truncated for the model — head+tail kept, full text in the task spill file)' : undefined,
+          ].filter(Boolean).join(' ') || undefined,
           status: finished?.result.status === 'ok' ? 'ok' : 'error',
         })
         break
