@@ -20,6 +20,7 @@ type ProviderForm = {
   defaultModel: string
   enabled: boolean
   supportsVision: boolean
+  toolProtocol: 'auto' | 'native' | 'text'
 }
 
 const EMPTY_FORM: ProviderForm = {
@@ -31,6 +32,7 @@ const EMPTY_FORM: ProviderForm = {
   defaultModel: '',
   enabled: true,
   supportsVision: false,
+  toolProtocol: 'auto',
 }
 
 /**
@@ -85,6 +87,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
       defaultModel: preset.defaultModel ?? '',
       enabled: true,
       supportsVision: Boolean(preset.supportsVision),
+      toolProtocol: 'auto',
     })
   }
 
@@ -99,6 +102,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
       defaultModel: provider.defaultModel ?? '',
       enabled: provider.enabled,
       supportsVision: Boolean(provider.supportsVision),
+      toolProtocol: provider.toolProtocol ?? 'auto',
     })
   }
 
@@ -111,6 +115,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
     defaultModel: form.defaultModel.trim() || undefined,
     enabled: form.enabled,
     supportsVision: form.supportsVision,
+    toolProtocol: form.toolProtocol,
   })
 
   const saveProvider = async (): Promise<ProviderConfigPublic | null> => {
@@ -382,7 +387,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
                     </Button>
                   </span>
                 </div>
-                <p className="truncate text-[10px] text-muted">{provider.id} · {provider.baseUrl || '(no base URL)'}</p>
+                <p className="truncate text-[10px] text-muted">{provider.id} · {provider.baseUrl || '(no base URL)'} · tools: {provider.toolProtocol ?? 'auto'}</p>
                 <p className="text-[10px] text-muted">
                   models: {provider.models.length ? provider.models.join(', ') : '(discover with Test connection)'}
                   {provider.supportsVision ? ' · vision-capable provider' : ''}
@@ -430,6 +435,19 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
           <Input aria-label="provider models" placeholder="models, comma separated" value={form.models} onChange={(event) => setForm({ ...form, models: event.target.value })} />
           <Input aria-label="provider default model" placeholder="default model" value={form.defaultModel} onChange={(event) => setForm({ ...form, defaultModel: event.target.value })} />
         </div>
+        <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+          tool protocol
+          <select
+            aria-label="provider tool protocol"
+            className="h-6 flex-1 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
+            value={form.toolProtocol}
+            onChange={(event) => setForm({ ...form, toolProtocol: event.target.value as ProviderForm['toolProtocol'] })}
+          >
+            <option value="auto">auto — native first, text fallback</option>
+            <option value="native">native — function calling only</option>
+            <option value="text">text — XML-style tool blocks</option>
+          </select>
+        </label>
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
             <input type="checkbox" className="size-3 accent-primary" checked={form.enabled} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} />

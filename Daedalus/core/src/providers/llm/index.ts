@@ -30,3 +30,15 @@ export {
   type ModelPoolSwitch,
   type ModelStrategy,
 } from "./model-pool.ts";
+export {
+  TextProtocolProvider,
+  normalizeToolProtocol,
+  parseTextToolCalls,
+  parseToolProtocol,
+  protocolBlock,
+  toTextMessages,
+  type ProtocolSwitchInfo,
+  type TextParseResult,
+  type TextProtocolOptions,
+  type ToolProtocol,
+} from "./text-protocol.ts";

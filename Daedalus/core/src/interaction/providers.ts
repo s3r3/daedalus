@@ -1,6 +1,7 @@
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { ProviderConfig, ProviderConfigPublic } from '../contracts.ts';
+import { normalizeToolProtocol } from '../providers/llm/text-protocol.ts';
 import type { Settings } from '../settings.ts';
 
 export type ProviderPreset = { id: string; name: string; baseUrl: string; defaultModel?: string; supportsVision?: boolean };
@@ -41,6 +42,7 @@ export function sanitizeProviderInput(input: Partial<ProviderConfig> & { id?: st
     enabled: input.enabled !== false,
     supportsVision: input.supportsVision,
     visionModels: input.visionModels,
+    toolProtocol: normalizeToolProtocol(input.toolProtocol),
   };
 }
 

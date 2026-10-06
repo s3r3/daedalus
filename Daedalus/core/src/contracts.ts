@@ -16,6 +16,13 @@ export type Event = { seq: number; task_id: string; turn_id?: string; type: Even
 
 export type AgentMode = 'ask' | 'manual' | 'auto' | 'plan' | 'orchestrator';
 export type ModelStrategy = 'failover' | 'round-robin';
+/**
+ * How tool calls are put on the wire: `native` function calling, the XML-ish
+ * `text` protocol (Cline-style fallback for models that stall on native tool
+ * definitions), or `auto` (start native, switch this provider to text after
+ * repeated unusable native responses).
+ */
+export type ToolProtocol = 'native' | 'text' | 'auto';
 export const AGENT_MODES: AgentMode[] = ['ask', 'manual', 'auto', 'plan', 'orchestrator'];
 
 export type ToolVisibility = 'read' | 'mutating' | 'executing' | 'none';
@@ -41,6 +48,8 @@ export type ProviderConfig = {
   enabled: boolean;
   supportsVision?: boolean;
   visionModels?: string[];
+  /** Tool wire protocol for this provider's models; unset = settings/env default (`auto`). */
+  toolProtocol?: ToolProtocol;
 };
 
 export type ProviderConfigPublic = Omit<ProviderConfig, 'apiKey'> & { hasApiKey: boolean };

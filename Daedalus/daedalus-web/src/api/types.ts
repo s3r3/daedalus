@@ -99,6 +99,7 @@ export type ProviderInput = {
   enabled?: boolean
   supportsVision?: boolean
   visionModels?: string[]
+  toolProtocol?: 'native' | 'text' | 'auto'
 }
 
 export type ProviderTestResult = {
@@ -166,7 +167,16 @@ export type ApprovalDecided = { key: PermissionKey; decision: 'grant' | 'deny'; 
 export type TaskCompleted = { state?: Record<string, unknown>; outcome: string; reason: string; error_summary?: string; summary?: string; model_error?: Record<string, unknown> }
 export type ModelRequestFailed = { error: string; error_kind?: string; error_reason?: string; model?: string; models_tried?: string[]; timeout_ms?: number }
 export type ModeChanged = { from: AgentMode; to: AgentMode; turn_boundary: boolean; replan_required: boolean }
-export type ProviderChanged = { providerId?: string; provider_id?: string; model?: string }
+export type ProviderChanged = {
+  providerId?: string
+  provider_id?: string
+  model?: string
+  /** Set when the change is an automatic tool-protocol switch (native → text). */
+  protocol_switched?: boolean
+  tool_protocol?: string
+  from_protocol?: string
+  reason?: string
+}
 export type AttachmentAdded = { attachment: Attachment }
 export type ChildTaskEvent = { child: ChildTask }
 export type SlashCommandExecuted = { command: string; text?: string; action?: string }

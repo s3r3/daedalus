@@ -21,6 +21,7 @@ import { CommandValidator, validationSatisfied, type ValidationCommand, type Val
 import { createProviderFromSettings } from './providers/index.ts';
 import { OpenAICompatProvider } from './providers/llm/openai-compat.ts';
 import { ModelPoolProvider, normalizeModelList } from './providers/llm/model-pool.ts';
+import { TextProtocolProvider, type ProtocolSwitchInfo } from './providers/llm/text-protocol.ts';
 import { ModeController } from './interaction/modes.ts';
 import { ProviderRegistry } from './interaction/providers.ts';
 import { OrchestratorRunner, decomposeTask, type ChildTaskInput } from './interaction/orchestrator.ts';
@@ -729,6 +730,32 @@ export class TaskRunner {
     return { models, strategy };
   }
 
+  /**
+   * Wrap a per-model provider in the text-protocol adapter. The configured
+   * protocol comes from the stored provider config when present, else the
+   * LLM_TOOL_PROTOCOL setting; an `auto` switch mid-task is surfaced as a
+   * PROVIDER_CHANGED event so the Web Chat panel can show it.
+   */
+  #textProtocol(taskId: string, options: RunOptions, config: ProviderConfig | undefined, model: string, inner: LLMProvider): LLMProvider {
+    return new TextProtocolProvider(inner, {
+      protocol: config?.toolProtocol ?? this.#settings.llm.toolProtocol,
+      onProtocolSwitch: (info: ProtocolSwitchInfo) => {
+        emitEvent({ bus: this.bus, store: this.store }, taskId, undefined, 'PROVIDER_CHANGED', {
+          protocol_switched: true,
+          tool_protocol: info.to,
+          from_protocol: info.from,
+          from_model: model,
+          to_model: model,
+          model,
+          provider_id: options.providerId ?? this.#options.providerId ?? config?.id,
+          reason: `tool_protocol_${info.to}: ${info.reason}`,
+          error: info.reason,
+          failures: info.failures,
+        });
+      },
+    });
+  }
+
   #providerFor(options: RunOptions, taskId: string): LLMProvider {
     const selection = this.#providerSelection(options);
     const modelConfig = this.#modelConfig(options);
@@ -739,12 +766,12 @@ export class TaskRunner {
       return new ModelPoolProvider({
         models: modelConfig.models,
         strategy: modelConfig.strategy,
-        createProvider: (model) => new OpenAICompatProvider({
+        createProvider: (model) => this.#textProtocol(taskId, options, config, model, new OpenAICompatProvider({
           baseUrl,
           apiKey,
           model,
           defaultTimeoutMs: this.#settings.llm.timeoutMs ?? undefined,
-        }),
+        })),
         onSwitch: (switched) => {
           emitEvent({ bus: this.bus, store: this.store }, taskId, undefined, 'PROVIDER_CHANGED', {
             from_model: switched.from,
@@ -763,12 +790,12 @@ export class TaskRunner {
     }
     if (!selection) return this.#provider();
     const { config, model } = selection;
-    return new OpenAICompatProvider({
+    return this.#textProtocol(taskId, options, config, modelConfig.models[0] ?? model, new OpenAICompatProvider({
       baseUrl: config.baseUrl || this.#settings.llm.baseUrl,
       apiKey: config.apiKey ?? '',
       model: modelConfig.models[0] ?? model,
       defaultTimeoutMs: this.#settings.llm.timeoutMs ?? undefined,
-    });
+    }));
   }
 
   #providerSelection(options: RunOptions): { config: ProviderConfig; model: string } | undefined {

@@ -394,6 +394,15 @@ export function activity(events: Event[], thinking = true): ActivityEntry[] {
       }
       case 'PROVIDER_CHANGED': {
         const changed = payloadOf(event, 'PROVIDER_CHANGED')
+        if (changed?.protocol_switched) {
+          push({
+            kind: 'system',
+            title: 'switched to text tool protocol',
+            detail: `${changed.model ?? 'model'} answered native tool calls unusably, so this task now uses XML-style text tool calls${changed.reason ? ` · ${changed.reason}` : ''}`,
+            status: 'info',
+          })
+          break
+        }
         push({ kind: 'system', title: 'provider changed', detail: `${changed?.providerId ?? changed?.provider_id ?? 'default'}${changed?.model ? `/${changed.model}` : ''}`, status: 'info' })
         break
       }
