@@ -1092,6 +1092,33 @@ export class InteractiveSession {
     return [...this.#chatHistory];
   }
 
+  /**
+   * The session's turns rendered as bounded prior-context for a task, so a
+   * follow-up task in this CLI session starts with the same memory the
+   * chat replies already see. Undefined while the session is fresh.
+   */
+  priorContext(): string | undefined {
+    const lines = this.#chatHistory.slice(-12).map((message) => {
+      const raw = typeof message.content === 'string' ? message.content : '';
+      const text = raw.replace(/\s*\n\s*/g, ' ').slice(0, 1_200);
+      return `${message.role === 'user' ? 'User' : 'Daedalus'}: ${text}`;
+    });
+    if (lines.length === 0) return undefined;
+    return [
+      "Earlier in this conversation (most recent last) — the user's follow-ups refer to this; continue from it instead of starting cold:",
+      ...lines,
+    ].join('\n');
+  }
+
+  /** Record a finished task as one exchange so later tasks/chat see it. */
+  recordTaskExchange(goal: string, summary: string): void {
+    this.#chatHistory.push(
+      { role: 'user', content: goal },
+      { role: 'assistant', content: summary },
+    );
+    if (this.#chatHistory.length > 12) this.#chatHistory.splice(0, this.#chatHistory.length - 12);
+  }
+
   async #conversationalReply(input: string): Promise<string> {
     if (!this.#callbacks.chatReply) return conversationalFallbackReply();
     try {

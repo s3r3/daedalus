@@ -194,6 +194,61 @@ run finishes, core scans the task's own file-change events for plan.md /
 PRD.md under `.daedalus/plans/**` and the closing `PLAN_CREATED` carries
 them as `documents: string[]`, so any surface can link or open the files.
 
+### The plan-document guarantee
+
+A plan-mode task that "succeeds" without ever writing a plan file is a
+harness failure, not a model success — so core enforces that a document
+exists before the task may complete:
+
+1. **One repair turn.** When a plan task is about to finish and no
+   `FILE_CHANGED` under `.daedalus/plans/**` named `plan.md`/`PRD.md`
+   exists, the loop first spends exactly one harness repair turn
+   (`RECOVERY_STARTED` with `reason: plan_document_missing`): the model is
+   told to write the plan file now, with the template and the recorded
+   Q&A decisions inlined. Never more than one such repair per task.
+2. **Deterministic assembly.** If the repair turn still produced no
+   document, the runtime assembles
+   `.daedalus/plans/<task-slug>/plan.md` from the structured plan steps
+   plus the recorded `QUESTION_ANSWERED` pairs (a `## Decisions` section;
+   unanswered questions stay visible as assumptions), writes it through
+   the normal file-change path (`FILE_CHANGED` +
+   `PLAN_CREATED.documents`), and says so in the final report's evidence:
+   the document is labeled *harness-assembled because the model did not
+   write one* — never disguised as model output.
+3. **Never overwritten.** A plan file the model wrote itself is left
+   byte-for-byte alone; the guarantee only fills the gap. Non-plan modes
+   are untouched.
+
+## Chat conversations
+
+The Web chat is one continuing session per workspace, not one isolated
+task per prompt:
+
+- **Storage.** A conversation (`id`, `created_at`, `turns[]`) lives as one
+  JSON file under the workspace's Daedalus home
+  (`.daedalus/conversations/<id>.json`, the TaskStore pattern), so it
+  survives server restarts. Endpoints: `POST /conversations`,
+  `GET /conversations/:id`, `GET /conversations?root=` (newest first).
+- **Turns.** Creating a task with a `conversation_id` appends the user
+  turn; a fast-path answer appends that reply; a finished task appends a
+  short assistant summary ("Selesai. (goal)" + the first evidence lines).
+  Tasks record the `conversation_id` on their spec/state, and picking
+  such a task in the Web task list re-opens its conversation.
+- **Memory.** The next prompt in the session is session-aware two ways:
+  fast-path (conversational/question) calls receive the recent turns as
+  history, and new tasks receive them as a bounded *prior conversation*
+  constraint (the same carriage as plan-task steps). Bounds: the last
+  ~12 turns, each turn clipped, ~6K characters total. A fresh conversation
+  injects nothing — first prompts behave exactly as before.
+- **Web UI.** The chat panel renders the whole session in order (the live
+  task's event segment expanded in place; finished turns as prompt +
+  summary), **new chat** starts a fresh conversation, and the active id
+  is kept in `localStorage` so a reload restores the latest session.
+- **CLI.** The interactive CLI keeps the same idea in memory: chat replies
+  see the session history and tasks run with it as prior context. It is
+  session-local only — the persisted, restart-proof conversation file is
+  a Web/server feature (see *Honest limits*).
+
 ## Approve & Execute
 
 When a plan task finishes (done or partial) with plan documents, the Web
@@ -229,8 +284,13 @@ success.
 - Plan documents are prompt-driven. The section structure (Goal / Scope /
   Decisions / Steps / Acceptance criteria) comes from the template in the
   plan mode prompt; core does not parse or repair a plan.md the model wrote
-  differently — it only verifies *where* plan writes may land and reports
-  which plan documents exist.
+  differently — it only verifies *where* plan writes may land, reports
+  which plan documents exist, and (per *The plan-document guarantee*)
+  assembles one deterministically when the model wrote none.
+- Conversations are a Web-first feature. The server persists them per
+  workspace and feeds bounded history/prior-context back into prompts;
+  the CLI keeps equivalent memory only in memory for its session (lost on
+  exit, no conversation files), and one-shot CLI runs are unchanged.
 - A question nobody answers is not an error and not an approval: after the
   timeout the agent proceeds on assumptions it must state (marked
   `(assumed)`), which the user can correct in a follow-up.

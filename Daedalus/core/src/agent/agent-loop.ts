@@ -17,6 +17,7 @@ import { handleObservation } from './observation.ts';
 import { resolveToolOutputLimits, shapeToolOutput, type ToolOutputLimits } from './tool-output.ts';
 import { evaluateStopConditions, noProgressCondition } from './stop.ts';
 import { ModeController, isToolCallDenied, isToolVisible, modeDenialMessage } from '../interaction/modes.ts';
+import { isPlanDocumentChange, planDecisionsFromEvents, planDocumentRepairDirective } from '../interaction/plans.ts';
 
 export type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor };
 export { interpretTask };
@@ -116,6 +117,8 @@ export class AgentLoop {
    * not spent again — the task finishes partial instead of burning turns.
    */
   readonly #validationStalls = new Map<string, { signature: string; changedSince: boolean }>();
+  /** Plan tasks that already spent their one write-the-plan repair turn. */
+  readonly #planRepairs = new Set<string>();
   #cancelled = new Set<string>();
   readonly #invalidActions = new Map<string, number>();
 
@@ -166,6 +169,7 @@ export class AgentLoop {
       this.#escalatedTasks.delete(spec.id);
       this.#changedFiles.delete(spec.id);
       this.#validationStalls.delete(spec.id);
+      this.#planRepairs.delete(spec.id);
     }
   }
 
@@ -201,6 +205,33 @@ export class AgentLoop {
         return state;
       }
       if (stop === 'completed' || this.#done(state)) {
+        // Plan-document guarantee: the loop may look "done" (steps checked
+        // off, a closing reply) while the plan FILE — plan mode's actual
+        // deliverable — was never written. Give the model exactly one
+        // repair turn whose only job is writing it; if it still has not,
+        // the runtime assembles the document deterministically at close.
+        if (
+          state.mode === 'plan'
+          && !this.#planRepairs.has(state.id)
+          && ![...(this.#changedFiles.get(state.id) ?? [])].some((path) => isPlanDocumentChange(path))
+        ) {
+          this.#planRepairs.add(state.id);
+          await this.#emit(state.id, undefined, 'RECOVERY_STARTED', { reason: 'plan_document_missing', strategy: 'write_plan_document', attempt: 1 });
+          const steps = reopenLastCompletedStep(state.steps);
+          state = {
+            ...state,
+            status: 'active',
+            steps,
+            plan: { ...state.plan, steps, status: 'active' },
+            last_error: undefined,
+            last_observation: planDocumentRepairDirective({
+              goal: state.goal,
+              decisions: planDecisionsFromEvents(this.#store.replay(state.id)),
+            }),
+          };
+          this.#store.saveState(state.id, state);
+          continue;
+        }
         let completed = true;
         if (this.#validator && completed) {
           await this.#emit(state.id, undefined, 'VALIDATION_STARTED', { task_id: state.id });

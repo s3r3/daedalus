@@ -9,7 +9,8 @@ import { useDaedalusStore } from '../../state/taskStore'
 import { useTaskEvents } from '../../state/hooks'
 import { approvalId, fileChanges, latestPlan, parseModelPool, pendingApprovals, pendingQuestions, taskStatus, validation } from '../../state/selectors'
 import { api } from '../../api/client'
-import type { WorkspaceFileEntry } from '../../api/types'
+import type { Conversation, ConversationTurn, WorkspaceFileEntry } from '../../api/types'
+import { saveActiveConversationId } from '../../state/prefs'
 import { ModelPicker } from './model-picker'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 
@@ -347,9 +348,14 @@ export function Composer() {
     upload: () => openUpload('file'),
     image: () => openUpload('image'),
     newTask: () => {
+      // /new also ends the chat conversation: the next submit starts a
+      // fresh one (the old session stays saved on the server).
+      const state = useDaedalusStore.getState()
+      state.setConversation(null)
+      if (state.workspace.root) saveActiveConversationId(state.workspace.root, null)
       useDaedalusStore.setState({ taskId: null, events: [], report: null, taskAttachments: [] })
       setComposer({ goal: '', attachments: [], error: null })
-      return { text: 'New task draft started.', action: 'new' }
+      return { text: 'New chat started. The next prompt opens a fresh conversation.', action: 'new' }
     },
     clear: () => {
       setComposer({ goal: '', error: null })
@@ -469,6 +475,26 @@ export function Composer() {
       // plan, the follow-up task carries it — switching to Auto/Manual and
       // sending "jalankan rencananya" executes those steps in this context.
       const planTaskId = activeTaskId && latestPlan(events) && composer.mode !== 'plan' ? activeTaskId : undefined
+      // The chat is one continuing conversation: submit into the active
+      // one (creating it on first use), so the server records this prompt
+      // as a turn and hands the next one the session's memory. If the
+      // gateway is unreachable the task still runs, just without a session.
+      let activeConversation: Conversation | null = null
+      const store = useDaedalusStore.getState()
+      if (workspaceRoot) {
+        if (store.conversation && store.conversation.root === workspaceRoot) {
+          activeConversation = store.conversation
+        } else {
+          try {
+            const fresh = await api.createConversation(workspaceRoot)
+            activeConversation = fresh.conversation
+            store.setConversation(activeConversation)
+            saveActiveConversationId(workspaceRoot, activeConversation.id)
+          } catch {
+            activeConversation = null
+          }
+        }
+      }
       const created = await api.createTask({
         goal,
         repo_path: workspaceRoot,
@@ -481,8 +507,25 @@ export function Composer() {
         ...(pool.length > 1 ? { model_strategy: composer.modelStrategy } : {}),
         attachments: attachmentsForTask,
         ...(planTaskId ? { plan_task_id: planTaskId } : {}),
+        ...(activeConversation ? { conversation_id: activeConversation.id } : {}),
       })
       setTask(created.id, goal)
+      if (activeConversation) {
+        // Show the prompt in the session at once (the server recorded the
+        // same turn; the fresh copy replaces this optimistic one).
+        const optimistic: Conversation = {
+          ...activeConversation,
+          turns: [
+            ...activeConversation.turns,
+            { role: 'user', text: goal, task_id: created.id, mode: composer.mode, ts: new Date().toISOString() } satisfies ConversationTurn,
+          ],
+        }
+        store.setConversation(optimistic)
+        void api
+          .getConversation(workspaceRoot, activeConversation.id)
+          .then(({ conversation }) => store.setConversation(conversation))
+          .catch(() => undefined)
+      }
       setComposer({ submitting: false, goal, attachments: [] })
       if (visionWarning) setSlashOutput(visionWarning)
     } catch (error) {

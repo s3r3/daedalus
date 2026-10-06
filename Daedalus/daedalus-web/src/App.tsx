@@ -18,7 +18,15 @@ import { useEventStream } from './api/useEventStream'
 import { api } from './api/client'
 import { readStoredTheme, applyPaletteVars } from './theme/theme'
 import { useDaedalusStore } from './state/taskStore'
-import { COLUMN_WIDTHS, loadColumnWidths, loadComposerPrefs, saveColumnWidths, type ColumnWidths } from './state/prefs'
+import {
+  COLUMN_WIDTHS,
+  loadActiveConversationId,
+  loadColumnWidths,
+  loadComposerPrefs,
+  saveActiveConversationId,
+  saveColumnWidths,
+  type ColumnWidths,
+} from './state/prefs'
 import { VERSION } from '@daedalus/core/version'
 
 /**
@@ -43,6 +51,8 @@ export function App() {
   const setWorkspace = useDaedalusStore((state) => state.setWorkspace)
   const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
   const setComposer = useDaedalusStore((state) => state.setComposer)
+  const setConversation = useDaedalusStore((state) => state.setConversation)
+  const workspaceRoot = workspace.root
 
   // Side-column widths are user layout, persisted across visits. They only
   // take effect in the wide three-column layout; below it the columns stack.
@@ -118,6 +128,40 @@ export function App() {
       cancelled = true
     }
   }, [setModels, setProviders, setSession])
+
+  // Restore the workspace's chat conversation: the browser remembers which
+  // one was open (localStorage), falling back to the newest on the server,
+  // so a reload returns to the same session instead of an empty panel.
+  useEffect(() => {
+    if (!workspaceRoot) return
+    if (useDaedalusStore.getState().conversation?.root === workspaceRoot) return
+    let cancelled = false
+    void (async () => {
+      const savedId = loadActiveConversationId(workspaceRoot)
+      if (savedId) {
+        try {
+          const { conversation } = await api.getConversation(workspaceRoot, savedId)
+          if (!cancelled) setConversation(conversation)
+          return
+        } catch {
+          /* pointer is stale (deleted/never existed) — fall back to newest */
+        }
+      }
+      try {
+        const { conversations } = await api.listConversations(workspaceRoot)
+        const latest = conversations[0]
+        if (!cancelled && latest) {
+          setConversation(latest)
+          saveActiveConversationId(workspaceRoot, latest.id)
+        }
+      } catch {
+        /* gateway unreachable: the panel stays task-only for now */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceRoot, setConversation])
 
   return (
     <div className="flex h-full flex-col bg-surface-base text-foreground" data-testid="app-shell" data-theme={theme}>

@@ -89,6 +89,14 @@ export type FastPathRun = {
   intent: Exclude<WebIntent, "task">;
   thinking: boolean;
   selection: FastPathSelection;
+  /**
+   * Prior conversation turns (chat sessions): handed to the answer helpers
+   * so a follow-up ("di mana plan-nya?") is answered with session memory
+   * instead of starting cold. Absent for a fresh conversation.
+   */
+  history?: import("@daedalus/core").Message[];
+  /** Records the reply as the conversation's assistant turn. */
+  onReply?: (text: string) => void;
 };
 
 /**
@@ -115,9 +123,9 @@ export function executeFastPath(run: FastPathRun): void {
       if (!provider) {
         reply = intent === "conversational" ? conversationalFallbackReply() : questionFallbackReply();
       } else if (intent === "conversational") {
-        reply = await answerConversational(provider, goal);
+        reply = await answerConversational(provider, goal, run.history ?? []);
       } else {
-        reply = await answerQuestion(provider, goal, { workspaceDir: repoPath });
+        reply = await answerQuestion(provider, goal, { workspaceDir: repoPath, history: run.history ?? [] });
       }
     } catch (error) {
       emitEvent(target, taskId, undefined, "MODEL_REQUEST_FAILED", { error: String(error), intent });
@@ -137,6 +145,7 @@ export function executeFastPath(run: FastPathRun): void {
       finish_reason: "stop",
       intent,
     });
+    run.onReply?.(reply);
     persistTerminal(run, "done", undefined);
     emitEvent(target, taskId, undefined, "TASK_COMPLETED", { outcome: "success", reason: intent, intent });
   })().catch((error: unknown) => {

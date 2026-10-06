@@ -42,6 +42,14 @@ import {
 } from "@daedalus/core";
 import { collectRoots, listDirectory, listFilesFlat, buildTree, resolveInside, MAX_FILE_BYTES } from "./workspace.ts";
 import { classifyWebIntent, executeFastPath } from "./fast-path.ts";
+import {
+  ConversationStore,
+  historyMessages,
+  priorContextSection,
+  taskSummaryText,
+  type Conversation,
+  type ConversationTurn,
+} from "./conversations.ts";
 import { UPLOAD_LIMITS, extractZipEntries, guessMimeType, parseMultipart, sanitizeRelativePath, type UploadPart } from "./uploads.ts";
 
 /**
@@ -647,6 +655,11 @@ type TaskLookup = { store: TaskStore; state: Record<string, unknown> };
  * CLI started in the same shared workspace (CLI and server resolve the same
  * home for that root) without exposing arbitrary directories.
  */
+/** Conversation store for one workspace root (same home resolution as its task store). */
+function conversationStoreFor(ctx: AppContext, root: string): ConversationStore {
+  return new ConversationStore(resolveDaedalusHome(ctx.settings.daedalusHome, root));
+}
+
 function taskStores(ctx: AppContext): TaskStore[] {
   const stores: TaskStore[] = [];
   const seen = new Set<string>();
@@ -695,6 +708,7 @@ function summarizeFrom(ctx: AppContext, lookup: TaskLookup, taskId: string): Rec
     status: report?.outcome ?? stateStatus,
     ...(outcome ? { outcome } : {}),
     mode: typeof state.mode === "string" ? state.mode : typeof spec.mode === "string" ? spec.mode : undefined,
+    ...(typeof state.conversation_id === "string" ? { conversation_id: state.conversation_id } : {}),
     thinking: typeof state.thinking === "boolean" ? state.thinking : typeof spec.thinking === "boolean" ? spec.thinking : undefined,
     created_at: typeof spec.created_at === "string" ? spec.created_at : typeof state.created_at === "string" ? state.created_at : events[0]?.ts ?? null,
     event_count: events.length,
@@ -918,6 +932,50 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
+    // Chat conversations: one continuing session per workspace, persisted
+    // under its .daedalus home. Tasks and fast-path answers append turns;
+    // the Web renders the whole session and prompts carry its memory.
+    if (method === "POST" && url.pathname === "/conversations") {
+      void (async () => {
+        try {
+          const parsed = (await readJson(req)) ?? {};
+          const root = resolveAllowedRoot(ctx, parsed.root ?? url.searchParams.get("root") ?? ctx.session.workspaceRoot);
+          const conversation = conversationStoreFor(ctx, root).create(root);
+          sendJson(res, 201, { conversation });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/conversations") {
+      try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.session.workspaceRoot);
+        const conversations = conversationStoreFor(ctx, root).list();
+        sendJson(res, 200, { conversations, count: conversations.length, root });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    const conversationMatch = /^\/conversations\/([^/]+)$/.exec(url.pathname);
+    if (method === "GET" && conversationMatch?.[1] !== undefined) {
+      try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.session.workspaceRoot);
+        const conversation = conversationStoreFor(ctx, root).load(conversationMatch[1]);
+        if (!conversation) {
+          sendJson(res, 404, { error: "conversation_not_found", request_id: requestId });
+          return;
+        }
+        sendJson(res, 200, { conversation });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
     if (method === "GET" && url.pathname === "/tasks") {
       const tasks = allTaskIds(ctx).flatMap((id) => {
         const lookup = findTask(ctx, id);
@@ -971,6 +1029,43 @@ export function createApp(ctx: AppContext) {
           const children = parseChildren(parsed.children);
           const taskStore = new TaskStore(resolveDaedalusHome(ctx.settings.daedalusHome, repoPath));
 
+          // Chat conversation: this submission is one turn of a continuing
+          // session. The turns BEFORE this prompt become the prompt's
+          // memory (fast-path history / task prior-context); this prompt is
+          // appended as a user turn now, the reply appended when it lands.
+          const conversationId =
+            typeof parsed.conversation_id === "string" && parsed.conversation_id.trim()
+              ? parsed.conversation_id.trim()
+              : typeof parsed.conversationId === "string" && parsed.conversationId.trim()
+                ? parsed.conversationId.trim()
+                : undefined;
+          const conversationStore = conversationId ? conversationStoreFor(ctx, repoPath) : undefined;
+          const priorTurns: ConversationTurn[] =
+            conversationStore && conversationId ? (conversationStore.load(conversationId)?.turns ?? []) : [];
+          if (conversationStore && conversationId) {
+            conversationStore.append(repoPath, conversationId, {
+              role: "user",
+              text: goal,
+              task_id: taskId,
+              mode,
+              ts: new Date().toISOString(),
+            });
+          }
+          const appendAssistantTurn = (text: string): void => {
+            if (!conversationStore || !conversationId) return;
+            try {
+              conversationStore.append(repoPath, conversationId, {
+                role: "assistant",
+                text,
+                task_id: taskId,
+                mode,
+                ts: new Date().toISOString(),
+              });
+            } catch (error) {
+              ctx.log.error("conversation append failed", { task_id: taskId, error: String(error) });
+            }
+          };
+
           // Direct answers (the Crush/Cline message pattern): casual
           // conversation and pure questions go straight to the model and the
           // reply is the result — no manufactured plan, no tool loop, no
@@ -992,6 +1087,7 @@ export function createApp(ctx: AppContext) {
               ...(model ? { model } : {}),
               ...(poolModels.length ? { models: poolModels } : {}),
               ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
+              ...(conversationId ? { conversation_id: conversationId } : {}),
               attachments,
               created_at: new Date().toISOString(),
             };
@@ -1016,6 +1112,8 @@ export function createApp(ctx: AppContext) {
               intent,
               thinking,
               selection: { providerId, model, poolModels },
+              ...(priorTurns.length > 0 ? { history: historyMessages(priorTurns) } : {}),
+              onReply: (text) => appendAssistantTurn(text),
             });
             sendJson(res, 201, task);
             return;
@@ -1053,6 +1151,7 @@ export function createApp(ctx: AppContext) {
             ...(model ? { model } : {}),
             ...(poolModels.length ? { models: poolModels } : {}),
             ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
+            ...(conversationId ? { conversation_id: conversationId } : {}),
             attachments,
             ...(children.length ? { children } : {}),
             ...(isolation ? { isolation } : {}),
@@ -1067,6 +1166,7 @@ export function createApp(ctx: AppContext) {
           ctx.log.info("task created", { task_id: taskId, request_id: requestId, repo_path: repoPath, mode });
 
           const goalText = [goal, ...constraints.map((constraint) => `constraint: ${constraint}`), ...doneCriteria.map((criterion) => `done: ${criterion}`)].join("\n");
+          const priorContext = priorContextSection(priorTurns);
           runner
             .run({
               goal: goalText,
@@ -1082,9 +1182,17 @@ export function createApp(ctx: AppContext) {
               ...(modelStrategy ? { modelStrategy } : {}),
               ...(children.length ? { children } : {}),
               ...(typeof parsed.plan_task_id === "string" && parsed.plan_task_id ? { planTaskId: parsed.plan_task_id } : {}),
+              ...(priorContext ? { priorContext } : {}),
+              ...(conversationId ? { conversationId } : {}),
             })
-            .then((result) => ctx.log.info("task finished", { task_id: taskId, outcome: result.outcome }))
-            .catch((error: unknown) => ctx.log.error("task run error", { task_id: taskId, error: String(error) }))
+            .then((result) => {
+              ctx.log.info("task finished", { task_id: taskId, outcome: result.outcome });
+              appendAssistantTurn(taskSummaryText({ outcome: result.outcome, goal, evidence: result.report?.evidence }));
+            })
+            .catch((error: unknown) => {
+              ctx.log.error("task run error", { task_id: taskId, error: String(error) });
+              appendAssistantTurn(taskSummaryText({ outcome: "failed", goal, evidence: [String(error)] }));
+            })
             .finally(() => ctx.activeRunners.delete(taskId));
 
           sendJson(res, 201, task);

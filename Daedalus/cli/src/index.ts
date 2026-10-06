@@ -1018,6 +1018,7 @@ export async function runInteractiveChat(options: {
           ...(session.providerId ? { providerId: session.providerId } : {}),
           ...(session.model ? { model: session.model } : {}),
           ...(session.models.length > 1 ? { models: session.models, modelStrategy: session.modelStrategy } : {}),
+          ...(session.priorContext() ? { priorContext: session.priorContext() } : {}),
           onEvent: (event: Event) => {
             currentTaskId = event.task_id;
             session.observeEvent(event);
@@ -1043,6 +1044,7 @@ export async function runInteractiveChat(options: {
           },
         });
         session.setStatus(result.outcome);
+        session.recordTaskExchange(handled.text, `Task ${result.outcome}: ${handled.text}${result.report.evidence[0] ? ` — ${result.report.evidence[0]}` : ''}`);
         applyExtensionStatus(session, runner.extensionStatus);
         session.setPlan(result.state.steps.map((step, index) => `${index + 1}. [${step.status}] ${step.intent}`).join("\n"));
         session.addSystemLine(`Outcome: ${result.outcome} · events ${result.events.length} · files changed ${result.report.metrics.files_changed ?? 0}`);

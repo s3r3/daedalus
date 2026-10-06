@@ -38,6 +38,25 @@ export type TaskSummary = {
   updated_at: string | null
   running: boolean
   store_root?: string
+  /** Chat conversation this task belongs to, when created from the Web chat. */
+  conversation_id?: string
+}
+
+/** One recorded chat turn; tasks append a user turn on submit and an assistant summary on completion. */
+export type ConversationTurn = {
+  role: 'user' | 'assistant'
+  text: string
+  task_id?: string
+  mode?: string
+  ts: string
+}
+
+/** A continuing chat session for one workspace, persisted server-side. */
+export type Conversation = {
+  id: string
+  root: string
+  created_at: string
+  turns: ConversationTurn[]
 }
 
 export type TaskSnapshot = {

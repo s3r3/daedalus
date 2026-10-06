@@ -5,6 +5,7 @@ import { Button } from '../ui/button'
 import { Separator } from '../ui/separator'
 import { api } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
+import { saveActiveConversationId } from '../../state/prefs'
 import { latestContextPercent, pendingApprovals, pendingQuestions, taskStatus } from '../../state/selectors'
 import { useTaskEvents } from '../../state/hooks'
 import { useTheme } from '../../theme/theme'
@@ -227,6 +228,21 @@ async function selectTask(taskId: string): Promise<void> {
     if (attachments.status === 'fulfilled') store.setTaskAttachments(attachments.value.attachments)
   } catch (error) {
     store.setError(error instanceof Error ? error.message : String(error))
+  }
+  // A task created inside a chat conversation opens that conversation, so
+  // picking it from the list lands in its session instead of stranding the
+  // user on the task's events alone.
+  const summary = store.tasks.find((task) => task.id === taskId)
+  const conversationId = summary?.conversation_id
+  const root = summary?.repo_path ?? store.workspace.root
+  if (conversationId && root) {
+    try {
+      const { conversation } = await api.getConversation(root, conversationId)
+      store.setConversation(conversation)
+      saveActiveConversationId(root, conversation.id)
+    } catch {
+      /* the task view alone remains usable */
+    }
   }
 }
 
