@@ -1,10 +1,13 @@
-import { useEffect, useMemo, useRef } from 'react'
-import { ShieldAlert } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { ArrowDown, ShieldAlert, Square } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { Button } from '../ui/button'
 import { EmptyState, Panel } from '../common/panel'
 import { Spinner } from '../common/spinner'
+import { api } from '../../api/client'
 import { useActiveTaskId, useTaskEvents } from '../../state/hooks'
 import { useDaedalusStore } from '../../state/taskStore'
+import { CHAT_HEIGHT, loadChatHeight, saveChatHeight } from '../../state/prefs'
 import { chatTranscript, pendingApprovals, taskStatus, type ChatEntry } from '../../state/selectors'
 import { STATUS_TONE, type Tone } from './status-tone'
 
@@ -13,7 +16,8 @@ import { STATUS_TONE, type Tone } from './status-tone'
  * tool calls with their short results, and status lines — the same recorded
  * event log the CLI prints, rendered next to Diff/Attachments so a running
  * task reads like a conversation instead of a raw timeline. Facts come from
- * `chatTranscript()`; this panel owns only scroll behaviour.
+ * `chatTranscript()`; this panel owns only scroll behaviour, its (user-sized)
+ * height, and the Stop control for the run it is showing.
  */
 export function ChatPanel() {
   const events = useTaskEvents()
@@ -22,14 +26,29 @@ export function ChatPanel() {
   const entries = useMemo(() => chatTranscript(events, thinking), [events, thinking])
   const pending = useMemo(() => pendingApprovals(events), [events])
   const status = taskStatus(events, pending.length)
+  const running = status === 'running' || status === 'awaiting-approval'
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const pinnedRef = useRef(true)
+  const [pinned, setPinned] = useState(true)
+  const [stopping, setStopping] = useState(false)
+
+  // The panel's height is the user's, not the content's: dragged once,
+  // persisted, restored. The column below simply flows underneath.
+  const [height, setHeight] = useState<number>(() => loadChatHeight())
+  const heightRef = useRef(height)
+  heightRef.current = height
 
   // A newly selected task starts pinned to its newest entry.
   useEffect(() => {
     pinnedRef.current = true
+    setPinned(true)
   }, [taskId])
+
+  // A fresh run (or a finished one) clears any stale "stopping…" label.
+  useEffect(() => {
+    if (!running) setStopping(false)
+  }, [running, taskId])
 
   // Follow the tail only while the reader is at the bottom; scrolling up to
   // re-read history is never yanked back by incoming events.
@@ -41,7 +60,59 @@ export function ChatPanel() {
   const onScroll = (): void => {
     const el = scrollRef.current
     if (!el) return
-    pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+    pinnedRef.current = atBottom
+    setPinned(atBottom)
+  }
+
+  const jumpToLatest = (): void => {
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+    pinnedRef.current = true
+    setPinned(true)
+  }
+
+  const stop = async (): Promise<void> => {
+    if (!taskId || stopping) return
+    setStopping(true)
+    try {
+      await api.cancelTask(taskId)
+      // The terminal TASK_COMPLETED lands within one poll cycle and flips
+      // `running` off, which clears this label via the effect above.
+    } catch {
+      setStopping(false)
+    }
+  }
+
+  const clampHeight = (value: number): number => Math.min(CHAT_HEIGHT.max, Math.max(CHAT_HEIGHT.min, Math.round(value)))
+
+  const startResize = (event: PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    const startY = event.clientY
+    const startHeight = heightRef.current
+    const onMove = (move: globalThis.PointerEvent): void => {
+      setHeight(clampHeight(startHeight + move.clientY - startY))
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      saveChatHeight(heightRef.current)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp, { once: true })
+  }
+
+  const onResizeKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    const step = event.shiftKey ? 48 : 16
+    let next: number | undefined
+    if (event.key === 'ArrowDown') next = heightRef.current + step
+    else if (event.key === 'ArrowUp') next = heightRef.current - step
+    else if (event.key === 'Home') next = CHAT_HEIGHT.min
+    else if (event.key === 'End') next = CHAT_HEIGHT.max
+    if (next === undefined) return
+    event.preventDefault()
+    const clamped = clampHeight(next)
+    setHeight(clamped)
+    saveChatHeight(clamped)
   }
 
   return (
@@ -52,6 +123,20 @@ export function ChatPanel() {
       bodyClassName="min-h-0"
       action={
         <span className="flex items-center gap-1">
+          {running && taskId ? (
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              onClick={() => void stop()}
+              disabled={stopping}
+              data-testid="chat-stop"
+              aria-label={`stop task ${taskId}`}
+            >
+              <Square className="fill-current" />
+              {stopping ? 'stopping…' : 'stop'}
+            </Button>
+          ) : null}
           <Badge tone="neutral">{entries.length}</Badge>
           <Badge tone={STATUS_TONE[status]} data-testid="chat-status">
             {status}
@@ -62,17 +147,53 @@ export function ChatPanel() {
       {!taskId || entries.length === 0 ? (
         <EmptyState title="No conversation yet" hint="Run a task to see the conversation here." />
       ) : (
-        <div ref={scrollRef} onScroll={onScroll} className="max-h-[320px] overflow-y-auto pr-1" data-testid="chat-scroll">
-          <ol className="flex flex-col gap-1.5" data-testid="chat-entries">
-            {entries.map((entry) => (
-              <ChatRow key={entry.seq} entry={entry} />
-            ))}
-            {status === 'running' ? (
-              <li className="flex items-center gap-1.5 px-1 py-0.5 text-[11px] text-muted" data-testid="chat-working">
-                <Spinner label="agent working" /> agent is working…
-              </li>
-            ) : null}
-          </ol>
+        <div className="relative">
+          <div
+            ref={scrollRef}
+            onScroll={onScroll}
+            className="overflow-y-auto pr-1"
+            style={{ height: `${height}px` }}
+            data-testid="chat-scroll"
+          >
+            <ol className="flex flex-col gap-1.5" data-testid="chat-entries">
+              {entries.map((entry) => (
+                <ChatRow key={entry.seq} entry={entry} />
+              ))}
+              {status === 'running' ? (
+                <li className="flex items-center gap-1.5 px-1 py-0.5 text-[11px] text-muted" data-testid="chat-working">
+                  <Spinner label="agent working" /> agent is working…
+                </li>
+              ) : null}
+            </ol>
+          </div>
+
+          {!pinned ? (
+            <button
+              type="button"
+              onClick={jumpToLatest}
+              data-testid="chat-jump-latest"
+              className="absolute right-2 bottom-2 inline-flex items-center gap-1 rounded-full border border-line bg-surface px-2 py-1 text-[10px] font-semibold text-foreground shadow hover:border-primary"
+            >
+              <ArrowDown className="size-3" /> jump to latest
+            </button>
+          ) : null}
+
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="resize chat panel"
+            aria-valuemin={CHAT_HEIGHT.min}
+            aria-valuemax={CHAT_HEIGHT.max}
+            aria-valuenow={height}
+            tabIndex={0}
+            data-testid="chat-resize-handle"
+            onPointerDown={startResize}
+            onKeyDown={onResizeKeyDown}
+            className="group flex h-3 cursor-ns-resize touch-none items-center justify-center border-t border-transparent hover:border-line focus:border-primary focus:outline-none"
+            title="Drag to resize the chat panel (arrow keys work too)"
+          >
+            <span className="h-0.5 w-10 rounded bg-line group-hover:bg-primary" />
+          </div>
         </div>
       )}
 

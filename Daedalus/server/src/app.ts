@@ -27,7 +27,7 @@ import {
   seedProviderFromSettings,
   unstagedDiff,
   workspaceAgentsDir,
-  workspaceSkillsDir,
+  resolveSkillSearchDirs,
   type AgentMode,
   type Attachment,
   type Event,
@@ -35,8 +35,10 @@ import {
   type ModelStrategy,
   type PermissionKey,
   type Settings,
+  type SkillOrigin,
 } from "@daedalus/core";
 import { collectRoots, listDirectory, buildTree, resolveInside, MAX_FILE_BYTES } from "./workspace.ts";
+import { classifyWebIntent, executeFastPath } from "./fast-path.ts";
 import { UPLOAD_LIMITS, extractZipEntries, guessMimeType, parseMultipart, sanitizeRelativePath, type UploadPart } from "./uploads.ts";
 
 /**
@@ -56,7 +58,7 @@ export type SessionState = {
 export type ExtensionStatus = {
   root: string;
   mcp: Array<{ name: string; connected: boolean; toolCount: number; error?: string }>;
-  skills: Array<{ name: string; description: string }>;
+  skills: Array<{ name: string; description: string; origin?: SkillOrigin }>;
   agents: Array<{ name: string; description: string; model?: string; mode?: string; tools?: string[] }>;
   lsp: Array<{ name: string; extensions: string[]; configured: boolean; running?: boolean; error?: string }>;
   problems: string[];
@@ -711,7 +713,7 @@ async function extensionStatus(ctx: AppContext, rootValue: unknown): Promise<Ext
 
   const [mcpConfig, skillRegistry, agentRegistry, lspConfig] = await Promise.all([
     loadMcpConfig(root),
-    loadSkills([workspaceSkillsDir(root)]),
+    loadSkills(resolveSkillSearchDirs(root)),
     loadAgents([workspaceAgentsDir(root)]),
     loadLspConfig(root),
   ]);
@@ -737,7 +739,7 @@ async function extensionStatus(ctx: AppContext, rootValue: unknown): Promise<Ext
   const value: ExtensionStatus = {
     root,
     mcp,
-    skills: skillRegistry.list().map((skill) => ({ name: skill.name, description: skill.description })),
+    skills: skillRegistry.list().map((skill) => ({ name: skill.name, description: skill.description, origin: skill.origin })),
     agents: agentRegistry.list().map((agent) => ({
       name: agent.name,
       description: agent.description,
@@ -950,6 +952,56 @@ export function createApp(ctx: AppContext) {
           const children = parseChildren(parsed.children);
           const taskStore = new TaskStore(resolveDaedalusHome(ctx.settings.daedalusHome, repoPath));
 
+          // Direct answers (the Crush/Cline message pattern): casual
+          // conversation and pure questions go straight to the model and the
+          // reply is the result — no manufactured plan, no tool loop, no
+          // validation. Modes still govern everything classified as a task;
+          // attachments/children/worktrees always take the task path.
+          const intent = attachments.length || children.length || isolation ? "task" : classifyWebIntent(goal);
+          if (intent !== "task") {
+            const task = {
+              id: taskId,
+              goal,
+              repo_path: repoPath,
+              constraints,
+              done_criteria: doneCriteria,
+              mode,
+              auto_approve: autoApprove,
+              thinking,
+              intent,
+              ...(providerId ? { provider_id: providerId } : {}),
+              ...(model ? { model } : {}),
+              ...(poolModels.length ? { models: poolModels } : {}),
+              ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
+              attachments,
+              created_at: new Date().toISOString(),
+            };
+            taskStore.saveState(taskId, {
+              ...task,
+              plan: { id: `${taskId}-plan`, task_id: taskId, steps: [], version: 0, status: "draft" },
+              steps: [],
+              status: "running",
+            });
+            emitEvent({ bus: ctx.bus, store: taskStore }, taskId, undefined, "TASK_STARTED", {
+              spec: { id: taskId, goal, mode, repo_path: repoPath, created_at: task.created_at },
+              intent,
+            });
+            ctx.log.info("fast path task created", { task_id: taskId, request_id: requestId, repo_path: repoPath, mode, intent });
+            executeFastPath({
+              ctx,
+              store: taskStore,
+              taskId,
+              goal,
+              mode,
+              repoPath,
+              intent,
+              thinking,
+              selection: { providerId, model, poolModels },
+            });
+            sendJson(res, 201, task);
+            return;
+          }
+
           const runner = new TaskRunner({
             workspaceRoot: repoPath,
             approvalPolicy: autoApprove ? "auto" : "ask",
@@ -1113,7 +1165,11 @@ export function createApp(ctx: AppContext) {
       const lookup = findTask(ctx, taskId);
       (lookup?.store ?? ctx.store).requestCancel(taskId);
       runner?.cancel(taskId);
-      sendJson(res, 200, { cancelled: runner !== undefined, task_id: taskId });
+      // `cancel_requested` is the honest half of this response: the marker is
+      // always recorded and any polling loop (this process or a CLI one)
+      // stops at its next checkpoint. `cancelled` only claims an in-process
+      // runner was signalled directly.
+      sendJson(res, 200, { cancelled: runner !== undefined, cancel_requested: true, task_id: taskId });
       return;
     }
 

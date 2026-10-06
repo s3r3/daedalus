@@ -48,9 +48,14 @@ export {
 } from './review.ts';
 export {
   CONVERSATIONAL_SYSTEM_PROMPT,
+  QUESTION_SYSTEM_PROMPT,
   answerConversational,
+  answerQuestion,
   classifyChatIntent,
   conversationalFallbackReply,
+  gatherWorkspaceContext,
+  questionFallbackReply,
+  type AnswerQuestionOptions,
   type ChatIntent,
 } from './conversation.ts';
 export { handleObservation } from './observation.ts';

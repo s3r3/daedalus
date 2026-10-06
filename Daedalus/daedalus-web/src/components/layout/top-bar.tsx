@@ -189,9 +189,9 @@ export function TopBar() {
           refresh
         </Button>
 
-        {taskId ? (
-          <Button variant="ghost" size="sm" onClick={() => void cancelTask()}>
-            cancel
+        {taskId && (status === 'running' || status === 'awaiting-approval') ? (
+          <Button variant="danger" size="sm" onClick={() => void cancelTask()} data-testid="topbar-stop" aria-label="stop the running task">
+            ■ stop
           </Button>
         ) : null}
 

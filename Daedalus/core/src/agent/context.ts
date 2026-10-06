@@ -3,7 +3,7 @@ import { resolve, sep } from 'node:path';
 import type { ContentBlock, Message, ToolDefinition } from '../providers/llm/types.ts';
 import type { Attachment, TaskState } from '../contracts.ts';
 import { buildPrompt, estimateTokens, systemMessage, userMessage } from '../providers/index.ts';
-import type { SkillInfo } from '../skills/index.ts';
+import { formatSkillOrigin, type SkillInfo } from '../skills/index.ts';
 import type { ContextManager, Observation } from './types.ts';
 
 export type ContextManagerOptions = {
@@ -80,7 +80,7 @@ export class DefaultContextManager implements ContextManager {
         ...(this.#skills.length
           ? [{
               id: 'skills',
-              content: `Available skills (playbooks stored on disk; call the read_skill tool with the skill name to load its full instructions before following it):\n${this.#skills.map((skill) => `- ${skill.name}: ${skill.description}`).join('\n')}`,
+              content: `Available skills (playbooks stored on disk; call the read_skill tool with the skill name to load its full instructions before following it):\n${this.#skills.map((skill) => `- ${skill.name}: ${skill.description} (${formatSkillOrigin(skill.origin)})`).join('\n')}`,
             }]
           : []),
         ...(this.#rules
