@@ -8,14 +8,38 @@ export type ToolResult = { call_id: string; status: ToolResultStatus; output: st
 export type ValidationCheck = { name: string; cmd: string; status: 'pass' | 'fail' | 'error' | 'skipped'; exit_code: number | null; summary: string; diagnostics: Array<{ file?: string; line?: number; message: string }>; source?: 'profile' | 'default'; required?: boolean };
 export type ValidationResult = { checks: ValidationCheck[]; source?: 'profile' | 'default'; warning?: string };
 export type RecoveryAction = { reason: string; strategy: 'retry' | 'fix' | 'replan' | 'abort'; attempt: number; limits: Record<string, number> };
-export type FinalReport = { task_id: string; outcome: 'success' | 'partial' | 'failed'; diff: string; evidence: string[]; metrics: Record<string, number>; title?: string; rules_files?: string[]; validation_source?: 'profile' | 'default'; worktree?: WorktreeReport };
+export type FinalReport = { task_id: string; outcome: 'success' | 'partial' | 'failed'; diff: string; evidence: string[]; metrics: Record<string, number>; title?: string; rules_files?: string[]; validation_source?: 'profile' | 'default'; worktree?: WorktreeReport; review?: ReviewGateReport };
+/** Strong-model review gate verdict recorded on the final report (tailor suite). */
+export type ReviewGateReport = {
+  model: string;
+  author_model?: string;
+  blocking: boolean;
+  findings: Array<{ severity: 'high' | 'medium' | 'low'; file: string; line?: number; message: string }>;
+};
 export type TaskState = TaskSpec & { plan: Plan; steps: PlanStep[]; status: 'pending' | 'active' | 'done' | 'failed'; current_step_id?: string; last_observation?: string; last_error?: string; last_tool_call_id?: string; tool_result?: ToolResult; mode?: AgentMode; turns?: number };
-export const EVENT_TYPES = ['TASK_STARTED','PLAN_CREATED','THOUGHT','LOOP_WARNING','TOOL_CALL_STARTED','TOOL_CALL_FINISHED','FILE_CHANGED','COMMAND_STARTED','COMMAND_OUTPUT','COMMAND_FINISHED','VALIDATION_STARTED','VALIDATION_FAILED','VALIDATION_PASSED','RECOVERY_STARTED','REPLAN_CREATED','TASK_COMPLETED','MODEL_REQUEST_STARTED','MODEL_REQUEST_FINISHED','MODEL_REQUEST_FAILED','APPROVAL_REQUESTED','APPROVAL_DECIDED','MODE_CHANGED','SLASH_COMMAND_EXECUTED','PROVIDER_CHANGED','ATTACHMENT_ADDED','CHILD_TASK_STARTED','CHILD_TASK_FINISHED','HOOK_EXECUTED'] as const;
+export const EVENT_TYPES = ['TASK_STARTED','PLAN_CREATED','THOUGHT','LOOP_WARNING','TOOL_CALL_STARTED','TOOL_CALL_FINISHED','FILE_CHANGED','COMMAND_STARTED','COMMAND_OUTPUT','COMMAND_FINISHED','VALIDATION_STARTED','VALIDATION_FAILED','VALIDATION_PASSED','RECOVERY_STARTED','REPLAN_CREATED','TASK_COMPLETED','MODEL_REQUEST_STARTED','MODEL_REQUEST_FINISHED','MODEL_REQUEST_FAILED','APPROVAL_REQUESTED','APPROVAL_DECIDED','MODE_CHANGED','SLASH_COMMAND_EXECUTED','PROVIDER_CHANGED','REVIEW_COMPLETED','ATTACHMENT_ADDED','CHILD_TASK_STARTED','CHILD_TASK_FINISHED','HOOK_EXECUTED'] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 export type Event = { seq: number; task_id: string; turn_id?: string; type: EventType; payload: unknown; ts: string };
 
 export type AgentMode = 'ask' | 'manual' | 'auto' | 'plan' | 'orchestrator';
 export type ModelStrategy = 'failover' | 'round-robin';
+/**
+ * Capability tier of one model in a pool (tailor suite): the harness routes
+ * cheap phases to `fast`/`balanced` models and spends `strong` models on
+ * editing and repair turns. Unset models behave exactly as before (the
+ * router treats them as balanced for ordering).
+ */
+export type ModelTier = 'strong' | 'balanced' | 'fast';
+/** Model families the prompt dialect layer knows framing conventions for. */
+export type PromptFamily = 'claude' | 'gpt' | 'qwen' | 'llama' | 'gemini' | 'generic';
+/** Provider setting: an explicit family, or `auto` = detect from the model id. */
+export type PromptFamilySetting = PromptFamily | 'auto';
+/**
+ * Edit dialect for a provider's models (tailor suite): `native` keeps the
+ * function-call edit tools; `search_replace` adds the Aider-style
+ * SEARCH/REPLACE block tool (`edit_search_replace`) to the visible tools.
+ */
+export type EditFormat = 'native' | 'search_replace';
 /**
  * How tool calls are put on the wire: `native` function calling, the XML-ish
  * `text` protocol (Cline-style fallback for models that stall on native tool
@@ -50,6 +74,12 @@ export type ProviderConfig = {
   visionModels?: string[];
   /** Tool wire protocol for this provider's models; unset = settings/env default (`auto`). */
   toolProtocol?: ToolProtocol;
+  /** Capability tier per model id (tailor suite routing); unset models are treated as balanced. */
+  modelTiers?: Record<string, ModelTier>;
+  /** Prompt dialect family for this provider's models; unset/`auto` = detect from the model id. */
+  promptFamily?: PromptFamilySetting;
+  /** Edit dialect for this provider's models; unset = `native`. */
+  editFormat?: EditFormat;
 };
 
 export type ProviderConfigPublic = Omit<ProviderConfig, 'apiKey'> & { hasApiKey: boolean };
