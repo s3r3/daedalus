@@ -93,7 +93,7 @@ export function ApprovalCard() {
       data-testid="approval-card"
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      className="motion-approval-rise rounded-md border-2 border-warning bg-warning/10 px-3 py-2"
+      className="motion-approval-rise flex max-h-[80vh] flex-col rounded-md border-2 border-warning bg-warning/10 px-3 py-2"
     >
       <div className="flex flex-wrap items-center gap-1.5 text-warning">
         <ShieldAlert className="size-4" />
@@ -103,20 +103,25 @@ export function ApprovalCard() {
         {pending.length > 1 ? <Badge tone="warning">+{pending.length - 1} queued</Badge> : null}
       </div>
 
-      <p className="mt-1 text-[11px] text-muted" data-testid="approval-requester">
-        {fromChild
-          ? `requested by child task ${requester?.taskId} (child of ${requester?.parentTaskId})`
-          : `requested by task ${requester?.taskId ?? current.key.taskId}`}
-      </p>
+      {/* The preview scrolls inside the card; the header above and the action
+          row below stay put, so the buttons remain visible however large the
+          untruncated preview is. */}
+      <div className="min-h-0 overflow-y-auto" data-testid="approval-card-scroll">
+        <p className="mt-1 text-[11px] text-muted" data-testid="approval-requester">
+          {fromChild
+            ? `requested by child task ${requester?.taskId} (child of ${requester?.parentTaskId})`
+            : `requested by task ${requester?.taskId ?? current.key.taskId}`}
+        </p>
 
-      {preview ? <ApprovalPreviewView preview={preview} /> : null}
+        {preview ? <ApprovalPreviewView preview={preview} /> : null}
 
-      <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[11px]">
-        <dt className="text-muted">action</dt>
-        <dd className="text-foreground">{current.key.action}</dd>
-        <dt className="text-muted">target</dt>
-        <dd className="truncate text-foreground">{previewTarget(preview) ?? current.key.path ?? '—'}</dd>
-      </dl>
+        <dl className="mt-1.5 grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5 text-[11px]">
+          <dt className="text-muted">action</dt>
+          <dd className="text-foreground">{current.key.action}</dd>
+          <dt className="text-muted">target</dt>
+          <dd className="truncate text-foreground">{previewTarget(preview) ?? current.key.path ?? '—'}</dd>
+        </dl>
+      </div>
 
       {editing && preview?.kind === 'command' ? (
         <div className="mt-2 flex flex-col gap-1">
