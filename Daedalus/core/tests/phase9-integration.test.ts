@@ -205,7 +205,7 @@ describe('Phase 9 — LLM fault injection', () => {
     const cases: Array<{ name: string; provider: LLMProvider; marker: string }> = [
       { name: 'timeout', provider: { name: 'timeout', async chat() { throw new LLMTimeoutError('LLM request timed out'); }, async *stream() {} }, marker: 'max_errors' },
       { name: 'rate-limit', provider: { name: 'rate-limit', async chat() { throw new LLMRateLimitError('provider rate limited'); }, async *stream() {} }, marker: 'max_errors' },
-      { name: 'refusal', provider: { name: 'refusal', async chat() { throw new LLMContentPolicyError('provider refused'); }, async *stream() {} }, marker: 'max_errors' },
+      { name: 'refusal', provider: { name: 'refusal', async chat() { throw new LLMContentPolicyError('provider refused'); }, async *stream() {} }, marker: 'content_policy' },
       { name: 'malformed', provider: { name: 'malformed', async chat() { return { message: { role: 'assistant', content: 'unstructured prose' } }; }, async *stream() {} }, marker: 'invalid_action' },
     ];
 
@@ -215,9 +215,10 @@ describe('Phase 9 — LLM fault injection', () => {
       const { runner } = makeRunner({ workspace, home, provider: item.provider, maxIterations: 3, maxErrors: 1 });
       const result = await runner.run({ goal: `Fault case ${item.name}\ndone: never reached`, maxErrors: 1 });
       expect(result.state.status, item.name).toBe('failed');
-      expect(result.state.last_error, item.name).toContain(item.marker === 'invalid_action' ? 'invalid_action' : 'max_errors');
+      expect(result.state.last_error, item.name).toContain(item.marker);
       if (item.name !== 'malformed') {
         expect(result.events.some((event) => event.type === 'MODEL_REQUEST_FAILED'), item.name).toBe(true);
+        expect(result.report.evidence.some((line) => line.startsWith('model failure:')), item.name).toBe(true);
       }
       expect(result.report.outcome, item.name).toBe('failed');
     }

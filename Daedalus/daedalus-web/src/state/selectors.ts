@@ -51,6 +51,10 @@ export type ErrorEntry = {
   context?: string
 }
 
+function completionDetail(completed: { reason: string; error_summary?: string; summary?: string } | undefined): string {
+  return completed?.error_summary ?? completed?.summary ?? completed?.reason ?? '';
+}
+
 export function filterTaskEvents(events: Event[], taskId: string | null): Event[] {
   if (!taskId) return []
   return events.filter((event) => event.task_id === taskId).sort((a, b) => a.seq - b.seq)
@@ -272,7 +276,7 @@ export function errors(events: Event[]): ErrorEntry[] {
     }
     const completed = payloadOf(event, 'TASK_COMPLETED')
     if (completed && completed.outcome !== 'success') {
-      entries.push({ seq: event.seq, ts: event.ts, type: 'task', message: `task ${completed.outcome}: ${completed.reason}` })
+      entries.push({ seq: event.seq, ts: event.ts, type: 'task', message: `task ${completed.outcome}: ${completionDetail(completed)}` })
     }
   }
   return entries
@@ -372,7 +376,7 @@ export function activity(events: Event[], thinking = true): ActivityEntry[] {
       }
       case 'TASK_COMPLETED': {
         const completed = payloadOf(event, 'TASK_COMPLETED')
-        push({ kind: 'completion', title: `task ${completed?.outcome ?? 'done'}`, detail: completed?.reason, status: completed?.outcome === 'success' ? 'ok' : 'error' })
+        push({ kind: 'completion', title: `task ${completed?.outcome ?? 'done'}`, detail: completionDetail(completed), status: completed?.outcome === 'success' ? 'ok' : 'error' })
         break
       }
       case 'MODEL_REQUEST_FAILED':
@@ -452,13 +456,15 @@ export function outcomeOf(events: Event[]): { outcome: string; reason: string } 
   const completed = [...events].reverse().find((event) => event.type === 'TASK_COMPLETED')
   if (!completed) return null
   const payload = payloadOf(completed, 'TASK_COMPLETED')
-  return { outcome: payload?.outcome ?? 'unknown', reason: payload?.reason ?? '' }
+  return { outcome: payload?.outcome ?? 'unknown', reason: completionDetail(payload) }
 }
 
 export function reportFromEvents(taskId: string, events: Event[], report: FinalReport | null | undefined): FinalReport | null {
   if (report) return report
   const completion = outcomeOf(events)
   if (!completion) return null
+  const completed = [...events].reverse().find((event) => event.type === 'TASK_COMPLETED')
+  const modelSummary = completed ? payloadOf(completed, 'TASK_COMPLETED')?.error_summary : undefined
   const { result } = validation(events)
   const changes = fileChanges(events)
   const calls = toolCalls(events)
@@ -467,6 +473,7 @@ export function reportFromEvents(taskId: string, events: Event[], report: FinalR
     outcome: completion.outcome === 'success' ? 'success' : completion.outcome === 'partial' ? 'partial' : 'failed',
     diff: changes.map((change) => change.patch).join(''),
     evidence: [
+      ...(modelSummary ? [`model failure: ${modelSummary}`] : []),
       ...(result?.checks.map((check) => `${check.name}: ${check.status} (${check.cmd})`) ?? []),
       ...changes.map((change) => `${change.operation} ${change.path} (+${change.added}/-${change.removed})`),
     ],
@@ -625,7 +632,7 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
           ...base,
           role: 'status',
           text: stopped ? 'task stopped' : `task ${completed?.outcome ?? 'done'}`,
-          detail: stopped ? undefined : completed?.reason,
+          detail: stopped ? undefined : completionDetail(completed),
           status: stopped ? 'warning' : completed?.outcome === 'success' ? 'ok' : completed?.outcome === 'partial' ? 'warning' : 'error',
         })
         break

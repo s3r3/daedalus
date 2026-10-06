@@ -6,6 +6,7 @@ import {
   LLMContentPolicyError,
   LLMFormatError,
   LLMRateLimitError,
+  LLMTimeoutError,
   ModelPoolProvider,
   TaskRunner,
   TaskStore,
@@ -88,6 +89,50 @@ describe('ModelPoolProvider', () => {
     await expect(pool.chat([{ role: 'user', content: 'one' }])).resolves.toMatchObject({ message: { content: 'done: m1' } });
     await expect(pool.chat([{ role: 'user', content: 'two' }])).resolves.toMatchObject({ message: { content: 'done: m2' } });
     expect(calls).toEqual(['m1', 'm2']);
+  });
+
+  test('cools down a timed-out model, skips it, and retries it after the cooldown', async () => {
+    let now = 0;
+    const calls: string[] = [];
+    const pool = new ModelPoolProvider({
+      models: ['slow-model', 'good-model'],
+      strategy: 'round-robin',
+      cooldownMs: 60_000,
+      now: () => now,
+      createProvider: (model) => fakeProvider(model, async () => {
+        calls.push(model);
+        if (model === 'slow-model') throw new LLMTimeoutError('LLM request timed out after 180000ms');
+        return response('done: good model');
+      }),
+    });
+
+    await expect(pool.chat([{ role: 'user', content: 'one' }])).resolves.toMatchObject({ message: { content: 'done: good model' } });
+    await expect(pool.chat([{ role: 'user', content: 'two' }])).resolves.toMatchObject({ message: { content: 'done: good model' } });
+    expect(calls).toEqual(['slow-model', 'good-model', 'good-model']);
+    expect(pool.lastAttemptedModels).toEqual(['good-model']);
+
+    now += 60_001;
+    await expect(pool.chat([{ role: 'user', content: 'three' }])).resolves.toMatchObject({ message: { content: 'done: good model' } });
+    expect(calls).toEqual(['slow-model', 'good-model', 'good-model', 'slow-model', 'good-model']);
+    expect(pool.lastAttemptedModels).toEqual(['slow-model', 'good-model']);
+  });
+
+  test('when every model is cooling down, only the earliest-expiring model is probed', async () => {
+    const calls: string[] = [];
+    const pool = new ModelPoolProvider({
+      models: ['a-model', 'b-model'],
+      cooldownMs: 60_000,
+      now: () => 0,
+      createProvider: (model) => fakeProvider(model, async () => {
+        calls.push(model);
+        throw new LLMTimeoutError(`timeout from ${model}`);
+      }),
+    });
+
+    await expect(pool.chat([{ role: 'user', content: 'one' }])).rejects.toThrow('timeout from b-model');
+    await expect(pool.chat([{ role: 'user', content: 'two' }])).rejects.toThrow('timeout from a-model');
+    expect(calls).toEqual(['a-model', 'b-model', 'a-model']);
+    expect(pool.lastAttemptedModels).toEqual(['a-model']);
   });
 
   test('failover remembers the last successful model for the next request', async () => {
@@ -197,6 +242,7 @@ describe('TaskRunner model pool wiring', () => {
     expect(result.outcome).toBe('success');
     expect(readFileSync(join(workspace, 'result.txt'), 'utf8')).toBe('written by second model\n');
     expect(seenModels).toEqual(['bad-model', 'good-model']);
+    expect(result.events.some((event) => event.type === 'MODEL_REQUEST_FAILED')).toBe(false);
     expect(result.events.some((event) => event.type === 'PROVIDER_CHANGED' && (event.payload as { to_model?: string }).to_model === 'good-model')).toBe(true);
   });
 });
