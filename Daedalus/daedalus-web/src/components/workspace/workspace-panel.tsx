@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, File as FileIcon, Folder, FolderOpen, ImagePlus, UploadCloud } from 'lucide-react'
+import { ChevronDown, ChevronRight, File as FileIcon, Folder, FolderOpen, ImagePlus, Pin, PinOff, UploadCloud } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -35,6 +35,7 @@ export function WorkspacePanel() {
   const [fileContent, setFileContent] = useState('')
   const [renameFrom, setRenameFrom] = useState('')
   const [renameTo, setRenameTo] = useState('')
+  const [pins, setPins] = useState<string[]>([])
   const [mutationStatus, setMutationStatus] = useState<string | null>(null)
   const [mutationError, setMutationError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -63,6 +64,39 @@ export function WorkspacePanel() {
   }, [setWorkspace])
 
   const root = workspace.root
+
+  // User pins (tailor suite): persisted server-side in .daedalus/pins.json
+  // and injected into every task's workspace overview. Loaded per root.
+  useEffect(() => {
+    if (!root) {
+      setPins([])
+      return
+    }
+    let cancelled = false
+    api
+      .pins(root)
+      .then((response) => {
+        if (!cancelled) setPins(response.pins)
+      })
+      .catch(() => {
+        if (!cancelled) setPins([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [root])
+
+  const togglePin = async (entry: WorkspaceEntry): Promise<void> => {
+    if (!root) return
+    const next = pins.includes(entry.path) ? pins.filter((pin) => pin !== entry.path) : [...pins, entry.path]
+    try {
+      const response = await api.savePins(root, next)
+      setPins(response.pins)
+      setMutationStatus(response.pins.includes(entry.path) ? `Pinned ${entry.path} — the agent sees it in every task overview.` : `Unpinned ${entry.path}.`)
+    } catch (error) {
+      setMutationError(error instanceof Error ? error.message : String(error))
+    }
+  }
 
   /**
    * Reading and applying a root are split so the fetch never touches state
@@ -364,8 +398,10 @@ export function WorkspacePanel() {
               children={children}
               loadingPath={loadingPath}
               selectedPath={openFilePath}
+              pins={pins}
               onToggle={toggle}
               onOpen={open}
+              onTogglePin={togglePin}
             />
           ))}
         </ul>
@@ -394,8 +430,10 @@ function TreeRow({
   children,
   loadingPath,
   selectedPath,
+  pins,
   onToggle,
   onOpen,
+  onTogglePin,
 }: {
   entry: WorkspaceEntry
   depth: number
@@ -403,28 +441,47 @@ function TreeRow({
   children: Record<string, WorkspaceEntry[]>
   loadingPath: string | null
   selectedPath: string | null
+  pins: string[]
   onToggle: (entry: WorkspaceEntry) => Promise<void>
   onOpen: (entry: WorkspaceEntry) => Promise<void>
+  onTogglePin: (entry: WorkspaceEntry) => Promise<void>
 }) {
   const isOpen = expanded.includes(entry.path)
+  const pinned = pins.includes(entry.path)
   const padding = { paddingLeft: `${depth * 12 + 4}px` }
+  const pinButton = (
+    <button
+      type="button"
+      onClick={() => void onTogglePin(entry)}
+      data-testid="file-tree-pin"
+      data-path={entry.path}
+      data-pinned={pinned ? 'true' : 'false'}
+      aria-label={pinned ? `unpin ${entry.path}` : `pin ${entry.path}`}
+      title={pinned ? 'Pinned: shown in every task overview (click to unpin)' : 'Pin: show in every task overview'}
+      className={`shrink-0 rounded p-0.5 hover:bg-surface ${pinned ? 'text-primary' : 'text-muted opacity-50 hover:opacity-100'}`}
+    >
+      {pinned ? <Pin className="size-3" /> : <PinOff className="size-3" />}
+    </button>
+  )
 
   if (!entry.isDirectory) {
     return (
       <li>
-        <button
-          type="button"
-          onClick={() => void onOpen(entry)}
-          data-testid="file-tree-item"
-          data-path={entry.path}
-          style={padding}
-          className={`flex w-full items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-surface ${
-            selectedPath === entry.path ? 'bg-surface text-primary' : 'text-foreground'
-          }`}
-        >
-          <FileIcon className="size-3 shrink-0 text-muted" />
-          <span className="truncate">{entry.name}</span>
-        </button>
+        <div className="flex w-full items-center" style={padding}>
+          <button
+            type="button"
+            onClick={() => void onOpen(entry)}
+            data-testid="file-tree-item"
+            data-path={entry.path}
+            className={`flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-0.5 text-left hover:bg-surface ${
+              selectedPath === entry.path ? 'bg-surface text-primary' : 'text-foreground'
+            }`}
+          >
+            <FileIcon className="size-3 shrink-0 text-muted" />
+            <span className="truncate">{entry.name}</span>
+          </button>
+          {pinButton}
+        </div>
       </li>
     )
   }
@@ -432,20 +489,22 @@ function TreeRow({
   const grandchildren = children[entry.path] ?? []
   return (
     <li>
-      <button
-        type="button"
-        onClick={() => void onToggle(entry)}
-        data-testid="file-tree-dir"
-        data-path={entry.path}
-        style={padding}
-        className="flex w-full items-center gap-1 rounded px-1 py-0.5 text-left text-foreground hover:bg-surface"
-        aria-expanded={isOpen}
-      >
-        {isOpen ? <ChevronDown className="size-3 shrink-0 text-muted" /> : <ChevronRight className="size-3 shrink-0 text-muted" />}
-        {isOpen ? <FolderOpen className="size-3 shrink-0 text-muted" /> : <Folder className="size-3 shrink-0 text-muted" />}
-        <span className="truncate">{entry.name}</span>
-        {loadingPath === entry.path ? <span className="text-[9px] text-muted">…</span> : null}
-      </button>
+      <div className="flex w-full items-center" style={padding}>
+        <button
+          type="button"
+          onClick={() => void onToggle(entry)}
+          data-testid="file-tree-dir"
+          data-path={entry.path}
+          className="flex min-w-0 flex-1 items-center gap-1 rounded px-1 py-0.5 text-left text-foreground hover:bg-surface"
+          aria-expanded={isOpen}
+        >
+          {isOpen ? <ChevronDown className="size-3 shrink-0 text-muted" /> : <ChevronRight className="size-3 shrink-0 text-muted" />}
+          {isOpen ? <FolderOpen className="size-3 shrink-0 text-muted" /> : <Folder className="size-3 shrink-0 text-muted" />}
+          <span className="truncate">{entry.name}</span>
+          {loadingPath === entry.path ? <span className="text-[9px] text-muted">…</span> : null}
+        </button>
+        {pinButton}
+      </div>
       {isOpen ? (
         <ul>
           {grandchildren.length === 0 && loadingPath !== entry.path ? (
@@ -462,8 +521,10 @@ function TreeRow({
               children={children}
               loadingPath={loadingPath}
               selectedPath={selectedPath}
+              pins={pins}
               onToggle={onToggle}
               onOpen={onOpen}
+              onTogglePin={onTogglePin}
             />
           ))}
         </ul>

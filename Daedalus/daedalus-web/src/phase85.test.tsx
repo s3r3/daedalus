@@ -59,6 +59,8 @@ const mocks = vi.hoisted(() => ({
   cancelTask: vi.fn(),
   approve: vi.fn(),
   roots: vi.fn(),
+  pins: vi.fn(),
+  savePins: vi.fn(),
   tree: vi.fn(),
   list: vi.fn(),
   file: vi.fn(),
@@ -97,6 +99,8 @@ function resetMocks(): void {
   mocks.taskAttachments.mockResolvedValue({ attachments: [], count: 0 })
   mocks.cancelTask.mockResolvedValue({ cancelled: true, task_id: 'task-1' })
   mocks.roots.mockResolvedValue({ roots: [{ path: '/workspace', name: 'workspace' }], cwd: '/workspace' })
+  mocks.pins.mockResolvedValue({ root: '/workspace', pins: [] })
+  mocks.savePins.mockResolvedValue({ root: '/workspace', pins: [] })
   mocks.tree.mockResolvedValue({ name: 'workspace', path: '.', isDirectory: true, children: [] })
   mocks.list.mockResolvedValue({ path: '.', items: [] })
   mocks.file.mockResolvedValue({ path: 'README.md', content: 'hello', size: 5 })

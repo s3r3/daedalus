@@ -2,10 +2,10 @@ import { join } from 'node:path';
 import type { EventBus } from '../events.ts';
 import { emitEvent } from '../events.ts';
 import type { TaskStore } from '../persistence.ts';
-import type { LLMProvider, Message } from '../providers/llm/types.ts';
+import type { LLMProvider, Message, ModelPhase } from '../providers/llm/types.ts';
 import { classifyLLMError, LLMAuthError, LLMContentPolicyError, type LLMErrorKind } from '../providers/llm/errors.ts';
-import { modelPoolFailureReason } from '../providers/llm/model-pool.ts';
-import type { Event, Plan, PlanStep, TaskSpec, TaskState, ToolCall, ToolResult } from '../contracts.ts';
+import { asModelController, modelPoolFailureReason } from '../providers/llm/model-pool.ts';
+import type { Event, ModelTier, Plan, PlanStep, TaskSpec, TaskState, ToolCall, ToolResult } from '../contracts.ts';
 import type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor } from './types.ts';
 import type { Validator } from '../validation/index.ts';
 import { completionGate, normalizeError, validationFailed } from '../validation/index.ts';
@@ -54,6 +54,18 @@ export type AgentLoopOptions = {
    * 50k chars / 2k lines, spill on — see agent/tool-output.ts.
    */
   toolOutput?: Partial<ToolOutputLimits>;
+  /**
+   * Capability tiers per model (tailor suite): stamped onto request events
+   * (`tier`) and used for phase routing inside a model pool.
+   */
+  modelTiers?: Record<string, ModelTier>;
+  /**
+   * Quality escalation (tailor suite): when validation fails and a weaker
+   * pool model is driving, pin the rest of the task to the pool's strongest
+   * model (at most once per task). Default on; DAEDALUS_QUALITY_ESCALATION=off
+   * disables. No-op without a multi-model pool.
+   */
+  qualityEscalation?: boolean;
 };
 
 
@@ -86,10 +98,16 @@ export class AgentLoop {
   readonly #contextLimitTokens: number;
   readonly #condense: boolean;
   readonly #toolOutputLimits: ToolOutputLimits;
+  readonly #modelTiers: Record<string, ModelTier>;
+  readonly #qualityEscalation: boolean;
   readonly #spillCounters = new Map<string, number>();
   readonly #loopGuards = new Map<string, LoopGuard>();
   readonly #pendingGuidance = new Map<string, string>();
   readonly #modelFailures = new Map<string, ModelFailure>();
+  /** Tasks that have executed at least one mutating tool (phase routing: edit). */
+  readonly #taskMutated = new Set<string>();
+  /** Tasks whose model was already escalated once (escalation cap). */
+  readonly #escalatedTasks = new Set<string>();
   #cancelled = new Set<string>();
   readonly #invalidActions = new Map<string, number>();
 
@@ -115,6 +133,8 @@ export class AgentLoop {
     this.#contextLimitTokens = options.contextLimitTokens && options.contextLimitTokens > 0 ? options.contextLimitTokens : 128_000;
     this.#condense = options.condense !== false;
     this.#toolOutputLimits = resolveToolOutputLimits(options.toolOutput);
+    this.#modelTiers = options.modelTiers ?? {};
+    this.#qualityEscalation = options.qualityEscalation !== false;
   }
 
   get modeController(): ModeController {
@@ -134,6 +154,8 @@ export class AgentLoop {
       this.#pendingGuidance.delete(spec.id);
       this.#modelFailures.delete(spec.id);
       this.#spillCounters.delete(spec.id);
+      this.#taskMutated.delete(spec.id);
+      this.#escalatedTasks.delete(spec.id);
     }
   }
 
@@ -182,6 +204,10 @@ export class AgentLoop {
               validationFailures++;
               await this.#emit(state.id, undefined, 'RECOVERY_STARTED', { reason: error.category, strategy: 'retry', attempt: validationFailures });
               if (validationFailures < validationRecoveryLimit) {
+                // Quality escalation (tailor suite): a repair attempt is the
+                // most expensive turn to waste on a weak model — if the pool
+                // has a stronger one, pin the rest of the task to it.
+                await this.#maybeEscalateQuality(state, validationFailures);
                 const summary = failing.map((check) => `${check.name}: ${check.summary}`).join('; ');
                 const steps = reopenLastCompletedStep(state.steps);
                 state = {
@@ -262,11 +288,15 @@ export class AgentLoop {
       messages = [...messages, { role: 'user', content: guidance }];
     }
     const meter = contextMeter(messages, this.#contextLimitTokens);
-    await this.#emit(state.id, turnId, 'MODEL_REQUEST_STARTED', { provider: this.#provider.name, messages: messages.length, tools: visibleTools?.length ?? 0, mode: turnMode, ...meter });
+    // Phase hint (tailor suite): the pool spends strong models on edit and
+    // repair turns and fast/balanced ones on exploration. Stamped onto the
+    // request events too, so the Web can show which tier served a turn.
+    const phase = this.#phaseFor(state);
+    await this.#emit(state.id, turnId, 'MODEL_REQUEST_STARTED', { provider: this.#provider.name, messages: messages.length, tools: visibleTools?.length ?? 0, mode: turnMode, phase, ...meter });
     let response;
     try {
-      response = await this.#provider.chat(messages, visibleTools, this.#chatOptions);
-      await this.#emit(state.id, turnId, 'MODEL_REQUEST_FINISHED', { message: response.message, usage: response.usage, finish_reason: response.finish_reason, ...meter });
+      response = await this.#provider.chat(messages, visibleTools, { ...this.#chatOptions, phase });
+      await this.#emit(state.id, turnId, 'MODEL_REQUEST_FINISHED', { message: response.message, usage: response.usage, finish_reason: response.finish_reason, phase, ...this.#servedModelFields(state), ...meter });
       await this.#emitThought(state.id, turnId, response.message);
       this.#modelFailures.delete(state.id);
     } catch (error) {
@@ -421,6 +451,9 @@ export class AgentLoop {
               meta: { tool: call.tool, mode: turnMode, reason: 'repeat_suppressed', repeats: guardCall.repeats, mutating: false, ...(guardCall.repeatKind ? { repeat_kind: guardCall.repeatKind } : {}) },
             }
           : await this.#executeTool(call);
+      // Phase routing bookkeeping: once a task has actually mutated the
+      // workspace, its later turns are edit turns and earn strong models.
+      if (result.meta?.mutating === true) this.#taskMutated.add(state.id);
       // Shape the result before it enters the model context (the single
       // choke point every tool's output passes through): over-cap output is
       // kept head+tail with the full text spilled to the task store, so a
@@ -470,6 +503,59 @@ export class AgentLoop {
       this.#loopGuards.set(state.id, guard);
     }
     return guard;
+  }
+
+  /**
+   * Tailor-suite phase for the next request: a turn answering a failed
+   * validation is a repair turn; once the task has mutated the workspace its
+   * turns are edit turns; everything earlier is exploration. Q&A never
+   * reaches the loop (the fast paths answer it), so `question` is stamped
+   * only by those direct calls.
+   */
+  #phaseFor(state: TaskState): ModelPhase {
+    const observation = state.last_observation ?? '';
+    if ((state.last_error ?? '').startsWith('validation_failed') || observation.startsWith('Validation failed')) return 'repair';
+    if (this.#taskMutated.has(state.id)) return 'edit';
+    return 'explore';
+  }
+
+  /** Additive `model`/`tier` fields naming who served a finished request. */
+  #servedModelFields(state: TaskState): { model?: string; tier?: ModelTier } {
+    const modelsTried = providerAttemptedModels(this.#provider, state);
+    const model = providerAttemptedModel(this.#provider, state, modelsTried);
+    if (!model) return {};
+    const tier = this.#modelTiers[model];
+    return { model, ...(tier ? { tier } : {}) };
+  }
+
+  /**
+   * Quality escalation (tailor suite): after a real validation failure, if
+   * the driving provider is a multi-model pool whose current model is not
+   * its strongest, pin the remainder of the task to the strongest model —
+   * at most once per task, fail-open (a broken controller never fails the
+   * repair it was meant to improve).
+   */
+  async #maybeEscalateQuality(state: TaskState, attempt: number): Promise<void> {
+    if (!this.#qualityEscalation || this.#escalatedTasks.has(state.id)) return;
+    try {
+      const controller = asModelController(this.#provider);
+      if (!controller || controller.poolModels.length < 2) return;
+      const strongest = controller.strongestModel();
+      if (!strongest) return;
+      const current = controller.currentModel();
+      if (current === strongest) return;
+      if (!controller.pinModel(strongest)) return;
+      this.#escalatedTasks.add(state.id);
+      await this.#emit(state.id, undefined, 'PROVIDER_CHANGED', {
+        reason: 'quality_escalation',
+        from_model: current,
+        to_model: strongest,
+        model: strongest,
+        attempt,
+      });
+    } catch {
+      // Escalation is an optimization, never a failure mode.
+    }
   }
 
   /**
