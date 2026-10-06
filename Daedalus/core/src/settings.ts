@@ -1,8 +1,11 @@
 import { resolve } from "node:path";
 import { normalizeModelList, parseModelStrategy, type ModelStrategy } from "./providers/llm/model-pool.ts";
+import { parseToolProtocol, type ToolProtocol } from "./providers/llm/text-protocol.ts";
+
+export type { ToolProtocol };
 
 export type Settings = {
-  llm: { baseUrl: string; apiKey: string; model: string; models: string[]; modelStrategy: ModelStrategy; timeoutMs: number | null; helperModel: string };
+  llm: { baseUrl: string; apiKey: string; model: string; models: string[]; modelStrategy: ModelStrategy; timeoutMs: number | null; helperModel: string; toolProtocol: ToolProtocol };
   server: { host: string; port: number };
   session: { thinking: boolean };
   /** Run the post-edit syntax/LSP guard on files the agent writes (DAEDALUS_EDIT_GUARD). */
@@ -36,6 +39,7 @@ export function loadSettings(env: Env = process.env): Settings {
       modelStrategy: parseModelStrategy(env.LLM_MODEL_STRATEGY),
       timeoutMs: positiveInt(env.LLM_TIMEOUT_MS),
       helperModel: (env.DAEDALUS_HELPER_MODEL ?? "").trim(),
+      toolProtocol: parseToolProtocol(env.LLM_TOOL_PROTOCOL),
     },
     server: {
       host: env.DAEDALUS_HOST ?? "127.0.0.1",
