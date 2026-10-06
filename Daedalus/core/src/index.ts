@@ -165,6 +165,8 @@ export {
 
 export {
   DEFAULT_TOOLS,
+  IGNORED_DIRECTORY_NAMES,
+  MAX_LIST_ENTRIES,
   ToolRegistry,
   createDefaultRegistry,
   createDirTool,
@@ -178,6 +180,7 @@ export {
   readFileTool,
   renderPatch,
   runCommandTool,
+  walkTreeLines,
   writeFileTool,
   type DiffLine,
   type ModelToolSchema,
@@ -244,6 +247,7 @@ export {
   type LoadHooksResult,
   type LoopGuardDecision,
   type LoopGuardObservation,
+  type LoopRepeatKind,
   type PostToolHookOutcome,
   type PreToolHookOutcome,
   type ProjectRules,
@@ -328,6 +332,7 @@ export {
   defaultTemplate,
   estimateTokens,
   getProvider,
+  hasUpstreamFailureMarker,
   instrumentProvider,
   isFatalLLMError,
   isModelPoolRetryableError,

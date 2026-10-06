@@ -1,4 +1,4 @@
-export { createDirTool, editFileTool, listDirTool, pathInWorkspace, readFileTool, writeFileTool, confined } from './filesystem/index.ts';
+export { createDirTool, editFileTool, listDirTool, pathInWorkspace, readFileTool, writeFileTool, confined, IGNORED_DIRECTORY_NAMES, MAX_LIST_ENTRIES, walkTreeLines } from './filesystem/index.ts';
 export { changedLineCounts, diffLines, renderPatch, type DiffLine } from './filesystem/diff.ts';
 export { gitDiffTool, gitStatusTool, runCommandTool } from './terminal/index.ts';
 export { globTool, grepTool } from './search/index.ts';

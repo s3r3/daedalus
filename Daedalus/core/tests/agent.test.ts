@@ -91,12 +91,14 @@ describe('ContextManager', () => {
     const spec = await interpretTask('Add auth\ndone: tests pass', { id: 't-ctx' });
     const plan = await createPlan(spec);
     const state: TaskState = { ...spec, plan, steps: plan.steps, status: 'active' };
-    const ctx = new DefaultContextManager(400);
+    // Budget covers the fixed sections plus the bounded workspace overview
+    // the prompt now ships (production default is 16000).
+    const ctx = new DefaultContextManager(700);
     const messages = await ctx.buildMessages(state, []);
     const joined = messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
     expect(joined.indexOf('## role')).toBeLessThan(joined.indexOf('## task'));
     expect(joined.indexOf('## task')).toBeLessThan(joined.indexOf('## plan'));
-    expect(ctx.estimate(messages)).toBeLessThanOrEqual(400);
+    expect(ctx.estimate(messages)).toBeLessThanOrEqual(700);
   });
 
   test('truncate marks oversized observations explicitly', () => {

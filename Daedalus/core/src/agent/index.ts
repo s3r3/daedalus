@@ -14,11 +14,16 @@ export {
   LoopGuard,
   LOOP_WINDOW_SIZE,
   REPEAT_SUPPRESSED_OUTPUT,
+  explorationKey,
+  explorationSuppressedNote,
   loopGuidanceNote,
+  normalizeExplorationPath,
+  skillAlreadyLoadedNote,
   stableSerialize,
   toolCallSignature,
   type LoopGuardDecision,
   type LoopGuardObservation,
+  type LoopRepeatKind,
 } from './loop-guard.ts';
 export { GLOBAL_RULES_LABEL, loadProjectRules, MAX_RULES_CHARS, PROJECT_RULES_FILES, type ProjectRules, type ProjectRulesOptions } from './rules.ts';
 export {

@@ -194,6 +194,107 @@ describe('feature 1: anti-loop guard', () => {
     expect(state.status).toBe('failed');
     expect(state.last_error).toBe('no_progress');
   });
+
+  test('LoopGuard counts same-path list_dir with different depth as repeats and suppresses with a mutation nudge', () => {
+    const root = '/work/repo';
+    const guard = new LoopGuard({ workspaceRoot: root });
+    expect(guard.observe('list_dir', { path: '.' }).decision).toBe('execute');
+    expect(guard.observe('list_dir', { path: '.', depth: 2 }).decision).toBe('execute');
+    const warn = guard.observe('list_dir', { path: root });
+    expect(warn.decision).toBe('warn');
+    expect(warn.repeatKind).toBe('same_path');
+    const suppressed = guard.observe('list_dir', { path: '.', depth: 3 });
+    expect(suppressed.decision).toBe('suppress');
+    expect(suppressed.repeatKind).toBe('same_path');
+    expect(suppressed.suppressedOutput).toContain('Do not list it again');
+    expect(suppressed.suppressedOutput).toContain('create_dir');
+  });
+
+  test('LoopGuard suppresses a repeated read_skill immediately with an already-loaded note', () => {
+    const guard = new LoopGuard();
+    expect(guard.observe('read_skill', { name: 'frontend-design' }).decision).toBe('execute');
+    const again = guard.observe('read_skill', { name: 'frontend-design' });
+    expect(again.decision).toBe('suppress');
+    expect(again.repeatKind).toBe('skill');
+    expect(again.suppressedOutput).toContain('already loaded');
+    expect(again.suppressedOutput).toContain('frontend-design');
+    expect(guard.observe('read_skill', { name: 'git-workflow' }).decision).toBe('execute');
+  });
+
+  test('LoopGuard resets same-path counters after a mutation touches that path', () => {
+    const guard = new LoopGuard({ workspaceRoot: '/work/repo' });
+    guard.observe('list_dir', { path: '.' });
+    guard.observe('list_dir', { path: '.', depth: 2 });
+    expect(guard.observe('list_dir', { path: '.' }).decision).toBe('warn');
+    guard.observe('create_dir', { path: 'ayid' });
+    expect(guard.observe('list_dir', { path: '.' }).decision).toBe('execute');
+    // …and a different, untouched path still accumulates repeats on its own.
+    guard.observe('list_dir', { path: 'src' });
+    guard.observe('list_dir', { path: 'src', depth: 2 });
+    expect(guard.observe('list_dir', { path: 'src' }).decision).toBe('warn');
+  });
+
+  test('agent loop suppresses same-root re-listing across arg variants and nudges toward mutation', async () => {
+    const home = tempDir('daedalus-explore-home-');
+    const workspace = tempDir('daedalus-explore-ws-');
+    const store = new TaskStore(home);
+    const bus = new EventBus();
+    const events: Event[] = [];
+    bus.on('*', (event) => events.push(event));
+
+    const script: Array<{ tool: string; args: unknown }> = [
+      { tool: 'list_dir', args: { path: '.' } },
+      { tool: 'list_dir', args: { path: '.', depth: 2 } },
+      { tool: 'list_dir', args: { path: workspace } },
+      { tool: 'list_dir', args: { path: '.', depth: 3 } },
+      { tool: 'create_dir', args: { path: 'ayid' } },
+    ];
+    const requests: Message[][] = [];
+    let executions = 0;
+    const loop = new AgentLoop({
+      provider: {
+        name: 'fake',
+        async chat(messages) {
+          requests.push(messages);
+          const step = script[requests.length - 1];
+          return step ? toolReply(`c${requests.length}`, step.tool, step.args) : textReply('done: folder created');
+        },
+        async *stream() { yield { type: 'delta', content: '' }; },
+      },
+      bus,
+      store,
+      executeTool: async (call) => {
+        executions++;
+        return {
+          call_id: call.id,
+          status: 'ok' as const,
+          output: call.tool === 'create_dir' ? 'created directory ayid' : 'root listing',
+          truncated: false,
+          meta: { tool: call.tool, mutating: call.tool === 'create_dir' },
+        };
+      },
+      stopPolicy: { max_iterations: 12, max_errors: 5 },
+    });
+
+    const state = await loop.run({
+      id: 'explore-task',
+      goal: 'Create the ayid folder with a landing page',
+      constraints: [],
+      done_criteria: ['folder created'],
+      repo_path: workspace,
+      status: 'draft',
+    });
+
+    expect(state.status).toBe('done');
+    // Listings 1–2 execute, the 3rd warns but still executes, the 4th is
+    // suppressed without executing; plus the create_dir = 4 executions.
+    expect(executions).toBe(4);
+    const warnings = events.filter((event) => event.type === 'LOOP_WARNING');
+    expect(warnings.map((event) => (event.payload as { repeat_kind?: string }).repeat_kind)).toContain('same_path');
+    // The request after suppression carries the nudge to stop listing and mutate.
+    const nudged = requests[4]?.find((message) => typeof message.content === 'string' && message.content.includes('Do not list it again'));
+    expect(nudged).toBeDefined();
+  });
 });
 
 describe('feature 2: edit guard', () => {

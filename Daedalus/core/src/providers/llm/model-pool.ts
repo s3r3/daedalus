@@ -232,6 +232,11 @@ export function isModelPoolRetryableError(error: unknown): boolean {
     "network",
     "econn",
     "socket",
+    // Router-wrapped upstream failures (HTTP 400 from a router whose own
+    // upstream call failed): another model may well answer the same request.
+    "upstream request failed",
+    "upstream error",
+    "error from provider",
     "http 500",
     "http 502",
     "http 503",

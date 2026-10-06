@@ -11,12 +11,15 @@ import {
   OpenAICompatProvider,
   buildPrompt,
   classifyLLMError,
+  classifyProviderError,
   clearProviders,
   defaultTemplate,
   estimateTokens,
   getProvider,
+  hasUpstreamFailureMarker,
   instrumentProvider,
   isFatalLLMError,
+  isModelPoolRetryableError,
   isTransientLLMError,
   registerProvider,
   systemMessage,
@@ -210,6 +213,45 @@ describe("OpenAICompatProvider non-streaming", () => {
     expect(classifyLLMError(new LLMAuthError("bad key"))).toBe("fatal");
     expect(isFatalLLMError(new LLMError("refused", { code: "content_policy" }))).toBe(true);
     expect(classifyLLMError(new LLMFormatError("bad format"))).toBe("other");
+  });
+
+  test("router-wrapped upstream 400 is transient and pool-retryable; a plain malformed 400 is not", async () => {
+    const upstreamBody = { error: { type: "invalid_request_error", message: "Error from provider (Console): Upstream request failed: [invalid_request_error] invalid request" } };
+    expect(hasUpstreamFailureMarker(upstreamBody)).toBe(true);
+    expect(classifyLLMError(new LLMError(upstreamBody.error.message))).toBe("transient");
+    expect(classifyLLMError(classifyProviderError(400, upstreamBody))).toBe("transient");
+
+    const malformedBody = { error: { type: "invalid_request_error", message: "Invalid request: 'max_tokens' must be a positive integer" } };
+    expect(hasUpstreamFailureMarker(malformedBody)).toBe(false);
+    expect(classifyLLMError(classifyProviderError(400, malformedBody))).toBe("other");
+
+    const upstreamFetch = fakeFetch(async () =>
+      new Response(JSON.stringify(upstreamBody), { status: 400 }),
+    );
+    const provider = new OpenAICompatProvider({
+      baseUrl: "https://llm.ayid.cc.cd/v1",
+      apiKey: "test-key",
+      model: "m",
+      fetch: upstreamFetch,
+    });
+    const upstreamError = await provider.chat([userMessage("hi")]).catch((error: unknown) => error);
+    expect(upstreamError).toBeInstanceOf(LLMError);
+    expect(isTransientLLMError(upstreamError)).toBe(true);
+    expect(isModelPoolRetryableError(upstreamError)).toBe(true);
+
+    const malformedFetch = fakeFetch(async () =>
+      new Response(JSON.stringify(malformedBody), { status: 400 }),
+    );
+    const strictProvider = new OpenAICompatProvider({
+      baseUrl: "https://llm.ayid.cc.cd/v1",
+      apiKey: "test-key",
+      model: "m",
+      fetch: malformedFetch,
+    });
+    const malformedError = await strictProvider.chat([userMessage("hi")]).catch((error: unknown) => error);
+    expect(malformedError).toBeInstanceOf(LLMError);
+    expect(isTransientLLMError(malformedError)).toBe(false);
+    expect(isModelPoolRetryableError(malformedError)).toBe(false);
   });
 
   test("throws LLMFormatError on malformed choice response", async () => {

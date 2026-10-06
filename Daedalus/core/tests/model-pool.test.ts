@@ -67,6 +67,33 @@ describe('ModelPoolProvider', () => {
     expect(pool.activeModel).toBe('good-model');
   });
 
+  test('fails over on a router-wrapped upstream 400 but never on a plain malformed-request 400', async () => {
+    const upstreamError = new Error('Error from provider (Console): Upstream request failed: [invalid_request_error] invalid request');
+    const calls: string[] = [];
+    const pool = new ModelPoolProvider({
+      models: ['router-model', 'good-model'],
+      createProvider: (model) => fakeProvider(model, async () => {
+        calls.push(model);
+        if (model === 'router-model') throw upstreamError;
+        return response('done: second model answered');
+      }),
+    });
+    await expect(pool.chat([{ role: 'user', content: 'hi' }])).resolves.toMatchObject({ message: { content: 'done: second model answered' } });
+    expect(calls).toEqual(['router-model', 'good-model']);
+
+    const malformedError = new Error("Invalid request: 'max_tokens' must be a positive integer");
+    const strictCalls: string[] = [];
+    const strictPool = new ModelPoolProvider({
+      models: ['strict-model', 'other-model'],
+      createProvider: (model) => fakeProvider(model, async () => {
+        strictCalls.push(model);
+        throw malformedError;
+      }),
+    });
+    await expect(strictPool.chat([{ role: 'user', content: 'hi' }])).rejects.toBe(malformedError);
+    expect(strictCalls).toEqual(['strict-model']);
+  });
+
   test('treats empty / no-choice responses as retryable format failures', async () => {
     const pool = new ModelPoolProvider({
       models: ['empty-model', 'good-model'],

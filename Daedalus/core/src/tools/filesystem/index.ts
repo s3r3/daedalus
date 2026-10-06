@@ -6,6 +6,47 @@ import type { ToolResult } from '../../contracts.ts';
 const MAX_OUTPUT = 16_000;
 
 /**
+ * Directories the file tools never descend into or list: dependency/vendor
+ * trees, VCS metadata, and Daedalus's own state (`.daedalus/` holds the
+ * task store — expanding it into a listing floods the model's context with
+ * dozens of unrelated task directories and teaches it nothing about the
+ * user's project). Shared by list_dir, the search tools, and path helpers.
+ */
+export const IGNORED_DIRECTORY_NAMES: ReadonlySet<string> = new Set(['node_modules', '.git', '.daedalus', 'dist']);
+
+/** Hard cap on entries emitted by one list_dir call; the remainder is counted and reported, not dumped. */
+export const MAX_LIST_ENTRIES = 150;
+
+/**
+ * Walk a directory into shallow-tree lines (directories first, ignored
+ * directories pruned). Lines stop at `maxEntries`, but the walk keeps
+ * counting (up to `countLimit`) so callers can report how much was omitted.
+ */
+export async function walkTreeLines(
+  dir: string,
+  options: { maxDepth?: number; maxEntries?: number; countLimit?: number } = {},
+): Promise<{ lines: string[]; total: number; truncated: boolean }> {
+  const maxDepth = options.maxDepth ?? 3;
+  const maxEntries = options.maxEntries ?? MAX_LIST_ENTRIES;
+  const countLimit = options.countLimit ?? 5_000;
+  const lines: string[] = [];
+  let total = 0;
+  const walk = async (current: string, prefix: string, depth: number): Promise<void> => {
+    const entries = (await readdir(current, { withFileTypes: true }))
+      .filter((entry) => !(entry.isDirectory() && IGNORED_DIRECTORY_NAMES.has(entry.name)))
+      .sort((x, y) => Number(y.isDirectory()) - Number(x.isDirectory()) || x.name.localeCompare(y.name));
+    for (const entry of entries) {
+      total++;
+      if (lines.length < maxEntries) lines.push(`${prefix}${entry.name}${entry.isDirectory() ? '/' : ''}`);
+      if (entry.isDirectory() && depth < maxDepth && total < countLimit) await walk(join(current, entry.name), `${prefix}  `, depth + 1);
+      if (total >= countLimit) return;
+    }
+  };
+  await walk(dir, '', 1);
+  return { lines, total, truncated: total > lines.length };
+}
+
+/**
  * Resolve a workspace-relative target to an absolute path, throwing if it escapes
  * the resolved workspace root. Returns the resolved absolute path.
  */
@@ -36,7 +77,7 @@ async function pathSuggestion(root: string, requested: string): Promise<string |
       if (depth > 6 || matches.length > 1) return;
       const entries = await readdir(current, { withFileTypes: true });
       for (const entry of entries) {
-        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        if (entry.isDirectory() && IGNORED_DIRECTORY_NAMES.has(entry.name)) continue;
         const full = join(current, entry.name);
         if (entry.isFile() && entry.name === wanted) matches.push(relative(base, full));
         else if (entry.isDirectory()) await walk(full, depth + 1);
@@ -89,7 +130,7 @@ async function findUniqueOldString(root: string, oldString: string): Promise<str
       if (depth > 6 || total > 1) return;
       const entries = await readdir(current, { withFileTypes: true });
       for (const entry of entries) {
-        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        if (entry.isDirectory() && IGNORED_DIRECTORY_NAMES.has(entry.name)) continue;
         const full = join(current, entry.name);
         if (entry.isDirectory()) await walk(full, depth + 1);
         else if (entry.isFile()) {
@@ -199,27 +240,16 @@ export const editFileTool: ToolDefinition = {
 };
 
 export const listDirTool: ToolDefinition = {
-  name: 'list_dir', description: 'List a workspace directory as a shallow tree (depth 3), so nested source files are visible without guessing paths.', mutating: false,
+  name: 'list_dir', description: 'List a workspace directory as a shallow tree (depth 3), so nested source files are visible without guessing paths. Dependency/state folders (node_modules, .git, .daedalus, dist) are omitted and very large listings are truncated with a count of what was left out.', mutating: false,
   inputSchema: { type: 'object', properties: { path: { type: 'string' }, depth: { type: 'integer', minimum: 1, maximum: 6 } }, additionalProperties: false },
   async execute(args, context) {
     const a = args as { path?: unknown; depth?: unknown }; const input = typeof a.path === 'string' ? a.path : '.';
     const maxDepth = typeof a.depth === 'number' && Number.isInteger(a.depth) ? Math.min(6, Math.max(1, a.depth)) : 3;
     try {
       const dir = await pathInWorkspace(context.workspaceRoot, input);
-      const lines: string[] = [];
-      const walk = async (current: string, prefix: string, depth: number): Promise<void> => {
-        if (lines.length >= 200) return;
-        const entries = (await readdir(current, { withFileTypes: true }))
-          .filter((e) => !['node_modules', '.git'].includes(e.name))
-          .sort((x, y) => Number(y.isDirectory()) - Number(x.isDirectory()) || x.name.localeCompare(y.name));
-        for (const entry of entries) {
-          if (lines.length >= 200) return;
-          lines.push(`${prefix}${entry.name}${entry.isDirectory() ? '/' : ''}`);
-          if (entry.isDirectory() && depth < maxDepth) await walk(join(current, entry.name), `${prefix}  `, depth + 1);
-        }
-      };
-      await walk(dir, '', 1);
-      return output('', lines.join('\n'), { path: input, depth: maxDepth, entries: lines.length });
+      const { lines, total, truncated } = await walkTreeLines(dir, { maxDepth });
+      const text = truncated ? [...lines, `… (${total - lines.length} more entries, truncated)`].join('\n') : lines.join('\n');
+      return output('', text, { path: input, depth: maxDepth, entries: lines.length, ...(truncated ? { truncated: true, total_entries: total } : {}) });
     }
     catch (error) { return { call_id: '', status: 'error', output: String(error), truncated: false, meta: {} }; }
   },
