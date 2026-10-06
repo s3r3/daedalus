@@ -11,6 +11,9 @@ import { Input } from '../ui/input'
 import { Panel } from '../common/panel'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 
+type ModelTierValue = 'strong' | 'balanced' | 'fast'
+type PromptFamilyValue = 'auto' | 'claude' | 'gpt' | 'qwen' | 'llama' | 'gemini' | 'generic'
+
 type ProviderForm = {
   id: string
   name: string
@@ -20,6 +23,10 @@ type ProviderForm = {
   defaultModel: string
   enabled: boolean
   supportsVision: boolean
+  toolProtocol: 'auto' | 'native' | 'text'
+  modelTiers: Record<string, ModelTierValue>
+  promptFamily: PromptFamilyValue
+  editFormat: 'native' | 'search_replace'
 }
 
 const EMPTY_FORM: ProviderForm = {
@@ -31,6 +38,10 @@ const EMPTY_FORM: ProviderForm = {
   defaultModel: '',
   enabled: true,
   supportsVision: false,
+  toolProtocol: 'auto',
+  modelTiers: {},
+  promptFamily: 'auto',
+  editFormat: 'native',
 }
 
 /**
@@ -54,6 +65,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
   const [status, setStatus] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [reviewGate, setReviewGate] = useState(false)
 
   const loadAll = useCallback(async (): Promise<void> => {
     setError(null)
@@ -61,6 +73,8 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
     if (settingsResult.status === 'fulfilled') {
       setSession(settingsResult.value.session)
       if (settingsResult.value.providers) setProviders(settingsResult.value.providers)
+      const tailor = (settingsResult.value.settings as { tailor?: { reviewGate?: boolean } }).tailor
+      if (typeof tailor?.reviewGate === 'boolean') setReviewGate(tailor.reviewGate)
     }
     if (providersResult.status === 'fulfilled') setProviders(providersResult.value.providers, providersResult.value.presets)
     if (modelsResult.status === 'fulfilled') setModels(modelsResult.value.models)
@@ -85,6 +99,10 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
       defaultModel: preset.defaultModel ?? '',
       enabled: true,
       supportsVision: Boolean(preset.supportsVision),
+      toolProtocol: 'auto',
+      modelTiers: {},
+      promptFamily: 'auto',
+      editFormat: 'native',
     })
   }
 
@@ -99,7 +117,35 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
       defaultModel: provider.defaultModel ?? '',
       enabled: provider.enabled,
       supportsVision: Boolean(provider.supportsVision),
+      toolProtocol: provider.toolProtocol ?? 'auto',
+      modelTiers: provider.modelTiers ?? {},
+      promptFamily: provider.promptFamily ?? 'auto',
+      editFormat: provider.editFormat ?? 'native',
     })
+  }
+
+  const formModelList = useMemo(
+    () => form.models.split(',').map((model) => model.trim()).filter(Boolean),
+    [form.models],
+  )
+
+  const setModelTier = (model: string, tier: string): void => {
+    setForm((current) => {
+      const modelTiers = { ...current.modelTiers }
+      if (tier === 'strong' || tier === 'balanced' || tier === 'fast') modelTiers[model] = tier
+      else delete modelTiers[model]
+      return { ...current, modelTiers }
+    })
+  }
+
+  const changeReviewGate = async (enabled: boolean): Promise<void> => {
+    setReviewGate(enabled)
+    try {
+      await api.updateSettings({ tailor: { reviewGate: enabled } })
+      setStatus(enabled ? 'Review gate on: the strongest pool model reviews weaker models\' changes before completion.' : 'Review gate off.')
+    } catch (caught) {
+      setError(errorMessage(caught))
+    }
   }
 
   const formToInput = (): ProviderInput => ({
@@ -111,6 +157,10 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
     defaultModel: form.defaultModel.trim() || undefined,
     enabled: form.enabled,
     supportsVision: form.supportsVision,
+    toolProtocol: form.toolProtocol,
+    modelTiers: Object.fromEntries(Object.entries(form.modelTiers).filter(([model]) => formModelList.includes(model))),
+    promptFamily: form.promptFamily,
+    editFormat: form.editFormat,
   })
 
   const saveProvider = async (): Promise<ProviderConfigPublic | null> => {
@@ -350,6 +400,23 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
             error · round-robin: rotate per request). Saved in this browser and sent with every task; leave empty to use the session model.
           </p>
         </div>
+        <div className="flex flex-col gap-1" data-testid="review-gate-settings">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+            <input
+              type="checkbox"
+              className="size-3 accent-primary"
+              checked={reviewGate}
+              onChange={(event) => void changeReviewGate(event.target.checked)}
+              data-testid="settings-review-gate"
+              aria-label="review gate"
+            />
+            review gate — strongest model checks weaker models' work
+          </label>
+          <p className="text-[10px] text-muted">
+            Off by default. When on and a pool with 2+ models is in play, the strongest model reviews a weaker model's file changes
+            before completion; blocking findings demote the result to partial. Report-only — it never re-runs the task.
+          </p>
+        </div>
         <p className="text-[10px] text-muted">
           {enabledProviders.length} enabled provider(s) · {models.length} model(s) · workspace {session?.workspaceRoot ?? 'not loaded'}
         </p>
@@ -382,10 +449,18 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
                     </Button>
                   </span>
                 </div>
-                <p className="truncate text-[10px] text-muted">{provider.id} · {provider.baseUrl || '(no base URL)'}</p>
+                <p className="truncate text-[10px] text-muted">{provider.id} · {provider.baseUrl || '(no base URL)'} · tools: {provider.toolProtocol ?? 'auto'}</p>
                 <p className="text-[10px] text-muted">
                   models: {provider.models.length ? provider.models.join(', ') : '(discover with Test connection)'}
                   {provider.supportsVision ? ' · vision-capable provider' : ''}
+                </p>
+                {provider.modelTiers && Object.keys(provider.modelTiers).length > 0 ? (
+                  <p className="text-[10px] text-muted" data-testid="provider-tiers">
+                    tiers: {Object.entries(provider.modelTiers).map(([model, tier]) => `${model}=${tier}`).join(' · ')}
+                  </p>
+                ) : null}
+                <p className="text-[10px] text-muted">
+                  dialect: {provider.promptFamily ?? 'auto'} · edits: {provider.editFormat ?? 'native'}
                 </p>
               </li>
             ))}
@@ -430,6 +505,77 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
           <Input aria-label="provider models" placeholder="models, comma separated" value={form.models} onChange={(event) => setForm({ ...form, models: event.target.value })} />
           <Input aria-label="provider default model" placeholder="default model" value={form.defaultModel} onChange={(event) => setForm({ ...form, defaultModel: event.target.value })} />
         </div>
+        <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+          tool protocol
+          <select
+            aria-label="provider tool protocol"
+            className="h-6 flex-1 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
+            value={form.toolProtocol}
+            onChange={(event) => setForm({ ...form, toolProtocol: event.target.value as ProviderForm['toolProtocol'] })}
+          >
+            <option value="auto">auto — native first, text fallback</option>
+            <option value="native">native — function calling only</option>
+            <option value="text">text — XML-style tool blocks</option>
+          </select>
+        </label>
+        <div className="grid grid-cols-2 gap-2">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+            prompt family
+            <select
+              aria-label="provider prompt family"
+              className="h-6 flex-1 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
+              value={form.promptFamily}
+              onChange={(event) => setForm({ ...form, promptFamily: event.target.value as PromptFamilyValue })}
+            >
+              <option value="auto">auto — detect from model id</option>
+              <option value="claude">claude</option>
+              <option value="gpt">gpt</option>
+              <option value="qwen">qwen</option>
+              <option value="llama">llama</option>
+              <option value="gemini">gemini</option>
+              <option value="generic">generic</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+            edit format
+            <select
+              aria-label="provider edit format"
+              className="h-6 flex-1 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
+              value={form.editFormat}
+              onChange={(event) => setForm({ ...form, editFormat: event.target.value as ProviderForm['editFormat'] })}
+            >
+              <option value="native">native — function-call edits</option>
+              <option value="search_replace">search/replace blocks (Aider-style)</option>
+            </select>
+          </label>
+        </div>
+        {formModelList.length > 0 ? (
+          <div className="flex flex-col gap-1" data-testid="model-tier-editor">
+            <p className="text-[10px] uppercase tracking-wider text-muted">model tiers (pool routing)</p>
+            {formModelList.map((model) => (
+              <label key={model} className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+                <span className="min-w-0 flex-1 truncate normal-case">{model}</span>
+                <select
+                  aria-label={`tier for ${model}`}
+                  data-testid="model-tier-select"
+                  data-model={model}
+                  className="h-6 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
+                  value={form.modelTiers[model] ?? ''}
+                  onChange={(event) => setModelTier(model, event.target.value)}
+                >
+                  <option value="">auto (balanced)</option>
+                  <option value="strong">strong</option>
+                  <option value="balanced">balanced</option>
+                  <option value="fast">fast</option>
+                </select>
+              </label>
+            ))}
+            <p className="text-[10px] text-muted">
+              Strong models take edit and repair turns; fast/balanced models take exploration. A failed validation escalates the
+              rest of the task to the strongest model.
+            </p>
+          </div>
+        ) : null}
         <div className="flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
             <input type="checkbox" className="size-3 accent-primary" checked={form.enabled} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} />

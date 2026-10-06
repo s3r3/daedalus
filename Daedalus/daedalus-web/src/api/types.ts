@@ -99,7 +99,16 @@ export type ProviderInput = {
   enabled?: boolean
   supportsVision?: boolean
   visionModels?: string[]
+  toolProtocol?: 'native' | 'text' | 'auto'
+  /** Tailor suite: capability tier per model id for pool phase routing. */
+  modelTiers?: Record<string, 'strong' | 'balanced' | 'fast'>
+  /** Tailor suite: prompt dialect family ('auto' = detect from model id). */
+  promptFamily?: 'auto' | 'claude' | 'gpt' | 'qwen' | 'llama' | 'gemini' | 'generic'
+  /** Tailor suite: edit dialect for this provider's models. */
+  editFormat?: 'native' | 'search_replace'
 }
+
+export type WorkspacePins = { root: string; pins: string[] }
 
 export type ProviderTestResult = {
   ok: boolean
@@ -166,7 +175,26 @@ export type ApprovalDecided = { key: PermissionKey; decision: 'grant' | 'deny'; 
 export type TaskCompleted = { state?: Record<string, unknown>; outcome: string; reason: string; error_summary?: string; summary?: string; model_error?: Record<string, unknown> }
 export type ModelRequestFailed = { error: string; error_kind?: string; error_reason?: string; model?: string; models_tried?: string[]; timeout_ms?: number }
 export type ModeChanged = { from: AgentMode; to: AgentMode; turn_boundary: boolean; replan_required: boolean }
-export type ProviderChanged = { providerId?: string; provider_id?: string; model?: string }
+export type ProviderChanged = {
+  providerId?: string
+  provider_id?: string
+  model?: string
+  from_model?: string
+  to_model?: string
+  /** Set when the change is an automatic tool-protocol switch (native → text). */
+  protocol_switched?: boolean
+  tool_protocol?: string
+  from_protocol?: string
+  /** 'quality_escalation' when the task was pinned to the strongest model after a validation failure. */
+  reason?: string
+}
+export type ReviewCompleted = {
+  model: string
+  author_model?: string
+  blocking: boolean
+  findings: Array<{ severity: 'high' | 'medium' | 'low'; file: string; line?: number; message: string }>
+  truncated?: boolean
+}
 export type AttachmentAdded = { attachment: Attachment }
 export type ChildTaskEvent = { child: ChildTask }
 export type SlashCommandExecuted = { command: string; text?: string; action?: string }
@@ -178,13 +206,13 @@ export type EventPayloads = {
   LOOP_WARNING: { tool: string; repeats: number; suppressed: boolean }
   REPLAN_CREATED: { plan: Plan; previous_plan?: Plan; reason?: string }
   TOOL_CALL_STARTED: { call: ToolCall }
-  TOOL_CALL_FINISHED: { call: ToolCall; result: ToolResult }
+  TOOL_CALL_FINISHED: { call: ToolCall; result: ToolResult; output_truncated?: boolean; spill_path?: string }
   COMMAND_STARTED: CommandStarted
   COMMAND_OUTPUT: CommandOutput
   COMMAND_FINISHED: CommandFinished
   FILE_CHANGED: FileChange
-  MODEL_REQUEST_STARTED: { provider: string; messages: number; tools: number; context_estimate_tokens?: number; context_limit_tokens?: number; context_percent?: number }
-  MODEL_REQUEST_FINISHED: { message?: { content?: string }; usage?: Record<string, number>; finish_reason?: string; context_estimate_tokens?: number; context_limit_tokens?: number; context_percent?: number }
+  MODEL_REQUEST_STARTED: { provider: string; messages: number; tools: number; phase?: string; context_estimate_tokens?: number; context_limit_tokens?: number; context_percent?: number }
+  MODEL_REQUEST_FINISHED: { message?: { content?: string }; usage?: Record<string, number>; finish_reason?: string; model?: string; tier?: string; phase?: string; context_estimate_tokens?: number; context_limit_tokens?: number; context_percent?: number }
   MODEL_REQUEST_FAILED: ModelRequestFailed
   VALIDATION_STARTED: { task_id: string }
   VALIDATION_PASSED: { result: ValidationResult }
@@ -195,6 +223,7 @@ export type EventPayloads = {
   TASK_COMPLETED: TaskCompleted
   MODE_CHANGED: ModeChanged
   PROVIDER_CHANGED: ProviderChanged
+  REVIEW_COMPLETED: ReviewCompleted
   ATTACHMENT_ADDED: AttachmentAdded
   CHILD_TASK_STARTED: ChildTaskEvent
   CHILD_TASK_FINISHED: ChildTaskEvent

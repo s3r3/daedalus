@@ -1,16 +1,35 @@
 import { resolve } from "node:path";
-import { normalizeModelList, parseModelStrategy, type ModelStrategy } from "./providers/llm/model-pool.ts";
+import type { EditFormat, ModelTier, PromptFamilySetting } from "./contracts.ts";
+import { normalizeModelList, normalizeModelTiers, parseModelStrategy, parseModelTiers, type ModelStrategy } from "./providers/llm/model-pool.ts";
+import { parsePromptFamilySetting } from "./agent/prompt-dialects.ts";
+import { parseToolProtocol, type ToolProtocol } from "./providers/llm/text-protocol.ts";
+import { TOOL_OUTPUT_MAX_CHARS, TOOL_OUTPUT_MAX_LINES, type ToolOutputLimits } from "./agent/tool-output.ts";
+
+export type { ToolProtocol };
 
 export type Settings = {
-  llm: { baseUrl: string; apiKey: string; model: string; models: string[]; modelStrategy: ModelStrategy; timeoutMs: number | null; helperModel: string };
+  llm: { baseUrl: string; apiKey: string; model: string; models: string[]; modelStrategy: ModelStrategy; timeoutMs: number | null; helperModel: string; toolProtocol: ToolProtocol; modelTiers: Record<string, ModelTier>; promptFamily: PromptFamilySetting; editFormat: EditFormat };
   server: { host: string; port: number };
   session: { thinking: boolean };
+  /**
+   * Tailor suite: harness features that make weaker routed models perform
+   * above their weight. Routing/escalation default on (they are no-ops
+   * without a tiered multi-model pool); the review gate defaults off.
+   */
+  tailor: { modelRouting: boolean; qualityEscalation: boolean; reviewGate: boolean };
   /** Run the post-edit syntax/LSP guard on files the agent writes (DAEDALUS_EDIT_GUARD). */
   editGuard: boolean;
   /** Run project hooks from .daedalus/hooks.json around tool calls (DAEDALUS_HOOKS). */
   hooks?: boolean;
   /** Context-window budgeting: token limit estimate + automatic condensing (DAEDALUS_CONTEXT_LIMIT / DAEDALUS_CONDENSE). */
   context: { limitTokens: number; condense: boolean };
+  /**
+   * Hard tool-output caps + spill files: over-cap results enter the model
+   * context head+tail with the full text saved under the task store
+   * (DAEDALUS_TOOL_OUTPUT_MAX_CHARS / DAEDALUS_TOOL_OUTPUT_MAX_LINES /
+   * DAEDALUS_TOOL_SPILL=off disables the spill file; caps still apply).
+   */
+  toolOutput: ToolOutputLimits;
   daedalusHome: string;
 };
 
@@ -36,6 +55,15 @@ export function loadSettings(env: Env = process.env): Settings {
       modelStrategy: parseModelStrategy(env.LLM_MODEL_STRATEGY),
       timeoutMs: positiveInt(env.LLM_TIMEOUT_MS),
       helperModel: (env.DAEDALUS_HELPER_MODEL ?? "").trim(),
+      toolProtocol: parseToolProtocol(env.LLM_TOOL_PROTOCOL),
+      modelTiers: parseModelTiers(env.LLM_MODEL_TIERS),
+      promptFamily: parsePromptFamilySetting(env.LLM_PROMPT_FAMILY),
+      editFormat: parseEditFormat(env.LLM_EDIT_FORMAT),
+    },
+    tailor: {
+      modelRouting: parseBoolean(env.DAEDALUS_MODEL_ROUTING, true, "DAEDALUS_MODEL_ROUTING"),
+      qualityEscalation: parseBoolean(env.DAEDALUS_QUALITY_ESCALATION, true, "DAEDALUS_QUALITY_ESCALATION"),
+      reviewGate: parseBoolean(env.DAEDALUS_REVIEW_GATE, false, "DAEDALUS_REVIEW_GATE"),
     },
     server: {
       host: env.DAEDALUS_HOST ?? "127.0.0.1",
@@ -49,6 +77,11 @@ export function loadSettings(env: Env = process.env): Settings {
     context: {
       limitTokens: positiveTokenLimit(env.DAEDALUS_CONTEXT_LIMIT),
       condense: parseBoolean(env.DAEDALUS_CONDENSE, true, "DAEDALUS_CONDENSE"),
+    },
+    toolOutput: {
+      maxChars: positiveIntOrDefault(env.DAEDALUS_TOOL_OUTPUT_MAX_CHARS, TOOL_OUTPUT_MAX_CHARS, "DAEDALUS_TOOL_OUTPUT_MAX_CHARS"),
+      maxLines: positiveIntOrDefault(env.DAEDALUS_TOOL_OUTPUT_MAX_LINES, TOOL_OUTPUT_MAX_LINES, "DAEDALUS_TOOL_OUTPUT_MAX_LINES"),
+      spill: parseBoolean(env.DAEDALUS_TOOL_SPILL, true, "DAEDALUS_TOOL_SPILL"),
     },
     daedalusHome: env.DAEDALUS_HOME ?? ".daedalus",
   };
@@ -66,6 +99,23 @@ export function resolveDaedalusHome(home: string, workspaceRoot?: string): strin
   if (!workspaceRoot) return resolve(home);
   return resolve(workspaceRoot, home);
 }
+
+/** `LLM_EDIT_FORMAT`: `native` (default) or `search_replace`; anything else fails fast. */
+export function parseEditFormat(value: string | undefined, source = "LLM_EDIT_FORMAT"): EditFormat {
+  if (value === undefined || value.trim() === "") return "native";
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "native" || normalized === "search_replace") return normalized;
+  throw new Error(`Invalid ${source}: ${value} (expected native or search_replace)`);
+}
+
+/** Lenient variant for stored provider configs: garbage means "unset". */
+export function normalizeEditFormat(value: unknown): EditFormat | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "native" || normalized === "search_replace" ? normalized : undefined;
+}
+
+export { normalizeModelTiers };
 
 function parseBoolean(value: string | undefined, fallback: boolean, name: string): boolean {
   if (value === undefined || value.trim() === "") return fallback;
@@ -91,6 +141,16 @@ function positiveTokenLimit(value: string | undefined): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`Invalid DAEDALUS_CONTEXT_LIMIT: ${value} (expected a positive integer number of tokens)`);
+  }
+  return parsed;
+}
+
+/** Positive-integer setting with a default; invalid values fail fast like the other numeric settings. */
+function positiveIntOrDefault(value: string | undefined, fallback: number, name: string): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name}: ${value} (expected a positive integer)`);
   }
   return parsed;
 }

@@ -16,6 +16,7 @@ import {
   emitEvent,
   loadAgents,
   loadLspConfig,
+  loadPins,
   loadProjectRules,
   loadMcpConfig,
   loadSettings,
@@ -24,6 +25,7 @@ import {
   redactSettings,
   resolveDaedalusHome,
   reviewDiff,
+  savePins,
   seedProviderFromSettings,
   unstagedDiff,
   workspaceAgentsDir,
@@ -340,6 +342,15 @@ function applySettingsUpdate(ctx: AppContext, parsed: Record<string, unknown>): 
   applySessionUpdate(ctx, parsed);
   const session = typeof parsed.session === "object" && parsed.session !== null ? (parsed.session as Record<string, unknown>) : undefined;
   if (session) applySessionUpdate(ctx, session);
+  // Tailor-suite toggles (review gate / routing / escalation): process-local
+  // like the session thinking flag; env vars set the boot defaults.
+  const tailor = typeof parsed.tailor === "object" && parsed.tailor !== null ? (parsed.tailor as Record<string, unknown>) : undefined;
+  if (tailor) {
+    if (typeof tailor.reviewGate === "boolean") ctx.settings.tailor.reviewGate = tailor.reviewGate;
+    if (typeof tailor.review_gate === "boolean") ctx.settings.tailor.reviewGate = tailor.review_gate;
+    if (typeof tailor.modelRouting === "boolean") ctx.settings.tailor.modelRouting = tailor.modelRouting;
+    if (typeof tailor.qualityEscalation === "boolean") ctx.settings.tailor.qualityEscalation = tailor.qualityEscalation;
+  }
   const llm = typeof parsed.llm === "object" && parsed.llm !== null ? (parsed.llm as Record<string, unknown>) : undefined;
   if (llm) {
     if (typeof llm.baseUrl === "string") ctx.settings.llm.baseUrl = llm.baseUrl;
@@ -1356,6 +1367,37 @@ export function createApp(ctx: AppContext) {
 
     if (method === "POST" && (url.pathname === "/uploads" || url.pathname === "/upload" || url.pathname === "/attachments")) {
       void handleUpload(ctx, req, res, requestId);
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/workspace/pins") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.session.workspaceRoot || ctx.cwd);
+          const pins = await loadPins(resolveDaedalusHome(ctx.settings.daedalusHome, root));
+          sendJson(res, 200, { root, pins });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if ((method === "PUT" || method === "POST") && url.pathname === "/workspace/pins") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const pins = await savePins(resolveDaedalusHome(ctx.settings.daedalusHome, root), parsed.pins);
+          sendJson(res, 200, { root, pins });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
       return;
     }
 

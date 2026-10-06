@@ -4,7 +4,7 @@ import type { ModelToolSchema } from '../tools/registry.ts';
 export const AGENT_MODE_ORDER: AgentMode[] = [...AGENT_MODES];
 
 const READ_TOOLS = new Set(['read_file', 'list_dir', 'grep', 'glob', 'git_diff', 'git_status', 'read_skill', 'lsp_diagnostics']);
-const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'create_dir']);
+const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'edit_search_replace', 'create_dir']);
 const EXECUTING_TOOLS = new Set(['run_command']);
 
 export type ToolVisibility = 'read' | 'mutating' | 'executing' | 'none';

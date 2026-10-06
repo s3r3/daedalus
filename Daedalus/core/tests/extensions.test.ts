@@ -167,6 +167,32 @@ describe('Skills', () => {
     expect(text).toContain('greeter: Greets users warmly');
     expect(text).toContain('read_skill');
   });
+
+  test('the agent context ships a filtered workspace overview plus exploration discipline', async () => {
+    const workspace = temp('daedalus-ctx-overview-');
+    mkdirSync(join(workspace, 'src'), { recursive: true });
+    writeFileSync(join(workspace, 'src', 'index.ts'), 'export {};\n');
+    writeFileSync(join(workspace, 'package.json'), '{"name":"demo"}\n');
+    mkdirSync(join(workspace, '.daedalus', 'tasks', 't1'), { recursive: true });
+    writeFileSync(join(workspace, '.daedalus', 'tasks', 't1', 'events.jsonl'), '{}\n');
+    mkdirSync(join(workspace, 'node_modules', 'pkg'), { recursive: true });
+    writeFileSync(join(workspace, 'node_modules', 'pkg', 'index.js'), '');
+
+    const context = new DefaultContextManager({ workspaceRoot: workspace });
+    const state = {
+      id: 'ctx-overview', goal: 'Do work', repo_path: workspace, constraints: [], done_criteria: [], created_at: new Date().toISOString(),
+      plan: { id: 'p', task_id: 'ctx-overview', steps: [], version: 1, status: 'active' }, steps: [], status: 'active',
+    } as TaskState;
+    const messages = await context.buildMessages(state, []);
+    const text = typeof messages[0]?.content === 'string' ? messages[0].content : JSON.stringify(messages[0]?.content);
+    expect(text).toContain('Workspace overview');
+    expect(text).toContain('src/');
+    expect(text).toContain('index.ts');
+    expect(text).not.toContain('events.jsonl');
+    expect(text).not.toContain('node_modules/');
+    expect(text).toContain('do not call list_dir on the workspace root again');
+    expect(text).toContain('Do not repeat list_dir/read on the same path');
+  });
 });
 
 describe('LSP client/manager', () => {

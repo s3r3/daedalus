@@ -2,8 +2,50 @@ import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/pro
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import type { ToolDefinition } from '../registry.ts';
 import type { ToolResult } from '../../contracts.ts';
+import { applySearchReplace } from './search-replace.ts';
 
 const MAX_OUTPUT = 16_000;
+
+/**
+ * Directories the file tools never descend into or list: dependency/vendor
+ * trees, VCS metadata, and Daedalus's own state (`.daedalus/` holds the
+ * task store — expanding it into a listing floods the model's context with
+ * dozens of unrelated task directories and teaches it nothing about the
+ * user's project). Shared by list_dir, the search tools, and path helpers.
+ */
+export const IGNORED_DIRECTORY_NAMES: ReadonlySet<string> = new Set(['node_modules', '.git', '.daedalus', 'dist']);
+
+/** Hard cap on entries emitted by one list_dir call; the remainder is counted and reported, not dumped. */
+export const MAX_LIST_ENTRIES = 150;
+
+/**
+ * Walk a directory into shallow-tree lines (directories first, ignored
+ * directories pruned). Lines stop at `maxEntries`, but the walk keeps
+ * counting (up to `countLimit`) so callers can report how much was omitted.
+ */
+export async function walkTreeLines(
+  dir: string,
+  options: { maxDepth?: number; maxEntries?: number; countLimit?: number } = {},
+): Promise<{ lines: string[]; total: number; truncated: boolean }> {
+  const maxDepth = options.maxDepth ?? 3;
+  const maxEntries = options.maxEntries ?? MAX_LIST_ENTRIES;
+  const countLimit = options.countLimit ?? 5_000;
+  const lines: string[] = [];
+  let total = 0;
+  const walk = async (current: string, prefix: string, depth: number): Promise<void> => {
+    const entries = (await readdir(current, { withFileTypes: true }))
+      .filter((entry) => !(entry.isDirectory() && IGNORED_DIRECTORY_NAMES.has(entry.name)))
+      .sort((x, y) => Number(y.isDirectory()) - Number(x.isDirectory()) || x.name.localeCompare(y.name));
+    for (const entry of entries) {
+      total++;
+      if (lines.length < maxEntries) lines.push(`${prefix}${entry.name}${entry.isDirectory() ? '/' : ''}`);
+      if (entry.isDirectory() && depth < maxDepth && total < countLimit) await walk(join(current, entry.name), `${prefix}  `, depth + 1);
+      if (total >= countLimit) return;
+    }
+  };
+  await walk(dir, '', 1);
+  return { lines, total, truncated: total > lines.length };
+}
 
 /**
  * Resolve a workspace-relative target to an absolute path, throwing if it escapes
@@ -36,7 +78,7 @@ async function pathSuggestion(root: string, requested: string): Promise<string |
       if (depth > 6 || matches.length > 1) return;
       const entries = await readdir(current, { withFileTypes: true });
       for (const entry of entries) {
-        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        if (entry.isDirectory() && IGNORED_DIRECTORY_NAMES.has(entry.name)) continue;
         const full = join(current, entry.name);
         if (entry.isFile() && entry.name === wanted) matches.push(relative(base, full));
         else if (entry.isDirectory()) await walk(full, depth + 1);
@@ -89,7 +131,7 @@ async function findUniqueOldString(root: string, oldString: string): Promise<str
       if (depth > 6 || total > 1) return;
       const entries = await readdir(current, { withFileTypes: true });
       for (const entry of entries) {
-        if (entry.name === 'node_modules' || entry.name === '.git') continue;
+        if (entry.isDirectory() && IGNORED_DIRECTORY_NAMES.has(entry.name)) continue;
         const full = join(current, entry.name);
         if (entry.isDirectory()) await walk(full, depth + 1);
         else if (entry.isFile()) {
@@ -112,17 +154,20 @@ async function findUniqueOldString(root: string, oldString: string): Promise<str
 }
 
 export const readFileTool: ToolDefinition = {
-  name: 'read_file', description: 'Read a UTF-8 text file, optionally by 1-based inclusive line range.', mutating: false,
-  inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 }, end_line: { type: 'integer', minimum: 1 } }, additionalProperties: false },
+  name: 'read_file', description: 'Read a UTF-8 text file by 1-based line range: start_line/end_line, or offset (first line) + limit (max lines). Use offset/limit to page through a spilled tool-output file or any long file instead of re-running the tool that produced it.', mutating: false,
+  inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 }, end_line: { type: 'integer', minimum: 1 }, offset: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1 } }, additionalProperties: false },
   async execute(args, context) {
-    const a = args as { path?: unknown; start_line?: unknown; end_line?: unknown };
+    const a = args as { path?: unknown; start_line?: unknown; end_line?: unknown; offset?: unknown; limit?: unknown };
     if (typeof a.path !== 'string') return { call_id: '', status: 'error', output: 'path must be a string', truncated: false, meta: {} };
     try {
       const resolved = await resolveExistingPath(context.workspaceRoot, a.path);
       const data = await readFile(resolved.target, 'utf8');
       const lines = data.split('\n');
-      const start = typeof a.start_line === 'number' ? Math.max(1, a.start_line) : 1;
-      const end = typeof a.end_line === 'number' ? Math.min(lines.length, a.end_line) : lines.length;
+      // offset is the 1-based first line (same anchor as start_line; offset wins).
+      const startInput = typeof a.offset === 'number' ? a.offset : a.start_line;
+      const start = typeof startInput === 'number' ? Math.max(1, Math.floor(startInput)) : 1;
+      let end = typeof a.end_line === 'number' ? Math.min(lines.length, Math.floor(a.end_line)) : lines.length;
+      if (typeof a.limit === 'number') end = Math.min(end, start + Math.max(1, Math.floor(a.limit)) - 1);
       const text = lines.slice(start - 1, end).map((line, i) => `${start + i}: ${line}`).join('\n');
       return output('', text, { start_line: start, end_line: end, total_lines: lines.length, ...(resolved.resolvedPath ? { resolved_path: resolved.resolvedPath, requested_path: a.path } : {}) });
     } catch (error) { return { call_id: '', status: 'error', output: await errorWithSuggestion(error, context.workspaceRoot, a.path), truncated: false, meta: {} }; }
@@ -198,28 +243,44 @@ export const editFileTool: ToolDefinition = {
   },
 };
 
+export const editSearchReplaceTool: ToolDefinition = {
+  name: 'edit_search_replace', description: [
+    'Edit an existing UTF-8 file with Aider-style SEARCH/REPLACE blocks instead of JSON string arguments.',
+    'Put one or more blocks in `replacements`, each exactly:',
+    '<<<<<<< SEARCH',
+    '<lines copied byte-exact from the current file>',
+    '=======',
+    '<the lines that replace them>',
+    '>>>>>>> REPLACE',
+    'Each SEARCH anchor must appear exactly once in the file; on any mismatch nothing is written and the error tells you how to fix the anchor.',
+  ].join('\n'), mutating: true,
+  inputSchema: { type: 'object', required: ['path', 'replacements'], properties: { path: { type: 'string' }, replacements: { type: 'string', description: 'One or more SEARCH/REPLACE blocks in the format described above.' } }, additionalProperties: false },
+  async execute(args, context) {
+    const a = args as { path?: unknown; replacements?: unknown };
+    if (typeof a.path !== 'string' || typeof a.replacements !== 'string') return { call_id: '', status: 'error', output: 'path and replacements must be strings', truncated: false, meta: {} };
+    try {
+      const resolved = await resolveExistingPath(context.workspaceRoot, a.path);
+      const data = await readFile(resolved.target, 'utf8');
+      const applied = applySearchReplace(data, a.replacements, a.path);
+      if ('error' in applied) return { call_id: '', status: 'error', output: applied.error, truncated: false, meta: { path: a.path, reason: 'search_replace_mismatch' } };
+      await writeFile(resolved.target, applied.content, 'utf8');
+      const shownPath = resolved.resolvedPath ?? a.path;
+      return { call_id: '', status: 'ok', output: `edited ${shownPath} (${applied.applied} SEARCH/REPLACE block${applied.applied === 1 ? '' : 's'} applied)`, truncated: false, meta: { path: shownPath, replacements: applied.applied, ...(resolved.resolvedPath ? { resolved_path: resolved.resolvedPath, requested_path: a.path } : {}) } };
+    } catch (error) { return { call_id: '', status: 'error', output: await errorWithSuggestion(error, context.workspaceRoot, a.path), truncated: false, meta: {} }; }
+  },
+};
+
 export const listDirTool: ToolDefinition = {
-  name: 'list_dir', description: 'List a workspace directory as a shallow tree (depth 3), so nested source files are visible without guessing paths.', mutating: false,
+  name: 'list_dir', description: 'List a workspace directory as a shallow tree (depth 3), so nested source files are visible without guessing paths. Dependency/state folders (node_modules, .git, .daedalus, dist) are omitted and very large listings are truncated with a count of what was left out.', mutating: false,
   inputSchema: { type: 'object', properties: { path: { type: 'string' }, depth: { type: 'integer', minimum: 1, maximum: 6 } }, additionalProperties: false },
   async execute(args, context) {
     const a = args as { path?: unknown; depth?: unknown }; const input = typeof a.path === 'string' ? a.path : '.';
     const maxDepth = typeof a.depth === 'number' && Number.isInteger(a.depth) ? Math.min(6, Math.max(1, a.depth)) : 3;
     try {
       const dir = await pathInWorkspace(context.workspaceRoot, input);
-      const lines: string[] = [];
-      const walk = async (current: string, prefix: string, depth: number): Promise<void> => {
-        if (lines.length >= 200) return;
-        const entries = (await readdir(current, { withFileTypes: true }))
-          .filter((e) => !['node_modules', '.git'].includes(e.name))
-          .sort((x, y) => Number(y.isDirectory()) - Number(x.isDirectory()) || x.name.localeCompare(y.name));
-        for (const entry of entries) {
-          if (lines.length >= 200) return;
-          lines.push(`${prefix}${entry.name}${entry.isDirectory() ? '/' : ''}`);
-          if (entry.isDirectory() && depth < maxDepth) await walk(join(current, entry.name), `${prefix}  `, depth + 1);
-        }
-      };
-      await walk(dir, '', 1);
-      return output('', lines.join('\n'), { path: input, depth: maxDepth, entries: lines.length });
+      const { lines, total, truncated } = await walkTreeLines(dir, { maxDepth });
+      const text = truncated ? [...lines, `… (${total - lines.length} more entries, truncated)`].join('\n') : lines.join('\n');
+      return output('', text, { path: input, depth: maxDepth, entries: lines.length, ...(truncated ? { truncated: true, total_entries: total } : {}) });
     }
     catch (error) { return { call_id: '', status: 'error', output: String(error), truncated: false, meta: {} }; }
   },

@@ -1,4 +1,4 @@
-import { ModelPoolProvider, OpenAICompatProvider, registerProvider, type LLMProvider, type Message } from "./llm/index.ts";
+import { ModelPoolProvider, OpenAICompatProvider, TextProtocolProvider, registerProvider, type LLMProvider, type Message, type ProtocolSwitchInfo, type ToolProtocol } from "./llm/index.ts";
 import { loadSettings, type Settings } from "../settings.ts";
 
 export type PromptSection = { id: string; content: string };
@@ -13,38 +13,47 @@ export function buildPrompt(template: PromptTemplate): string {
 /** Reads LLM_* settings and registers the default OpenAI-compatible provider. */
 export function createProviderFromSettings(settings: Settings = loadSettings()): LLMProvider {
   const models = settings.llm.models.length > 0 ? settings.llm.models : settings.llm.model ? [settings.llm.model] : [];
+  const protocol = settings.llm.toolProtocol;
   const provider = models.length > 1
     ? new ModelPoolProvider({
         models,
         strategy: settings.llm.modelStrategy,
-        createProvider: (model) => new OpenAICompatProvider({
+        // Tailor suite: tier routing inside the pool (DAEDALUS_MODEL_ROUTING=off disables).
+        tiers: settings.llm.modelTiers ?? {},
+        routing: settings.tailor?.modelRouting !== false,
+        // Protocol state is per underlying model: wrap inside the pool so a
+        // weak model can fall back to text while a strong one stays native.
+        createProvider: (model) => new TextProtocolProvider(new OpenAICompatProvider({
           baseUrl: settings.llm.baseUrl,
           apiKey: settings.llm.apiKey,
           model,
           defaultTimeoutMs: settings.llm.timeoutMs ?? undefined,
-        }),
+        }), { protocol }),
       })
-    : new OpenAICompatProvider({
+    : new TextProtocolProvider(new OpenAICompatProvider({
         baseUrl: settings.llm.baseUrl,
         apiKey: settings.llm.apiKey,
         model: settings.llm.model || models[0] || "",
         defaultTimeoutMs: settings.llm.timeoutMs ?? undefined,
-      });
+      }), { protocol });
   registerProvider(provider);
   return provider;
 }
 
 /** Build a provider for one stored provider configuration + model (single-model, no pool). */
 export function createProviderForConfig(
-  config: { baseUrl?: string; apiKey?: string } | undefined,
+  config: { baseUrl?: string; apiKey?: string; toolProtocol?: ToolProtocol } | undefined,
   model: string,
-  options: { defaultTimeoutMs?: number } = {},
+  options: { defaultTimeoutMs?: number; toolProtocol?: ToolProtocol; onProtocolSwitch?: (info: ProtocolSwitchInfo) => void | Promise<void> } = {},
 ): LLMProvider {
-  return new OpenAICompatProvider({
+  return new TextProtocolProvider(new OpenAICompatProvider({
     baseUrl: config?.baseUrl ?? "",
     apiKey: config?.apiKey ?? "",
     model,
     defaultTimeoutMs: options.defaultTimeoutMs,
+  }), {
+    protocol: options.toolProtocol ?? config?.toolProtocol ?? "auto",
+    onProtocolSwitch: options.onProtocolSwitch,
   });
 }
 

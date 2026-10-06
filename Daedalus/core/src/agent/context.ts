@@ -1,9 +1,11 @@
 import { readFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import type { ContentBlock, Message, ToolDefinition } from '../providers/llm/types.ts';
-import type { Attachment, TaskState } from '../contracts.ts';
+import type { Attachment, PromptFamily, TaskState } from '../contracts.ts';
 import { buildPrompt, estimateTokens, systemMessage, userMessage } from '../providers/index.ts';
 import { formatSkillOrigin, type SkillInfo } from '../skills/index.ts';
+import { walkTreeLines } from '../tools/filesystem/index.ts';
+import { promptFamilyFragment } from './prompt-dialects.ts';
 import type { ContextManager, Observation } from './types.ts';
 
 export type ContextManagerOptions = {
@@ -22,10 +24,21 @@ export type ContextManagerOptions = {
   agentInstructions?: string;
   /** Name of the subagent running this task, for the prompt header. */
   agentName?: string;
+  /**
+   * Prompt dialect family (tailor suite). Only non-`generic` families add a
+   * framing fragment; generic/unset leaves the prompt byte-identical.
+   */
+  promptFamily?: PromptFamily;
+  /** Workspace-relative paths the user pinned (tailor suite); shown in the workspace overview section. */
+  pins?: string[];
 };
 
 const DEFAULT_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_MAX_IMAGES = 4;
+/** Pins shown in the prompt: count, per-file excerpt, and total budget caps. */
+export const MAX_PINNED_FILES_IN_PROMPT = 10;
+export const MAX_PINNED_LINES_PER_FILE = 6;
+export const MAX_PINNED_TOTAL_CHARS = 2_400;
 
 /**
  * Context Manager: ordered prompt sections (role, task, plan, constraints),
@@ -47,6 +60,8 @@ export class DefaultContextManager implements ContextManager {
   readonly #rulesFiles: string[];
   readonly #agentInstructions?: string;
   readonly #agentName?: string;
+  readonly #promptFamily: PromptFamily;
+  readonly #pins: string[];
 
   constructor(options: number | ContextManagerOptions = 16_000) {
     const resolved = typeof options === 'number' ? { budget: options } : options;
@@ -60,23 +75,38 @@ export class DefaultContextManager implements ContextManager {
     this.#rulesFiles = resolved.rulesFiles ?? [];
     this.#agentInstructions = resolved.agentInstructions;
     this.#agentName = resolved.agentName;
+    this.#promptFamily = resolved.promptFamily ?? 'generic';
+    this.#pins = resolved.pins ?? [];
   }
 
   async buildMessages(state: TaskState, observations: Observation[], tools?: ToolDefinition[]): Promise<Message[]> {
+    const workspaceOverview = await this.#workspaceOverview(state);
     const template = {
       version: '1.0.0',
       sections: [
         { id: 'role', content: 'You are Daedalus, an autonomous coding agent operating on a local repository.' },
         { id: 'task', content: state.goal },
         { id: 'repo', content: `Repository: ${state.repo_path}` },
+        ...(workspaceOverview
+          ? [{
+              id: 'workspace',
+              content: workspaceOverview,
+            }]
+          : []),
         { id: 'plan', content: state.steps.map((s) => `- [${s.status}] ${s.intent}`).join('\n') || '(no plan yet)' },
         { id: 'mode', content: `Current mode: ${state.mode ?? 'auto'}. Ask/Plan are read-only; Manual requires approval for mutations; Auto follows the session approval policy; Orchestrator coordinates child tasks.` },
         { id: 'constraints', content: state.constraints.join('\n') || '(none)' },
         {
           id: 'protocol',
           content:
-            'Respond with a tool call to act, or reply starting with "done: <summary>" when every plan step is satisfied, "replan: <reason>" to amend the plan, or "stop: <reason>" to abort. Read-only inspection (list/read/search) is evidence only: it can finish an inspection step, but it does not satisfy an implementation criterion. Before using "done:" for a mutating task, call a mutating tool (write_file, edit_file, create_dir) or run_command as appropriate and let the validation gate prove the result. If a previous model response was invalid prose, answer with a concrete tool call next.',
+            'Respond with a tool call to act, or reply starting with "done: <summary>" when every plan step is satisfied, "replan: <reason>" to amend the plan, or "stop: <reason>" to abort. Read-only inspection (list/read/search) is evidence only: it can finish an inspection step, but it does not satisfy an implementation criterion. Before using "done:" for a mutating task, call a mutating tool (write_file, edit_file, create_dir) or run_command as appropriate and let the validation gate prove the result. If a previous model response was invalid prose, answer with a concrete tool call next. Do not repeat list_dir/read on the same path: the workspace overview below (and any listing already returned) is your structure reference — once you have enough structure, proceed to the actual mutation (create_dir, write_file, edit_file) instead of exploring further. Bias to action: deliver the working result, not a plan about it — create the folder/file as soon as you know where it goes, and finish with "done: <what you made and where>".',
         },
+        // Prompt dialect (tailor suite): framing conventions per model
+        // family. `generic` contributes no section at all, keeping the
+        // default prompt byte-identical to the pre-dialect one.
+        ...(promptFamilyFragment(this.#promptFamily)
+          ? [{ id: 'dialect', content: promptFamilyFragment(this.#promptFamily)! }]
+          : []),
         ...(this.#skills.length
           ? [{
               id: 'skills',
@@ -111,6 +141,79 @@ export class DefaultContextManager implements ContextManager {
       messages.push(userMessage(`Available tools: ${tools.map((t) => t.function.name).join(', ')}`));
     }
     return this.compact(messages, this.#budget);
+  }
+
+  /**
+   * Shallow, filtered workspace tree shipped with every prompt, so the model
+   * starts with the repository structure instead of spending its first turns
+   * re-listing the root (the classic exploration loop). Dependency/state
+   * folders are pruned by the shared tree walker; failures are silent (the
+   * section is simply omitted).
+   */
+  async #workspaceOverview(state: TaskState): Promise<string | undefined> {
+    const root = this.#workspaceRoot ?? state.repo_path;
+    if (!root) return undefined;
+    const pinned = await this.#pinnedSection(root);
+    try {
+      const { lines, total, truncated } = await walkTreeLines(resolve(root), { maxDepth: 2, maxEntries: 60 });
+      if (lines.length === 0) return pinned;
+      const remainder = truncated ? `\n… (${total - lines.length} more entries, truncated)` : '';
+      return [
+        `Workspace overview (shallow tree of ${root}; node_modules, .git, .daedalus and dist omitted):`,
+        ...lines,
+        remainder.trim() ? remainder.trim() : undefined,
+        'You already have this overview — do not call list_dir on the workspace root again just to see the structure. List one specific subfolder only when you need deeper detail, and never re-list a directory you have already listed.',
+        pinned,
+      ].filter(Boolean).join('\n');
+    } catch {
+      return pinned;
+    }
+  }
+
+  /**
+   * User-pinned paths (tailor suite), appended to the workspace overview:
+   * the pin list itself plus a short first-lines excerpt per file, so the
+   * model starts oriented around what the user marked important. Hard caps
+   * (count, per-file lines, total chars) keep pins from flooding the prompt;
+   * an over-cap or unreadable pin degrades to its path alone, silently.
+   */
+  async #pinnedSection(root: string): Promise<string | undefined> {
+    if (this.#pins.length === 0) return undefined;
+    const shown = this.#pins.slice(0, MAX_PINNED_FILES_IN_PROMPT);
+    const lines: string[] = [
+      `Pinned by user (treat as important; ${shown.length} of ${this.#pins.length} pin${this.#pins.length === 1 ? '' : 's'} shown):`,
+    ];
+    let used = 0;
+    let capped = false;
+    for (const pin of shown) {
+      const excerpt = await this.#pinExcerpt(root, pin);
+      const entry = excerpt ? `- ${pin}\n${excerpt}` : `- ${pin}`;
+      if (used + entry.length > MAX_PINNED_TOTAL_CHARS) {
+        lines.push(`- ${pin}`);
+        capped = true;
+        continue;
+      }
+      used += entry.length;
+      lines.push(entry);
+    }
+    if (this.#pins.length > shown.length || capped) {
+      lines.push(`… (pinned overview truncated at ${MAX_PINNED_TOTAL_CHARS} chars / ${MAX_PINNED_FILES_IN_PROMPT} entries — read_file a pinned path for its full content)`);
+    }
+    return lines.join('\n');
+  }
+
+  async #pinExcerpt(root: string, pin: string): Promise<string | undefined> {
+    try {
+      const absolute = resolve(root, pin);
+      if (absolute !== root && !absolute.startsWith(root + sep)) return undefined;
+      const data = await readFile(absolute, 'utf8');
+      const head = data.split('\n').slice(0, MAX_PINNED_LINES_PER_FILE).join('\n').trim();
+      if (!head) return undefined;
+      return head.split('\n').map((line) => `  | ${line}`).join('\n');
+    } catch {
+      // Directories and unreadable pins still appear as paths.
+      return undefined;
+    }
   }
 
   async #attachmentMessage(state: TaskState): Promise<Message | undefined> {

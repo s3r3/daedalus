@@ -2,6 +2,7 @@ import type { AgentMode, Attachment, Event, FinalReport, ModelStrategy, Provider
 import { EventBus, emitEvent } from './events.ts';
 import { TaskStore } from './persistence.ts';
 import { AgentLoop } from './agent/agent-loop.ts';
+import type { ToolOutputLimits } from './agent/tool-output.ts';
 import { DefaultContextManager } from './agent/context.ts';
 import { interpretTask } from './agent/interpreter.ts';
 import { createPlan } from './agent/planner.ts';
@@ -10,7 +11,7 @@ import { guardEditedFile } from './agent/edit-guard.ts';
 import { loadHooksConfig, runPostToolHooks, runPreToolHooks, type HooksConfig } from './agent/hooks.ts';
 import { loadAgents, workspaceAgentsDir, type AgentDefinition } from './agents/index.ts';
 import { createTaskWorktree, worktreeChangedFiles } from './worktree.ts';
-import { createDefaultRegistry } from './tools/index.ts';
+import { createDefaultRegistry, editSearchReplaceTool } from './tools/index.ts';
 import { pathInWorkspace } from './tools/filesystem/index.ts';
 import type { ToolDefinition } from './tools/registry.ts';
 import { readFile } from 'node:fs/promises';
@@ -20,7 +21,12 @@ import { ApprovalBroker, ExecutionHarness, type ApprovalPolicy, type HarnessConf
 import { CommandValidator, validationSatisfied, type ValidationCommand, type Validator } from './validation/index.ts';
 import { createProviderFromSettings } from './providers/index.ts';
 import { OpenAICompatProvider } from './providers/llm/openai-compat.ts';
-import { ModelPoolProvider, normalizeModelList } from './providers/llm/model-pool.ts';
+import { ModelPoolProvider, asModelController, normalizeModelList } from './providers/llm/model-pool.ts';
+import { resolvePromptFamily } from './agent/prompt-dialects.ts';
+import { reviewDiff } from './agent/review.ts';
+import { loadPins } from './pins.ts';
+import type { EditFormat, ModelTier, PromptFamily, PromptFamilySetting, ReviewGateReport } from './contracts.ts';
+import { TextProtocolProvider, type ProtocolSwitchInfo } from './providers/llm/text-protocol.ts';
 import { ModeController } from './interaction/modes.ts';
 import { ProviderRegistry } from './interaction/providers.ts';
 import { OrchestratorRunner, decomposeTask, type ChildTaskInput } from './interaction/orchestrator.ts';
@@ -86,10 +92,26 @@ export type TaskRunnerOptions = {
   contextLimitTokens?: number;
   /** Condense older tool outputs past 70% of the context limit. Defaults to settings.context.condense (on). */
   condense?: boolean;
+  /** Tool-output caps + spill (head+tail in model context, full text in the task store). Defaults to settings.toolOutput. */
+  toolOutput?: ToolOutputLimits;
   /** Cheap helper model used only to title tasks (DAEDALUS_HELPER_MODEL). */
   helperModel?: string;
   /** Injected helper provider (tests); production builds one from settings. */
   helperProvider?: LLMProvider;
+  /** Capability tiers per model (tailor suite); merged over settings tiers, under the provider config's tiers. */
+  modelTiers?: Record<string, ModelTier>;
+  /** Tier routing on/off (tailor suite). Defaults to settings.tailor.modelRouting (on). */
+  modelRouting?: boolean;
+  /** Quality escalation on/off (tailor suite). Defaults to settings.tailor.qualityEscalation (on). */
+  qualityEscalation?: boolean;
+  /** Strong-model review gate (tailor suite). Defaults to settings.tailor.reviewGate (off). */
+  reviewGate?: boolean;
+  /** Reviewer factory for the gate (tests); production binds the strongest model on the run's endpoint. */
+  reviewProviderFor?: (model: string) => LLMProvider | undefined;
+  /** Edit dialect (tailor suite): `search_replace` adds the SEARCH/REPLACE edit tool. Defaults to the provider config / settings. */
+  editFormat?: EditFormat;
+  /** Prompt dialect family override (tailor suite). Defaults to the provider config / settings (`auto`). */
+  promptFamily?: PromptFamilySetting;
 };
 
 /** Live snapshot of the extension systems (MCP / LSP / skills / agents) for UIs. */
@@ -144,7 +166,7 @@ const STOP_REASONS = new Set(['aborted', 'max_iterations', 'max_errors', 'no_pro
 /** Tools whose execution is a process → COMMAND_* events for the terminal surface. */
 const COMMAND_TOOLS = new Set(['run_command', 'git_status', 'git_diff']);
 /** Tools that target a workspace file → FILE_CHANGED diff evidence. */
-const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'create_dir']);
+const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'edit_search_replace', 'create_dir']);
 
 export class TaskRunner {
   readonly bus: EventBus;
@@ -397,6 +419,26 @@ export class TaskRunner {
         // A name collision with a built-in tool is skipped, never fatal.
       }
     }
+    // Tailor suite, resolved once per run from runner options < provider
+    // config < settings: capability tiers (pool routing + escalation),
+    // the edit dialect, the prompt-dialect family for the primary model,
+    // and the user's pinned workspace paths for the prompt overview.
+    const selection = this.#providerSelection(effectiveOptions);
+    const tiers = this.#tiersFor(effectiveOptions);
+    const qualityEscalation = this.#options.qualityEscalation ?? (this.#settings.tailor?.qualityEscalation !== false);
+    const editFormat: EditFormat = this.#options.editFormat ?? selection?.config.editFormat ?? this.#settings.llm.editFormat ?? 'native';
+    const promptFamily: PromptFamily = resolvePromptFamily(
+      this.#options.promptFamily ?? selection?.config.promptFamily ?? this.#settings.llm.promptFamily,
+      spec.model ?? modelConfig.models[0],
+    );
+    const pins = await loadPins(this.store.root);
+    if (editFormat === 'search_replace') {
+      try {
+        registry.register(editSearchReplaceTool);
+      } catch {
+        // Already registered (e.g. a future default): keep the existing one.
+      }
+    }
     // Subagent tool allowlist: the model only sees allowed tools, and
     // execution denies anything else (defence in depth — a hallucinated
     // call name must not slip past the schema filter).
@@ -423,6 +465,8 @@ export class TaskRunner {
         rulesFiles: rules.files,
         agentInstructions: agent?.instructions,
         agentName: agent?.name,
+        promptFamily,
+        pins,
       }),
       validator: this.validator,
       tools: toolSchemas,
@@ -432,6 +476,9 @@ export class TaskRunner {
       thinking: spec.thinking ?? options.thinking ?? this.#options.thinking ?? settingsThinking(this.#settings),
       contextLimitTokens: this.#options.contextLimitTokens ?? this.#settings.context?.limitTokens,
       condense: this.#options.condense ?? (this.#settings.context?.condense !== false),
+      toolOutput: this.#options.toolOutput ?? this.#settings.toolOutput,
+      modelTiers: tiers,
+      qualityEscalation,
       executeTool: async (call) => {
         if (allowlist && !allowlist.includes(call.tool)) {
           return {
@@ -442,7 +489,21 @@ export class TaskRunner {
             meta: { tool: call.tool, reason: 'tool_allowlist' },
           };
         }
-        const tool = registry.get(call.tool);
+        // A hallucinated or dialect-gated tool name (e.g. edit_search_replace
+        // while edit_format is native) gets a clean denial the model can
+        // react to, not a thrown registry error that eats the error budget.
+        let tool: ToolDefinition;
+        try {
+          tool = registry.get(call.tool);
+        } catch {
+          return {
+            call_id: call.id,
+            status: 'denied',
+            output: `tool ${call.tool} is not available in this run`,
+            truncated: false,
+            meta: { tool: call.tool, reason: 'unknown_tool' },
+          };
+        }
         return this.#executeWithObservability(call, tool, spec.id, call.turn_id || undefined, hooksConfig);
       },
     });
@@ -459,7 +520,13 @@ export class TaskRunner {
     }
 
     const validation = this.#lastValidation(collected);
-    const outcome = this.#outcome(state, validation);
+    // Cross-model review gate (tailor suite, default off): a strong-model
+    // read of the diff before completion is declared. Report-only — a
+    // blocking verdict demotes success to partial; it never blocks the
+    // run itself (fail-open inside the gate).
+    const review = await this.#reviewGate(effectiveOptions, spec, state, provider, collected, rules.text ? rules.text : undefined);
+    let outcome = this.#outcome(state, validation);
+    if (review?.blocking && outcome === 'success') outcome = 'partial';
     const modelFailureEvidence = this.#modelFailureEvidence(collected, state);
     const report: FinalReport = {
       task_id: spec.id,
@@ -469,7 +536,12 @@ export class TaskRunner {
         ...(modelFailureEvidence ? [`model failure: ${modelFailureEvidence}`] : []),
         ...this.#validationEvidence(validation),
         ...this.#fileChangeEvidence(collected),
+        ...(review ? [
+          `review by ${review.model}: ${review.blocking ? 'blocking issues found' : 'no blocking issues'} (${review.findings.length} finding${review.findings.length === 1 ? '' : 's'})`,
+          ...review.findings.map((finding) => `review [${finding.severity}] ${finding.file}${finding.line ? `:${finding.line}` : ''} — ${finding.message}`),
+        ] : []),
       ],
+      ...(review ? { review } : {}),
       ...(spec.title ? { title: spec.title } : {}),
       ...(spec.rules_files?.length ? { rules_files: spec.rules_files } : {}),
       ...(validation?.source ? { validation_source: validation.source } : {}),
@@ -484,11 +556,88 @@ export class TaskRunner {
         approvals: collected.filter((e) => e.type === 'APPROVAL_REQUESTED').length,
         checks_passed: validation?.checks.filter((c) => c.status === 'pass').length ?? 0,
         checks_failed: validation?.checks.filter((c) => c.status !== 'pass').length ?? 0,
+        review_findings: review?.findings.length ?? 0,
+        review_blocking: review?.blocking ? 1 : 0,
         duration_ms: Date.now() - startedAt,
       },
     };
     this.store.saveReport(spec.id, report);
     return { state, events: collected, validation, outcome, report };
+  }
+
+  /**
+   * Cross-model review gate (tailor suite, default off): when a task that
+   * changed files was driven by a non-strongest pool model, the pool's
+   * strongest model reviews the diff before completion is declared. The
+   * verdict is recorded as a REVIEW_COMPLETED event and on the report; a
+   * blocking (high-severity) verdict demotes the outcome to partial.
+   * Repair loops are quality escalation's job — the gate never re-runs
+   * the agent. Entirely fail-open: any problem skips the gate silently.
+   */
+  async #reviewGate(
+    options: RunOptions,
+    spec: TaskSpec,
+    state: TaskState,
+    provider: LLMProvider,
+    events: Event[],
+    rulesText: string | undefined,
+  ): Promise<ReviewGateReport | undefined> {
+    try {
+      const enabled = this.#options.reviewGate ?? this.#settings.tailor?.reviewGate === true;
+      if (!enabled || state.status !== 'done') return undefined;
+      const diff = this.#aggregateDiff(events);
+      if (!diff.trim()) return undefined;
+      const controller = asModelController(provider);
+      if (!controller || controller.poolModels.length < 2) return undefined;
+      const strongest = controller.strongestModel();
+      if (!strongest) return undefined;
+      // The author is the task's assigned model (spec.model; the pool
+      // primary in the router path). Phase routing may borrow the strong
+      // model for individual turns, but the task still counts as authored
+      // by the model it was assigned to.
+      const author = spec.model ?? controller.currentModel();
+      if (!author || author === strongest) return undefined;
+      const reviewer = this.#reviewerProvider(options, strongest);
+      if (!reviewer) return undefined;
+      const result = await reviewDiff({ provider: reviewer, diff, rulesText, source: 'task-diff' });
+      const blocking = result.findings.some((finding) => finding.severity === 'high');
+      emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'REVIEW_COMPLETED', {
+        model: strongest,
+        author_model: author,
+        blocking,
+        findings: result.findings,
+        truncated: result.truncated,
+      });
+      await this.bus.drain();
+      return { model: strongest, author_model: author, blocking, findings: result.findings };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Bind a one-shot reviewer to a model on the run's endpoint (fail-open: undefined = skip the gate). */
+  #reviewerProvider(options: RunOptions, model: string): LLMProvider | undefined {
+    if (this.#options.reviewProviderFor) return this.#options.reviewProviderFor(model);
+    const selection = this.#providerSelection(options);
+    const defaultTimeoutMs = this.#settings.llm.timeoutMs ?? undefined;
+    if (selection) {
+      const { config } = selection;
+      return new OpenAICompatProvider({
+        baseUrl: config.baseUrl || this.#settings.llm.baseUrl,
+        apiKey: config.apiKey ?? '',
+        model,
+        defaultTimeoutMs,
+      });
+    }
+    // An injected provider with no registry/settings backing cannot be
+    // re-bound to another model; guessing an endpoint would be worse.
+    if (this.#options.provider) return undefined;
+    return new OpenAICompatProvider({
+      baseUrl: this.#settings.llm.baseUrl,
+      apiKey: this.#settings.llm.apiKey,
+      model,
+      defaultTimeoutMs,
+    });
   }
 
   /**
@@ -528,6 +677,14 @@ export class TaskRunner {
       editGuard: this.#options.editGuard,
       contextLimitTokens: this.#options.contextLimitTokens,
       condense: this.#options.condense,
+      toolOutput: this.#options.toolOutput,
+      modelTiers: this.#options.modelTiers,
+      modelRouting: this.#options.modelRouting,
+      qualityEscalation: this.#options.qualityEscalation,
+      reviewGate: this.#options.reviewGate,
+      reviewProviderFor: this.#options.reviewProviderFor,
+      editFormat: this.#options.editFormat,
+      promptFamily: this.#options.promptFamily,
       helperModel: this.#options.helperModel,
       helperProvider: this.#options.helperProvider,
       hooks: this.#options.hooks,
@@ -729,6 +886,46 @@ export class TaskRunner {
     return { models, strategy };
   }
 
+  /**
+   * Wrap a per-model provider in the text-protocol adapter. The configured
+   * protocol comes from the stored provider config when present, else the
+   * LLM_TOOL_PROTOCOL setting; an `auto` switch mid-task is surfaced as a
+   * PROVIDER_CHANGED event so the Web Chat panel can show it.
+   */
+  #textProtocol(taskId: string, options: RunOptions, config: ProviderConfig | undefined, model: string, inner: LLMProvider): LLMProvider {
+    return new TextProtocolProvider(inner, {
+      protocol: config?.toolProtocol ?? this.#settings.llm.toolProtocol,
+      onProtocolSwitch: (info: ProtocolSwitchInfo) => {
+        emitEvent({ bus: this.bus, store: this.store }, taskId, undefined, 'PROVIDER_CHANGED', {
+          protocol_switched: true,
+          tool_protocol: info.to,
+          from_protocol: info.from,
+          from_model: model,
+          to_model: model,
+          model,
+          provider_id: options.providerId ?? this.#options.providerId ?? config?.id,
+          reason: `tool_protocol_${info.to}: ${info.reason}`,
+          error: info.reason,
+          failures: info.failures,
+        });
+      },
+    });
+  }
+
+  /** Merged capability tiers for a run (tailor suite): settings < runner options < provider config. */
+  #tiersFor(options: RunOptions): Record<string, ModelTier> {
+    const config = this.#providerSelection(options)?.config;
+    return {
+      ...(this.#settings.llm.modelTiers ?? {}),
+      ...(this.#options.modelTiers ?? {}),
+      ...(config?.modelTiers ?? {}),
+    };
+  }
+
+  #routingEnabled(): boolean {
+    return this.#options.modelRouting ?? (this.#settings.tailor?.modelRouting !== false);
+  }
+
   #providerFor(options: RunOptions, taskId: string): LLMProvider {
     const selection = this.#providerSelection(options);
     const modelConfig = this.#modelConfig(options);
@@ -739,12 +936,14 @@ export class TaskRunner {
       return new ModelPoolProvider({
         models: modelConfig.models,
         strategy: modelConfig.strategy,
-        createProvider: (model) => new OpenAICompatProvider({
+        tiers: this.#tiersFor(options),
+        routing: this.#routingEnabled(),
+        createProvider: (model) => this.#textProtocol(taskId, options, config, model, new OpenAICompatProvider({
           baseUrl,
           apiKey,
           model,
           defaultTimeoutMs: this.#settings.llm.timeoutMs ?? undefined,
-        }),
+        })),
         onSwitch: (switched) => {
           emitEvent({ bus: this.bus, store: this.store }, taskId, undefined, 'PROVIDER_CHANGED', {
             from_model: switched.from,
@@ -763,12 +962,12 @@ export class TaskRunner {
     }
     if (!selection) return this.#provider();
     const { config, model } = selection;
-    return new OpenAICompatProvider({
+    return this.#textProtocol(taskId, options, config, modelConfig.models[0] ?? model, new OpenAICompatProvider({
       baseUrl: config.baseUrl || this.#settings.llm.baseUrl,
       apiKey: config.apiKey ?? '',
       model: modelConfig.models[0] ?? model,
       defaultTimeoutMs: this.#settings.llm.timeoutMs ?? undefined,
-    });
+    }));
   }
 
   #providerSelection(options: RunOptions): { config: ProviderConfig; model: string } | undefined {
@@ -859,7 +1058,7 @@ export class TaskRunner {
     }
 
     let output = result.output;
-    if (result.status === 'ok' && (tool.name === 'write_file' || tool.name === 'edit_file') && typeof args.path === 'string') {
+    if (result.status === 'ok' && (tool.name === 'write_file' || tool.name === 'edit_file' || tool.name === 'edit_search_replace') && typeof args.path === 'string') {
       const effectivePath = typeof result.meta?.path === 'string' ? result.meta.path : args.path;
       // Checkpoint: persist the pre-mutation content captured before
       // execution (`before`); TaskStore keeps the first record per path, so a

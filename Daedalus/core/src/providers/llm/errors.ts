@@ -78,7 +78,15 @@ export function classifyLLMError(error: unknown): LLMErrorKind {
     summary.includes("network") ||
     /http 5\d\d/.test(summary) ||
     summary.includes("temporarily unavailable") ||
-    summary.includes("overloaded")
+    summary.includes("overloaded") ||
+    // Router/provider-wrapped upstream failures (e.g. 9Router answering a
+    // 400 with "Error from provider (Console): Upstream request failed…"):
+    // the request never really reached a model, so another model may work.
+    // A plain malformed-request 400 carries none of these markers and stays
+    // non-transient.
+    summary.includes("upstream request failed") ||
+    summary.includes("upstream error") ||
+    summary.includes("error from provider")
   ) return "transient";
   return "other";
 }
@@ -98,7 +106,24 @@ export function classifyProviderError(status: number, body: unknown): LLMError {
     return new LLMRateLimitError("provider rate limited", { retryAfterMs });
   }
   if (status >= 500) return new LLMError("provider transient error", { code: "transient" });
+  if (hasUpstreamFailureMarker(body)) return new LLMError("provider upstream request failed", { code: "transient" });
   return new LLMError(`provider error: ${status}`, { code: "unknown" });
+}
+
+/**
+ * A 400 whose body says the *upstream* provider failed (router-wrapped
+ * errors such as "Error from provider (Console): Upstream request failed")
+ * is a transient routing failure, not a malformed local request.
+ */
+export function hasUpstreamFailureMarker(body: unknown): boolean {
+  let text: string;
+  try {
+    text = typeof body === "string" ? body : JSON.stringify(body) ?? "";
+  } catch {
+    return false;
+  }
+  const lower = text.toLowerCase();
+  return lower.includes("upstream request failed") || lower.includes("upstream error") || lower.includes("error from provider");
 }
 
 function retryAfterMsFromResponse(body: unknown): number | undefined {
