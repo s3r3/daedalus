@@ -17,6 +17,7 @@ import type {
   UploadResponse,
   WorkspaceEntry,
   WorkspaceFile,
+  WorkspaceFiles,
   WorkspacePins,
   WorkspaceRoot,
   WorkspaceTreeNode,
@@ -170,6 +171,8 @@ export const api = {
   list: (root: string, path = '.') => request<{ path: string; items: WorkspaceEntry[] }>(`/workspace/list${query({ root, path })}`),
 
   file: (root: string, path: string) => request<WorkspaceFile>(`/workspace/file${query({ root, path })}`),
+
+  files: (root: string) => request<WorkspaceFiles>(`/workspace/files${query({ root })}`),
 
   createWorkspace: (input: { root?: string; path?: string; name?: string }) =>
     request<{ path: string; name: string; root?: string; session: SessionState }>('/workspace/create', {

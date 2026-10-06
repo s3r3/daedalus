@@ -6,6 +6,7 @@ import { buildPrompt, estimateTokens, systemMessage, userMessage } from '../prov
 import { formatSkillOrigin, type SkillInfo } from '../skills/index.ts';
 import { walkTreeLines } from '../tools/filesystem/index.ts';
 import { promptFamilyFragment } from './prompt-dialects.ts';
+import { resolveMentionSection } from './mentions.ts';
 import type { ContextManager, Observation } from './types.ts';
 
 export type ContextManagerOptions = {
@@ -81,6 +82,9 @@ export class DefaultContextManager implements ContextManager {
 
   async buildMessages(state: TaskState, observations: Observation[], tools?: ToolDefinition[]): Promise<Message[]> {
     const workspaceOverview = await this.#workspaceOverview(state);
+    // @-mentions resolve in the harness (see mentions.ts), never by the
+    // model: no mentions in the goal → no section, prompt byte-identical.
+    const mentionSection = await resolveMentionSection(this.#workspaceRoot ?? state.repo_path, state.goal);
     const template = {
       version: '1.0.0',
       sections: [
@@ -91,6 +95,12 @@ export class DefaultContextManager implements ContextManager {
           ? [{
               id: 'workspace',
               content: workspaceOverview,
+            }]
+          : []),
+        ...(mentionSection
+          ? [{
+              id: 'mentions',
+              content: mentionSection,
             }]
           : []),
         { id: 'plan', content: state.steps.map((s) => `- [${s.status}] ${s.intent}`).join('\n') || '(no plan yet)' },

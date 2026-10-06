@@ -39,7 +39,7 @@ import {
   type Settings,
   type SkillOrigin,
 } from "@daedalus/core";
-import { collectRoots, listDirectory, buildTree, resolveInside, MAX_FILE_BYTES } from "./workspace.ts";
+import { collectRoots, listDirectory, listFilesFlat, buildTree, resolveInside, MAX_FILE_BYTES } from "./workspace.ts";
 import { classifyWebIntent, executeFastPath } from "./fast-path.ts";
 import { UPLOAD_LIMITS, extractZipEntries, guessMimeType, parseMultipart, sanitizeRelativePath, type UploadPart } from "./uploads.ts";
 
@@ -1412,6 +1412,17 @@ export function createApp(ctx: AppContext) {
         const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
         const path = url.searchParams.get("path") || ".";
         sendJson(res, 200, buildTree(root, path, depth));
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error) });
+      }
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/workspace/files") {
+      try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+        const { files, truncated } = listFilesFlat(root);
+        sendJson(res, 200, { root, files, truncated });
       } catch (error) {
         sendJson(res, errorStatus(error), { error: errorMessage(error) });
       }

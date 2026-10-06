@@ -33,6 +33,11 @@ export type WorkspaceEntry = {
 
 export type WorkspaceTreeNode = WorkspaceEntry & { children?: WorkspaceTreeNode[] };
 
+export type FlatWorkspaceEntry = { path: string; type: "file" | "dir" };
+
+/** Flat file index budget: enough for @-mention completion in large repos without unbounded walks. */
+export const MAX_FLAT_FILE_ENTRIES = 2000;
+
 /** Reject any path that resolves outside the workspace root. */
 export function resolveInside(root: string, target: string): string {
   const absoluteRoot = resolve(root);
@@ -84,6 +89,45 @@ export function buildTree(root: string, target: string, depth: number, maxEntrie
       return { ...entry, ...(nested === undefined ? {} : { children: nested ?? [] }) };
     }),
   };
+}
+
+/**
+ * Flat index of every mentionable workspace path (files and directories),
+ * for @-completion in the composer. Mirrors the agent's own listing hygiene:
+ * IGNORED_DIRECTORIES are pruned and hidden entries (dotfiles, dot-dirs —
+ * which covers `.daedalus`/`.git` too) are skipped. Symlinks are reported as
+ * files and never descended, so link cycles cannot loop the walk. The result
+ * is sorted by path and capped; `truncated` says the cap cut entries off.
+ */
+export function listFilesFlat(root: string, maxEntries = MAX_FLAT_FILE_ENTRIES): { files: FlatWorkspaceEntry[]; truncated: boolean } {
+  const absoluteRoot = resolve(root);
+  const files: FlatWorkspaceEntry[] = [];
+  let truncated = false;
+  const walk = (dir: string): void => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (truncated) return;
+      if (entry.name.startsWith(".")) continue;
+      const isDirectory = entry.isDirectory();
+      if (isDirectory && isIgnored(entry.name)) continue;
+      if (files.length >= maxEntries) {
+        truncated = true;
+        return;
+      }
+      const child = join(dir, entry.name);
+      files.push({ path: relative(absoluteRoot, child), type: isDirectory ? "dir" : "file" });
+      if (isDirectory) walk(child);
+    }
+  };
+  walk(absoluteRoot);
+  files.sort((a, b) => a.path.localeCompare(b.path));
+  return { files, truncated };
 }
 
 function baseName(root: string, target?: string): string {

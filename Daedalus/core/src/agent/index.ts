@@ -14,6 +14,14 @@ export {
   type ContextManagerOptions,
 } from './context.ts';
 export {
+  MAX_MENTION_DIR_ENTRIES,
+  MAX_MENTION_FILE_CHARS,
+  MAX_MENTION_PATHS,
+  MAX_MENTION_TOTAL_CHARS,
+  extractMentionPaths,
+  resolveMentionSection,
+} from './mentions.ts';
+export {
   LoopGuard,
   LOOP_WINDOW_SIZE,
   REPEAT_SUPPRESSED_OUTPUT,
