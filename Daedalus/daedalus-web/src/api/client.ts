@@ -17,6 +17,7 @@ import type {
   UploadResponse,
   WorkspaceEntry,
   WorkspaceFile,
+  WorkspacePins,
   WorkspaceRoot,
   WorkspaceTreeNode,
 } from './types'
@@ -199,6 +200,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ root, path, content }),
     }),
+
+  pins: (root: string) => request<WorkspacePins>(`/workspace/pins${query({ root })}`),
+
+  savePins: (root: string, pins: string[]) =>
+    request<WorkspacePins>('/workspace/pins', { method: 'PUT', body: JSON.stringify({ root, pins }) }),
 
   upload: (form: FormData) => request<UploadResponse>('/uploads', { method: 'POST', body: form }),
 
