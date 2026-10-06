@@ -102,7 +102,7 @@ export function ModelPicker({
       </button>
 
       {open ? (
-        <div className="absolute bottom-full left-0 z-20 mb-1 w-[300px] rounded border border-line bg-surface shadow-lg">
+        <div className="absolute top-full left-0 z-20 mt-1 w-[300px] rounded border border-line bg-surface shadow-lg" data-testid="model-picker-list">
           <input
             data-testid="model-picker-filter"
             aria-label="filter models"

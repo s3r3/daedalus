@@ -34,6 +34,11 @@ export function ExecutePlanBar() {
     setFailure(null)
     try {
       const goal = `Execute the approved plan in ${planDoc}`
+      // Executing the plan is the next turn of the same chat conversation
+      // when one is active, so the follow-up keeps the session's memory.
+      const store = useDaedalusStore.getState()
+      const activeConversation =
+        store.conversation && store.conversation.root === workspaceRoot ? store.conversation : null
       const created = await api.createTask({
         goal,
         repo_path: workspaceRoot,
@@ -43,8 +48,18 @@ export function ExecutePlanBar() {
         provider_id: composer.providerId || undefined,
         model: composer.model || undefined,
         thinking: composer.thinking,
+        ...(activeConversation ? { conversation_id: activeConversation.id } : {}),
       })
       setTask(created.id, goal)
+      if (activeConversation) {
+        store.setConversation({
+          ...activeConversation,
+          turns: [
+            ...activeConversation.turns,
+            { role: 'user', text: goal, task_id: created.id, mode, ts: new Date().toISOString() },
+          ],
+        })
+      }
       setComposer({ mode, goal: '' })
     } catch (error) {
       setFailure(error instanceof Error ? error.message : String(error))

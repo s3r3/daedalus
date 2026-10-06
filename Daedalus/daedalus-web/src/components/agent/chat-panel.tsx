@@ -1,18 +1,23 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
-import { ArrowDown, CircleQuestionMark, ShieldAlert, Square } from 'lucide-react'
+import { ArrowDown, CircleQuestionMark, MessageSquarePlus, ShieldAlert, Square } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { EmptyState, Panel } from '../common/panel'
 import { Spinner } from '../common/spinner'
 import { api } from '../../api/client'
+import type { ConversationTurn } from '../../api/types'
 import { useActiveTaskId, useTaskEvents } from '../../state/hooks'
 import { useDaedalusStore } from '../../state/taskStore'
-import { CHAT_HEIGHT, loadChatHeight, saveChatHeight } from '../../state/prefs'
+import { CHAT_HEIGHT, loadChatHeight, saveChatHeight, saveActiveConversationId } from '../../state/prefs'
 import { chatTranscript, pendingApprovals, pendingQuestions, taskStatus, type ChatEntry } from '../../state/selectors'
 import { ApprovalCard } from '../approval/approval-card'
 import { QuestionCard } from '../approval/question-card'
 import { ExecutePlanBar } from './execute-plan-bar'
 import { STATUS_TONE, type Tone } from './status-tone'
+
+type ChatRowModel =
+  | { kind: 'entry'; entry: ChatEntry }
+  | { kind: 'turn'; turn: ConversationTurn; index: number }
 
 /**
  * The conversation, chat-style: your prompt, the model's thoughts and replies,
@@ -21,16 +26,96 @@ import { STATUS_TONE, type Tone } from './status-tone'
  * task reads like a conversation instead of a raw timeline. Facts come from
  * `chatTranscript()`; this panel owns only scroll behaviour, its (user-sized)
  * height, and the Stop control for the run it is showing.
+ *
+ * When a chat conversation is active, the panel renders the whole session:
+ * recorded turns in order, with the live task's event segment expanded in
+ * place of its own two turns (the segment carries the same prompt/replies in
+ * full detail). Tasks finished earlier in the session show as their recorded
+ * user prompt + Daedalus summary — that compact history is also what the
+ * next prompt carries as context.
  */
 export function ChatPanel() {
   const events = useTaskEvents()
   const taskId = useActiveTaskId()
   const thinking = useDaedalusStore((state) => state.composer.thinking)
+  const conversation = useDaedalusStore((state) => state.conversation)
+  const workspaceRoot = useDaedalusStore((state) => state.workspace.root)
+  const setConversation = useDaedalusStore((state) => state.setConversation)
+  const setComposer = useDaedalusStore((state) => state.setComposer)
   const entries = useMemo(() => chatTranscript(events, thinking), [events, thinking])
   const pending = useMemo(() => pendingApprovals(events), [events])
   const questions = useMemo(() => pendingQuestions(events), [events])
   const status = taskStatus(events, pending.length, questions.length)
   const running = status === 'running' || status === 'awaiting-approval' || status === 'awaiting-answer'
+
+  const rows = useMemo<ChatRowModel[]>(() => {
+    if (!conversation) return entries.map((entry) => ({ kind: 'entry' as const, entry }))
+    const out: ChatRowModel[] = []
+    let segmentInserted = false
+    conversation.turns.forEach((turn, index) => {
+      if (turn.task_id && turn.task_id === taskId) {
+        if (turn.role === 'user') {
+          if (entries.length > 0) {
+            for (const entry of entries) out.push({ kind: 'entry', entry })
+            segmentInserted = true
+          } else {
+            // Submitted a moment ago: no events yet, show the prompt itself.
+            out.push({ kind: 'turn', turn, index })
+          }
+        }
+        // The active task's assistant turn is rendered by its own segment.
+        return
+      }
+      out.push({ kind: 'turn', turn, index })
+    })
+    // The selected task predates (or is missing from) the conversation —
+    // keep its segment visible after the recorded turns.
+    if (taskId && entries.length > 0 && !segmentInserted) {
+      for (const entry of entries) out.push({ kind: 'entry', entry })
+    }
+    return out
+  }, [conversation, entries, taskId])
+
+  // When the live task completes, the server records its assistant turn;
+  // pull the fresh conversation so the summary joins the session here too.
+  const completed = useMemo(() => events.some((event) => event.type === 'TASK_COMPLETED'), [events])
+  const conversationId = conversation?.id
+  useEffect(() => {
+    if (!completed || !conversationId || !workspaceRoot) return
+    let cancelled = false
+    const timer = setTimeout(() => {
+      void api
+        .getConversation(workspaceRoot, conversationId)
+        .then(({ conversation: fresh }) => {
+          if (!cancelled) setConversation(fresh)
+        })
+        .catch(() => undefined)
+    }, 400)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+  }, [completed, conversationId, workspaceRoot, setConversation])
+
+  // "New chat": a fresh conversation on the server, a clean panel here, and
+  // the persisted pointer moved so a reload stays on the new session.
+  const startNewChat = async (): Promise<void> => {
+    const root = workspaceRoot || conversation?.root
+    useDaedalusStore.setState({ taskId: null, events: [], report: null, taskAttachments: [] })
+    setComposer({ goal: '', error: null })
+    if (!root) {
+      setConversation(null)
+      return
+    }
+    try {
+      const { conversation: fresh } = await api.createConversation(root)
+      setConversation(fresh)
+      saveActiveConversationId(root, fresh.id)
+    } catch {
+      setConversation(null)
+      saveActiveConversationId(root, null)
+    }
+  }
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const pinnedRef = useRef(true)
@@ -59,7 +144,7 @@ export function ChatPanel() {
   useEffect(() => {
     const el = scrollRef.current
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
-  }, [entries, status])
+  }, [rows, status])
 
   const onScroll = (): void => {
     const el = scrollRef.current
@@ -127,6 +212,18 @@ export function ChatPanel() {
       bodyClassName="min-h-0"
       action={
         <span className="flex items-center gap-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => void startNewChat()}
+            data-testid="new-chat"
+            aria-label="start a new chat conversation"
+            title="Start a fresh conversation (the previous one stays saved on the server)"
+          >
+            <MessageSquarePlus />
+            new chat
+          </Button>
           {running && taskId ? (
             <Button
               type="button"
@@ -141,14 +238,14 @@ export function ChatPanel() {
               {stopping ? 'stopping…' : 'stop'}
             </Button>
           ) : null}
-          <Badge tone="neutral">{entries.length}</Badge>
+          <Badge tone="neutral">{rows.length}</Badge>
           <Badge tone={STATUS_TONE[status]} data-testid="chat-status">
             {status}
           </Badge>
         </span>
       }
     >
-      {!taskId || entries.length === 0 ? (
+      {rows.length === 0 ? (
         <EmptyState title="No conversation yet" hint="Run a task to see the conversation here." />
       ) : (
         <div className="relative">
@@ -160,9 +257,13 @@ export function ChatPanel() {
             data-testid="chat-scroll"
           >
             <ol className="flex flex-col gap-1.5" data-testid="chat-entries">
-              {entries.map((entry) => (
-                <ChatRow key={entry.seq} entry={entry} />
-              ))}
+              {rows.map((row) =>
+                row.kind === 'entry' ? (
+                  <ChatRow key={`event-${row.entry.seq}`} entry={row.entry} />
+                ) : (
+                  <ChatTurnRow key={`turn-${row.index}`} turn={row.turn} />
+                ),
+              )}
               {status === 'running' ? (
                 <li className="flex items-center gap-1.5 px-1 py-0.5 text-[11px] text-muted" data-testid="chat-working">
                   <Spinner label="agent working" /> agent is working…
@@ -227,6 +328,24 @@ export function ChatPanel() {
 
       <ExecutePlanBar />
     </Panel>
+  )
+}
+
+/** A recorded conversation turn (finished task or fast-path exchange in this session). */
+function ChatTurnRow({ turn }: { turn: ConversationTurn }) {
+  if (turn.role === 'user') {
+    return (
+      <li className="rounded bg-surface px-2 py-1.5" data-testid="chat-entry" data-role="user" data-turn="recorded">
+        <span className="text-[9px] font-semibold uppercase tracking-wider text-primary">you</span>
+        <p className="whitespace-pre-wrap break-words text-[11px] text-foreground">{turn.text}</p>
+      </li>
+    )
+  }
+  return (
+    <li className="px-1 py-0.5" data-testid="chat-entry" data-role="assistant" data-turn="recorded">
+      <span className="text-[9px] font-semibold uppercase tracking-wider text-muted">daedalus</span>
+      <p className="whitespace-pre-wrap break-words text-[11px] text-foreground">{turn.text}</p>
+    </li>
   )
 }
 

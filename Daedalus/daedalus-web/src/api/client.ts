@@ -1,6 +1,7 @@
 import type { AgentMode, Attachment, Event, FinalReport, PermissionKey } from '@daedalus/core'
 import type {
   ChildTaskInput,
+  Conversation,
   FileChange,
   ProviderInput,
   ProviderConfigPublic,
@@ -86,6 +87,8 @@ export type CreateTaskInput = {
   isolation?: 'worktree'
   /** Follow up on a plan drafted by this earlier task; core injects its steps as a constraint. */
   plan_task_id?: string
+  /** Chat conversation this submit belongs to; the server records the turns and feeds back the history. */
+  conversation_id?: string
 }
 
 export const api = {
@@ -134,6 +137,18 @@ export const api = {
     request<{ models: ProviderModel[]; session: SessionState; count: number }>(`/models${query({ provider_id: providerId })}`),
 
   listTasks: () => request<{ tasks: TaskSummary[]; count: number }>('/tasks'),
+
+  /** Start a fresh chat conversation for a workspace. */
+  createConversation: (root: string) =>
+    request<{ conversation: Conversation }>('/conversations', { method: 'POST', body: JSON.stringify({ root }) }),
+
+  /** Load one conversation (turns included) to render/restore the session. */
+  getConversation: (root: string, id: string) =>
+    request<{ conversation: Conversation }>(`/conversations/${encodeURIComponent(id)}${query({ root })}`),
+
+  /** Conversations for a workspace, newest first — used to restore the latest session. */
+  listConversations: (root: string) =>
+    request<{ conversations: Conversation[]; count: number; root: string }>(`/conversations${query({ root })}`),
 
   createTask: (input: CreateTaskInput) =>
     request<{ id: string; goal: string; repo_path: string; created_at: string }>('/tasks', {

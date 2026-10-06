@@ -14,8 +14,8 @@ import { createTaskWorktree, worktreeChangedFiles } from './worktree.ts';
 import { createDefaultRegistry, editSearchReplaceTool } from './tools/index.ts';
 import { pathInWorkspace } from './tools/filesystem/index.ts';
 import type { ToolDefinition } from './tools/registry.ts';
-import { readFile } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { changedLineCounts, diffLines, renderPatch } from './tools/filesystem/diff.ts';
 import { ApprovalBroker, ExecutionHarness, resolveApprovalTimeoutMs, type ApprovalDecision, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
 import { CommandValidator, validationSatisfied, type ValidationCommand, type Validator } from './validation/index.ts';
@@ -29,6 +29,7 @@ import type { EditFormat, ModelTier, PromptFamily, PromptFamilySetting, ReviewGa
 import { TextProtocolProvider, type ProtocolSwitchInfo } from './providers/llm/text-protocol.ts';
 import { ModeController, isPlanDocumentPath, restrictMode } from './interaction/modes.ts';
 import { QuestionBroker, createAskUserTool, resolveQuestionTimeoutMs } from './interaction/questions.ts';
+import { assembledPlanPath, planDecisionsFromEvents, renderAssembledPlan } from './interaction/plans.ts';
 import { ProviderRegistry } from './interaction/providers.ts';
 import { OrchestratorRunner, decomposeTask, type ChildTaskInput } from './interaction/orchestrator.ts';
 import { McpManager, loadMcpConfig, type McpServerConfig, type McpServerStatus } from './mcp/index.ts';
@@ -153,6 +154,15 @@ export type RunOptions = {
   maxErrors?: number;
   /** Execute the plan an earlier (plan-mode) task recorded: its steps are carried into this task's context. */
   planTaskId?: string;
+  /**
+   * Prior conversation context (Web chat sessions): recent turns of the
+   * conversation this task belongs to, pre-rendered and capped by the
+   * caller. Carried into the prompt's constraints exactly like the
+   * plan-task steps above, so a follow-up task starts session-aware.
+   */
+  priorContext?: string;
+  /** Chat conversation id this task belongs to; recorded on the spec/state so task listings can point back at the session. */
+  conversationId?: string;
   /** Name of a file-defined subagent (.daedalus/agents/<name>.md) running this task. */
   agentName?: string;
   /** Subagent definition already resolved by a parent run (worktree re-dispatch); set automatically. */
@@ -470,6 +480,12 @@ export class TaskRunner {
         ];
       }
     }
+    // Prior conversation (chat sessions): the recent turns ride into the
+    // prompt as one constraint, the same carriage as the plan steps above.
+    if (options.priorContext && options.priorContext.trim().length > 0) {
+      spec.constraints = [...spec.constraints, options.priorContext];
+    }
+    if (options.conversationId) spec.conversation_id = options.conversationId;
     const collected: Event[] = [];
     const listener = (event: Event): void => {
       collected.push(event);
@@ -615,8 +631,42 @@ export class TaskRunner {
     // under .daedalus/plans/, a closing PLAN_CREATED names them so the Web
     // can link the documents and offer Approve & Execute. The steps ride
     // along unchanged, so plan consumers keep reading the same payload.
+    let assembledPlanDocument: string | undefined;
     if (spec.mode === 'plan') {
-      const documents = planDocumentsFromEvents(collected);
+      let documents = planDocumentsFromEvents(collected);
+      if (documents.length === 0) {
+        // Plan-document guarantee, second half: the loop already spent its
+        // one repair turn and the model STILL wrote no plan file (Farid's
+        // live weak-model run: questions answered, task "success", no
+        // plan.md anywhere). Assemble the document deterministically from
+        // the structured steps + recorded Q&A and write it through the
+        // normal file-change path — honestly labeled in the report below,
+        // never disguised as the model's own writing. A model-written
+        // document is never overwritten (this only runs when none exists).
+        const relativePath = assembledPlanPath(spec.goal);
+        const content = renderAssembledPlan({
+          goal: spec.goal,
+          plan: state.plan,
+          decisions: planDecisionsFromEvents(collected),
+        });
+        const absolutePath = join(this.#workspaceRoot, ...relativePath.split('/'));
+        await mkdir(dirname(absolutePath), { recursive: true });
+        await writeFile(absolutePath, content, 'utf8');
+        const contentLines = content.split('\n');
+        emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'FILE_CHANGED', {
+          call_id: `harness-plan-document-${spec.id}`,
+          path: relativePath,
+          tool: 'write_file',
+          operation: 'created',
+          added: contentLines.length,
+          removed: 0,
+          lines: contentLines.map((text) => ({ kind: 'add', text })),
+          meta: { harness_assembled_plan: true },
+        });
+        await this.bus.drain();
+        documents = [relativePath];
+        assembledPlanDocument = relativePath;
+      }
       if (documents.length > 0) {
         emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'PLAN_CREATED', { plan: state.plan, mode: 'plan', documents });
         await this.bus.drain();
@@ -639,6 +689,9 @@ export class TaskRunner {
       evidence: [
         ...(modelFailureEvidence ? [`model failure: ${modelFailureEvidence}`] : []),
         ...this.#validationEvidence(validation),
+        ...(assembledPlanDocument
+          ? [`plan document assembled by the harness (${assembledPlanDocument}): the model finished plan mode without writing a plan file, so the harness wrote it from the plan steps and the recorded Q&A decisions — review it before executing`]
+          : []),
         ...this.#fileChangeEvidence(collected),
         ...(review ? [
           `review by ${review.model}: ${review.blocking ? 'blocking issues found' : 'no blocking issues'} (${review.findings.length} finding${review.findings.length === 1 ? '' : 's'})`,

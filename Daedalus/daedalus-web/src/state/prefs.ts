@@ -64,6 +64,34 @@ export function saveComposerPrefs(prefs: ComposerPrefs, storage: Storage | undef
   }
 }
 
+/**
+ * The active chat conversation per workspace root. The conversation itself
+ * lives on the server (file-backed, shared with nothing else); the browser
+ * only remembers WHICH one is open here so a reload returns to the same
+ * session instead of stranding the user on an empty panel.
+ */
+export const CONVERSATION_KEY_PREFIX = 'daedalus.web.conversation.'
+
+export function loadActiveConversationId(root: string, storage: Storage | undefined = defaultStorage()): string | null {
+  if (!storage || !root) return null
+  try {
+    const value = storage.getItem(CONVERSATION_KEY_PREFIX + root)
+    return value && value.trim() ? value : null
+  } catch {
+    return null
+  }
+}
+
+export function saveActiveConversationId(root: string, id: string | null, storage: Storage | undefined = defaultStorage()): void {
+  if (!storage || !root) return
+  try {
+    if (id) storage.setItem(CONVERSATION_KEY_PREFIX + root, id)
+    else storage.removeItem(CONVERSATION_KEY_PREFIX + root)
+  } catch {
+    /* unavailable storage just keeps the pointer session-local */
+  }
+}
+
 /** The persistable slice of a composer state — drafts and flags stay out. */
 export function composerPrefsOf(composer: {
   mode: AgentMode

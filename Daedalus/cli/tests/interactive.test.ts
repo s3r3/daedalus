@@ -553,6 +553,20 @@ describe('casual chat never becomes a task', () => {
     expect(seen).toEqual([0, 2]);
     expect(session.chatHistory).toHaveLength(4);
   });
+
+  test('tasks in the session get prior-context, and a finished task joins the memory', async () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace() });
+    session.setCallbacks({ chatReply: async () => 'balasan' });
+    expect(session.priorContext()).toBeUndefined();
+    await session.handleInput('hai');
+    const context = session.priorContext();
+    expect(context).toContain('Earlier in this conversation');
+    expect(context).toContain('User: hai');
+    expect(context).toContain('Daedalus: balasan');
+    session.recordTaskExchange('buatkan fungsi login', 'Task success: buatkan fungsi login — created login.ts (+10/-0)');
+    expect(session.priorContext()).toContain('Daedalus: Task success: buatkan fungsi login');
+    expect(session.chatHistory).toHaveLength(4);
+  });
 });
 
 describe('questions are answered, never tasked', () => {

@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { AgentMode, Attachment, Event, FinalReport, ProviderConfigPublic } from '@daedalus/core'
 import type { StreamStatus } from '../api/eventStream'
-import type { ProviderModel, ProviderPreset, SessionState, TaskSummary } from '../api/types'
+import type { Conversation, ProviderModel, ProviderPreset, SessionState, TaskSummary } from '../api/types'
 import { composerPrefsOf, saveComposerPrefs } from './prefs'
 
 /**
@@ -40,6 +40,8 @@ export type DaedalusState = {
   reconnectAttempt: number
   tasks: TaskSummary[]
   taskId: string | null
+  /** The active chat conversation (turns included); null for task-only views. */
+  conversation: Conversation | null
   events: Event[]
   report: FinalReport | null
   workspace: WorkspaceState
@@ -58,6 +60,7 @@ export type DaedalusState = {
   setConnection: (status: StreamStatus, attempt?: number) => void
   setTasks: (tasks: TaskSummary[]) => void
   setTask: (taskId: string, goal?: string) => void
+  setConversation: (conversation: Conversation | null) => void
   appendEvent: (event: Event) => void
   seedEvents: (events: Event[]) => void
   setReport: (report: FinalReport | null) => void
@@ -98,6 +101,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   reconnectAttempt: 0,
   tasks: [],
   taskId: null,
+  conversation: null,
   events: [],
   report: null,
   workspace: initialWorkspace,
@@ -115,6 +119,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
 
   setConnection: (connection, reconnectAttempt = 0) => set({ connection, reconnectAttempt }),
   setTasks: (tasks) => set({ tasks }),
+  setConversation: (conversation) => set({ conversation }),
   setTask: (taskId, goal) =>
     set((state) => ({
       taskId,
@@ -178,6 +183,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
       reconnectAttempt: 0,
       tasks: [],
       taskId: null,
+      conversation: null,
       events: [],
       report: null,
       workspace: initialWorkspace,

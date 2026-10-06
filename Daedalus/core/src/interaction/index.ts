@@ -37,6 +37,17 @@ export {
 } from './questions.ts';
 
 export {
+  assembledPlanPath,
+  isPlanDocumentChange,
+  planDecisionsFromEvents,
+  planDocumentRepairDirective,
+  planSlugFromGoal,
+  renderAssembledPlan,
+  renderDecisionLines,
+  type PlanDecision,
+} from './plans.ts';
+
+export {
   PROVIDER_PRESETS,
   ProviderRegistry,
   ProviderRegistryStore,
