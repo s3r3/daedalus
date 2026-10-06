@@ -2,11 +2,25 @@ import { randomUUID } from 'node:crypto';
 import type { Plan, PlanStep, TaskSpec } from '../contracts.ts';
 import type { Observation } from './types.ts';
 
-const DEFAULT_STEPS = [
+/** The canned sequential pipeline used when a goal carries no done-criteria. */
+export const DEFAULT_PLAN_STEPS = [
   'Inspect the repository structure relevant to the goal',
   'Make the code changes required by the goal',
   'Run the project validation checks',
 ];
+
+const DEFAULT_STEPS = DEFAULT_PLAN_STEPS;
+
+/**
+ * True when every step intent comes from the canned default pipeline. Such a
+ * chain is three names for ONE loop's phases (explore → edit → validate over
+ * the same goal and the same context), not three independent work items —
+ * the orchestrator runs it directly instead of fanning it out into children
+ * that each re-derive the shared context (see orchestrator.ts).
+ */
+export function isDefaultPipeline(intents: string[]): boolean {
+  return intents.length > 0 && intents.every((intent) => DEFAULT_STEPS.includes(intent));
+}
 
 /** Planner: TaskSpec -> ordered, amendable checklist (PLAN.md §3.1). */
 export async function createPlan(spec: TaskSpec): Promise<Plan> {

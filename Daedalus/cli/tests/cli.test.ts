@@ -147,6 +147,14 @@ describe('CLI', () => {
     })
   })
 
+  describe('orchestration rendering', () => {
+    test('ORCHESTRATION_SKIPPED explains the single-path run', () => {
+      const out = formatEvent({ type: 'ORCHESTRATION_SKIPPED', task_id: 't', payload: { reason: 'single_path', decomposed_children: 3 } })
+      expect(out).toContain('single path')
+      expect(out).toContain('running one agent loop directly')
+    })
+  })
+
   describe('approvalPreviewLine', () => {
     test('renders a command verbatim so the terminal prompt shows what runs', () => {
       const line = approvalPreviewLine({

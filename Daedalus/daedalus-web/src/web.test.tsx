@@ -10,7 +10,8 @@ import { Spinner } from './components/common/spinner'
 import { SPINNER_FRAMES } from './theme/motion-tokens'
 import { Panel, EmptyState, ErrorState } from './components/common/panel'
 import { STATUS_TONE, RESULT_TONE, KIND_TONE, toneForResult } from './components/agent/status-tone'
-import { fileChanges, planSteps, pendingApprovals, toolCalls } from './state/selectors'
+import { activity, chatTranscript, fileChanges, filterTaskEvents, planSteps, pendingApprovals, toolCalls } from './state/selectors'
+import { useDaedalusStore } from './state/taskStore'
 
 const SRC = join(process.cwd(), 'src')
 
@@ -195,5 +196,54 @@ describe('selectors derive state from the event log', () => {
     expect(fileChanges([])).toHaveLength(0)
     expect(toolCalls([])).toHaveLength(0)
     expect(pendingApprovals([])).toHaveLength(0)
+  })
+})
+
+describe('orchestrator parent views (JOB B mirrors + single-path note)', () => {
+  const tagged = (seq: number, taskId: string, type: string, payload: unknown): Event =>
+    ({ seq, task_id: taskId, type, payload, ts: seq }) as unknown as Event
+
+  test('mirrored child changes appear exactly once in the parent view, originals once in the child view', () => {
+    const change = { call_id: 'c1', path: 'a.ts', tool: 'write_file', operation: 'created', added: 4, removed: 0, lines: [{ kind: 'add', text: 'x' }], patch: '' }
+    const events = [
+      tagged(1, 'parent-1', 'TASK_STARTED', { spec: { id: 'parent-1' } }),
+      // The child's original lives in the child's log (task_id = child-1)…
+      tagged(7, 'child-1', 'FILE_CHANGED', change),
+      // …and core mirrors a tagged copy into the parent's log.
+      tagged(2, 'parent-1', 'FILE_CHANGED', { ...change, parent_task_id: 'parent-1', child_task_id: 'child-1', mirrored: true }),
+    ]
+    const parentChanges = fileChanges(filterTaskEvents(events, 'parent-1'))
+    expect(parentChanges).toHaveLength(1)
+    expect(parentChanges[0]?.path).toBe('a.ts')
+    expect(parentChanges[0]?.mirrored).toBe(true)
+    expect(parentChanges[0]?.child_task_id).toBe('child-1')
+
+    const childChanges = fileChanges(filterTaskEvents(events, 'child-1'))
+    expect(childChanges).toHaveLength(1)
+    expect(childChanges[0]?.mirrored).toBeUndefined()
+  })
+
+  test('ORCHESTRATION_SKIPPED is rendered by activity and chat derivations', () => {
+    const events = [
+      ev(1, 'ORCHESTRATION_SKIPPED', { reason: 'single_path', mode: 'orchestrator', decomposed_children: 3, note: 'one loop' }),
+    ]
+    expect(activity(events).some((entry) => entry.title.includes('orchestration skipped'))).toBe(true)
+    expect(chatTranscript(events).some((entry) => entry.text.includes('orchestration skipped'))).toBe(true)
+  })
+
+  test('FILE_CHANGED appends bump the workspace revision; duplicates and other events do not', () => {
+    const store = useDaedalusStore.getState()
+    store.reset()
+    const before = useDaedalusStore.getState().workspaceRevision
+    const change = tagged(1, 'task-1', 'FILE_CHANGED', { call_id: 'c1', path: 'a.ts', tool: 'write_file', operation: 'created', added: 1, removed: 0, lines: [], patch: '' })
+    store.appendEvent(change)
+    expect(useDaedalusStore.getState().workspaceRevision).toBe(before + 1)
+    store.appendEvent(change) // duplicate (task_id, seq) — dropped, no bump
+    expect(useDaedalusStore.getState().workspaceRevision).toBe(before + 1)
+    store.appendEvent(tagged(2, 'task-1', 'THOUGHT', { text: 'thinking' }))
+    expect(useDaedalusStore.getState().workspaceRevision).toBe(before + 1)
+    store.appendEvent(tagged(3, 'parent-1', 'FILE_CHANGED', { call_id: 'c2', path: 'b.ts', tool: 'write_file', operation: 'created', added: 1, removed: 0, lines: [], patch: '', parent_task_id: 'parent-1', child_task_id: 'child-1', mirrored: true }))
+    expect(useDaedalusStore.getState().workspaceRevision).toBe(before + 2)
+    useDaedalusStore.getState().reset()
   })
 })

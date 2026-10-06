@@ -286,6 +286,62 @@ iterations/errors) return **typed errors** to the parent —
 `budget_exceeded`, `no_progress`, `child_failed`, `cancelled` — never silent
 success.
 
+## Orchestrator economics: when it fans out, and what children cost
+
+Fan-out is not free: every child rebuilds its context from scratch, so a
+decomposition only pays when the children are genuinely independent work.
+Four rules keep Orchestrator honest about that, learned from a live run
+where "add images + CSS to one page" burned 609s / 35 turns as three
+sequential full agent loops and died on the shared budget:
+
+- **Skip rule (single path runs directly).** When decomposition would
+  produce fewer than two children, or exactly the canned sequential
+  pipeline (the default inspect → implement → validate steps over one
+  goal — sequential dependents sharing all context), the parent does NOT
+  fan out: it runs **one agent loop itself** with the parent budget and the
+  user's goal. An `ORCHESTRATION_SKIPPED` event (`reason: single_path`)
+  records the decision, the task's mode stays `orchestrator` on the
+  record, and the runtime's normal post-loop validation still applies.
+  Genuine fan-out — more than one done-criterion, or a caller-provided
+  child list — is never collapsed.
+- **Per-child budget slices, continue on exhaustion.** Each child gets its
+  own iteration slice of the shared pool: a floor of 8 turns, otherwise an
+  even share of what remains, never more than the pool still holds (so the
+  run as a whole can never exceed the task's max iterations). A child that
+  burns its slice ends failed with `error_reason: budget_exceeded` — and
+  the parent **continues with the remaining children** instead of aborting
+  the run. Only when the pool itself is spent do later children cancel
+  (typed `budget_exceeded`). The final outcome reflects the counts: all
+  children done → success; some done, some not → **partial**; none done →
+  failed. The budget math is legible in the final report's evidence
+  (`child budgets: 8/8, 5/12, 0/10 (not run); pool 13/25`).
+- **Distilled child returns.** A child's result carried into the parent
+  context, the findings handoff, and the report is a distilled summary —
+  an outcome line, the changed files with line counts, and at most two
+  evidence lines, hard-capped at 1,500 characters. It is never the raw
+  text of the child's last tool call (previously a child ending on a big
+  file read injected the whole file as its "summary"). The full detail
+  stays in the child's own task log, one click away in the Child Tasks
+  panel. Child goals carry the matching contract: implementation steps
+  must produce a real file change, and every child must finish with a
+  short summary that never pastes file contents.
+- **Findings handoff.** When a child finishes, its distilled summary is
+  handed to the next child's prompt under a `## findings from previous
+  steps` heading, so a later child acts on what earlier siblings found
+  instead of re-reading (and re-paying for) the same files.
+- **Diff visibility.** A child's file changes are mirrored onto the
+  parent's event log (tagged with both task ids), so the parent's
+  Files-changed and Diff panels aggregate all descendants live; the
+  child's own view still reads the child's log, so nothing double-counts.
+
+**Sequential writers by design.** Children that write run one after
+another, never in parallel: they share one workspace, and two agents
+editing the same tree concurrently is a merge conflict generator, not a
+speedup. Parallel write children land only with per-child worktree
+isolation (the `isolation: 'worktree'` machinery exists per child today);
+until then, Orchestrator's win is bounded context per child and typed
+partial results — not wall-clock parallelism.
+
 ## Honest limits
 
 - Remembered approvals live in server memory only; nothing is written to

@@ -204,7 +204,14 @@ export type FileChange = {
   removed: number
   lines: DiffLine[]
   patch: string
+  /** Orchestrator mirror tags: set on the copy of a child's change that core records on the parent task's log. */
+  parent_task_id?: string
+  child_task_id?: string
+  mirrored?: boolean
 }
+
+/** The parent ran the goal itself: the decomposition was a single sequential path. */
+export type OrchestrationSkipped = { reason: 'single_path' | string; mode?: string; decomposed_children?: number; note?: string }
 
 export type CommandStarted = { call_id: string; command: string; tool: string; cwd: string }
 export type CommandOutput = { call_id: string; chunk: string }
@@ -289,6 +296,7 @@ export type EventPayloads = {
   ATTACHMENT_ADDED: AttachmentAdded
   CHILD_TASK_STARTED: ChildTaskEvent
   CHILD_TASK_FINISHED: ChildTaskEvent
+  ORCHESTRATION_SKIPPED: OrchestrationSkipped
   SLASH_COMMAND_EXECUTED: SlashCommandExecuted
 }
 

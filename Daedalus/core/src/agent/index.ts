@@ -1,6 +1,6 @@
 export { AgentLoop, parseAction, thoughtFromMessage, type AgentLoopOptions } from './agent-loop.ts';
 export { interpretTask } from './interpreter.ts';
-export { createPlan, replan } from './planner.ts';
+export { DEFAULT_PLAN_STEPS, createPlan, isDefaultPipeline, replan } from './planner.ts';
 export {
   DefaultContextManager,
   CONDENSED_TOOL_OUTPUT,

@@ -324,6 +324,10 @@ export function formatEvent(event: Omit<Event, "seq" | "ts">): string {
       const kind = p.attachment?.kind ?? p.kind ?? "file";
       return `${paint(palette.info, "▣")} Attached ${kind}: ${name}\n`;
     }
+    case "ORCHESTRATION_SKIPPED": {
+      const p = event.payload as { reason?: string; decomposed_children?: number };
+      return `${paint(palette.info, "◆")} Orchestrator: single path (${p.reason ?? "single_path"}) — running one agent loop directly instead of ${p.decomposed_children ?? 0} child task(s)\n`;
+    }
     case "CHILD_TASK_STARTED": {
       const p = event.payload as { child?: { goal?: string } };
       return `${paint(palette.secondary, "▸")} Child task started: ${p.child?.goal ?? ""}\n`;

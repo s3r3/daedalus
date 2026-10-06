@@ -31,7 +31,7 @@ import { ModeController, isPlanDocumentPath, restrictMode } from './interaction/
 import { QuestionBroker, createAskUserTool, resolveQuestionTimeoutMs } from './interaction/questions.ts';
 import { assembledPlanPath, planDecisionsFromEvents, renderAssembledPlan } from './interaction/plans.ts';
 import { ProviderRegistry } from './interaction/providers.ts';
-import { OrchestratorRunner, decomposeTask, type ChildTaskInput } from './interaction/orchestrator.ts';
+import { OrchestratorRunner, decomposeTask, shouldRunDirect, type ChildFileChange, type ChildTaskInput } from './interaction/orchestrator.ts';
 import { McpManager, loadMcpConfig, type McpServerConfig, type McpServerStatus } from './mcp/index.ts';
 import { LspManager, loadLspConfig, type LspServerConfig, type LspServerStatus } from './lsp/index.ts';
 import { SkillRegistry, createReadSkillTool, loadSkills, resolveSkillSearchDirs, type SkillInfo, type SkillSearchDir } from './skills/index.ts';
@@ -208,6 +208,26 @@ export function planDocumentsFromEvents(events: Event[]): string[] {
     if (name === 'plan.md' || name === 'PRD.md') seen.add(clean);
   }
   return [...seen].sort((a, b) => Number(a.endsWith('PRD.md')) - Number(b.endsWith('PRD.md')));
+}
+
+/**
+ * Latest change per path from a child run's FILE_CHANGED events, in
+ * first-appearance order — the distilled "what this child touched" input for
+ * its summary (the child's full diff stays in its own log and report).
+ */
+function childFileChanges(events: Event[]): ChildFileChange[] {
+  const byPath = new Map<string, ChildFileChange>();
+  for (const event of events) {
+    if (event.type !== 'FILE_CHANGED') continue;
+    const payload = event.payload as { path?: unknown; added?: unknown; removed?: unknown };
+    if (typeof payload.path !== 'string' || payload.path.length === 0) continue;
+    byPath.set(payload.path, {
+      path: payload.path,
+      ...(typeof payload.added === 'number' ? { added: payload.added } : {}),
+      ...(typeof payload.removed === 'number' ? { removed: payload.removed } : {}),
+    });
+  }
+  return [...byPath.values()];
 }
 
 /** Tools whose execution is a process → COMMAND_* events for the terminal surface. */
@@ -488,13 +508,42 @@ export class TaskRunner {
     if (options.conversationId) spec.conversation_id = options.conversationId;
     const collected: Event[] = [];
     const listener = (event: Event): void => {
+      // Mirrored child FILE_CHANGED events (see #emitFileChanged) exist for
+      // the parent's persisted log and the Web's diff view; this run's own
+      // metrics/diff accounting already sees the child's original event, so
+      // counting the mirror too would double every orchestrated change.
+      if ((event.payload as { mirrored?: unknown } | undefined)?.mirrored === true) return;
       collected.push(event);
       options.onEvent?.(event);
     };
     this.bus.on('*', listener);
 
     if (spec.mode === 'orchestrator' && !options.parentTaskId) {
-      return this.#runOrchestrated(options, spec, collected, startedAt);
+      const decomposedChildren = options.children ? undefined : await decomposeTask(spec);
+      const inputs: ChildTaskInput[] = (options.children ?? decomposedChildren!).map((child) => ({
+        goal: child.goal,
+        mode: child.mode,
+        budget: child.budget,
+        ...(child.agent ? { agent: child.agent } : {}),
+        ...(child.isolation ? { isolation: child.isolation } : {}),
+      }));
+      // Small-task bypass: a decomposed fan-out of fewer than two children,
+      // or exactly the canned inspect → implement → validate pipeline over
+      // one goal, is one loop's work — run it directly on this task (mode
+      // stays 'orchestrator' on the record) instead of paying three
+      // sequential context rebuilds. Caller-provided children always fan
+      // out: the caller asked for them explicitly.
+      const stepIntents = spec.done_criteria.length > 1 ? [] : (await createPlan(spec)).steps.map((step) => step.intent);
+      if (decomposedChildren && shouldRunDirect(spec, decomposedChildren, stepIntents)) {
+        emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'ORCHESTRATION_SKIPPED', {
+          reason: 'single_path',
+          mode: 'orchestrator',
+          decomposed_children: inputs.length,
+          note: 'decomposition is a single sequential path; running one agent loop directly instead of child tasks',
+        });
+      } else {
+        return this.#runOrchestrated(options, spec, collected, startedAt, inputs);
+      }
     }
 
     const isolation = options.isolation ?? this.#options.isolation;
@@ -653,7 +702,7 @@ export class TaskRunner {
         await mkdir(dirname(absolutePath), { recursive: true });
         await writeFile(absolutePath, content, 'utf8');
         const contentLines = content.split('\n');
-        emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'FILE_CHANGED', {
+        const planPayload = {
           call_id: `harness-plan-document-${spec.id}`,
           path: relativePath,
           tool: 'write_file',
@@ -662,7 +711,9 @@ export class TaskRunner {
           removed: 0,
           lines: contentLines.map((text) => ({ kind: 'add', text })),
           meta: { harness_assembled_plan: true },
-        });
+        };
+        emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'FILE_CHANGED', planPayload);
+        this.#mirrorFileChanged(spec.id, undefined, planPayload);
         await this.bus.drain();
         documents = [relativePath];
         assembledPlanDocument = relativePath;
@@ -874,7 +925,7 @@ export class TaskRunner {
     return { ...innerResult, report };
   }
 
-  async #runOrchestrated(options: RunOptions, spec: TaskSpec, collected: Event[], startedAt: number): Promise<RunResult> {
+  async #runOrchestrated(options: RunOptions, spec: TaskSpec, collected: Event[], startedAt: number, inputs: ChildTaskInput[]): Promise<RunResult> {
     const target = { bus: this.bus, store: this.store };
     const plan = await createPlan(spec);
     let state: TaskState = {
@@ -889,18 +940,11 @@ export class TaskRunner {
     emitEvent(target, spec.id, undefined, 'PLAN_CREATED', { plan });
     this.store.saveState(spec.id, state);
 
-    const decomposed = options.children ?? (await decomposeTask(spec)).map((child) => ({
-      goal: child.goal,
-      mode: child.mode,
-      budget: child.budget,
-      agent: child.agent,
-      isolation: child.isolation,
-    }));
     // File-defined subagents are validated up front: a child naming an
     // agent that does not exist fails the whole run with a clear error
     // before any child starts, instead of half-running and degrading.
     const agentRegistry = await loadAgents([workspaceAgentsDir(this.#workspaceRoot)]);
-    for (const child of decomposed) {
+    for (const child of inputs) {
       if (child.agent && !agentRegistry.get(child.agent)) {
         const defined = agentRegistry.list().map((definition) => definition.name);
         throw new Error(
@@ -909,19 +953,12 @@ export class TaskRunner {
         );
       }
     }
-    const inputs: ChildTaskInput[] = decomposed.map((child) => ({
-      goal: child.goal,
-      mode: child.mode,
-      budget: child.budget,
-      ...(child.agent ? { agent: child.agent } : {}),
-      ...(child.isolation ? { isolation: child.isolation } : {}),
-    }));
 
     const orchestrator = new OrchestratorRunner({
       bus: this.bus,
       store: this.store,
       totalBudget: { max_iterations: options.maxIterations ?? this.#options.maxIterations ?? 25, max_errors: options.maxErrors ?? 5 },
-      executeChild: async (child) => {
+      executeChild: async (child, context) => {
         const definition = child.agent ? agentRegistry.get(child.agent) : undefined;
         // Inheritance rule: a child may tighten the parent's posture, never
         // loosen it (and never become an orchestrator itself — no nesting).
@@ -944,10 +981,20 @@ export class TaskRunner {
           agentName: child.agent,
           agentDefinition: definition,
           isolation: child.isolation,
+          // Findings handoff: earlier siblings' distilled results ride in
+          // as prior context so this child acts on what they found instead
+          // of re-deriving (and re-paying for) the same exploration.
+          ...(context.priorFindings ? { priorContext: context.priorFindings } : {}),
         });
         return {
           status: childResult.state.status === 'done' ? 'done' : childResult.state.status === 'failed' ? 'failed' : 'cancelled',
+          // The raw last observation rides along only as the distiller's
+          // closing-line candidate (orchestrator.ts drops it when it is a
+          // tool-output dump); the structured fields below are what the
+          // distilled summary is actually built from.
           summary: childResult.state.last_observation ?? childResult.state.last_error ?? childResult.outcome,
+          files_changed: childFileChanges(childResult.events),
+          evidence: childResult.report.evidence.slice(0, 4),
           diff: childResult.report.diff,
           iterations: childResult.report.metrics.turns,
           errors: childResult.state.status === 'failed' ? 1 : 0,
@@ -997,20 +1044,28 @@ export class TaskRunner {
         status: orchestration.children[index]?.status === 'done' ? 'done' : orchestration.status === 'done' && !validationFailedCombined ? 'done' : step.status,
       })),
     };
+    // Counts decide the outcome: every child done → the success path; some
+    // done and some not → partial (the finished children's work stands; the
+    // failed ones are named in the evidence, not papered over).
+    const outcome: 'success' | 'partial' | 'failed' = orchestration.status === 'done' && !validationFailedCombined
+      ? 'success'
+      : orchestration.status === 'partial'
+        ? 'partial'
+        : 'failed';
     emitEvent(target, spec.id, undefined, 'TASK_COMPLETED', {
       state,
-      outcome: state.status === 'done' ? 'success' : 'failed',
+      outcome,
       reason: state.last_error ?? 'completed',
       children: orchestration.children,
     });
     this.store.saveState(spec.id, state);
 
-    const outcome = this.#outcome(state, validation);
     const report: FinalReport = {
       task_id: spec.id,
-      outcome: outcome === 'success' ? 'success' : outcome === 'partial' ? 'partial' : 'failed',
+      outcome,
       diff: orchestration.diff || this.#aggregateDiff(collected),
       evidence: [
+        orchestration.budget_summary,
         ...orchestration.children.map((child) => `child ${child.id} (${child.status}): ${child.result_summary ?? child.goal}`),
         ...this.#validationEvidence(validation),
         ...this.#fileChangeEvidence(collected),
@@ -1295,7 +1350,7 @@ export class TaskRunner {
     const lines = diffLines(before ?? '', after);
     const counts = changedLineCounts(lines);
     if (lines.length === 0) return;
-    emitEvent({ bus: this.bus, store: this.store }, taskId, turnId, 'FILE_CHANGED', {
+    const payload = {
       call_id: callId,
       path,
       tool,
@@ -1304,6 +1359,28 @@ export class TaskRunner {
       removed: counts.removed,
       lines,
       patch: renderPatch(path, lines),
+    };
+    emitEvent({ bus: this.bus, store: this.store }, taskId, turnId, 'FILE_CHANGED', payload);
+    this.#mirrorFileChanged(taskId, turnId, payload);
+  }
+
+  /**
+   * Mirror an orchestrator child's file change onto the parent's log (the
+   * approval events set this precedent): the parent is the task the user
+   * watches, and its Files-changed/Diff views read only its own log —
+   * without the mirror, orchestrated work looked like it changed nothing.
+   * The copy is tagged with both ids and `mirrored`, so the child's own
+   * view (which reads the child's log) never double-counts and core's
+   * run accounting skips it (the child's original already counted).
+   */
+  #mirrorFileChanged(taskId: string, turnId: string | undefined, payload: Record<string, unknown>): void {
+    const parentTaskId = this.#taskParents.get(taskId);
+    if (!parentTaskId || parentTaskId === taskId) return;
+    emitEvent({ bus: this.bus, store: this.store }, parentTaskId, turnId, 'FILE_CHANGED', {
+      ...payload,
+      parent_task_id: parentTaskId,
+      child_task_id: taskId,
+      mirrored: true,
     });
   }
 
