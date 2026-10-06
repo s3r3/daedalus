@@ -34,7 +34,10 @@ beforeEach(() => {
   extensionsStatus.mockResolvedValue({
     root: '/workspace',
     mcp: [{ name: 'demo', connected: true, toolCount: 3 }],
-    skills: [{ name: 'greeter', description: 'Greets users warmly' }],
+    skills: [
+      { name: 'greeter', description: 'Greets users warmly', origin: 'workspace' },
+      { name: 'oracle', description: 'From the Claude skills dir', origin: 'claude' },
+    ],
     lsp: [{ name: 'fake-lsp', extensions: ['.ts'], configured: true }],
     problems: [],
   })
@@ -108,6 +111,9 @@ describe('ExtensionsPanel', () => {
     expect(screen.getByTestId('extensions-panel').textContent).toContain('demo')
     expect(screen.getByTestId('extensions-panel').textContent).toContain('3 tools')
     expect(screen.getByTestId('extensions-panel').textContent).toContain('greeter')
+    expect(screen.getByTestId('extensions-panel').textContent).toContain('(workspace)')
+    expect(screen.getByTestId('extensions-panel').textContent).toContain('oracle')
+    expect(screen.getByTestId('extensions-panel').textContent).toContain('(global · claude)')
     expect(screen.getByTestId('extensions-panel').textContent).toContain('fake-lsp')
     expect(extensionsStatus).toHaveBeenCalledWith('/workspace')
   })

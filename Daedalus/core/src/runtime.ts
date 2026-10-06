@@ -26,7 +26,7 @@ import { ProviderRegistry } from './interaction/providers.ts';
 import { OrchestratorRunner, decomposeTask, type ChildTaskInput } from './interaction/orchestrator.ts';
 import { McpManager, loadMcpConfig, type McpServerConfig, type McpServerStatus } from './mcp/index.ts';
 import { LspManager, loadLspConfig, type LspServerConfig, type LspServerStatus } from './lsp/index.ts';
-import { SkillRegistry, createReadSkillTool, loadSkills, workspaceSkillsDir, type SkillInfo } from './skills/index.ts';
+import { SkillRegistry, createReadSkillTool, loadSkills, resolveSkillSearchDirs, type SkillInfo, type SkillSearchDir } from './skills/index.ts';
 import type { LLMProvider } from './providers/llm/types.ts';
 import { loadSettings, resolveDaedalusHome, type Settings } from './settings.ts';
 
@@ -72,8 +72,8 @@ export type TaskRunnerOptions = {
   mcpServers?: McpServerConfig[];
   /** Language servers for lsp_diagnostics; defaults to `<workspace>/.daedalus/lsp.json`. */
   lspServers?: LspServerConfig[];
-  /** Extra skill directories scanned in addition to `<workspace>/.daedalus/skills`. */
-  skillDirs?: string[];
+  /** Extra skill directories scanned between the workspace dir and the global dirs (see skills loader resolution). */
+  skillDirs?: Array<string | SkillSearchDir>;
   /** Run each task in its own git worktree instead of the shared workspace (requires git). */
   isolation?: 'worktree';
   /** Run project hooks (.daedalus/hooks.json) around tool calls. Defaults to settings.hooks (on). */
@@ -211,7 +211,15 @@ export class TaskRunner {
   async #prepareExtensions(): Promise<{ tools: ToolDefinition[]; skills: SkillRegistry; lsp: LspManager; close: () => Promise<void> }> {
     const mcpServers = this.#options.mcpServers ?? (await loadMcpConfig(this.#workspaceRoot)).servers;
     const lspServers = this.#options.lspServers ?? (await loadLspConfig(this.#workspaceRoot)).servers;
-    const skillDirs = [workspaceSkillsDir(this.#workspaceRoot), ...(this.#options.skillDirs ?? [])];
+    // Workspace skills first (they shadow same-name globals), then any
+    // caller-provided dirs, then the global directories (~/.daedalus/skills,
+    // other AI tools' skill folders) so global skills work in every workspace.
+    const searchDirs = resolveSkillSearchDirs(this.#workspaceRoot);
+    const skillDirs: Array<string | SkillSearchDir> = [
+      ...searchDirs.slice(0, 1),
+      ...(this.#options.skillDirs ?? []),
+      ...searchDirs.slice(1),
+    ];
     const skills = await loadSkills(skillDirs);
     const agents = await loadAgents([workspaceAgentsDir(this.#workspaceRoot)]);
 
@@ -509,7 +517,7 @@ export class TaskRunner {
       hooksConfig: this.#options.hooksConfig ?? (await loadHooksConfig(this.#workspaceRoot)).hooks,
       mcpServers: (await loadMcpConfig(this.#workspaceRoot)).servers,
       lspServers: (await loadLspConfig(this.#workspaceRoot)).servers,
-      skillDirs: [workspaceSkillsDir(this.#workspaceRoot)],
+      skillDirs: resolveSkillSearchDirs(this.#workspaceRoot),
     });
     const innerResult = await inner.run({
       ...options,

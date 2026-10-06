@@ -1,5 +1,17 @@
 import { beforeEach, describe, expect, test } from 'vitest'
-import { COMPOSER_PREFS_KEY, composerPrefsOf, loadComposerPrefs, saveComposerPrefs } from './prefs'
+import {
+  CHAT_HEIGHT,
+  CHAT_HEIGHT_KEY,
+  COLUMN_WIDTHS_KEY,
+  COMPOSER_PREFS_KEY,
+  composerPrefsOf,
+  loadChatHeight,
+  loadColumnWidths,
+  loadComposerPrefs,
+  saveChatHeight,
+  saveColumnWidths,
+  saveComposerPrefs,
+} from './prefs'
 import { useDaedalusStore } from './taskStore'
 
 beforeEach(() => {
@@ -77,5 +89,29 @@ describe('composer prefs (browser persistence for run defaults)', () => {
     expect(prefs.maxIterations).toBe(42)
     expect(prefs.modelPool).toBe('a-model, b-model')
     expect(prefs.modelStrategy).toBe('round-robin')
+  })
+})
+
+describe('panel layout prefs (chat height + column widths)', () => {
+  test('chat height defaults, round-trips, and clamps to its sane range', () => {
+    expect(loadChatHeight()).toBe(CHAT_HEIGHT.default)
+    saveChatHeight(480)
+    expect(loadChatHeight()).toBe(480)
+    saveChatHeight(10_000)
+    expect(loadChatHeight()).toBe(CHAT_HEIGHT.max)
+    saveChatHeight(10)
+    expect(loadChatHeight()).toBe(CHAT_HEIGHT.min)
+    localStorage.setItem(CHAT_HEIGHT_KEY, 'not-a-number')
+    expect(loadChatHeight()).toBe(CHAT_HEIGHT.default)
+  })
+
+  test('column widths default, round-trip, clamp, and survive corrupt storage', () => {
+    expect(loadColumnWidths()).toEqual({ left: 320, right: 360 })
+    saveColumnWidths({ left: 400, right: 500 })
+    expect(loadColumnWidths()).toEqual({ left: 400, right: 500 })
+    saveColumnWidths({ left: 50, right: 5_000 })
+    expect(loadColumnWidths()).toEqual({ left: 240, right: 560 })
+    localStorage.setItem(COLUMN_WIDTHS_KEY, '{broken')
+    expect(loadColumnWidths()).toEqual({ left: 320, right: 360 })
   })
 })

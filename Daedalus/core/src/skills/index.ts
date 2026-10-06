@@ -1,10 +1,17 @@
 export {
   SkillRegistry,
   createReadSkillTool,
+  daedalusGlobalSkillsDir,
+  formatSkillOrigin,
+  globalSkillSearchDirs,
   loadSkills,
   parseSkillMarkdown,
+  resolveSkillSearchDirs,
   workspaceSkillsDir,
   WORKSPACE_SKILLS_RELATIVE_PATH,
   type Skill,
+  type SkillDirOptions,
   type SkillInfo,
+  type SkillOrigin,
+  type SkillSearchDir,
 } from './loader.ts';

@@ -305,7 +305,7 @@ describe('model picker overlay', () => {
     expect(session.modelPickerOpen).toBe(true);
     expect(session.modelPickerItems().map((item) => item.model)).toEqual(['kr/auto', 'claude-lo', 'cx/gpt-5.5']);
     // The transcript carries only the command echo — no model list lines.
-    expect(session.transcript).toEqual(['> /models']);
+    expect(session.transcript).toEqual(['You › /models']);
     expect(session.transcript.join('\n')).not.toContain('claude-lo');
     await session.refreshModelPicker();
     expect(session.modelPickerOpen).toBe(true);
@@ -539,7 +539,7 @@ describe('casual chat never becomes a task', () => {
       kind: 'task',
       text: 'hai, tolong buatkan fungsi login',
     });
-    await expect(session.handleInput('jelaskan file ini')).resolves.toMatchObject({ kind: 'task' });
+    await expect(session.handleInput('hai tolong fix bug ini')).resolves.toMatchObject({ kind: 'task' });
   });
 
   test('conversational history accumulates for follow-ups', async () => {
@@ -552,5 +552,123 @@ describe('casual chat never becomes a task', () => {
     await session.handleInput('apa kabar');
     expect(seen).toEqual([0, 2]);
     expect(session.chatHistory).toHaveLength(4);
+  });
+});
+
+describe('questions are answered, never tasked', () => {
+  test('a repo question gets a direct grounded answer with labeled entries and an empty plan', async () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace(), initialMode: 'ask' });
+    let taskRuns = 0;
+    const asked: string[] = [];
+    session.setCallbacks({
+      runTask: async () => { taskRuns += 1; return 'should never run'; },
+      questionReply: async ({ input }) => { asked.push(input); return 'Ini repo Daedalus, framework agentic coding.'; },
+    });
+    const result = await session.handleInput('hai kamu siapa dan aku siapa? dan repo ini tentang apa?');
+    expect(result.kind).toBe('question');
+    expect(asked).toEqual(['hai kamu siapa dan aku siapa? dan repo ini tentang apa?']);
+    expect(taskRuns).toBe(0);
+    expect(session.status).toBe('idle');
+    const transcript = session.transcript.join('\n');
+    expect(transcript).toContain('You › hai kamu siapa');
+    expect(transcript).toContain('Daedalus › Ini repo Daedalus');
+    expect(transcript).not.toContain('Plan (');
+    expect(transcript).not.toContain('Task:');
+    expect(session.renderScreen({ columns: 132, rows: 40 })).toContain('No active plan');
+  });
+
+  test('questions bypass the task path in every mode', async () => {
+    for (const mode of ['ask', 'manual', 'auto', 'plan', 'orchestrator'] as const) {
+      const session = new InteractiveSession({ workspaceRoot: workspace(), initialMode: mode });
+      session.setCallbacks({ questionReply: async () => 'jawaban langsung' });
+      const result = await session.handleInput('kenapa build gagal?');
+      expect(result.kind).toBe('question');
+      expect(result.text).toBe('jawaban langsung');
+      expect(session.transcript.join('\n')).toContain('Daedalus › jawaban langsung');
+    }
+  });
+
+  test('without a questionReply callback the local fallback answers, still no task', async () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace(), initialMode: 'plan' });
+    const result = await session.handleInput('repo ini tentang apa?');
+    expect(result.kind).toBe('question');
+    expect(result.text).toContain('/models');
+    expect(session.transcript.join('\n')).toContain('Daedalus ›');
+  });
+
+  test('a throwing Q&A provider degrades to a friendly line, never a task', async () => {
+    const session = new InteractiveSession({ workspaceRoot: workspace() });
+    session.setCallbacks({ questionReply: async () => { throw new Error('provider down'); } });
+    const result = await session.handleInput('apa fungsi file config.ts?');
+    expect(result.kind).toBe('question');
+    expect(result.text).toContain('provider error');
+  });
+});
+
+describe('transcript scrolling', () => {
+  function longSession(): InteractiveSession {
+    const session = new InteractiveSession({ workspaceRoot: workspace() });
+    for (let i = 1; i <= 60; i += 1) session.addTranscript(`line ${i}`);
+    return session;
+  }
+
+  test('PgUp pages toward older lines, shows the scrolled indicator, and End jumps back', () => {
+    const session = longSession();
+    // rows 24 -> 20 content rows (4 footer lines); page step is 19.
+    let screen = session.renderScreen({ columns: 100, rows: 24 });
+    expect(screen).toContain('line 60');
+    expect(screen).not.toContain('▲ scrolled');
+
+    session.scrollTranscriptPage(1);
+    expect(session.scrollOffset).toBe(19);
+    screen = session.renderScreen({ columns: 100, rows: 24 });
+    expect(screen).toContain('▲ scrolled — End to jump back');
+    expect(screen).toContain('line 25');
+    expect(screen).not.toContain('line 60');
+
+    session.scrollTranscriptPage(1);
+    screen = session.renderScreen({ columns: 100, rows: 24 });
+    expect(screen).toContain('line 5');
+
+    session.jumpTranscriptToBottom();
+    expect(session.scrollOffset).toBe(0);
+    screen = session.renderScreen({ columns: 100, rows: 24 });
+    expect(screen).toContain('line 60');
+    expect(screen).not.toContain('▲ scrolled');
+  });
+
+  test('offset clamps at the oldest line and at the bottom', () => {
+    const session = longSession();
+    session.renderScreen({ columns: 100, rows: 24 });
+    session.scrollTranscriptPage(1);
+    session.scrollTranscriptPage(1);
+    session.scrollTranscriptPage(1);
+    session.scrollTranscriptPage(1);
+    session.renderScreen({ columns: 100, rows: 24 });
+    // 60 wrapped lines, 20 visible: the farthest useful offset is 40.
+    expect(session.scrollOffset).toBe(40);
+    session.scrollTranscript(-1000);
+    expect(session.scrollOffset).toBe(0);
+  });
+
+  test('new output does not yank a scrolled view to the bottom', () => {
+    const session = longSession();
+    session.renderScreen({ columns: 100, rows: 24 });
+    session.scrollTranscriptPage(1);
+    session.addTranscript('line 61');
+    const screen = session.renderScreen({ columns: 100, rows: 24 });
+    expect(session.isTranscriptScrolled).toBe(true);
+    expect(screen).toContain('▲ scrolled');
+    expect(screen).not.toContain('line 61');
+    expect(screen).not.toContain('line 60');
+  });
+
+  test('jump-to-top shows the oldest lines', () => {
+    const session = longSession();
+    session.renderScreen({ columns: 100, rows: 24 });
+    session.jumpTranscriptToTop();
+    const screen = session.renderScreen({ columns: 100, rows: 24 });
+    expect(screen).toContain('line 1');
+    expect(screen).toContain('▲ scrolled');
   });
 });

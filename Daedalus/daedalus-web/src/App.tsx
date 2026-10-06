@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { TopBar } from './components/layout/top-bar'
 import { Composer } from './components/composer/composer'
 import { WorkspacePanel } from './components/workspace/workspace-panel'
@@ -19,7 +19,7 @@ import { useEventStream } from './api/useEventStream'
 import { api } from './api/client'
 import { readStoredTheme, applyPaletteVars } from './theme/theme'
 import { useDaedalusStore } from './state/taskStore'
-import { loadComposerPrefs } from './state/prefs'
+import { COLUMN_WIDTHS, loadColumnWidths, loadComposerPrefs, saveColumnWidths, type ColumnWidths } from './state/prefs'
 import { VERSION } from '@daedalus/core/version'
 
 /**
@@ -44,6 +44,46 @@ export function App() {
   const setWorkspace = useDaedalusStore((state) => state.setWorkspace)
   const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
   const setComposer = useDaedalusStore((state) => state.setComposer)
+
+  // Side-column widths are user layout, persisted across visits. They only
+  // take effect in the wide three-column layout; below it the columns stack.
+  const [columns, setColumns] = useState<ColumnWidths>(() => loadColumnWidths())
+
+  const clampColumn = (side: 'left' | 'right', value: number): number => {
+    const range = COLUMN_WIDTHS[side]
+    return Math.min(range.max, Math.max(range.min, Math.round(value)))
+  }
+
+  const startColumnResize = (side: 'left' | 'right') => (event: PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = columns[side]
+    let latest = columns
+    const onMove = (move: globalThis.PointerEvent): void => {
+      const delta = side === 'left' ? move.clientX - startX : startX - move.clientX
+      const next = { ...latest, [side]: clampColumn(side, startWidth + delta) }
+      latest = next
+      setColumns(next)
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      saveColumnWidths(latest)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp, { once: true })
+  }
+
+  const onColumnKeyDown = (side: 'left' | 'right') => (event: KeyboardEvent<HTMLDivElement>): void => {
+    const step = event.shiftKey ? 32 : 8
+    let next: number | undefined
+    if (event.key === 'ArrowLeft') next = columns[side] + (side === 'left' ? -step : step)
+    else if (event.key === 'ArrowRight') next = columns[side] + (side === 'left' ? step : -step)
+    if (next === undefined) return
+    event.preventDefault()
+    const updated = { ...columns, [side]: clampColumn(side, next) }
+    setColumns(updated)
+    saveColumnWidths(updated)
+  }
 
   useEffect(() => {
     setTheme(readStoredTheme())
@@ -85,7 +125,41 @@ export function App() {
       <TopBar />
       <Composer />
 
-      <main className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-auto p-2 lg:grid-cols-[320px_minmax(0,1fr)_360px] lg:overflow-hidden">
+      <main
+        className="relative grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-auto p-2 lg:grid-cols-[var(--daedalus-col-left)_minmax(0,1fr)_var(--daedalus-col-right)] lg:overflow-hidden"
+        style={{ '--daedalus-col-left': `${columns.left}px`, '--daedalus-col-right': `${columns.right}px` } as CSSProperties}
+      >
+        {/* Column resize handles — only meaningful in the wide layout. */}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="resize left column"
+          aria-valuemin={COLUMN_WIDTHS.left.min}
+          aria-valuemax={COLUMN_WIDTHS.left.max}
+          aria-valuenow={columns.left}
+          tabIndex={0}
+          data-testid="column-resize-left"
+          onPointerDown={startColumnResize('left')}
+          onKeyDown={onColumnKeyDown('left')}
+          className="absolute top-2 bottom-2 z-10 hidden w-2 cursor-col-resize touch-none rounded hover:bg-primary/30 focus:bg-primary/30 focus:outline-none lg:block"
+          style={{ left: `calc(${columns.left}px + 4px)` }}
+          title="Drag to resize the left column"
+        />
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="resize right column"
+          aria-valuemin={COLUMN_WIDTHS.right.min}
+          aria-valuemax={COLUMN_WIDTHS.right.max}
+          aria-valuenow={columns.right}
+          tabIndex={0}
+          data-testid="column-resize-right"
+          onPointerDown={startColumnResize('right')}
+          onKeyDown={onColumnKeyDown('right')}
+          className="absolute top-2 bottom-2 z-10 hidden w-2 cursor-col-resize touch-none rounded hover:bg-primary/30 focus:bg-primary/30 focus:outline-none lg:block"
+          style={{ right: `calc(${columns.right}px + 4px)` }}
+          title="Drag to resize the right column"
+        />
         {/* Left column: workspace + agent state */}
         <aside className="flex min-h-0 flex-col gap-2 lg:overflow-hidden">
           <WorkspacePanel />

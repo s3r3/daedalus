@@ -62,7 +62,10 @@ beforeEach(() => {
   extensionsStatus.mockResolvedValue({
     root: '/workspace',
     mcp: [{ name: 'demo', connected: true, toolCount: 3 }],
-    skills: [{ name: 'greeter', description: 'Greets users warmly' }],
+    skills: [
+      { name: 'greeter', description: 'Greets users warmly', origin: 'workspace' },
+      { name: 'oracle', description: 'Answers from the Claude dir', origin: 'claude' },
+    ],
     lsp: [{ name: 'fake-lsp', extensions: ['.ts'], configured: true }],
     problems: [],
   })

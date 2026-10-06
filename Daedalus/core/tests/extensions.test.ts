@@ -139,7 +139,7 @@ describe('Skills', () => {
 
     const registry = await loadSkills([join(workspace, '.daedalus', 'skills'), join(workspace, 'missing-dir')]);
     expect(registry.list()).toEqual([
-      { name: 'greeter', description: 'Greets users warmly', source: join(workspace, '.daedalus', 'skills') },
+      { name: 'greeter', description: 'Greets users warmly', source: join(workspace, '.daedalus', 'skills'), origin: 'workspace' },
     ]);
 
     const tool = createReadSkillTool(registry);
@@ -154,7 +154,7 @@ describe('Skills', () => {
   });
 
   test('the agent context advertises available skills', async () => {
-    const skill: Skill = { name: 'greeter', description: 'Greets users warmly', source: '/tmp/skills', body: 'body', path: '/tmp/skills/greeter/SKILL.md' };
+    const skill: Skill = { name: 'greeter', description: 'Greets users warmly', source: '/tmp/skills', origin: 'workspace', body: 'body', path: '/tmp/skills/greeter/SKILL.md' };
     const context = new DefaultContextManager({ skills: new SkillRegistry([skill]).list() });
     const state = {
       id: 'ctx-task', goal: 'Say hi', repo_path: '/tmp', constraints: [], done_criteria: [], created_at: new Date().toISOString(),

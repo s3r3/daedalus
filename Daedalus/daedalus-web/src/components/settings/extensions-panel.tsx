@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw } from 'lucide-react'
+import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core'
 import { api } from '../../api/client'
 import type { ExtensionStatus } from '../../api/types'
 import { useDaedalusStore } from '../../state/taskStore'
@@ -82,12 +83,13 @@ export function ExtensionsPanel() {
           <section data-testid="extensions-skills">
             <p className="mb-1 text-[10px] uppercase tracking-wider text-muted">Skills</p>
             {status.skills.length === 0 ? (
-              <p className="text-muted">none found (.daedalus/skills)</p>
+              <p className="text-muted">none found (.daedalus/skills, ~/.daedalus/skills, ~/.claude/skills, …)</p>
             ) : (
               <ul className="flex flex-col gap-1">
                 {status.skills.map((skill) => (
-                  <li key={skill.name} data-testid="extension-skill-entry">
+                  <li key={`${skill.origin ?? 'workspace'}:${skill.name}`} data-testid="extension-skill-entry">
                     <span className="text-foreground">{skill.name}</span>
+                    {skill.origin ? <span className="text-muted"> ({formatSkillOrigin(skill.origin as SkillOrigin)})</span> : null}
                     {skill.description ? <span className="block truncate text-[10px] text-muted">{skill.description}</span> : null}
                   </li>
                 ))}

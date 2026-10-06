@@ -6,7 +6,7 @@ import { payloadOf, type ApprovalRequested, type CommandFinished, type CommandSt
  * these, so the UI is a function of recorded events only (§3.4 rule 6).
  */
 
-export type TaskStatus = 'idle' | 'running' | 'awaiting-approval' | 'done' | 'failed' | 'partial'
+export type TaskStatus = 'idle' | 'running' | 'awaiting-approval' | 'done' | 'failed' | 'partial' | 'stopped'
 
 export type ToolCallView = {
   call: ToolCall
@@ -435,9 +435,12 @@ export function taskStatus(events: Event[], pendingApprovalsCount: number): Task
   const completed = [...events].reverse().find((event) => event.type === 'TASK_COMPLETED')
   const hasStarted = events.some((event) => event.type === 'TASK_STARTED')
   if (completed) {
-    const outcome = payloadOf(completed, 'TASK_COMPLETED')?.outcome
-    if (outcome === 'success') return 'done'
-    if (outcome === 'partial') return 'partial'
+    const payload = payloadOf(completed, 'TASK_COMPLETED')
+    if (payload?.outcome === 'success') return 'done'
+    if (payload?.outcome === 'partial') return 'partial'
+    // A user-stopped run is not a failure: the loop records outcome
+    // 'failed' with reason 'aborted', and the UI owes the user the truth.
+    if (payload?.reason === 'aborted' || payload?.reason === 'cancelled') return 'stopped'
     return 'failed'
   }
   if (pendingApprovalsCount > 0) return 'awaiting-approval'
@@ -617,12 +620,13 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
       }
       case 'TASK_COMPLETED': {
         const completed = payloadOf(event, 'TASK_COMPLETED')
+        const stopped = completed?.reason === 'aborted' || completed?.reason === 'cancelled'
         entries.push({
           ...base,
           role: 'status',
-          text: `task ${completed?.outcome ?? 'done'}`,
-          detail: completed?.reason,
-          status: completed?.outcome === 'success' ? 'ok' : completed?.outcome === 'partial' ? 'warning' : 'error',
+          text: stopped ? 'task stopped' : `task ${completed?.outcome ?? 'done'}`,
+          detail: stopped ? undefined : completed?.reason,
+          status: stopped ? 'warning' : completed?.outcome === 'success' ? 'ok' : completed?.outcome === 'partial' ? 'warning' : 'error',
         })
         break
       }

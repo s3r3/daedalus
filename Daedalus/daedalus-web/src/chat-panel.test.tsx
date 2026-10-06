@@ -1,8 +1,16 @@
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { Event } from '@daedalus/core'
 import { useDaedalusStore } from './state/taskStore'
 import { ChatPanel } from './components/agent/chat-panel'
+import { api } from './api/client'
+import { CHAT_HEIGHT_KEY, loadChatHeight } from './state/prefs'
+
+vi.mock('./api/client', () => ({
+  api: {
+    cancelTask: vi.fn(async () => ({ cancelled: true, cancel_requested: true, task_id: 'task-1' })),
+  },
+}))
 
 // The chat panel is a pure view over the recorded event log, so — like the
 // other panel suites — it is driven through seeded events, not a socket.
@@ -152,5 +160,64 @@ describe('ChatPanel', () => {
     render(<ChatPanel />)
     const roles = screen.getAllByTestId('chat-entry').map((entry) => entry.getAttribute('data-role'))
     expect(roles).toEqual(['user', 'thought', 'tool', 'assistant', 'status'])
+  })
+})
+
+describe('ChatPanel stop + resize', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    vi.mocked(api.cancelTask).mockClear()
+  })
+
+  test('shows a prominent Stop while running and calls the cancel API', async () => {
+    seed([started()])
+    render(<ChatPanel />)
+    const stop = screen.getByTestId('chat-stop')
+    fireEvent.click(stop)
+    await waitFor(() => expect(vi.mocked(api.cancelTask)).toHaveBeenCalledWith('task-1'))
+  })
+
+  test('hides Stop when idle and reports a stopped task as stopped, not failed', () => {
+    seed([started(), ev('TASK_COMPLETED', { outcome: 'failed', reason: 'aborted' })])
+    render(<ChatPanel />)
+    expect(screen.queryByTestId('chat-stop')).toBeNull()
+    expect(textOf(screen.getByTestId('chat-status'))).toContain('stopped')
+    expect(textOf(screen.getByTestId('chat-panel'))).toContain('task stopped')
+  })
+
+  test('resize handle changes the height by keyboard and persists it', () => {
+    seed([started()])
+    render(<ChatPanel />)
+    const scroll = screen.getByTestId('chat-scroll')
+    const before = Number((scroll.getAttribute('style') ?? '').match(/height:\s*(\d+)px/)?.[1] ?? '0')
+    expect(before).toBe(loadChatHeight())
+
+    const handle = screen.getByTestId('chat-resize-handle')
+    fireEvent.keyDown(handle, { key: 'ArrowDown' })
+    const after = Number((scroll.getAttribute('style') ?? '').match(/height:\s*(\d+)px/)?.[1] ?? '0')
+    expect(after).toBe(before + 16)
+    expect(localStorage.getItem(CHAT_HEIGHT_KEY)).toBe(String(after))
+    expect(handle.getAttribute('aria-valuenow')).toBe(String(after))
+  })
+
+  test('a persisted height is restored on the next mount', () => {
+    localStorage.setItem(CHAT_HEIGHT_KEY, '512')
+    seed([started()])
+    render(<ChatPanel />)
+    expect(screen.getByTestId('chat-scroll').getAttribute('style')).toContain('height: 512px')
+  })
+
+  test('offers jump-to-latest when the reader scrolls up during a run', () => {
+    seed([started()])
+    render(<ChatPanel />)
+    const scroll = screen.getByTestId('chat-scroll')
+    Object.defineProperty(scroll, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 320, configurable: true })
+    scroll.scrollTop = 0
+    fireEvent.scroll(scroll)
+    const jump = screen.getByTestId('chat-jump-latest')
+    fireEvent.click(jump)
+    expect(scroll.scrollTop).toBe(1000)
+    expect(screen.queryByTestId('chat-jump-latest')).toBeNull()
   })
 })

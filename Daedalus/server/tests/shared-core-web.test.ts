@@ -247,7 +247,7 @@ describe('shared local core, Web prompts, extensions, and shared workspace', () 
     }>(await fetch(new URL(`/extensions/status?root=${encodeURIComponent(workspace!)}`, base)));
     expect(status.root).toBe(workspace);
     expect(status.mcp).toEqual([{ name: 'demo', connected: true, toolCount: 3 }]);
-    expect(status.skills).toEqual([{ name: 'greeter', description: 'Greets users warmly' }]);
+    expect(status.skills).toEqual([{ name: 'greeter', description: 'Greets users warmly', origin: 'workspace' }]);
     expect(status.lsp).toEqual([{ name: 'fake-lsp', extensions: ['.ts'], configured: true, running: false }]);
     expect(status.problems).toEqual([]);
 
@@ -259,6 +259,28 @@ describe('shared local core, Web prompts, extensions, and shared workspace', () 
     );
     expect(broken.mcp[0]).toMatchObject({ name: 'broken', connected: false, toolCount: 0 });
     expect(broken.mcp[0]?.error).toBeTruthy();
+  });
+
+  test('GET /extensions/status also surfaces global skills with their origin', async () => {
+    const { base } = await listen();
+    writeExtensionFixtures(workspace!);
+    const globalSkills = mkdtempSync(join(tmpdir(), 'daedalus-global-skills-'));
+    mkdirSync(join(globalSkills, 'oracle'), { recursive: true });
+    writeFileSync(join(globalSkills, 'oracle', 'SKILL.md'), '---\nname: oracle\ndescription: Answers from the global dir\n---\nBe oracular.');
+
+    const previous = process.env.DAEDALUS_SKILLS_DIR;
+    process.env.DAEDALUS_SKILLS_DIR = globalSkills;
+    try {
+      const status = await json<{ skills: Array<{ name: string; description: string; origin?: string }> }>(
+        await fetch(new URL(`/extensions/status?root=${encodeURIComponent(workspace!)}`, base)),
+      );
+      expect(status.skills).toContainEqual({ name: 'greeter', description: 'Greets users warmly', origin: 'workspace' });
+      expect(status.skills).toContainEqual({ name: 'oracle', description: 'Answers from the global dir', origin: 'global' });
+    } finally {
+      if (previous === undefined) delete process.env.DAEDALUS_SKILLS_DIR;
+      else process.env.DAEDALUS_SKILLS_DIR = previous;
+      rmSync(globalSkills, { recursive: true, force: true });
+    }
   });
 
   test('a Web prompt creates a shared-store task through the same core with thinking and extension tools', async () => {
