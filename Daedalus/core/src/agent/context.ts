@@ -3,6 +3,7 @@ import { resolve, sep } from 'node:path';
 import type { ContentBlock, Message, ToolDefinition } from '../providers/llm/types.ts';
 import type { Attachment, PromptFamily, TaskState } from '../contracts.ts';
 import { buildPrompt, estimateTokens, systemMessage, userMessage } from '../providers/index.ts';
+import { modePromptContract } from '../interaction/modes.ts';
 import { MAX_SKILLS_IN_PROMPT, dedupeSkillsByName, formatSkillOrigin, type SkillInfo } from '../skills/index.ts';
 import { walkTreeLines } from '../tools/filesystem/index.ts';
 import { promptFamilyFragment } from './prompt-dialects.ts';
@@ -107,7 +108,7 @@ export class DefaultContextManager implements ContextManager {
             }]
           : []),
         { id: 'plan', content: state.steps.map((s) => `- [${s.status}] ${s.intent}`).join('\n') || '(no plan yet)' },
-        { id: 'mode', content: `Current mode: ${state.mode ?? 'auto'}. Ask/Plan are read-only; Manual requires approval for mutations; Auto follows the session approval policy; Orchestrator coordinates child tasks.` },
+        { id: 'mode', content: modePromptContract(state.mode ?? 'auto') },
         { id: 'constraints', content: state.constraints.join('\n') || '(none)' },
         {
           id: 'protocol',

@@ -1,16 +1,19 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { Badge } from '../ui/badge'
 import { EmptyState, Panel } from '../common/panel'
 import { Spinner } from '../common/spinner'
 import { useTaskEvents } from '../../state/hooks'
 import { useDaedalusStore } from '../../state/taskStore'
 import { commands, type CommandView } from '../../state/selectors'
+import { TERMINAL_HEIGHT, loadTerminalHeight, saveTerminalHeight } from '../../state/prefs'
 import { terminalTheme, type ITheme } from '../../theme/terminal-theme'
 
 /**
  * Terminal surface (PLAN.md §3.6): streamed COMMAND_OUTPUT plus the process
  * status from COMMAND_STARTED / COMMAND_FINISHED. The agent owns the process;
- * this pane is a read-only log of what the harness ran.
+ * this pane is a read-only log of what the harness ran. Its height is the
+ * user's: dragged by the handle on its top edge (up grows), persisted,
+ * double-click resets — the same interaction as the chat panel.
  */
 export function TerminalPane() {
   const events = useTaskEvents()
@@ -18,35 +21,96 @@ export function TerminalPane() {
   const running = views.filter((view) => view.status === 'running')
   const last = views.at(-1)
 
+  const [height, setHeight] = useState<number>(() => loadTerminalHeight())
+  const heightRef = useRef(height)
+  heightRef.current = height
+
+  const clampHeight = (value: number): number => Math.min(TERMINAL_HEIGHT.max, Math.max(TERMINAL_HEIGHT.min, Math.round(value)))
+
+  const startResize = (event: PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    const startY = event.clientY
+    const startHeight = heightRef.current
+    const onMove = (move: globalThis.PointerEvent): void => {
+      // The handle is on the pane's top edge: dragging up grows it.
+      setHeight(clampHeight(startHeight + startY - move.clientY))
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      saveTerminalHeight(heightRef.current)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp, { once: true })
+  }
+
+  const onResizeKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    const step = event.shiftKey ? 48 : 16
+    let next: number | undefined
+    if (event.key === 'ArrowUp') next = heightRef.current + step
+    else if (event.key === 'ArrowDown') next = heightRef.current - step
+    else if (event.key === 'Home') next = TERMINAL_HEIGHT.min
+    else if (event.key === 'End') next = TERMINAL_HEIGHT.max
+    if (next === undefined) return
+    event.preventDefault()
+    const clamped = clampHeight(next)
+    setHeight(clamped)
+    saveTerminalHeight(clamped)
+  }
+
+  const resetHeight = (): void => {
+    setHeight(TERMINAL_HEIGHT.default)
+    saveTerminalHeight(TERMINAL_HEIGHT.default)
+  }
+
   return (
-    <Panel
-      title="terminal"
-      data-testid="terminal-panel"
-      action={
-        running.length > 0 ? (
-          <Badge tone="info" data-testid="terminal-running">
-            <Spinner label="process running" /> {running.length} running
-          </Badge>
-        ) : last ? (
-          <Badge tone={last.status === 'ok' ? 'success' : 'error'} data-testid="terminal-exit">
-            exit {last.exitCode ?? 'n/a'}
-          </Badge>
+    <>
+      <div
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="resize terminal panel"
+        aria-valuemin={TERMINAL_HEIGHT.min}
+        aria-valuemax={TERMINAL_HEIGHT.max}
+        aria-valuenow={height}
+        tabIndex={0}
+        data-testid="terminal-resize-handle"
+        onPointerDown={startResize}
+        onDoubleClick={resetHeight}
+        onKeyDown={onResizeKeyDown}
+        className="group flex h-2 shrink-0 cursor-ns-resize touch-none items-center justify-center rounded hover:bg-primary/20 focus:bg-primary/20 focus:outline-none"
+        title="Drag to resize the terminal panel (double-click resets, arrow keys work too)"
+      >
+        <span className="h-0.5 w-10 rounded bg-line group-hover:bg-primary" />
+      </div>
+      <Panel
+        title="terminal"
+        data-testid="terminal-panel"
+        action={
+          running.length > 0 ? (
+            <Badge tone="info" data-testid="terminal-running">
+              <Spinner label="process running" /> {running.length} running
+            </Badge>
+          ) : last ? (
+            <Badge tone={last.status === 'ok' ? 'success' : 'error'} data-testid="terminal-exit">
+              exit {last.exitCode ?? 'n/a'}
+            </Badge>
+          ) : (
+            <Badge tone="neutral">idle</Badge>
+          )
+        }
+        className="shrink-0"
+        bodyClassName="flex min-h-0 flex-1 flex-col gap-2"
+        style={{ height: `${height}px` }}
+      >
+        {views.length === 0 ? (
+          <EmptyState title="No commands yet" hint="Process output streams here as the harness runs commands." />
         ) : (
-          <Badge tone="neutral">idle</Badge>
-        )
-      }
-      className="min-h-[180px] shrink-0"
-      bodyClassName="flex min-h-0 flex-1 flex-col gap-2"
-    >
-      {views.length === 0 ? (
-        <EmptyState title="No commands yet" hint="Process output streams here as the harness runs commands." />
-      ) : (
-        <>
-          <ProcessStatus running={running.length} lastExitCode={last?.exitCode ?? null} lastStatus={last?.status ?? null} />
-          <CommandStream views={views} />
-        </>
-      )}
-    </Panel>
+          <>
+            <ProcessStatus running={running.length} lastExitCode={last?.exitCode ?? null} lastStatus={last?.status ?? null} />
+            <CommandStream views={views} />
+          </>
+        )}
+      </Panel>
+    </>
   )
 }
 

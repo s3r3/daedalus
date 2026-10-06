@@ -9,6 +9,7 @@ import { useActiveTaskId, useTaskEvents } from '../../state/hooks'
 import { useDaedalusStore } from '../../state/taskStore'
 import { CHAT_HEIGHT, loadChatHeight, saveChatHeight } from '../../state/prefs'
 import { chatTranscript, pendingApprovals, taskStatus, type ChatEntry } from '../../state/selectors'
+import { ApprovalCard } from '../approval/approval-card'
 import { STATUS_TONE, type Tone } from './status-tone'
 
 /**
@@ -198,13 +199,17 @@ export function ChatPanel() {
       )}
 
       {pending.length > 0 ? (
-        <p className="mt-2 flex items-start gap-1.5 border-t border-line pt-2 text-[11px] text-warning" data-testid="chat-approval-pending">
-          <ShieldAlert className="mt-[1px] size-3.5 shrink-0" />
-          <span>
-            waiting for approval: {pending[0]?.key.tool} [{pending[0]?.key.action}]
-            {pending[0]?.key.path ? ` ${pending[0].key.path}` : ''} — approve or deny it in the approval card.
-          </span>
-        </p>
+        <div className="mt-2 border-t border-line pt-2">
+          <ApprovalCard />
+          <p className="mt-2 flex items-start gap-1.5 text-[11px] text-warning" data-testid="chat-approval-pending">
+            <ShieldAlert className="mt-[1px] size-3.5 shrink-0" />
+            <span>
+              waiting for approval: {pending[0]?.key.tool} [{pending[0]?.key.action}]
+              {pending[0]?.key.path ? ` ${pending[0].key.path}` : ''} — allow or decline it in the card above, or type a
+              reply in the composer to decline with that note.
+            </span>
+          </p>
+        </div>
       ) : null}
     </Panel>
   )

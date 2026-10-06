@@ -31,6 +31,7 @@ import {
   workspaceAgentsDir,
   resolveSkillSearchDirs,
   type AgentMode,
+  type ApprovalDecision,
   type Attachment,
   type Event,
   type FinalReport,
@@ -73,6 +74,12 @@ export type AppContext = {
   startedAt: number;
   cwd: string;
   activeRunners: Map<string, TaskRunner>;
+  /**
+   * Session-scoped remembered approvals (pattern key → decision), shared by
+   * every runner this server creates. In-memory only: restarting the
+   * server forgets every remembered grant.
+   */
+  approvalMemory: Map<string, ApprovalDecision>;
   settings: Settings;
   providerStore: ProviderRegistryStore;
   session: SessionState;
@@ -97,6 +104,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     startedAt: overrides.startedAt ?? Date.now(),
     cwd,
     activeRunners: overrides.activeRunners ?? new Map<string, TaskRunner>(),
+    approvalMemory: overrides.approvalMemory ?? new Map<string, ApprovalDecision>(),
     settings,
     providerStore: overrides.providerStore ?? new ProviderRegistryStore(resolveDaedalusHome(settings.daedalusHome, cwd)),
     session,
@@ -1016,6 +1024,7 @@ export function createApp(ctx: AppContext) {
           const runner = new TaskRunner({
             workspaceRoot: repoPath,
             approvalPolicy: autoApprove ? "auto" : "ask",
+            approvalMemory: ctx.approvalMemory,
             maxIterations,
             bus: ctx.bus,
             store: taskStore,
@@ -1072,6 +1081,7 @@ export function createApp(ctx: AppContext) {
               ...(poolModels.length ? { models: poolModels } : {}),
               ...(modelStrategy ? { modelStrategy } : {}),
               ...(children.length ? { children } : {}),
+              ...(typeof parsed.plan_task_id === "string" && parsed.plan_task_id ? { planTaskId: parsed.plan_task_id } : {}),
             })
             .then((result) => ctx.log.info("task finished", { task_id: taskId, outcome: result.outcome }))
             .catch((error: unknown) => ctx.log.error("task run error", { task_id: taskId, error: String(error) }))
@@ -1166,6 +1176,42 @@ export function createApp(ctx: AppContext) {
         }
         const success = runner.approvals.decide(pending.key, decision, remember);
         sendJson(res, 200, { success, decision, remember, key: pending.key });
+      })();
+      return;
+    }
+
+    // Id-addressed approval decision (the Web chat card): allow once,
+    // allow & remember the shown pattern, or decline — optionally with the
+    // user's redirect text and, for commands, edited arguments.
+    const decideMatch = /^\/tasks\/([^/]+)\/approvals\/([^/]+)$/.exec(url.pathname);
+    if (method === "POST" && decideMatch?.[1] !== undefined && decideMatch[2] !== undefined) {
+      void (async () => {
+        const taskId = decideMatch[1] as string;
+        const approvalId = decideMatch[2] as string;
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json" });
+          return;
+        }
+        const decision = parsed.decision === "allow" || parsed.decision === "allow_remember" ? "grant" : "deny";
+        const remember = parsed.decision === "allow_remember";
+        const note = typeof parsed.note === "string" && parsed.note.length > 0 ? parsed.note : undefined;
+        const editedArgs =
+          parsed.editedArgs && typeof parsed.editedArgs === "object" && !Array.isArray(parsed.editedArgs)
+            ? (parsed.editedArgs as Record<string, unknown>)
+            : undefined;
+        // The URL names the task the user is looking at (often the
+        // orchestrator parent); the pending request may live on any active
+        // runner, so fall back to whichever broker actually holds it.
+        const candidates = new Set<TaskRunner>([...(ctx.activeRunners.get(taskId) ? [ctx.activeRunners.get(taskId)!] : []), ...ctx.activeRunners.values()]);
+        let success = false;
+        for (const runner of candidates) {
+          if (runner.approvals.decideById(approvalId, { decision, remember, ...(note ? { note } : {}), ...(editedArgs ? { editedArgs } : {}) })) {
+            success = true;
+            break;
+          }
+        }
+        sendJson(res, success ? 200 : 404, { success, decision, approval_id: approvalId, ...(success ? {} : { error: "approval_not_pending" }) });
       })();
       return;
     }

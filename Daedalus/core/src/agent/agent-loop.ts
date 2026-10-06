@@ -16,7 +16,7 @@ import { LoopGuard, REPEAT_SUPPRESSED_OUTPUT, loopGuidanceNote } from './loop-gu
 import { handleObservation } from './observation.ts';
 import { resolveToolOutputLimits, shapeToolOutput, type ToolOutputLimits } from './tool-output.ts';
 import { evaluateStopConditions, noProgressCondition } from './stop.ts';
-import { ModeController, isToolVisible } from '../interaction/modes.ts';
+import { ModeController, isToolVisible, modeDenialMessage } from '../interaction/modes.ts';
 
 export type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor };
 export { interpretTask };
@@ -176,7 +176,9 @@ export class AgentLoop {
     this.#store.saveState(state.id, state);
     const plan = await this.#planner.createPlan(spec);
     state = { ...state, plan, steps: plan.steps };
-    await this.#emit(state.id, undefined, 'PLAN_CREATED', { plan });
+    // The mode rides along so renderers can tell a Plan-mode deliverable
+    // (the plan IS the output) from an execution plan.
+    await this.#emit(state.id, undefined, 'PLAN_CREATED', { plan, mode: state.mode });
     this.#store.saveState(state.id, state);
     let iteration = 0;
     let errors = 0;
@@ -464,7 +466,7 @@ export class AgentLoop {
         ? {
             call_id: call.id,
             status: 'denied' as const,
-            output: `tool ${call.tool} is not available in ${turnMode} mode`,
+            output: modeDenialMessage(turnMode, call.tool),
             truncated: false,
             meta: { tool: call.tool, mode: turnMode, reason: 'mode_policy' },
           }

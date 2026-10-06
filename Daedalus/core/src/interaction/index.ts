@@ -1,13 +1,17 @@
 export {
   AGENT_MODE_ORDER,
   MODE_DESCRIPTIONS,
+  MODE_PERMISSION_MATRIX,
   ModeController,
   classifyToolName,
   cycleAgentMode,
   isReadOnlyMode,
   isToolVisible,
+  modeDenialMessage,
   modeIntent,
+  modePromptContract,
   nextAgentMode,
+  restrictMode,
   toolModePolicy,
   type ModeChange,
 } from './modes.ts';

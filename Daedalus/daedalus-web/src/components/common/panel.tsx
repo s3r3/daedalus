@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import { Card, CardBody, CardHeader, CardTitle } from '../ui/card'
 import { cn } from '../../lib/utils'
 
@@ -8,6 +8,7 @@ export function Panel({
   children,
   className,
   bodyClassName,
+  style,
   'data-testid': testId,
 }: {
   title: string
@@ -15,10 +16,11 @@ export function Panel({
   children: ReactNode
   className?: string
   bodyClassName?: string
+  style?: CSSProperties
   'data-testid'?: string
 }) {
   return (
-    <Card className={cn('flex min-h-0 flex-col', className)} data-testid={testId}>
+    <Card className={cn('flex min-h-0 flex-col', className)} data-testid={testId} style={style}>
       <CardHeader>
         <CardTitle>{title}</CardTitle>
         {action}

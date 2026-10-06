@@ -1,4 +1,4 @@
-import type { AgentMode, Attachment, Event, FinalReport, ModelStrategy, ProviderConfig, TaskSpec, TaskState, ToolCall, ToolResult, ValidationResult } from './contracts.ts';
+import type { AgentMode, Attachment, ChildTaskErrorReason, Event, FinalReport, ModelStrategy, ProviderConfig, TaskSpec, TaskState, ToolCall, ToolResult, ValidationResult } from './contracts.ts';
 import { EventBus, emitEvent } from './events.ts';
 import { TaskStore } from './persistence.ts';
 import { AgentLoop } from './agent/agent-loop.ts';
@@ -17,7 +17,7 @@ import type { ToolDefinition } from './tools/registry.ts';
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { changedLineCounts, diffLines, renderPatch } from './tools/filesystem/diff.ts';
-import { ApprovalBroker, ExecutionHarness, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
+import { ApprovalBroker, ExecutionHarness, resolveApprovalTimeoutMs, type ApprovalDecision, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
 import { CommandValidator, validationSatisfied, type ValidationCommand, type Validator } from './validation/index.ts';
 import { createProviderFromSettings } from './providers/index.ts';
 import { OpenAICompatProvider } from './providers/llm/openai-compat.ts';
@@ -27,7 +27,7 @@ import { reviewDiff } from './agent/review.ts';
 import { loadPins } from './pins.ts';
 import type { EditFormat, ModelTier, PromptFamily, PromptFamilySetting, ReviewGateReport } from './contracts.ts';
 import { TextProtocolProvider, type ProtocolSwitchInfo } from './providers/llm/text-protocol.ts';
-import { ModeController } from './interaction/modes.ts';
+import { ModeController, restrictMode } from './interaction/modes.ts';
 import { ProviderRegistry } from './interaction/providers.ts';
 import { OrchestratorRunner, decomposeTask, type ChildTaskInput } from './interaction/orchestrator.ts';
 import { McpManager, loadMcpConfig, type McpServerConfig, type McpServerStatus } from './mcp/index.ts';
@@ -68,6 +68,16 @@ export type TaskRunnerOptions = {
   thinking?: boolean;
   bus?: EventBus;
   store?: TaskStore;
+  /** Shared approval broker (worktree re-dispatch reuses the parent's so decisions reach child runs). */
+  approvalBroker?: ApprovalBroker;
+  /** How long an approval may wait for a human before it counts as declined. Defaults to DAEDALUS_APPROVAL_TIMEOUT_MS / 10 minutes. */
+  approvalTimeoutMs?: number;
+  /**
+   * Shared remembered-approval store (pattern key → decision). Inject one
+   * Map to make "Allow & remember" session-scoped across runners; in-memory
+   * only, so a process restart forgets every remembered grant.
+   */
+  approvalMemory?: Map<string, ApprovalDecision>;
   harness?: Partial<HarnessConfig>;
   validator?: Validator;
   validationCommands?: ValidationCommand[];
@@ -136,6 +146,8 @@ export type RunOptions = {
   autoApprove?: boolean;
   maxIterations?: number;
   maxErrors?: number;
+  /** Execute the plan an earlier (plan-mode) task recorded: its steps are carried into this task's context. */
+  planTaskId?: string;
   /** Name of a file-defined subagent (.daedalus/agents/<name>.md) running this task. */
   agentName?: string;
   /** Subagent definition already resolved by a parent run (worktree re-dispatch); set automatically. */
@@ -180,6 +192,8 @@ export class TaskRunner {
   readonly #workspaceRoot: string;
   readonly #options: TaskRunnerOptions;
   readonly #activeLoops = new Map<string, AgentLoop>();
+  /** Child task id → orchestrator parent task id, for approval surfacing. */
+  readonly #taskParents = new Map<string, string>();
   #extensionStatus: ExtensionStatus = { mcp: [], lsp: [], skills: [], agents: [] };
   /** Language servers of the in-flight run, used by the edit guard. */
   #activeLsp: LspManager | undefined;
@@ -190,7 +204,7 @@ export class TaskRunner {
     this.#workspaceRoot = options.workspaceRoot;
     this.bus = options.bus ?? new EventBus();
     this.store = options.store ?? new TaskStore(resolveDaedalusHome(this.#settings.daedalusHome, options.workspaceRoot));
-    this.approvals = new ApprovalBroker();
+    this.approvals = options.approvalBroker ?? new ApprovalBroker({ timeoutMs: resolveApprovalTimeoutMs(options.approvalTimeoutMs) });
     this.modeController = options.modeController ?? new ModeController(options.mode ?? 'auto', options.autoApprove ?? options.approvalPolicy === 'auto');
     if (options.autoApprove !== undefined) this.modeController.setAutoApprove(options.autoApprove);
     this.providerRegistry = options.providerRegistry;
@@ -199,6 +213,13 @@ export class TaskRunner {
       {
         defaultApprovalPolicy: options.approvalPolicy ?? 'ask',
         ...options.harness,
+        approvalMemory: options.approvalMemory ?? options.harness?.approvalMemory,
+        modeFor: () => this.modeController.mode,
+        parentTaskIdFor: (taskId) => this.#taskParents.get(taskId),
+        approvalTaskIds: (key) => {
+          const parent = this.#taskParents.get(key.taskId);
+          return parent ? [key.taskId, parent] : [key.taskId];
+        },
         policyFor: (key, tool) => {
           const modePolicy = this.modeController.approvalFor(tool.name);
           if (!modePolicy.visible) return 'deny';
@@ -210,7 +231,7 @@ export class TaskRunner {
       },
       { bus: this.bus, store: this.store },
     );
-    this.harness.setApprovalCallback((key, policy) => this.approvals.request(key, policy));
+    this.harness.setApprovalCallback((info) => this.approvals.request(info));
     this.validator = options.validator ?? new CommandValidator();
   }
 
@@ -343,6 +364,10 @@ export class TaskRunner {
 
   cancel(taskId: string): void {
     this.harness.cancelTask(taskId);
+    // A pending approval is a wait, not work: stopping the task settles it
+    // as a decline (never an allow) so the blocked loop can observe the
+    // cancellation instead of hanging on a card nobody will answer.
+    this.approvals.cancelTasks([taskId]);
     // A runner executes one user task at a time (plus its orchestrator
     // children), so cancelling it stops every loop currently active here.
     for (const [activeTaskId, loop] of this.#activeLoops) loop.stop(activeTaskId);
@@ -395,6 +420,22 @@ export class TaskRunner {
     if (!options.parentTaskId && !spec.title) {
       const title = await this.#helperTitle(spec.goal);
       if (title) spec.title = title;
+    }
+    if (options.parentTaskId) this.#taskParents.set(spec.id, options.parentTaskId);
+    // Plan continuity (Cline-style: context carries across the mode switch,
+    // unlike Cursor's fresh context per mode): "execute the plan" loads the
+    // steps an earlier plan-mode task recorded and hands them to this task
+    // as a constraint, verbatim.
+    if (options.planTaskId && options.planTaskId !== spec.id) {
+      const prior = this.store.loadState<TaskState>(options.planTaskId);
+      const steps = prior?.plan?.steps ?? prior?.steps ?? [];
+      if (steps.length > 0) {
+        const listing = steps.map((step, index) => `${index + 1}. ${step.intent}`).join('\n');
+        spec.constraints = [
+          ...spec.constraints,
+          `Execute the plan drafted earlier in plan mode (task ${options.planTaskId}); follow these steps:\n${listing}`,
+        ];
+      }
     }
     const collected: Event[] = [];
     const listener = (event: Event): void => {
@@ -670,6 +711,11 @@ export class TaskRunner {
       providerRegistry: this.providerRegistry,
       provider: this.#options.provider,
       providerId: this.#options.providerId,
+      // The inner run shares the approval channel: a decision made on the
+      // outer surface must reach a worktree task blocked on its card.
+      approvalBroker: this.approvals,
+      approvalMemory: this.#options.approvalMemory,
+      approvalTimeoutMs: this.#options.approvalTimeoutMs,
       harness: this.#options.harness,
       validator: this.validator,
       approvalPolicy: this.#options.approvalPolicy,
@@ -761,10 +807,14 @@ export class TaskRunner {
       totalBudget: { max_iterations: options.maxIterations ?? this.#options.maxIterations ?? 25, max_errors: options.maxErrors ?? 5 },
       executeChild: async (child) => {
         const definition = child.agent ? agentRegistry.get(child.agent) : undefined;
+        // Inheritance rule: a child may tighten the parent's posture, never
+        // loosen it (and never become an orchestrator itself — no nesting).
+        const requestedMode = child.mode ?? definition?.mode ?? 'auto';
+        const childMode = restrictMode(spec.mode ?? 'orchestrator', requestedMode === 'orchestrator' ? 'auto' : requestedMode);
         const childResult = await this.run({
           goal: child.goal,
           taskId: child.id,
-          mode: child.mode ?? definition?.mode ?? 'auto',
+          mode: childMode,
           parentTaskId: spec.id,
           providerId: options.providerId,
           model: options.model,
@@ -785,6 +835,18 @@ export class TaskRunner {
           diff: childResult.report.diff,
           iterations: childResult.report.metrics.turns,
           errors: childResult.state.status === 'failed' ? 1 : 0,
+          // Budget exhaustion is a typed result for the parent: the child
+          // ran out of iterations/errors and its partial state is reported
+          // as such, not dressed up as a success.
+          ...(childResult.state.status !== 'done'
+            ? {
+                error_reason: (childResult.state.last_error === 'max_iterations' || childResult.state.last_error === 'max_errors'
+                  ? 'budget_exceeded'
+                  : childResult.state.status === 'failed'
+                    ? 'child_failed'
+                    : 'cancelled') as ChildTaskErrorReason,
+              }
+            : {}),
         };
       },
     });

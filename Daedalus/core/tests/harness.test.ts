@@ -10,6 +10,7 @@ import {
   readFileTool,
   runCommandTool,
   writeFileTool,
+  type ApprovalRequestInfo,
   type ApprovalResult,
   type PermissionKey,
 } from '../src/index.ts';
@@ -33,11 +34,12 @@ function harness(config: Parameters<typeof ExecutionHarness>[0] = {}, approval?:
 describe('ExecutionHarness — approval gate + broker', () => {
   test('policy ask blocks until approval grants, then executes', async () => {
     const root = workspace();
-    let requested: PermissionKey | undefined;
-    const { h } = harness({ defaultApprovalPolicy: 'ask' }, async (key) => { requested = key; return { decision: 'grant' }; });
+    let requested: ApprovalRequestInfo | undefined;
+    const { h } = harness({ defaultApprovalPolicy: 'ask' }, async (info) => { requested = info; return { decision: 'grant' }; });
     const result = await h.execute(call('write_file', { path: 'a.txt', content: 'hi' }), writeFileTool, ctx(root));
     expect(result.status).toBe('ok');
-    expect(requested).toMatchObject({ taskId: 't1', tool: 'write_file', action: 'write', path: 'a.txt' });
+    expect(requested?.key).toMatchObject({ taskId: 't1', tool: 'write_file', action: 'write', path: 'a.txt' });
+    expect(requested?.preview).toEqual({ kind: 'write', path: 'a.txt', content: 'hi' });
     expect(h.getAuditTrail('t1').map((e) => e.type)).toEqual(['tool_dispatch_started', 'approval_requested', 'approval_granted', 'tool_dispatch_completed']);
   });
 

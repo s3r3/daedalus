@@ -97,8 +97,14 @@ describe('agent modes', () => {
     expect(toolModePolicy('manual', 'write_file')).toEqual({ visible: true, approval: 'ask' });
     expect(toolModePolicy('manual', 'run_command')).toEqual({ visible: true, approval: 'ask' });
     expect(toolModePolicy('auto', 'write_file', true)).toEqual({ visible: true, approval: 'auto' });
-    expect(toolModePolicy('auto', 'write_file', false)).toEqual({ visible: true, approval: 'ask' });
+    // Auto: edits are free; only execution is gated by the auto-approve toggle.
+    expect(toolModePolicy('auto', 'write_file', false)).toEqual({ visible: true, approval: 'auto' });
+    expect(toolModePolicy('auto', 'run_command', false)).toEqual({ visible: true, approval: 'ask' });
+    expect(toolModePolicy('auto', 'run_command', true)).toEqual({ visible: true, approval: 'auto' });
+    expect(toolModePolicy('orchestrator', 'write_file', false)).toEqual({ visible: true, approval: 'auto' });
+    expect(toolModePolicy('orchestrator', 'run_command', false)).toEqual({ visible: true, approval: 'ask' });
     expect(toolModePolicy('ask', 'write_file')).toEqual({ visible: false, approval: 'deny' });
+    expect(toolModePolicy('plan', 'run_command')).toEqual({ visible: false, approval: 'deny' });
   });
 
   test('AgentLoop filters offered tools and denies a fabricated write in Ask mode', async () => {

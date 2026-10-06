@@ -41,6 +41,8 @@ export type PendingApproval = {
   seq: number
   key: ApprovalRequested['key']
   policy: string
+  /** Full card data (id, untruncated preview, remember pattern) when core sent it. */
+  approval?: ApprovalRequested['approval']
 }
 
 export type ErrorEntry = {
@@ -218,17 +220,21 @@ export function replanCount(events: Event[]): number {
 }
 
 export function pendingApprovals(events: Event[]): PendingApproval[] {
-  const decided = new Set(
-    events
-      .flatMap((event) => {
-        const payload = payloadOf(event, 'APPROVAL_DECIDED')
-        return payload ? [approvalId(payload.key)] : []
-      }),
-  )
+  // A decision retires its request by approval id when core sent one, and by
+  // the legacy composite key otherwise — both are recorded so old and new
+  // event logs alike stop showing the card.
+  const decided = new Set<string>()
+  for (const event of events) {
+    const payload = payloadOf(event, 'APPROVAL_DECIDED')
+    if (!payload) continue
+    decided.add(approvalId(payload.key))
+    if (payload.approval_id) decided.add(payload.approval_id)
+  }
   return events.flatMap((event) => {
     const payload = payloadOf(event, 'APPROVAL_REQUESTED')
-    if (!payload || decided.has(approvalId(payload.key))) return []
-    return [{ seq: event.seq, key: payload.key, policy: payload.policy }]
+    if (!payload) return []
+    const settled = decided.has(approvalId(payload.key)) || (payload.approval?.id ? decided.has(payload.approval.id) : false)
+    return settled ? [] : [{ seq: event.seq, key: payload.key, policy: payload.policy, ...(payload.approval ? { approval: payload.approval } : {}) }]
   })
 }
 
@@ -374,7 +380,18 @@ export function activity(events: Event[], thinking = true): ActivityEntry[] {
         break
       case 'APPROVAL_DECIDED': {
         const decided = payloadOf(event, 'APPROVAL_DECIDED')
-        push({ kind: 'approval', title: `approval ${decided?.decision ?? 'decided'}`, detail: approvalLabel(decided?.key), status: decided?.decision === 'grant' ? 'ok' : 'error' })
+        push({
+          kind: 'approval',
+          title: decided?.timed_out ? 'approval timed out' : `approval ${decided?.decision ?? 'decided'}`,
+          detail: [
+            approvalLabel(decided?.key),
+            decided?.timed_out ? 'timed out — treated as declined' : undefined,
+            decided?.cancelled ? 'cancelled — treated as declined' : undefined,
+            decided?.edited ? 'edited before running' : undefined,
+            decided?.note ? `note: ${decided.note}` : undefined,
+          ].filter(Boolean).join(' · '),
+          status: decided?.decision === 'grant' ? 'ok' : 'error',
+        })
         break
       }
       case 'TASK_COMPLETED': {
@@ -606,7 +623,14 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
         entries.push({
           ...base,
           role: 'approval',
-          text: `approval ${decided?.decision ?? 'decided'} — ${approvalLabel(decided?.key)}`,
+          text: decided?.timed_out
+            ? `approval timed out — treated as declined — ${approvalLabel(decided?.key)}`
+            : `approval ${decided?.decision ?? 'decided'} — ${approvalLabel(decided?.key)}`,
+          detail: [
+            decided?.cancelled ? 'cancelled — treated as declined' : undefined,
+            decided?.edited ? 'edited before running' : undefined,
+            decided?.note ? `note: ${decided.note}` : undefined,
+          ].filter(Boolean).join(' · ') || undefined,
           status: decided?.decision === 'grant' ? 'ok' : 'error',
         })
         break

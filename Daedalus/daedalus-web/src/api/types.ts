@@ -1,5 +1,6 @@
 import type {
   AgentMode,
+  ApprovalRequestInfo,
   Attachment,
   ChildTask,
   ChildTaskBudget,
@@ -173,8 +174,17 @@ export type CommandStarted = { call_id: string; command: string; tool: string; c
 export type CommandOutput = { call_id: string; chunk: string }
 export type CommandFinished = { call_id: string; status: string; exit_code: number | null; killed: boolean; truncated: boolean }
 export type RecoveryStarted = { reason: string; strategy: 'retry' | 'fix' | 'replan' | 'abort' | string; attempt: number }
-export type ApprovalRequested = { key: PermissionKey; policy: string }
-export type ApprovalDecided = { key: PermissionKey; decision: 'grant' | 'deny'; remember: boolean }
+export type ApprovalRequested = { key: PermissionKey; policy: string; approval?: ApprovalRequestInfo }
+export type ApprovalDecided = {
+  key: PermissionKey
+  decision: 'grant' | 'deny'
+  remember: boolean
+  approval_id?: string
+  note?: string
+  edited?: boolean
+  timed_out?: boolean
+  cancelled?: boolean
+}
 export type TaskCompleted = { state?: Record<string, unknown>; outcome: string; reason: string; error_summary?: string; summary?: string; model_error?: Record<string, unknown> }
 export type ModelRequestFailed = { error: string; error_kind?: string; error_reason?: string; model?: string; models_tried?: string[]; timeout_ms?: number }
 export type ModeChanged = { from: AgentMode; to: AgentMode; turn_boundary: boolean; replan_required: boolean }

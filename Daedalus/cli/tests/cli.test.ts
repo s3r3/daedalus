@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { buildProgram, formatEvent, makeSigintHandler, parseApproval, parsePositiveInt } from '../src/index.ts'
+import { approvalPreviewLine, buildProgram, formatEvent, makeSigintHandler, parseApproval, parsePositiveInt } from '../src/index.ts'
 import { VERSION } from '@daedalus/core'
 import { exitCodeFor } from '@daedalus/core'
 
@@ -88,6 +88,32 @@ describe('CLI', () => {
     })
     test('"x" denies', () => {
       expect(parseApproval('x')).toEqual({ decision: 'deny', remember: false })
+    })
+  })
+
+  describe('approvalPreviewLine', () => {
+    test('renders a command verbatim so the terminal prompt shows what runs', () => {
+      const line = approvalPreviewLine({
+        key: { tool: 'run_command' },
+        approval: { preview: { kind: 'command', command: 'npm test -- --watch' } },
+      })
+      expect(line).toBe('$ npm test -- --watch')
+    })
+
+    test('renders a write as path plus size, and an edit as path plus patch head', () => {
+      expect(
+        approvalPreviewLine({ approval: { preview: { kind: 'write', path: 'src/a.ts', content: 'export {}' } } }),
+      ).toBe('write src/a.ts (9 chars)')
+      const edit = approvalPreviewLine({ approval: { preview: { kind: 'edit', path: 'src/a.ts', patch: '+added\n-removed' } } })
+      expect(edit).toContain('edit src/a.ts')
+      expect(edit).toContain('+added')
+    })
+
+    test('caps long patches and degrades missing previews to undefined', () => {
+      const patch = Array.from({ length: 30 }, (_, index) => `line ${index}`).join('\n')
+      const capped = approvalPreviewLine({ approval: { preview: { kind: 'edit', path: 'x.ts', patch } } })
+      expect(capped).toContain('… (6 more lines)')
+      expect(approvalPreviewLine({ key: { tool: 'write_file' } })).toBeUndefined()
     })
   })
 

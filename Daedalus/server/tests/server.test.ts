@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { EventBus, TaskStore, type Event } from '@daedalus/core'
+import { EventBus, TaskStore, type ApprovalRequestInfo, type Event } from '@daedalus/core'
 import { WebSocket } from 'ws'
 import { createContext, createApp, attachWebSocket, type EventChannel } from '../src/app.ts'
 
@@ -196,6 +196,65 @@ describe('server', () => {
     const body = (await res.json()) as { success: boolean; decision: string }
     expect(body).toMatchObject({ success: true, decision: 'grant' })
     await expect(decision).resolves.toMatchObject({ decision: 'grant' })
+  })
+
+  test('POST /tasks/{id}/approvals/{approvalId} decides by id with note and edited args', async () => {
+    const { base, ctx } = await listen()
+    ctx.store.saveState('t7', { status: 'active' })
+    const { TaskRunner } = await import('@daedalus/core')
+    const runner = new TaskRunner({ workspaceRoot: workspace as string, bus: ctx.bus, store: ctx.store, approvalPolicy: 'ask' })
+    ctx.activeRunners.set('t7', runner)
+    const info: ApprovalRequestInfo = {
+      id: 'approval-7',
+      key: { taskId: 't7', tool: 'run_command', action: 'execute' },
+      policy: 'ask',
+      tool: 'run_command',
+      preview: { kind: 'command', command: 'npm test' },
+      requestedBy: { taskId: 't7' },
+      createdAt: new Date().toISOString(),
+    }
+    const decision = runner.approvals.request(info)
+    const res = await fetch(new URL('/tasks/t7/approvals/approval-7', base), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'decline', note: 'run the watcher instead' }),
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { success: boolean; decision: string; approval_id: string }
+    expect(body).toMatchObject({ success: true, decision: 'deny', approval_id: 'approval-7' })
+    await expect(decision).resolves.toMatchObject({ decision: 'deny', note: 'run the watcher instead' })
+  })
+
+  test('POST /tasks/{id}/approvals/{approvalId} maps allow_remember and 404s unknown ids', async () => {
+    const { base, ctx } = await listen()
+    ctx.store.saveState('t8', { status: 'active' })
+    const { TaskRunner } = await import('@daedalus/core')
+    const runner = new TaskRunner({ workspaceRoot: workspace as string, bus: ctx.bus, store: ctx.store, approvalPolicy: 'ask' })
+    ctx.activeRunners.set('t8', runner)
+    const info: ApprovalRequestInfo = {
+      id: 'approval-8',
+      key: { taskId: 't8', tool: 'write_file', action: 'write', path: 'a.ts' },
+      policy: 'ask',
+      tool: 'write_file',
+      preview: { kind: 'write', path: 'a.ts', content: 'x' },
+      requestedBy: { taskId: 't8' },
+      createdAt: new Date().toISOString(),
+    }
+    const decision = runner.approvals.request(info)
+    const missing = await fetch(new URL('/tasks/t8/approvals/nope', base), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'allow' }),
+    })
+    expect(missing.status).toBe(404)
+    const res = await fetch(new URL('/tasks/t8/approvals/approval-8', base), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ decision: 'allow_remember', editedArgs: { content: 'y' } }),
+    })
+    const body = (await res.json()) as { success: boolean; decision: string }
+    expect(body).toMatchObject({ success: true, decision: 'grant' })
+    await expect(decision).resolves.toMatchObject({ decision: 'grant', remember: true, editedArgs: { content: 'y' } })
   })
 })
 

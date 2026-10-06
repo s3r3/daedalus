@@ -99,6 +99,8 @@ export type Attachment = {
 };
 
 export type ChildTaskBudget = { max_iterations: number; max_errors: number };
+/** Why a child ended without completing: budget exhaustion is a typed partial result for the parent, never a silent success. */
+export type ChildTaskErrorReason = 'budget_exceeded' | 'no_progress' | 'child_failed' | 'cancelled';
 export type ChildTask = {
   id: string;
   parent_task_id: string;
@@ -107,6 +109,7 @@ export type ChildTask = {
   status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
   budget?: ChildTaskBudget;
   result_summary?: string;
+  error_reason?: ChildTaskErrorReason;
   created_at: string;
   /** Name of a file-defined subagent (.daedalus/agents/<name>.md) running this child. */
   agent?: string;

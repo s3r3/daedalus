@@ -45,8 +45,67 @@ export function toolModePolicy(mode: AgentMode, toolName: string, autoApprove = 
   const kind = classifyToolName(toolName);
   if (kind === 'read') return { visible: true, approval: 'auto' };
   if (mode === 'manual') return { visible: true, approval: 'ask' };
+  // Auto (and an Orchestrator parent acting directly): reads and file edits
+  // proceed without asking; only process execution is gated, by the
+  // session's auto-approve toggle (Cline keeps mode and auto-approve as two
+  // orthogonal switches; Claude Code's acceptEdits draws the same line).
+  if (kind === 'mutating') return { visible: true, approval: 'auto' };
   if (autoApprove) return { visible: true, approval: 'auto' };
   return { visible: true, approval: 'ask' };
+}
+
+/**
+ * The mode × capability matrix, as data (OpenCode-style: modes are configs
+ * over one permission engine, not prompt labels). `mutating` covers file
+ * writes/edits and MCP tools; `executing` is `run_command`. Reads are free
+ * in every mode — prompting on reads only trains blind approval.
+ */
+export const MODE_PERMISSION_MATRIX: Record<AgentMode, { read: 'allow'; mutating: 'allow' | 'ask' | 'deny'; executing: 'allow' | 'ask' | 'deny'; summary: string }> = {
+  ask: { read: 'allow', mutating: 'deny', executing: 'deny', summary: 'read-only answers; no edits, no commands' },
+  manual: { read: 'allow', mutating: 'ask', executing: 'ask', summary: 'every edit and command needs approval' },
+  auto: { read: 'allow', mutating: 'allow', executing: 'ask', summary: 'edits run freely; commands need approval unless auto-approve is on' },
+  plan: { read: 'allow', mutating: 'deny', executing: 'deny', summary: 'read-only exploration ending in a written plan' },
+  orchestrator: { read: 'allow', mutating: 'allow', executing: 'ask', summary: 'decomposes into child tasks; own commands follow the auto-approve toggle' },
+};
+
+/**
+ * Strictness order for orchestrator inheritance (higher = stricter). A
+ * child task's effective mode is the stricter of what it asked for and the
+ * ceiling its parent runs under: children may tighten, never loosen.
+ */
+const MODE_STRICTNESS: Record<AgentMode, number> = { orchestrator: 0, auto: 1, manual: 2, plan: 3, ask: 3 };
+
+export function restrictMode(parentCeiling: AgentMode, requested: AgentMode): AgentMode {
+  return MODE_STRICTNESS[requested] >= MODE_STRICTNESS[parentCeiling] ? requested : parentCeiling;
+}
+
+/** The behavioural contract each mode states to the model, verbatim in the prompt. */
+export function modePromptContract(mode: AgentMode): string {
+  switch (mode) {
+    case 'ask':
+      return 'Current mode: Ask (read-only). Answer the user\'s question directly from the workspace with read tools. You cannot create, edit, delete, or run anything, and no plan or task machinery applies. If the user asks for a change, briefly explain what would be done and tell them to switch to Manual or Auto mode (Shift+Tab) to have it made.';
+    case 'plan':
+      return 'Current mode: Plan (read-only). Explore the workspace with read tools only — edits and commands are denied by the harness. Your deliverable is the plan itself: finish with a numbered plan in your final reply where every step names the concrete file(s) it touches, followed by risks/unknowns and how completion will be verified. Do not start implementing.';
+    case 'manual':
+      return 'Current mode: Manual. Reads are free, but every file change and every command pauses for the user\'s approval first. Propose one concrete action at a time and let the approval flow gate it; a declined action comes back with the user\'s instructions — follow them instead of retrying the same action.';
+    case 'auto':
+      return 'Current mode: Auto. Reads and file edits proceed directly; commands run without asking only while auto-approve is on, otherwise each command pauses for approval. Work the plan to completion and let validation prove the result.';
+    case 'orchestrator':
+      return 'Current mode: Orchestrator. Your work is decomposed into child tasks that run under policies no looser than yours. Coordinate: keep each child\'s goal self-contained, respect the budgets, and treat a child\'s budget exhaustion as a partial result to report, not a success.';
+    default:
+      return `Current mode: ${mode}.`;
+  }
+}
+
+/** Why a tool call was refused by the mode gate, phrased for the model. */
+export function modeDenialMessage(mode: AgentMode, toolName: string): string {
+  if (mode === 'ask') {
+    return `tool ${toolName} is not available in ask mode (read-only). Answer the question with what you can read; if the user wants this change made, explain it and ask them to switch to Manual or Auto mode (Shift+Tab) — do not keep trying mutating tools.`;
+  }
+  if (mode === 'plan') {
+    return `tool ${toolName} is not available in plan mode (read-only). Keep exploring with read tools and put this action into the plan as a step naming the file it touches.`;
+  }
+  return `tool ${toolName} is not available in ${mode} mode`;
 }
 
 export type ModeChange = { from: AgentMode; to: AgentMode; turnBoundary: true; replanRequired: boolean };

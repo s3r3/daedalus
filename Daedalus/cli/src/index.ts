@@ -129,6 +129,32 @@ export function parseApproval(answer: string): { decision: "grant" | "deny"; rem
   return { decision: "deny", remember: false };
 }
 
+/**
+ * One-line terminal rendering of an approval preview so the CLI shows the
+ * exact artifact being approved (verbatim command; path + size for writes;
+ * the patch, capped, for edits) instead of just a tool name.
+ */
+export function approvalPreviewLine(payload: {
+  approval?: { preview?: { kind: string; command?: string; path?: string; content?: string; patch?: string; args?: unknown } };
+  key?: { tool: string; path?: string };
+}): string | undefined {
+  const preview = payload.approval?.preview;
+  if (!preview) return undefined;
+  if (preview.kind === "command" && preview.command !== undefined) return `$ ${preview.command}`;
+  if (preview.kind === "write" && preview.path !== undefined) {
+    return `write ${preview.path} (${(preview.content ?? "").length} chars)`;
+  }
+  if (preview.kind === "edit" && preview.path !== undefined) {
+    const lines = (preview.patch ?? "").split("\n").filter((line) => line.trim());
+    const shown = lines.slice(0, 24).join("\n");
+    return `edit ${preview.path}\n${shown}${lines.length > 24 ? `\n… (${lines.length - 24} more lines)` : ""}`;
+  }
+  if (preview.kind === "args") {
+    return `${payload.key?.tool ?? "tool"} ${JSON.stringify(preview.args ?? {})}`;
+  }
+  return undefined;
+}
+
 const AGENT_MODES: AgentMode[] = ["ask", "manual", "auto", "plan", "orchestrator"];
 
 export function parseMode(value: string | undefined): AgentMode | undefined {
@@ -236,8 +262,12 @@ export function formatEvent(event: Omit<Event, "seq" | "ts">): string {
       return `${paint(palette.warning, "↻")} Recovery: ${p.strategy} (attempt ${p.attempt}) — ${p.reason}\n`;
     }
     case "APPROVAL_REQUESTED": {
-      const p = event.payload as { key?: { tool: string; action: string; path?: string } };
-      return `${paint(palette.warning, "▲")} Approval requested: ${p.key?.tool} [${p.key?.action}] ${p.key?.path ?? ""}\n`;
+      const p = event.payload as {
+        key?: { tool: string; action: string; path?: string };
+        approval?: Parameters<typeof approvalPreviewLine>[0]["approval"];
+      };
+      const preview = approvalPreviewLine(p);
+      return `${paint(palette.warning, "▲")} Approval requested: ${p.key?.tool} [${p.key?.action}] ${p.key?.path ?? ""}${preview ? `\n  ${preview.split("\n").join("\n  ")}` : ""}\n`;
     }
     case "MODE_CHANGED": {
       const p = event.payload as { from?: string; to?: string; replan_required?: boolean };
@@ -458,10 +488,14 @@ async function runFullscreenChat(options: {
             if (plan?.steps) session.setPlan(plan.steps.map((step, index) => `${index + 1}. [${step.status ?? "pending"}] ${step.intent}`).join("\n"));
           }
           if (event.type === "APPROVAL_REQUESTED") {
-            const key = (event.payload as { key?: PermissionKey }).key;
-            if (key) {
-              pendingApproval = key;
-              session.addSystemLine(`Approval requested: ${key.tool} [${key.action}] ${key.path ?? ""} — press a approve · d deny · r remember`);
+            const payload = event.payload as {
+              key?: PermissionKey;
+              approval?: Parameters<typeof approvalPreviewLine>[0]["approval"];
+            };
+            if (payload.key) {
+              pendingApproval = payload.key;
+              const preview = approvalPreviewLine(payload);
+              session.addSystemLine(`Approval requested: ${payload.key.tool} [${payload.key.action}] ${payload.key.path ?? ""}${preview ? `\n  ${preview.split("\n").join("\n  ")}` : ""} — press a approve · d deny · r remember`);
             }
             draw();
             return;
@@ -863,10 +897,10 @@ export async function runInteractiveChat(options: {
     });
   }
 
-  const promptApproval = async (key: PermissionKey): Promise<void> => {
+  const promptApproval = async (key: PermissionKey, preview?: string): Promise<void> => {
     const answer = await askLine(
       rl,
-      `${paint(palette.warning, "▲ Approval requested: ")} ${bold(key.tool)} ${dim(`[${key.action}] ${key.path ?? ""}`)}\n  approve (a) / deny (d) / remember (r)? `,
+      `${paint(palette.warning, "▲ Approval requested: ")} ${bold(key.tool)} ${dim(`[${key.action}] ${key.path ?? ""}`)}${preview ? `\n  ${preview.split("\n").join("\n  ")}` : ""}\n  approve (a) / deny (d) / remember (r)? `,
     );
     if (answer === null) return;
     const parsed = parseApproval(answer);
@@ -920,8 +954,11 @@ export async function runInteractiveChat(options: {
               if (plan?.steps) session.setPlan(plan.steps.map((step, index) => `${index + 1}. [${step.status ?? "pending"}] ${step.intent}`).join("\n"));
             }
             if (event.type === "APPROVAL_REQUESTED") {
-              const key = (event.payload as { key?: PermissionKey }).key;
-              if (key) void promptApproval(key);
+              const payload = event.payload as {
+                key?: PermissionKey;
+                approval?: Parameters<typeof approvalPreviewLine>[0]["approval"];
+              };
+              if (payload.key) void promptApproval(payload.key, approvalPreviewLine(payload));
               return;
             }
             const formatted = formatEvent(event);
@@ -1193,10 +1230,10 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
       let stopSpinner: (() => void) | undefined;
       let rl: ReturnType<typeof createInterface> | undefined;
 
-      const promptApproval = async (key: PermissionKey): Promise<void> => {
+      const promptApproval = async (key: PermissionKey, preview?: string): Promise<void> => {
         rl ??= createInterface({ input: process.stdin });
         const answer = await new Promise<string>((resolve) => rl!.question(
-          `${paint(palette.warning, "▲ Approval requested: ")} ${bold(key.tool)} ${dim(`[${key.action}] ${key.path ?? ""}`)}\n  approve (a) / deny (d) / remember (r)? `,
+          `${paint(palette.warning, "▲ Approval requested: ")} ${bold(key.tool)} ${dim(`[${key.action}] ${key.path ?? ""}`)}${preview ? `\n  ${preview.split("\n").join("\n  ")}` : ""}\n  approve (a) / deny (d) / remember (r)? `,
           resolve,
         ));
         const { decision, remember } = parseApproval(answer);
@@ -1248,10 +1285,13 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
               if (event.type === "APPROVAL_REQUESTED") {
                 stopSpinner?.();
                 stopSpinner = undefined;
-                const key = (event.payload as { key?: PermissionKey }).key;
+                const payload = event.payload as {
+                  key?: PermissionKey;
+                  approval?: Parameters<typeof approvalPreviewLine>[0]["approval"];
+                };
                 // CI mode never prompts (policy already denies); the guard
                 // keeps even a stray request from touching stdin.
-                if (key && !ci) void promptApproval(key);
+                if (payload.key && !ci) void promptApproval(payload.key, approvalPreviewLine(payload));
               } else {
                 stopSpinner?.();
                 stopSpinner = undefined;
