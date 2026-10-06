@@ -8,6 +8,7 @@ import type {
   PermissionKey,
   Plan,
   ProviderConfigPublic,
+  SkillLoadedPayload,
   ToolCall,
   ToolResult,
   UserQuestionInfo,
@@ -96,10 +97,21 @@ export type SessionState = {
   workspaceRoot: string
 }
 
+/** One skill in a workspace inventory: the collision winner or a shadowed copy. */
+export type ExtensionSkillSummary = {
+  name: string
+  description: string
+  origin?: string
+  /** Disabled for this workspace via .daedalus/skills.json (shared with the CLI). */
+  disabled?: boolean
+  /** Origin of the winning copy with the same name, when this copy is shadowed. */
+  shadowedBy?: string
+}
+
 export type ExtensionStatus = {
   root: string
   mcp: Array<{ name: string; connected: boolean; toolCount: number; error?: string }>
-  skills: Array<{ name: string; description: string; origin?: string }>
+  skills: ExtensionSkillSummary[]
   agents: Array<{ name: string; description: string; model?: string; mode?: string; tools?: string[] }>
   lsp: Array<{ name: string; extensions: string[]; configured: boolean; running?: boolean; error?: string }>
   problems: string[]
@@ -265,6 +277,7 @@ export type EventPayloads = {
   REPLAN_CREATED: { plan: Plan; previous_plan?: Plan; reason?: string }
   TOOL_CALL_STARTED: { call: ToolCall }
   TOOL_CALL_FINISHED: { call: ToolCall; result: ToolResult; output_truncated?: boolean; spill_path?: string }
+  SKILL_LOADED: SkillLoadedPayload
   COMMAND_STARTED: CommandStarted
   COMMAND_OUTPUT: CommandOutput
   COMMAND_FINISHED: CommandFinished

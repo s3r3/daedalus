@@ -247,7 +247,7 @@ describe('shared local core, Web prompts, extensions, and shared workspace', () 
     }>(await fetch(new URL(`/extensions/status?root=${encodeURIComponent(workspace!)}`, base)));
     expect(status.root).toBe(workspace);
     expect(status.mcp).toEqual([{ name: 'demo', connected: true, toolCount: 3 }]);
-    expect(status.skills).toEqual([{ name: 'greeter', description: 'Greets users warmly', origin: 'workspace' }]);
+    expect(status.skills).toEqual([{ name: 'greeter', description: 'Greets users warmly', origin: 'workspace', disabled: false }]);
     expect(status.lsp).toEqual([{ name: 'fake-lsp', extensions: ['.ts'], configured: true, running: false }]);
     expect(status.problems).toEqual([]);
 
@@ -274,8 +274,8 @@ describe('shared local core, Web prompts, extensions, and shared workspace', () 
       const status = await json<{ skills: Array<{ name: string; description: string; origin?: string }> }>(
         await fetch(new URL(`/extensions/status?root=${encodeURIComponent(workspace!)}`, base)),
       );
-      expect(status.skills).toContainEqual({ name: 'greeter', description: 'Greets users warmly', origin: 'workspace' });
-      expect(status.skills).toContainEqual({ name: 'oracle', description: 'Answers from the global dir', origin: 'global' });
+      expect(status.skills).toContainEqual({ name: 'greeter', description: 'Greets users warmly', origin: 'workspace', disabled: false });
+      expect(status.skills).toContainEqual({ name: 'oracle', description: 'Answers from the global dir', origin: 'global', disabled: false });
     } finally {
       if (previous === undefined) delete process.env.DAEDALUS_SKILLS_DIR;
       else process.env.DAEDALUS_SKILLS_DIR = previous;

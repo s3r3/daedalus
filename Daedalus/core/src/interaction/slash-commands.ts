@@ -31,6 +31,12 @@ export type SlashCommandContext = {
   exit?: () => Promise<SlashCommandResult> | SlashCommandResult;
   getMcpStatus?: () => Promise<string> | string;
   listSkills?: () => Promise<string> | string;
+  /**
+   * Explicit skill invocation (`/skill <name> [task…]`): the surface
+   * force-loads the named skill for the task that follows. Surfaces that
+   * cannot start a task this way omit it and get the usage text instead.
+   */
+  invokeSkill?: (name: string, task: string) => Promise<SlashCommandResult> | SlashCommandResult;
   listAgents?: () => Promise<string> | string;
   review?: () => Promise<SlashCommandResult> | SlashCommandResult;
   getLspStatus?: () => Promise<string> | string;
@@ -58,6 +64,7 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'cancel', description: 'Cancel the running task', usage: '/cancel' },
   { name: 'mcp', description: 'Show MCP server status', usage: '/mcp' },
   { name: 'skills', description: 'List available skills', usage: '/skills' },
+  { name: 'skill', description: 'Run a task with a skill force-loaded', usage: '/skill <name> [task…]' },
   { name: 'agents', description: 'List defined subagents', usage: '/agents' },
   { name: 'review', description: 'Run a read-only review of the current diff', usage: '/review' },
   { name: 'lsp', description: 'Show language server status', usage: '/lsp' },
@@ -158,6 +165,22 @@ export class SlashCommandRegistry {
         return { text: ctx.getMcpStatus ? await ctx.getMcpStatus() : 'MCP status is unavailable in this context.', action: 'mcp' };
       case 'skills':
         return { text: ctx.listSkills ? await ctx.listSkills() : 'Skill listing is unavailable in this context.', action: 'skills' };
+      case 'skill': {
+        const name = args[0];
+        if (!name) {
+          return {
+            text: 'Usage: /skill <name> [task…] — force-loads the named skill into the task context. See /skills for names.',
+            action: 'skill',
+          };
+        }
+        if (!ctx.invokeSkill) {
+          return {
+            text: `Explicit skill invocation is unavailable in this context. The agent can still load "${name}" itself via read_skill when a task matches.`,
+            action: 'skill',
+          };
+        }
+        return ctx.invokeSkill(name, args.slice(1).join(' '));
+      }
       case 'agents':
         return { text: ctx.listAgents ? await ctx.listAgents() : 'Agent listing is unavailable in this context.', action: 'agents' };
       case 'review':

@@ -21,6 +21,8 @@ export function ExtensionsPanel() {
   const [status, setStatus] = useState<ExtensionStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  const [skillToggleError, setSkillToggleError] = useState<string | null>(null)
+  const [skillToggling, setSkillToggling] = useState<string | null>(null)
 
   const load = useCallback(async (): Promise<void> => {
     if (!effectiveRoot) {
@@ -38,6 +40,32 @@ export function ExtensionsPanel() {
       setLoading(false)
     }
   }, [effectiveRoot])
+
+  // Per-workspace disable, persisted via the gateway into the same
+  // .daedalus/skills.json the CLI and task runs read. Optimistic flip
+  // first; on failure the previous state is restored and the error is
+  // shown inline (never a silent no-op).
+  const toggleSkill = useCallback(
+    async (name: string, disabled: boolean): Promise<void> => {
+      setSkillToggleError(null)
+      setSkillToggling(name)
+      setStatus((current) =>
+        current
+          ? { ...current, skills: current.skills.map((skill) => (skill.name === name ? { ...skill, disabled } : skill)) }
+          : current,
+      )
+      try {
+        await api.toggleSkill({ root: effectiveRoot, name, disabled })
+        await load()
+      } catch (caught) {
+        setSkillToggleError(caught instanceof Error ? caught.message : String(caught))
+        await load().catch(() => undefined)
+      } finally {
+        setSkillToggling(null)
+      }
+    },
+    [effectiveRoot, load],
+  )
 
   useEffect(() => {
     void load()
@@ -82,19 +110,64 @@ export function ExtensionsPanel() {
 
           <section data-testid="extensions-skills">
             <p className="mb-1 text-[10px] uppercase tracking-wider text-muted">Skills</p>
+            {skillToggleError ? (
+              <p role="alert" className="mb-1 text-[10px] text-error" data-testid="extension-skills-error">
+                Could not update skill state: {skillToggleError}
+              </p>
+            ) : null}
             {status.skills.length === 0 ? (
               <p className="text-muted">none found (.daedalus/skills, ~/.daedalus/skills, ~/.claude/skills, …)</p>
             ) : (
-              <ul className="flex flex-col gap-1">
-                {status.skills.map((skill) => (
-                  <li key={`${skill.origin ?? 'workspace'}:${skill.name}`} data-testid="extension-skill-entry">
-                    <span className="text-foreground">{skill.name}</span>
-                    {skill.origin ? <span className="text-muted"> ({formatSkillOrigin(skill.origin as SkillOrigin)})</span> : null}
-                    {skill.description ? <span className="block truncate text-[10px] text-muted">{skill.description}</span> : null}
-                  </li>
-                ))}
-              </ul>
+              skillGroups(status.skills).map((group) => (
+                <div key={group.origin} className="mb-2" data-testid="extension-skill-group" data-origin={group.origin}>
+                  <p className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
+                    <Badge tone="info">{formatSkillOrigin(group.origin as SkillOrigin)}</Badge>
+                    <span>{group.origin}</span>
+                  </p>
+                  <ul className="flex flex-col gap-1">
+                    {group.entries.map((skill) => (
+                      <li key={`${skill.origin ?? 'workspace'}:${skill.name}`} data-testid="extension-skill-entry" className="flex items-start justify-between gap-2">
+                        <span className="min-w-0">
+                          <span className="text-foreground">{skill.name}</span>
+                          {skill.origin ? <span className="text-muted"> ({formatSkillOrigin(skill.origin as SkillOrigin)})</span> : null}
+                          {skill.disabled ? (
+                            <span className="text-warning" data-testid="extension-skill-disabled-note"> · disabled for this workspace</span>
+                          ) : null}
+                          {skill.description ? <span className="block truncate text-[10px] text-muted">{skill.description}</span> : null}
+                          {skill.shadowedBy ? (
+                            <span className="block text-[10px] text-muted" data-testid="extension-skill-shadowed">
+                              shadowed by {formatSkillOrigin(skill.shadowedBy as SkillOrigin)} — not used; that copy wins
+                            </span>
+                          ) : null}
+                        </span>
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={!(skill.disabled ?? false)}
+                          aria-label={`${skill.disabled ? 'Enable' : 'Disable'} skill ${skill.name} for this workspace`}
+                          data-testid="extension-skill-toggle"
+                          data-skill={skill.name}
+                          disabled={skillToggling === skill.name}
+                          className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold disabled:opacity-60 ${
+                            skill.disabled ? 'border-warning bg-warning/10 text-warning' : 'border-line bg-surface text-foreground hover:border-primary'
+                          }`}
+                          onClick={() => void toggleSkill(skill.name, !(skill.disabled ?? false))}
+                        >
+                          {skill.disabled ? 'disabled' : 'enabled'}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))
             )}
+            {skillIndexOverflow(status.skills) > 0 ? (
+              <p className="text-[10px] text-warning" data-testid="extension-skills-overflow">
+                {skillIndexOverflow(status.skills)} more skill{skillIndexOverflow(status.skills) === 1 ? '' : 's'} not shown to the model —
+                the prompt index caps at {SKILL_INDEX_CAP} enabled skills. Disable some above to free index slots; read_skill by name still
+                reaches them.
+              </p>
+            ) : null}
           </section>
 
           <section data-testid="extensions-agents">
@@ -140,4 +213,36 @@ export function ExtensionsPanel() {
       ) : null}
     </Panel>
   )
+}
+
+/**
+ * The prompt index caps at this many enabled skills (core
+ * MAX_SKILLS_IN_PROMPT). Mirrored here so the overflow note names the
+ * same number the prompt truncates at.
+ */
+const SKILL_INDEX_CAP = 40
+
+/** Skill search order (workspace > daedalus global > the other tools' skill dirs); unknown origins last. */
+const SKILL_ORIGIN_ORDER = ['workspace', 'global', 'claude', 'codex', 'opencode', 'kilo']
+
+/** Group inventory entries by origin, in skill search order. */
+function skillGroups(skills: ExtensionStatus['skills']): Array<{ origin: string; entries: ExtensionStatus['skills'] }> {
+  const groups = new Map<string, ExtensionStatus['skills']>()
+  for (const skill of skills) {
+    const origin = skill.origin ?? 'unknown'
+    groups.set(origin, [...(groups.get(origin) ?? []), skill])
+  }
+  return [...groups.entries()]
+    .sort(
+      ([a], [b]) =>
+        (SKILL_ORIGIN_ORDER.indexOf(a) === -1 ? SKILL_ORIGIN_ORDER.length : SKILL_ORIGIN_ORDER.indexOf(a)) -
+        (SKILL_ORIGIN_ORDER.indexOf(b) === -1 ? SKILL_ORIGIN_ORDER.length : SKILL_ORIGIN_ORDER.indexOf(b)),
+    )
+    .map(([origin, entries]) => ({ origin, entries }))
+}
+
+/** Enabled collision winners beyond the prompt-index cap (disabled and shadowed copies never reach the index). */
+function skillIndexOverflow(skills: ExtensionStatus['skills']): number {
+  const enabled = skills.filter((skill) => !skill.shadowedBy && !skill.disabled).length
+  return Math.max(0, enabled - SKILL_INDEX_CAP)
 }

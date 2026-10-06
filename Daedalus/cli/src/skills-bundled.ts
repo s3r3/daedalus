@@ -5,8 +5,11 @@ import { fileURLToPath } from 'node:url';
 import {
   daedalusGlobalSkillsDir,
   formatSkillOrigin,
+  loadSkillConfig,
+  loadSkillInventory,
   loadSkills,
   resolveSkillSearchDirs,
+  setSkillDisabled,
   workspaceSkillsDir,
   type SkillDirOptions,
   type SkillOrigin,
@@ -45,13 +48,17 @@ export type InstalledSkill = {
   dir: string;
 };
 
-/** A skill the core loader would detect for this workspace, with its origin. */
+/** A skill detected for this workspace, with its origin and per-workspace availability state. */
 export type DetectedSkill = {
   name: string;
   description: string;
   origin: SkillOrigin;
   /** Skills root the skill was loaded from. */
   dir: string;
+  /** Disabled for this workspace via .daedalus/skills.json (by name, all origins). */
+  disabled: boolean;
+  /** Origin of the winning copy when this entry is a shadowed duplicate. */
+  shadowedBy?: SkillOrigin;
 };
 
 /** One directory in the skill search path, in precedence order. */
@@ -116,15 +123,27 @@ export async function listSkills(options: { workspaceRoot: string } & SkillDirOp
   const bundledDir = bundledSkillsDir();
   const workspaceDir = workspaceSkillsDir(options.workspaceRoot);
   const searchDirs = resolveSkillSearchDirs(options.workspaceRoot, options);
-  const [bundled, registry] = await Promise.all([scanSkills(bundledDir), loadSkills(searchDirs)]);
-  const detected: DetectedSkill[] = registry
-    .list()
-    .map((skill) => ({ name: skill.name, description: skill.description, origin: skill.origin, dir: skill.source }))
+  // The core inventory (winners + shadowed copies) with the workspace's
+  // disabled set applied — the same state Web Settings → Extensions shows.
+  const skillConfig = await loadSkillConfig(options.workspaceRoot);
+  const [bundled, inventory] = await Promise.all([
+    scanSkills(bundledDir),
+    loadSkillInventory(searchDirs, { disabledNames: skillConfig.disabled }),
+  ]);
+  const detected: DetectedSkill[] = inventory
+    .map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      origin: skill.origin,
+      dir: skill.source,
+      disabled: skill.disabled,
+      ...(skill.shadowedBy ? { shadowedBy: skill.shadowedBy } : {}),
+    }))
     .sort((a, b) => a.name.localeCompare(b.name));
   return {
     bundled,
     installed: detected
-      .filter((skill) => skill.origin === 'workspace')
+      .filter((skill) => skill.origin === 'workspace' && !skill.shadowedBy)
       .map((skill) => ({ name: skill.name, description: skill.description, dir: skill.dir })),
     detected,
     searchedDirs: searchDirs.map((entry) => ({ dir: entry.dir, origin: entry.origin, exists: existsSync(entry.dir) })),
@@ -132,6 +151,20 @@ export async function listSkills(options: { workspaceRoot: string } & SkillDirOp
     workspaceDir,
     globalDir: daedalusGlobalSkillsDir(options),
   };
+}
+
+/**
+ * Enable/disable a skill for one workspace: writes the same
+ * `.daedalus/skills.json` the core loader and the Web gateway read.
+ * Disabling is name-based — every origin copy of the name is excluded.
+ */
+export async function setSkillDisabledForWorkspace(
+  workspaceRoot: string,
+  name: string,
+  disabled: boolean,
+): Promise<{ name: string; disabled: boolean; disabledSkills: string[] }> {
+  const config = await setSkillDisabled(workspaceRoot, name, disabled);
+  return { name, disabled, disabledSkills: config.disabled };
 }
 
 /**
@@ -197,10 +230,11 @@ export function formatSkillsListing(listing: SkillsListing): string {
   lines.push(`Bundled starter skills (${listing.bundledDir}):`);
   if (listing.bundled.length === 0) lines.push('  (none shipped with this build)');
   for (const skill of listing.bundled) lines.push(`  ${skill.name} — ${skill.description || '(no description)'}`);
-  lines.push('Detected skills (workspace + global; available to the agent in every workspace):');
+  lines.push('Detected skills (workspace + global; winners the agent can load):');
   if (listing.detected.length === 0) lines.push('  (none)');
   for (const skill of listing.detected) {
-    lines.push(`  ${skill.name} (${formatSkillOrigin(skill.origin)}) — ${skill.description || '(no description)'}`);
+    const state = skill.shadowedBy ? ` — shadowed by ${formatSkillOrigin(skill.shadowedBy)}, not used` : skill.disabled ? ' — disabled for this workspace' : '';
+    lines.push(`  ${skill.name} (${formatSkillOrigin(skill.origin)}) — ${skill.description || '(no description)'}${state}`);
   }
   lines.push('Skill directories searched (highest precedence first; first skill with a given name wins):');
   for (const entry of listing.searchedDirs) {

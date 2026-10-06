@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { ArrowDown, CircleQuestionMark, MessageSquarePlus, ShieldAlert, Square } from 'lucide-react'
+import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { EmptyState, Panel } from '../common/panel'
@@ -384,8 +385,85 @@ function ChatTurnRow({ turn }: { turn: ConversationTurn }) {
   )
 }
 
+/**
+ * The activation chip: which skill fired, from which origin, and who
+ * loaded it — plus a one-click per-workspace disable so a skill that
+ * fired at the wrong moment can be silenced from the chat itself. The
+ * toggle writes the shared .daedalus/skills.json via the gateway; the
+ * chip confirms the new state and offers undo inline. Non-blocking.
+ */
+function SkillChip({ entry }: { entry: ChatEntry }) {
+  const workspaceRoot = useDaedalusStore((state) => state.workspace.root)
+  const sessionRoot = useDaedalusStore((state) => state.session?.workspaceRoot)
+  const root = workspaceRoot || sessionRoot || ''
+  const skill = entry.skill
+  const [state, setState] = useState<'idle' | 'pending' | 'disabled' | 'error'>('idle')
+  if (!skill) return null
+
+  const toggle = async (disabled: boolean): Promise<void> => {
+    if (!root || state === 'pending') return
+    setState('pending')
+    try {
+      await api.toggleSkill({ root, name: skill.name, disabled })
+      setState(disabled ? 'disabled' : 'idle')
+    } catch {
+      setState('error')
+    }
+  }
+
+  return (
+    <li
+      className="flex flex-wrap items-center gap-1.5 rounded border border-line bg-surface px-2 py-1"
+      data-testid="chat-skill-chip"
+      data-skill={skill.name}
+      data-origin={skill.origin}
+      data-via={skill.via}
+    >
+      <span className="text-[9px] font-semibold uppercase tracking-wider text-muted">skill</span>
+      <span className="text-[11px] font-semibold text-foreground">{skill.name}</span>
+      <Badge tone="info">{formatSkillOrigin(skill.origin as SkillOrigin)}</Badge>
+      <span className="text-[10px] text-muted">{skill.via === 'user' ? 'invoked by you' : 'loaded by agent'}</span>
+      <span className="ml-auto flex items-center gap-1">
+        {state === 'disabled' ? (
+          <>
+            <span className="text-[10px] text-warning" data-testid="chat-skill-chip-state">
+              disabled for this workspace
+            </span>
+            <button
+              type="button"
+              className="rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] font-semibold text-foreground hover:border-primary"
+              data-testid="chat-skill-chip-enable"
+              onClick={() => void toggle(false)}
+            >
+              undo
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] font-semibold text-foreground hover:border-primary disabled:opacity-60"
+            data-testid="chat-skill-chip-disable"
+            disabled={state === 'pending' || !root}
+            title={root ? 'Disable this skill for the current workspace' : 'No workspace selected'}
+            onClick={() => void toggle(true)}
+          >
+            {state === 'pending' ? 'disabling…' : 'disable for this workspace'}
+          </button>
+        )}
+        {state === 'error' ? (
+          <span className="text-[10px] text-error" data-testid="chat-skill-chip-state">
+            toggle failed — gateway unreachable?
+          </span>
+        ) : null}
+      </span>
+    </li>
+  )
+}
+
 function ChatRow({ entry }: { entry: ChatEntry }) {
   switch (entry.role) {
+    case 'skill':
+      return <SkillChip entry={entry} />
     case 'user':
       return (
         <li className="rounded bg-surface px-2 py-1.5" data-testid="chat-entry" data-role="user">

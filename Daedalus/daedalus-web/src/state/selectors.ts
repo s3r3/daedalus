@@ -1,4 +1,5 @@
 import type { Attachment, ChildTask, Event, FinalReport, Plan, PlanStep, ToolCall, ToolResult, UserQuestionInfo, ValidationResult } from '@daedalus/core'
+import { formatSkillOrigin } from '@daedalus/core'
 import { payloadOf, type ApprovalRequested, type CommandFinished, type CommandStarted, type FileChange, type RecoveryStarted } from '../api/types'
 
 /**
@@ -20,7 +21,7 @@ export type ActivityEntry = {
   seq: number
   ts: string
   turnId?: string
-  kind: 'thought' | 'action' | 'observation' | 'plan' | 'validation' | 'recovery' | 'approval' | 'file' | 'completion' | 'error' | 'system' | 'attachment' | 'orchestration'
+  kind: 'thought' | 'action' | 'observation' | 'plan' | 'validation' | 'recovery' | 'approval' | 'file' | 'completion' | 'error' | 'system' | 'attachment' | 'orchestration' | 'skill'
   title: string
   detail?: string
   status?: 'ok' | 'error' | 'denied' | 'timeout' | 'running' | 'info' | 'warning'
@@ -440,6 +441,16 @@ export function activity(events: Event[], thinking = true): ActivityEntry[] {
         })
         break
       }
+      case 'SKILL_LOADED': {
+        const loaded = payloadOf(event, 'SKILL_LOADED')
+        push({
+          kind: 'skill',
+          title: `skill loaded: ${loaded?.name ?? 'unknown'}${loaded ? ` (${formatSkillOrigin(loaded.origin)})` : ''}`,
+          detail: loaded?.via === 'user' ? 'invoked by you' : 'loaded by agent',
+          status: 'info',
+        })
+        break
+      }
       case 'COMMAND_STARTED':
         push({ kind: 'action', title: 'command started', detail: payloadOf(event, 'COMMAND_STARTED')?.command, status: 'running' })
         break
@@ -663,11 +674,13 @@ export function commandStartedPayload(event: Event): CommandStarted | undefined 
 export type ChatEntry = {
   seq: number
   ts: string
-  role: 'user' | 'assistant' | 'thought' | 'tool' | 'status' | 'approval'
+  role: 'user' | 'assistant' | 'thought' | 'tool' | 'status' | 'approval' | 'skill'
   text: string
   detail?: string
   status?: ActivityEntry['status']
   tool?: string
+  /** Set on role 'skill': the activation chip payload (name, origin, who loaded it). */
+  skill?: { name: string; origin: string; via: 'agent' | 'user' }
 }
 
 /**
@@ -718,6 +731,22 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
           text: summarizeArgs(call.args) ?? '',
           detail: result?.output ? truncateChat(result.output.trim(), 400) : undefined,
           status: result ? toolStatus(result.status) : 'running',
+        })
+        break
+      }
+      case 'SKILL_LOADED': {
+        // The "why this fired" chip: a skill body entered the context,
+        // either because the agent chose it (read_skill) or because the
+        // user invoked it explicitly (/skill <name>).
+        const loaded = payloadOf(event, 'SKILL_LOADED')
+        if (!loaded?.name) break
+        entries.push({
+          ...base,
+          role: 'skill',
+          text: `skill loaded: ${loaded.name} (${formatSkillOrigin(loaded.origin)}) — ${loaded.via === 'user' ? 'invoked by you' : 'loaded by agent'}`,
+          detail: loaded.source,
+          status: 'info',
+          skill: { name: loaded.name, origin: loaded.origin, via: loaded.via },
         })
         break
       }
