@@ -311,6 +311,9 @@ export function protocolBlock(tools: ToolDefinition[]): string {
     '- Parameters whose schema type is array or object must contain raw JSON, e.g. <items>["a","b"]</items>. Numbers and booleans are plain text, e.g. <depth>2</depth>.',
     "- Tool results come back inside <tool_result name=\"...\">...</tool_result>.",
     "- If you need no tool, reply with plain text only (no <tool_call> block): that text is your final answer.",
+    ...(tools.some((tool) => tool.function.name === "edit_search_replace")
+      ? ["- For edit_search_replace, put the complete SEARCH/REPLACE block text (<<<<<<< SEARCH … ======= … >>>>>>> REPLACE) inside <replacements><![CDATA[...]]></replacements>; keep the block markers byte-exact."]
+      : []),
     "",
     "Available tools:",
   ];

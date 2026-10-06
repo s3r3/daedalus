@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/pro
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import type { ToolDefinition } from '../registry.ts';
 import type { ToolResult } from '../../contracts.ts';
+import { applySearchReplace } from './search-replace.ts';
 
 const MAX_OUTPUT = 16_000;
 
@@ -153,17 +154,20 @@ async function findUniqueOldString(root: string, oldString: string): Promise<str
 }
 
 export const readFileTool: ToolDefinition = {
-  name: 'read_file', description: 'Read a UTF-8 text file, optionally by 1-based inclusive line range.', mutating: false,
-  inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 }, end_line: { type: 'integer', minimum: 1 } }, additionalProperties: false },
+  name: 'read_file', description: 'Read a UTF-8 text file by 1-based line range: start_line/end_line, or offset (first line) + limit (max lines). Use offset/limit to page through a spilled tool-output file or any long file instead of re-running the tool that produced it.', mutating: false,
+  inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 }, end_line: { type: 'integer', minimum: 1 }, offset: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1 } }, additionalProperties: false },
   async execute(args, context) {
-    const a = args as { path?: unknown; start_line?: unknown; end_line?: unknown };
+    const a = args as { path?: unknown; start_line?: unknown; end_line?: unknown; offset?: unknown; limit?: unknown };
     if (typeof a.path !== 'string') return { call_id: '', status: 'error', output: 'path must be a string', truncated: false, meta: {} };
     try {
       const resolved = await resolveExistingPath(context.workspaceRoot, a.path);
       const data = await readFile(resolved.target, 'utf8');
       const lines = data.split('\n');
-      const start = typeof a.start_line === 'number' ? Math.max(1, a.start_line) : 1;
-      const end = typeof a.end_line === 'number' ? Math.min(lines.length, a.end_line) : lines.length;
+      // offset is the 1-based first line (same anchor as start_line; offset wins).
+      const startInput = typeof a.offset === 'number' ? a.offset : a.start_line;
+      const start = typeof startInput === 'number' ? Math.max(1, Math.floor(startInput)) : 1;
+      let end = typeof a.end_line === 'number' ? Math.min(lines.length, Math.floor(a.end_line)) : lines.length;
+      if (typeof a.limit === 'number') end = Math.min(end, start + Math.max(1, Math.floor(a.limit)) - 1);
       const text = lines.slice(start - 1, end).map((line, i) => `${start + i}: ${line}`).join('\n');
       return output('', text, { start_line: start, end_line: end, total_lines: lines.length, ...(resolved.resolvedPath ? { resolved_path: resolved.resolvedPath, requested_path: a.path } : {}) });
     } catch (error) { return { call_id: '', status: 'error', output: await errorWithSuggestion(error, context.workspaceRoot, a.path), truncated: false, meta: {} }; }
@@ -236,6 +240,33 @@ export const editFileTool: ToolDefinition = {
       }
       return { call_id: '', status: 'error', output: await errorWithSuggestion(error, context.workspaceRoot, a.path), truncated: false, meta: {} };
     }
+  },
+};
+
+export const editSearchReplaceTool: ToolDefinition = {
+  name: 'edit_search_replace', description: [
+    'Edit an existing UTF-8 file with Aider-style SEARCH/REPLACE blocks instead of JSON string arguments.',
+    'Put one or more blocks in `replacements`, each exactly:',
+    '<<<<<<< SEARCH',
+    '<lines copied byte-exact from the current file>',
+    '=======',
+    '<the lines that replace them>',
+    '>>>>>>> REPLACE',
+    'Each SEARCH anchor must appear exactly once in the file; on any mismatch nothing is written and the error tells you how to fix the anchor.',
+  ].join('\n'), mutating: true,
+  inputSchema: { type: 'object', required: ['path', 'replacements'], properties: { path: { type: 'string' }, replacements: { type: 'string', description: 'One or more SEARCH/REPLACE blocks in the format described above.' } }, additionalProperties: false },
+  async execute(args, context) {
+    const a = args as { path?: unknown; replacements?: unknown };
+    if (typeof a.path !== 'string' || typeof a.replacements !== 'string') return { call_id: '', status: 'error', output: 'path and replacements must be strings', truncated: false, meta: {} };
+    try {
+      const resolved = await resolveExistingPath(context.workspaceRoot, a.path);
+      const data = await readFile(resolved.target, 'utf8');
+      const applied = applySearchReplace(data, a.replacements, a.path);
+      if ('error' in applied) return { call_id: '', status: 'error', output: applied.error, truncated: false, meta: { path: a.path, reason: 'search_replace_mismatch' } };
+      await writeFile(resolved.target, applied.content, 'utf8');
+      const shownPath = resolved.resolvedPath ?? a.path;
+      return { call_id: '', status: 'ok', output: `edited ${shownPath} (${applied.applied} SEARCH/REPLACE block${applied.applied === 1 ? '' : 's'} applied)`, truncated: false, meta: { path: shownPath, replacements: applied.applied, ...(resolved.resolvedPath ? { resolved_path: resolved.resolvedPath, requested_path: a.path } : {}) } };
+    } catch (error) { return { call_id: '', status: 'error', output: await errorWithSuggestion(error, context.workspaceRoot, a.path), truncated: false, meta: {} }; }
   },
 };
 
