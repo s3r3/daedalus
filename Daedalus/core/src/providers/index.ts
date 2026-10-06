@@ -18,6 +18,9 @@ export function createProviderFromSettings(settings: Settings = loadSettings()):
     ? new ModelPoolProvider({
         models,
         strategy: settings.llm.modelStrategy,
+        // Tailor suite: tier routing inside the pool (DAEDALUS_MODEL_ROUTING=off disables).
+        tiers: settings.llm.modelTiers ?? {},
+        routing: settings.tailor?.modelRouting !== false,
         // Protocol state is per underlying model: wrap inside the pool so a
         // weak model can fall back to text while a strong one stays native.
         createProvider: (model) => new TextProtocolProvider(new OpenAICompatProvider({

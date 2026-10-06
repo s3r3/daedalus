@@ -1,8 +1,10 @@
 import { chmod, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { ProviderConfig, ProviderConfigPublic } from '../contracts.ts';
+import { normalizeModelTiers } from '../providers/llm/model-pool.ts';
 import { normalizeToolProtocol } from '../providers/llm/text-protocol.ts';
-import type { Settings } from '../settings.ts';
+import { normalizePromptFamilySetting } from '../agent/prompt-dialects.ts';
+import { normalizeEditFormat, type Settings } from '../settings.ts';
 
 export type ProviderPreset = { id: string; name: string; baseUrl: string; defaultModel?: string; supportsVision?: boolean };
 
@@ -43,6 +45,9 @@ export function sanitizeProviderInput(input: Partial<ProviderConfig> & { id?: st
     supportsVision: input.supportsVision,
     visionModels: input.visionModels,
     toolProtocol: normalizeToolProtocol(input.toolProtocol),
+    modelTiers: normalizeModelTiers(input.modelTiers),
+    promptFamily: normalizePromptFamilySetting(input.promptFamily),
+    editFormat: normalizeEditFormat(input.editFormat),
   };
 }
 

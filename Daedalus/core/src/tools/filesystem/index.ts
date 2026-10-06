@@ -2,6 +2,7 @@ import { mkdir, readdir, readFile, realpath, stat, writeFile } from 'node:fs/pro
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import type { ToolDefinition } from '../registry.ts';
 import type { ToolResult } from '../../contracts.ts';
+import { applySearchReplace } from './search-replace.ts';
 
 const MAX_OUTPUT = 16_000;
 
@@ -239,6 +240,33 @@ export const editFileTool: ToolDefinition = {
       }
       return { call_id: '', status: 'error', output: await errorWithSuggestion(error, context.workspaceRoot, a.path), truncated: false, meta: {} };
     }
+  },
+};
+
+export const editSearchReplaceTool: ToolDefinition = {
+  name: 'edit_search_replace', description: [
+    'Edit an existing UTF-8 file with Aider-style SEARCH/REPLACE blocks instead of JSON string arguments.',
+    'Put one or more blocks in `replacements`, each exactly:',
+    '<<<<<<< SEARCH',
+    '<lines copied byte-exact from the current file>',
+    '=======',
+    '<the lines that replace them>',
+    '>>>>>>> REPLACE',
+    'Each SEARCH anchor must appear exactly once in the file; on any mismatch nothing is written and the error tells you how to fix the anchor.',
+  ].join('\n'), mutating: true,
+  inputSchema: { type: 'object', required: ['path', 'replacements'], properties: { path: { type: 'string' }, replacements: { type: 'string', description: 'One or more SEARCH/REPLACE blocks in the format described above.' } }, additionalProperties: false },
+  async execute(args, context) {
+    const a = args as { path?: unknown; replacements?: unknown };
+    if (typeof a.path !== 'string' || typeof a.replacements !== 'string') return { call_id: '', status: 'error', output: 'path and replacements must be strings', truncated: false, meta: {} };
+    try {
+      const resolved = await resolveExistingPath(context.workspaceRoot, a.path);
+      const data = await readFile(resolved.target, 'utf8');
+      const applied = applySearchReplace(data, a.replacements, a.path);
+      if ('error' in applied) return { call_id: '', status: 'error', output: applied.error, truncated: false, meta: { path: a.path, reason: 'search_replace_mismatch' } };
+      await writeFile(resolved.target, applied.content, 'utf8');
+      const shownPath = resolved.resolvedPath ?? a.path;
+      return { call_id: '', status: 'ok', output: `edited ${shownPath} (${applied.applied} SEARCH/REPLACE block${applied.applied === 1 ? '' : 's'} applied)`, truncated: false, meta: { path: shownPath, replacements: applied.applied, ...(resolved.resolvedPath ? { resolved_path: resolved.resolvedPath, requested_path: a.path } : {}) } };
+    } catch (error) { return { call_id: '', status: 'error', output: await errorWithSuggestion(error, context.workspaceRoot, a.path), truncated: false, meta: {} }; }
   },
 };
 
