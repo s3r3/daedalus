@@ -503,6 +503,16 @@ export function activity(events: Event[], thinking = true): ActivityEntry[] {
         push({ kind: 'attachment', title: `attached ${attachment?.kind ?? 'file'}`, detail: attachment ? `${attachment.name} · ${attachment.workspacePath}` : undefined, status: 'info' })
         break
       }
+      case 'ORCHESTRATION_SKIPPED': {
+        const skipped = payloadOf(event, 'ORCHESTRATION_SKIPPED')
+        push({
+          kind: 'orchestration',
+          title: 'orchestration skipped — running directly',
+          detail: `single sequential path (${skipped?.decomposed_children ?? 0} decomposed step(s)); one agent loop on the parent task${skipped?.note ? ` — ${skipped.note}` : ''}`,
+          status: 'info',
+        })
+        break
+      }
       case 'CHILD_TASK_STARTED': {
         const child = payloadOf(event, 'CHILD_TASK_STARTED')?.child
         push({ kind: 'orchestration', title: 'child task started', detail: child?.goal, status: 'running' })
@@ -758,6 +768,11 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
       case 'MODE_CHANGED': {
         const changed = payloadOf(event, 'MODE_CHANGED')
         entries.push({ ...base, role: 'status', text: `mode ${changed?.from ?? '?'} → ${changed?.to ?? '?'}`, status: 'info' })
+        break
+      }
+      case 'ORCHESTRATION_SKIPPED': {
+        const skipped = payloadOf(event, 'ORCHESTRATION_SKIPPED')
+        entries.push({ ...base, role: 'status', text: 'orchestration skipped — running directly', detail: skipped?.note, status: 'info' })
         break
       }
       case 'CHILD_TASK_STARTED': {

@@ -69,9 +69,14 @@ export {
 } from './slash-commands.ts';
 
 export {
+  MAX_CHILD_SUMMARY_CHARS,
   OrchestratorRunner,
   childTaskFromInput,
   decomposeTask,
+  distillChildSummary,
+  shouldRunDirect,
+  type ChildFileChange,
+  type ChildRunContext,
   type ChildTaskExecution,
   type ChildTaskExecutor,
   type ChildTaskInput,

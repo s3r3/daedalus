@@ -158,7 +158,14 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   appendEvent: (event) =>
     set((state) => {
       if (state.events.some((existing) => existing.task_id === event.task_id && existing.seq === event.seq)) return state
-      return { events: [...state.events, event] }
+      // Any recorded file change — the selected task's own writes and the
+      // mirrored copies of orchestrator children's writes alike — bumps
+      // the workspace revision so the file tree refreshes on agent writes,
+      // not only on editor saves.
+      return {
+        events: [...state.events, event],
+        ...(event.type === 'FILE_CHANGED' ? { workspaceRevision: state.workspaceRevision + 1 } : {}),
+      }
     }),
   seedEvents: (events) =>
     set((state) => {
