@@ -3,7 +3,7 @@ import { resolve, sep } from 'node:path';
 import type { ContentBlock, Message, ToolDefinition } from '../providers/llm/types.ts';
 import type { Attachment, PromptFamily, TaskState } from '../contracts.ts';
 import { buildPrompt, estimateTokens, systemMessage, userMessage } from '../providers/index.ts';
-import { formatSkillOrigin, type SkillInfo } from '../skills/index.ts';
+import { MAX_SKILLS_IN_PROMPT, dedupeSkillsByName, formatSkillOrigin, type SkillInfo } from '../skills/index.ts';
 import { walkTreeLines } from '../tools/filesystem/index.ts';
 import { promptFamilyFragment } from './prompt-dialects.ts';
 import { resolveMentionSection } from './mentions.ts';
@@ -71,7 +71,10 @@ export class DefaultContextManager implements ContextManager {
     this.#visionEnabled = resolved.visionEnabled === true;
     this.#maxImageBytes = resolved.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES;
     this.#maxImages = resolved.maxImages ?? DEFAULT_MAX_IMAGES;
-    this.#skills = resolved.skills ?? [];
+    // Deduped by name at the door: whatever list a caller hands in, the
+    // prompt advertises each skill once (the loader already dedupes, this
+    // keeps the guarantee for direct/raw feeds too).
+    this.#skills = dedupeSkillsByName(resolved.skills ?? []);
     this.#rules = resolved.rules;
     this.#rulesFiles = resolved.rulesFiles ?? [];
     this.#agentInstructions = resolved.agentInstructions;
@@ -120,7 +123,7 @@ export class DefaultContextManager implements ContextManager {
         ...(this.#skills.length
           ? [{
               id: 'skills',
-              content: `Available skills (playbooks stored on disk; call the read_skill tool with the skill name to load its full instructions before following it):\n${this.#skills.map((skill) => `- ${skill.name}: ${skill.description} (${formatSkillOrigin(skill.origin)})`).join('\n')}`,
+              content: `Available skills (playbooks stored on disk; call the read_skill tool with the skill name to load its full instructions before following it):\n${this.#skills.slice(0, MAX_SKILLS_IN_PROMPT).map((skill) => `- ${skill.name}: ${skill.description} (${formatSkillOrigin(skill.origin)})`).join('\n')}${this.#skills.length > MAX_SKILLS_IN_PROMPT ? `\n+${this.#skills.length - MAX_SKILLS_IN_PROMPT} more skills available — use read_skill by name` : ''}`,
             }]
           : []),
         ...(this.#rules

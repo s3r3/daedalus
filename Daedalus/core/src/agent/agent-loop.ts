@@ -8,7 +8,7 @@ import { asModelController, modelPoolFailureReason } from '../providers/llm/mode
 import type { Event, ModelTier, Plan, PlanStep, TaskSpec, TaskState, ToolCall, ToolResult } from '../contracts.ts';
 import type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor } from './types.ts';
 import type { Validator } from '../validation/index.ts';
-import { completionGate, normalizeError, validationFailed } from '../validation/index.ts';
+import { completionGate, normalizeError, validationFailed, validationFailureSignature } from '../validation/index.ts';
 import { interpretTask } from './interpreter.ts';
 import { createPlan, replan } from './planner.ts';
 import { DefaultContextManager, condenseToolOutputs, contextMeter } from './context.ts';
@@ -108,6 +108,14 @@ export class AgentLoop {
   readonly #taskMutated = new Set<string>();
   /** Tasks whose model was already escalated once (escalation cap). */
   readonly #escalatedTasks = new Set<string>();
+  /** File paths each task has mutated (validation check scoping). */
+  readonly #changedFiles = new Map<string, Set<string>>();
+  /**
+   * Last validation failure per task (anti-thrash): when the identical
+   * failure repeats with no mutation in between, the recovery budget is
+   * not spent again — the task finishes partial instead of burning turns.
+   */
+  readonly #validationStalls = new Map<string, { signature: string; changedSince: boolean }>();
   #cancelled = new Set<string>();
   readonly #invalidActions = new Map<string, number>();
 
@@ -156,6 +164,8 @@ export class AgentLoop {
       this.#spillCounters.delete(spec.id);
       this.#taskMutated.delete(spec.id);
       this.#escalatedTasks.delete(spec.id);
+      this.#changedFiles.delete(spec.id);
+      this.#validationStalls.delete(spec.id);
     }
   }
 
@@ -192,14 +202,34 @@ export class AgentLoop {
         let completed = true;
         if (this.#validator && completed) {
           await this.#emit(state.id, undefined, 'VALIDATION_STARTED', { task_id: state.id });
-          const result = await this.#validator.validate({ workspaceRoot: state.repo_path });
+          const changedFiles = [...(this.#changedFiles.get(state.id) ?? [])];
+          const result = await this.#validator.validate({
+            workspaceRoot: state.repo_path,
+            ...(changedFiles.length > 0 ? { changedFiles } : {}),
+          });
           const gate = completionGate(result, undefined);
           completed = gate.complete;
-          await this.#emit(state.id, undefined, gate.complete ? 'VALIDATION_PASSED' : 'VALIDATION_FAILED', { result });
+          // Anti-thrash: when the identical validation failure repeats with
+          // no mutation since the previous attempt, another model retry can
+          // only re-derive the same outcome — finish partial now (with the
+          // reason on the emitted result) instead of burning the turns.
+          let emittedResult = result;
+          let identicalRepeat = false;
+          if (!gate.complete && validationFailed(result).length > 0) {
+            const signature = validationFailureSignature(result);
+            const stall = this.#validationStalls.get(state.id);
+            identicalRepeat = stall !== undefined && stall.signature === signature && !stall.changedSince;
+            if (identicalRepeat) {
+              emittedResult = { ...result, note: 'recovery stopped: the identical validation failure repeated with no changes since the previous attempt' };
+            } else {
+              this.#validationStalls.set(state.id, { signature, changedSince: false });
+            }
+          }
+          await this.#emit(state.id, undefined, gate.complete ? 'VALIDATION_PASSED' : 'VALIDATION_FAILED', { result: emittedResult });
           if (!gate.complete) {
             const failing = validationFailed(result);
             const firstFailure = failing[0];
-            if (firstFailure) {
+            if (firstFailure && !identicalRepeat) {
               const error = normalizeError(firstFailure);
               validationFailures++;
               await this.#emit(state.id, undefined, 'RECOVERY_STARTED', { reason: error.category, strategy: 'retry', attempt: validationFailures });
@@ -454,6 +484,22 @@ export class AgentLoop {
       // Phase routing bookkeeping: once a task has actually mutated the
       // workspace, its later turns are edit turns and earn strong models.
       if (result.meta?.mutating === true) this.#taskMutated.add(state.id);
+      if (result.meta?.mutating === true) {
+        // Validation bookkeeping: remember which files the task changed
+        // (checks are scoped to their packages) and that this failure is
+        // no longer "unchanged" for the anti-thrash guard below.
+        const stall = this.#validationStalls.get(state.id);
+        if (stall) stall.changedSince = true;
+        const changedPath = (call.args as { path?: unknown } | undefined)?.path;
+        if (typeof changedPath === 'string' && changedPath.length > 0) {
+          let files = this.#changedFiles.get(state.id);
+          if (!files) {
+            files = new Set<string>();
+            this.#changedFiles.set(state.id, files);
+          }
+          files.add(changedPath);
+        }
+      }
       // Shape the result before it enters the model context (the single
       // choke point every tool's output passes through): over-cap output is
       // kept head+tail with the full text spilled to the task store, so a

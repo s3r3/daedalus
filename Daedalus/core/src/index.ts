@@ -124,9 +124,11 @@ export {
 } from "./lsp/index.ts";
 
 export {
+  MAX_SKILLS_IN_PROMPT,
   SkillRegistry,
   createReadSkillTool,
   daedalusGlobalSkillsDir,
+  dedupeSkillsByName,
   formatSkillOrigin,
   globalSkillSearchDirs,
   loadSkills,
@@ -148,6 +150,7 @@ export {
   completionGate,
   decideRecovery,
   discoverChecks,
+  discoverScopedChecks,
   loadValidationProfile,
   normalizeError,
   profileCommands,
@@ -155,12 +158,14 @@ export {
   type NormalizedError,
   type RecoveryContext,
   type RecoveryPolicy,
+  type ScopedCheckDiscovery,
   type ValidationCommand,
   type ValidationProfile,
   type ValidationProfileCheck,
   type Validator,
   type ValidatorOptions,
   validationFailed,
+  validationFailureSignature,
   validationPassed,
   validationSatisfied,
 } from "./validation/index.ts";

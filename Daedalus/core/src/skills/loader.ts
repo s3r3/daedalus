@@ -1,4 +1,5 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import type { ToolDefinition } from '../tools/registry.ts';
@@ -116,12 +117,39 @@ export function parseSkillMarkdown(raw: string, fallbackName: string): { name: s
   return { name, description, body };
 }
 
+/** Skills advertised inline in the prompt/tool surface before the "+N more" line. */
+export const MAX_SKILLS_IN_PROMPT = 40;
+
+/**
+ * Dedupe a skills list by name, first occurrence winning and order
+ * preserved. The prompt surface uses this even for lists that did not pass
+ * through a SkillRegistry, so a skill can never be advertised twice.
+ */
+export function dedupeSkillsByName(skills: SkillInfo[]): SkillInfo[] {
+  const seen = new Set<string>();
+  return skills.filter((skill) => {
+    if (seen.has(skill.name)) return false;
+    seen.add(skill.name);
+    return true;
+  });
+}
+
+/** Canonical directory key: symlinks resolved, so one physical skills root is only ever scanned once. */
+function canonicalDirKey(dir: string): string {
+  try {
+    return realpathSync(dir);
+  } catch {
+    return resolve(dir);
+  }
+}
+
 /** Scan tagged skill directories (`<dir>/<name>/SKILL.md`); first name wins, missing dirs are fine. */
 async function scanSkillDirs(searchDirs: SkillSearchDir[]): Promise<SkillRegistry> {
   const skills: Skill[] = [];
   const seenDirs = new Set<string>();
+  const seenNames = new Set<string>();
   for (const { dir, origin } of searchDirs) {
-    const key = resolve(dir);
+    const key = canonicalDirKey(dir);
     if (seenDirs.has(key)) continue;
     seenDirs.add(key);
     let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
@@ -138,6 +166,10 @@ async function scanSkillDirs(searchDirs: SkillSearchDir[]): Promise<SkillRegistr
         if (!info.isFile()) continue;
         const raw = await readFile(skillPath, 'utf8');
         const parsed = parseSkillMarkdown(raw, entry.name);
+        // First occurrence of a name wins (search order is precedence
+        // order); later same-name copies are never collected at all.
+        if (seenNames.has(parsed.name)) continue;
+        seenNames.add(parsed.name);
         skills.push({ name: parsed.name, description: parsed.description, source: dir, origin, body: parsed.body, path: skillPath });
       } catch {
         continue;
@@ -224,7 +256,11 @@ const MAX_SKILL_OUTPUT = 16_000;
 
 /** Read-only tool letting the agent load a skill's full instructions on demand. */
 export function createReadSkillTool(registry: SkillRegistry): ToolDefinition {
-  const available = registry.list().map((skill) => skill.name).join(', ');
+  const listed = dedupeSkillsByName(registry.list());
+  const shownNames = listed.slice(0, MAX_SKILLS_IN_PROMPT).map((skill) => skill.name);
+  const available = listed.length
+    ? `${shownNames.join(', ')}${listed.length > shownNames.length ? `, …and ${listed.length - shownNames.length} more (call read_skill with the skill name)` : ''}`
+    : '';
   return {
     name: 'read_skill',
     description: available
@@ -244,7 +280,7 @@ export function createReadSkillTool(registry: SkillRegistry): ToolDefinition {
       }
       const skill = registry.get(name);
       if (!skill) {
-        const names = registry.list().map((item) => item.name);
+        const names = dedupeSkillsByName(registry.list()).map((item) => item.name);
         return {
           call_id: '',
           status: 'error',

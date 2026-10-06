@@ -304,7 +304,10 @@ export class TaskRunner {
     if (!validation) return [];
     return [
       ...(validation.warning ? [`validation profile warning: ${validation.warning}`] : []),
-      ...(validation.checks.length === 0 ? ['validation skipped: no validation commands configured for this workspace'] : []),
+      ...(validation.checks.length === 0
+        ? [validation.note ? `validation skipped: ${validation.note}` : 'validation skipped: no validation commands configured for this workspace']
+        : []),
+      ...(validation.note && validation.checks.length > 0 ? [`validation note: ${validation.note}`] : []),
       ...validation.checks.map((check) => `${check.name}: ${check.status} (${check.cmd})${check.source === 'profile' ? ' [profile]' : ''}`),
     ];
   }
@@ -792,7 +795,15 @@ export class TaskRunner {
     let validation: ValidationResult | undefined;
     if (orchestration.status === 'done') {
       emitEvent(target, spec.id, undefined, 'VALIDATION_STARTED', { task_id: spec.id, orchestrated: true });
-      validation = await this.validator.validate({ workspaceRoot: this.#workspaceRoot, commands: this.#options.validationCommands });
+      const changedFiles = collected
+        .filter((e) => e.type === 'FILE_CHANGED')
+        .map((e) => (e.payload as { path?: unknown }).path)
+        .filter((path): path is string => typeof path === 'string' && path.length > 0);
+      validation = await this.validator.validate({
+        workspaceRoot: this.#workspaceRoot,
+        commands: this.#options.validationCommands,
+        ...(changedFiles.length > 0 ? { changedFiles } : {}),
+      });
       emitEvent(target, spec.id, undefined, validationSatisfied(validation) ? 'VALIDATION_PASSED' : 'VALIDATION_FAILED', { result: validation });
     }
 
