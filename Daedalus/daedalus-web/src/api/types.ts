@@ -63,7 +63,7 @@ export type SessionState = {
 export type ExtensionStatus = {
   root: string
   mcp: Array<{ name: string; connected: boolean; toolCount: number; error?: string }>
-  skills: Array<{ name: string; description: string }>
+  skills: Array<{ name: string; description: string; origin?: string }>
   agents: Array<{ name: string; description: string; model?: string; mode?: string; tools?: string[] }>
   lsp: Array<{ name: string; extensions: string[]; configured: boolean; running?: boolean; error?: string }>
   problems: string[]

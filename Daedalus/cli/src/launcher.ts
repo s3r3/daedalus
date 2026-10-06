@@ -4,6 +4,7 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, resolveDaedalusHome } from '@daedalus/core';
+import { truncateVisible } from './interactive.ts';
 import { detectTray, type TrayStatus } from './tray.ts';
 
 export type DaemonState = {
@@ -208,21 +209,36 @@ export async function stopDaemon(options: DaemonOptions = {}): Promise<{ stopped
     return { stopped: false, pid: state.pid, reason: 'daemon process was already gone; stale state removed', status };
   }
 
-  (options.signal ?? ((pid, signal) => process.kill(pid, signal)))(state.pid, 'SIGTERM');
+  const signal = options.signal ?? ((pid, sig) => process.kill(pid, sig));
+  const isAlive = options.isAlive ?? isProcessAlive;
   const timeoutMs = options.timeoutMs ?? 3_000;
   const intervalMs = options.pollIntervalMs ?? 50;
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() <= deadline) {
-    if (!(options.isAlive ?? isProcessAlive)(state.pid)) break;
-    await delay(intervalMs);
+  // Poll until the pid is gone; true when it exited within the window.
+  const waitForExit = async (): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() <= deadline) {
+      if (!isAlive(state.pid)) return true;
+      await delay(intervalMs);
+    }
+    return !isAlive(state.pid);
+  };
+
+  signal(state.pid, 'SIGTERM');
+  let exited = await waitForExit();
+  let forced = false;
+  if (!exited) {
+    // The graceful window elapsed: force it. This is the one stop mechanism
+    // shared by `daedalus stop` and the launcher's Exit choice.
+    signal(state.pid, 'SIGKILL');
+    forced = true;
+    exited = await waitForExit();
   }
-  const stillAlive = (options.isAlive ?? isProcessAlive)(state.pid);
-  if (!stillAlive) await removeDaemonState(options);
+  if (exited) await removeDaemonState(options);
   const status = await getDaemonStatus(options);
   return {
-    stopped: !stillAlive,
+    stopped: exited,
     pid: state.pid,
-    reason: stillAlive ? 'daemon did not exit before the stop timeout' : 'daemon stopped',
+    reason: exited ? (forced ? 'daemon stopped (forced after the SIGTERM window)' : 'daemon stopped') : 'daemon did not exit before the stop timeout',
     status,
   };
 }
@@ -413,18 +429,74 @@ export function launcherKeyAction(key: string, selection: number): LauncherActio
   return parseMenuChoice(key) === 'invalid' ? undefined : (parseMenuChoice(key) as LauncherAction);
 }
 
+export type InPlaceFrameRenderer = {
+  /** Terminal rows the most recent painted frame occupies (0 before the first paint). */
+  readonly rows: number;
+  paint: (frame: string) => void;
+  close: () => void;
+};
+
+/**
+ * Repaints a text frame in place in the normal terminal buffer. The cursor
+ * is hidden on the first paint; every repaint moves up exactly as many rows
+ * as the previous frame occupied, erases each row before rewriting it, and
+ * erases anything below when the frame shrinks. Every line is clipped to
+ * the terminal width first (cell-accurate, via the same helper the
+ * fullscreen TUI uses), so a painted line can never wrap and the row count
+ * stays exact — resizing is safe because the width is re-read and every row
+ * is erased on each paint. `close()` shows the cursor again and steps below
+ * the frame, leaving exactly one clean copy of the final frame in the
+ * scrollback. `close()` is idempotent.
+ */
+export function createInPlaceFrameRenderer(deps: {
+  write: (text: string) => void;
+  columns: () => number;
+}): InPlaceFrameRenderer {
+  let rows = 0;
+  let closed = false;
+  const paint = (frame: string): void => {
+    if (closed) return;
+    const width = Math.max(1, Math.floor(deps.columns()) || 1);
+    const lines = frame.split('\n').map((line) => truncateVisible(line, width));
+    let out = rows === 0 ? '\x1b[?25l' : `\x1b[${rows - 1}A\r`;
+    out += lines.map((line) => `\x1b[K${line}`).join('\r\n');
+    if (lines.length < rows) out += '\x1b[J';
+    deps.write(out);
+    rows = lines.length;
+  };
+  const close = (): void => {
+    if (closed) return;
+    closed = true;
+    if (rows > 0) deps.write('\x1b[?25h\n');
+    rows = 0;
+  };
+  return {
+    get rows() {
+      return rows;
+    },
+    paint,
+    close,
+  };
+}
+
+/** Outcome of the one shared stop mechanism (`daedalus stop` / launcher Exit). */
+export type StopServerResult = { stopped: boolean; pid?: number; reason: string };
+
 export type LauncherChoiceDeps = {
   status: DaemonStatus;
   print: (text: string) => void;
   openCli: () => Promise<void>;
   openWeb: () => Promise<void>;
   hideToTray?: () => Promise<void> | void;
+  /** Stop the background server; the launcher's `Exit` choice goes through this. */
+  stopServer: () => Promise<StopServerResult>;
 };
 
 /**
  * Carry out one chosen launcher action and print what happens next. The
- * background server is left running for every choice; `Exit` changes
- * nothing at all. Returns the action so callers can react further.
+ * background server keeps running for Web, CLI, and Tray; `Exit` shuts it
+ * down through the same stop mechanism as `daedalus stop`. Returns the
+ * action so callers can react further.
  */
 export async function runLauncherChoice(action: LauncherAction, deps: LauncherChoiceDeps): Promise<LauncherAction> {
   const url = deps.status.server_url;
@@ -441,9 +513,19 @@ export async function runLauncherChoice(action: LauncherAction, deps: LauncherCh
       await deps.hideToTray?.();
       deps.print(`Background mode: only the server keeps running at ${url}. Tray: ${deps.status.tray.reason}\n`);
       return 'tray';
-    case 'exit':
-      deps.print(`Left the menu; the server state is unchanged (${url}). \`daedalus status\` shows it, \`daedalus stop\` stops it.\n`);
+    case 'exit': {
+      let line: string;
+      try {
+        const result = await deps.stopServer();
+        if (result.stopped) line = `Daedalus server stopped${result.pid ? ` (pid ${result.pid})` : ''}. Bye.\n`;
+        else if (/not running|already gone/i.test(result.reason)) line = 'No server running. Bye.\n';
+        else line = `Could not stop the Daedalus server: ${result.reason}. Bye.\n`;
+      } catch (error) {
+        line = `Could not stop the Daedalus server: ${error instanceof Error ? error.message : String(error)}. Bye.\n`;
+      }
+      deps.print(line);
       return 'exit';
+    }
   }
 }
 
@@ -491,6 +573,7 @@ export async function runBareLauncher(deps: {
   openCli: () => Promise<void>;
   openWeb: (url: string) => Promise<void>;
   hideToTray?: () => Promise<void> | void;
+  stopServer: () => Promise<StopServerResult>;
 }): Promise<LauncherAction> {
   const ensured = await deps.ensureDaemon();
   return runStartupMenu({
@@ -500,6 +583,7 @@ export async function runBareLauncher(deps: {
     openCli: deps.openCli,
     openWeb: () => deps.openWeb(ensured.status.server_url),
     hideToTray: deps.hideToTray,
+    stopServer: deps.stopServer,
   });
 }
 

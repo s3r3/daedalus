@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
-import { ImagePlus, Paperclip, Play, UploadCloud, X } from 'lucide-react'
+import { ImagePlus, Paperclip, Play, Square, UploadCloud, X } from 'lucide-react'
 import type { AgentMode, Attachment } from '@daedalus/core'
 import { AGENT_MODE_ORDER, nextAgentMode } from '@daedalus/core/interaction/modes'
 import { SlashCommandRegistry, slashCommandSuggestions, type SlashCommandContext, type SlashCommandResult } from '@daedalus/core/interaction/slash-commands'
@@ -7,7 +7,7 @@ import { Button } from '../ui/button'
 import { Textarea } from '../ui/input'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useTaskEvents } from '../../state/hooks'
-import { fileChanges, latestPlan, parseModelPool, validation } from '../../state/selectors'
+import { fileChanges, latestPlan, parseModelPool, pendingApprovals, taskStatus, validation } from '../../state/selectors'
 import { api } from '../../api/client'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 
@@ -37,10 +37,30 @@ export function Composer() {
   const [touched, setTouched] = useState(false)
   const [slashOutput, setSlashOutput] = useState<string | null>(null)
   const [activeSuggestion, setActiveSuggestion] = useState(0)
+  const [stopping, setStopping] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const registry = useMemo(() => new SlashCommandRegistry(), [])
+
+  // While the selected task is running, the Run button morphs into Stop —
+  // the user should never have to hunt for how to halt a run they started.
+  const activeStatus = taskStatus(events, pendingApprovals(events).length)
+  const activeRunning = Boolean(activeTaskId) && (activeStatus === 'running' || activeStatus === 'awaiting-approval')
+
+  useEffect(() => {
+    if (!activeRunning) setStopping(false)
+  }, [activeRunning, activeTaskId])
+
+  const stopActiveTask = async (): Promise<void> => {
+    if (!activeTaskId || stopping) return
+    setStopping(true)
+    try {
+      await api.cancelTask(activeTaskId)
+    } catch {
+      setStopping(false)
+    }
+  }
 
   useEffect(() => {
     folderInputRef.current?.setAttribute('webkitdirectory', '')
@@ -566,10 +586,25 @@ export function Composer() {
           <Button type="button" variant="outline" size="sm" onClick={() => imageInputRef.current?.click()} data-testid="composer-upload-image">
             <ImagePlus /> image
           </Button>
-          <Button type="submit" size="sm" disabled={composer.submitting} data-testid="composer-submit">
-            <Play />
-            {composer.submitting ? 'submitting…' : 'run task'}
-          </Button>
+          {activeRunning ? (
+            <Button
+              type="button"
+              variant="danger"
+              size="sm"
+              onClick={() => void stopActiveTask()}
+              disabled={stopping}
+              data-testid="composer-stop"
+              aria-label="stop the running task"
+            >
+              <Square className="fill-current" />
+              {stopping ? 'stopping…' : 'stop'}
+            </Button>
+          ) : (
+            <Button type="submit" size="sm" disabled={composer.submitting} data-testid="composer-submit">
+              <Play />
+              {composer.submitting ? 'submitting…' : 'run task'}
+            </Button>
+          )}
         </div>
       </div>
 

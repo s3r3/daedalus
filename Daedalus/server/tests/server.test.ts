@@ -173,8 +173,8 @@ describe('server', () => {
     const { base, ctx } = await listen()
     ctx.store.saveState('t4', { status: 'active' })
     const res = await fetch(new URL('/tasks/t4/cancel', base), { method: 'POST' })
-    const body = (await res.json()) as { cancelled: boolean; task_id: string }
-    expect(body).toEqual({ cancelled: false, task_id: 't4' })
+    const body = (await res.json()) as { cancelled: boolean; cancel_requested: boolean; task_id: string }
+    expect(body).toEqual({ cancelled: false, cancel_requested: true, task_id: 't4' })
     expect(ctx.store.isCancelRequested('t4')).toBe(true)
   })
 
