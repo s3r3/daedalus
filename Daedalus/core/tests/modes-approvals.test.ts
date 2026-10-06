@@ -118,12 +118,12 @@ describe('mode matrix data', () => {
       [],
       undefined,
     );
-    expect(JSON.stringify(messages[0])).toContain('Plan (read-only)');
+    expect(JSON.stringify(messages[0])).toContain('Plan (read-only apart from the plan itself)');
   });
 });
 
 describe('mode gates at the loop', () => {
-  test('Plan mode offers no mutating tools and denies a fabricated write, naming the mode', async () => {
+  test('Plan mode offers the plan-write tools but denies a fabricated write outside .daedalus/plans, naming the mode', async () => {
     const root = temp('daedalus-plan-ws-');
     const home = temp('daedalus-plan-home-');
     writeFileSync(join(root, 'a.txt'), 'hello');
@@ -159,7 +159,9 @@ describe('mode gates at the loop', () => {
     });
     const state = await loop.run('Draft a plan\ndone: plan drafted');
     expect(offered[0]).toContain('read_file');
-    expect(offered[0]).not.toContain('write_file');
+    // The plan-write tools are visible so the plan carve-out is callable…
+    expect(offered[0]).toContain('write_file');
+    // …but the shell has no carve-out and stays hidden.
     expect(offered[0]).not.toContain('run_command');
     expect(existsSync(join(root, 'blocked.txt'))).toBe(false);
     const events = store.replay(state.id);

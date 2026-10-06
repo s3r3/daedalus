@@ -16,7 +16,7 @@ import { LoopGuard, REPEAT_SUPPRESSED_OUTPUT, loopGuidanceNote } from './loop-gu
 import { handleObservation } from './observation.ts';
 import { resolveToolOutputLimits, shapeToolOutput, type ToolOutputLimits } from './tool-output.ts';
 import { evaluateStopConditions, noProgressCondition } from './stop.ts';
-import { ModeController, isToolVisible, modeDenialMessage } from '../interaction/modes.ts';
+import { ModeController, isToolCallDenied, isToolVisible, modeDenialMessage } from '../interaction/modes.ts';
 
 export type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor };
 export { interpretTask };
@@ -462,7 +462,7 @@ export class AgentLoop {
         });
         this.#pendingGuidance.set(state.id, loopGuidanceNote(call.tool, guardCall.repeats));
       }
-      const result = !isToolVisible(turnMode, call.tool)
+      const result = isToolCallDenied(turnMode, call.tool, toolCallTargetPath(call.args))
         ? {
             call_id: call.id,
             status: 'denied' as const,
@@ -748,6 +748,13 @@ function reopenLastCompletedStep(steps: PlanStep[]): PlanStep[] {
   const index = steps.map((step) => step.status).lastIndexOf('done');
   if (index < 0) return steps;
   return steps.map((step, i) => (i === index ? { ...step, status: 'active' } : step));
+}
+
+/** The workspace-relative path a tool call targets, when its args carry one. */
+function toolCallTargetPath(args: unknown): string | undefined {
+  if (typeof args !== 'object' || args === null) return undefined;
+  const path = (args as { path?: unknown }).path;
+  return typeof path === 'string' ? path : undefined;
 }
 
 function toSpec(state: TaskState): TaskSpec {

@@ -5,7 +5,7 @@ import { Button } from '../ui/button'
 import { Separator } from '../ui/separator'
 import { api } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
-import { latestContextPercent, pendingApprovals, taskStatus } from '../../state/selectors'
+import { latestContextPercent, pendingApprovals, pendingQuestions, taskStatus } from '../../state/selectors'
 import { useTaskEvents } from '../../state/hooks'
 import { useTheme } from '../../theme/theme'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
@@ -32,7 +32,7 @@ export function TopBar() {
   const { theme, toggle } = useTheme()
   const [refreshing, setRefreshing] = useState(false)
 
-  const status = taskStatus(taskEvents, pendingApprovals(taskEvents).length)
+  const status = taskStatus(taskEvents, pendingApprovals(taskEvents).length, pendingQuestions(taskEvents).length)
   const contextPercent = useMemo(() => latestContextPercent(taskEvents), [taskEvents])
 
   useEffect(() => {
@@ -189,7 +189,7 @@ export function TopBar() {
           refresh
         </Button>
 
-        {taskId && (status === 'running' || status === 'awaiting-approval') ? (
+        {taskId && (status === 'running' || status === 'awaiting-approval' || status === 'awaiting-answer') ? (
           <Button variant="danger" size="sm" onClick={() => void cancelTask()} data-testid="topbar-stop" aria-label="stop the running task">
             ■ stop
           </Button>

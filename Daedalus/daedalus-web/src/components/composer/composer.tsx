@@ -7,7 +7,7 @@ import { Button } from '../ui/button'
 import { Textarea } from '../ui/input'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useTaskEvents } from '../../state/hooks'
-import { approvalId, fileChanges, latestPlan, parseModelPool, pendingApprovals, taskStatus, validation } from '../../state/selectors'
+import { approvalId, fileChanges, latestPlan, parseModelPool, pendingApprovals, pendingQuestions, taskStatus, validation } from '../../state/selectors'
 import { api } from '../../api/client'
 import type { WorkspaceFileEntry } from '../../api/types'
 import { ModelPicker } from './model-picker'
@@ -86,8 +86,8 @@ export function Composer() {
 
   // While the selected task is running, the Run button morphs into Stop —
   // the user should never have to hunt for how to halt a run they started.
-  const activeStatus = taskStatus(events, pendingApprovals(events).length)
-  const activeRunning = Boolean(activeTaskId) && (activeStatus === 'running' || activeStatus === 'awaiting-approval')
+  const activeStatus = taskStatus(events, pendingApprovals(events).length, pendingQuestions(events).length)
+  const activeRunning = Boolean(activeTaskId) && (activeStatus === 'running' || activeStatus === 'awaiting-approval' || activeStatus === 'awaiting-answer')
 
   useEffect(() => {
     if (!activeRunning) setStopping(false)

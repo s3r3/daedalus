@@ -16,10 +16,14 @@ diagnostics…), **mutating** (file writes/edits, `create_dir`, MCP tools), and
 | Mode          | Read  | Mutating | Executing (`run_command`)          |
 |---------------|-------|----------|------------------------------------|
 | ask           | allow | deny     | deny                               |
-| plan          | allow | deny     | deny                               |
+| plan          | allow | deny\*   | deny                               |
 | manual        | allow | ask      | ask                                |
 | auto          | allow | allow    | ask → allow while auto-approve on  |
 | orchestrator  | allow | allow    | ask → allow while auto-approve on  |
+
+\* Plan mode has exactly one sanctioned write: plan documents under
+`.daedalus/plans/**` (see *Plan documents*). Everything else mutating stays
+denied, and `run_command` stays denied outright.
 
 Rules that hold in every mode:
 
@@ -35,12 +39,14 @@ Rules that hold in every mode:
   answered by the grounded fast path in one provider call, in CLI and Web,
   without task machinery; modes govern tasks.
 - **Plan mode output is recognizable.** A plan run emits `PLAN_CREATED` with
-  the producing `mode` in the payload, and the model's final reply is a
-  numbered plan whose steps name concrete files. Switching to Auto/Manual and
-  sending "jalankan rencananya" executes it **in context** (Cline-style
-  continuity, not a fresh-context handoff): the follow-up task carries
-  `plan_task_id`, and core injects the stored plan steps as a constraint.
-  There is no modal plan-approval pipeline; see *Honest limits*.
+  the producing `mode` in the payload (and the plan document paths, see
+  *Plan documents*), and the model's final reply is a brief summary naming
+  the plan file. Switching to Auto/Manual and sending "jalankan rencananya"
+  executes it **in context** (Cline-style continuity, not a fresh-context
+  handoff): the follow-up task carries `plan_task_id`, and core injects the
+  stored plan steps as a constraint. The Web also offers an explicit
+  *Approve & Execute* bar once a plan task finishes with documents; see
+  below. There is no modal plan-approval pipeline; see *Honest limits*.
 
 ## Approvals
 
@@ -100,6 +106,107 @@ parent chat names the requesting child task. The CLI's terminal prompt
 (`a` approve / `d` deny / `r` remember, decided through the same core broker)
 shows the same preview text.
 
+## Interactive questions (`ask_user`)
+
+Modeled on Claude Code's AskUserQuestion and Cline's `ask_followup_question`:
+when requirements are genuinely ambiguous — audience, product type, stack —
+the agent asks instead of guessing. The tool `ask_user` takes
+`{ question, options: [{label, description?}] (2–4), allow_free_text? (default
+true) }` and is visible in plan, manual, auto, and orchestrator modes (every
+mode that can produce a plan); it is hidden in ask mode, where the agent
+should simply answer. It is classified `read`, so it never routes through
+the approval gate — its own broker is the pause.
+
+The mechanism mirrors the approval broker:
+
+- Calling `ask_user` emits `QUESTION_REQUESTED` (question id, question,
+  options, `allowFreeText`, mode, task id) and the agent loop blocks on
+  core's `QuestionBroker` until the question is answered, times out, or the
+  task is cancelled.
+- Answers arrive through `POST /tasks/:id/questions/:questionId` with
+  `{ answer: string }` — the chosen option's label or the user's own
+  free text. The tool result returns the answer **verbatim** to the model,
+  named as the chosen option (with its index) or as a free-text answer.
+  Unknown or already-settled ids answer 404; a blank answer is a 400.
+- **Timeout is not failure.** After `DAEDALUS_QUESTION_TIMEOUT_MS` (default
+  900 000 ms / 15 min) the tool returns a "no answer arrived" result that
+  tells the model to proceed with stated assumptions (and to mark them
+  `(assumed)` in the plan's Decisions). The task continues.
+- **Stop cancels.** Cancelling the task settles its pending questions (and
+  its children's) as cancelled; the model is told not to ask further
+  questions and to wrap up.
+- Every settlement lands as `QUESTION_ANSWERED` (`question_id`, question,
+  outcome, answer, `option_index`, `timed_out`, `cancelled`), which the Web
+  renders as a collapsed receipt in the chat transcript. A question asked by
+  an orchestrator's child is mirrored onto the parent's event log, exactly
+  like child approvals, so the card appears in the parent chat.
+
+Surfaces: the Web shows a **question card** inline in the chat panel —
+option buttons (number keys 1–4 work too), and the LAST affordance is always
+"type your own answer", present even when the model supplied four options,
+unless `allow_free_text=false`, in which case the card says so. While a
+question is pending the task status reads `awaiting-answer`. The CLI prints
+the same numbered block and reads one line from stdin: a bare number picks
+that option, anything else is sent as free text, and the CLI never hangs on
+a question the user walks away from — the broker timeout (or Ctrl-C /
+Stop) settles it. In non-interactive contexts (CI, `--json`), the CLI does
+not prompt; the question settles on its timeout.
+
+The plan prompt contract is: explore the workspace read-only first, then ask
+at most three questions where the workspace itself cannot disambiguate, then
+write the plan files. Questions are for choices the user owns; facts come
+from the tools.
+
+## Plan documents
+
+A finalized plan is files, written by the agent into the workspace:
+
+- `.daedalus/plans/<task-slug>/plan.md` — always.
+- `.daedalus/plans/<task-slug>/PRD.md` — additionally, when the task is
+  product-oriented (a user-facing product or feature).
+
+Plan mode's matrix denies mutations, so these writes are the **one explicit
+carve-out**: the harness policy is call-aware (`toolCallPolicy` in
+`modes.ts`) — the plan-write tools (`write_file`, `edit_file`,
+`edit_search_replace`, `create_dir`) are allowed in plan mode **only** when
+the target path is `.daedalus/plans` or under it. Absolute paths, `..`
+traversal, and lookalike prefixes (`.daedalus/plansx`) are rejected, and
+any other write — and every `run_command` — stays denied, with the denial
+explaining the carve-out to the model. Tests prove both halves: a write to
+`.daedalus/plans/**` succeeds in plan mode and a write anywhere else (or a
+command) is refused.
+
+The document contract (prompt-driven, from the template in the plan mode
+prompt — not a runtime generator):
+
+```markdown
+# <Title>
+## Goal
+## Scope / Non-goals
+## Decisions        ← one "question → answer" line per ask_user Q&A;
+                       unanswered choices are marked "(assumed)"
+## Steps            ← numbered; each step names its target files
+## Acceptance criteria
+```
+
+PRD.md follows the same shape with the product goal up front. When a plan
+run finishes, core scans the task's own file-change events for plan.md /
+PRD.md under `.daedalus/plans/**` and the closing `PLAN_CREATED` carries
+them as `documents: string[]`, so any surface can link or open the files.
+
+## Approve & Execute
+
+When a plan task finishes (done or partial) with plan documents, the Web
+chat shows an **Approve & Execute** bar naming the plan file, with two
+buttons: **Execute with Auto** and **Execute with Orchestrator**. Clicking
+one creates the follow-up task through the existing plan-continuity
+machinery: `plan_task_id` set to the plan task (core injects the plan's
+steps), the chosen mode, and a goal of the form "Execute the approved plan
+in .daedalus/plans/<slug>/plan.md" — and the composer's mode switch follows
+the choice. In the CLI there is no equivalent button yet: run the follow-up
+as a new Auto/Orchestrator goal naming the plan file (Web-only for now; see
+*Honest limits*).
+
 ## Orchestrator tightening rule
 
 Modes have a strictness order — `orchestrator` (0) < `auto` (1) < `manual`
@@ -119,9 +226,17 @@ success.
 - The plan flow is continuity, not a pipeline: there is no separate
   plan-approval state machine, and executing a plan is a new task that
   carries the plan steps as a constraint.
-- Interactive plan clarification (the agent asking multiple-choice questions
-  before writing the plan) is **not** implemented here; plan mode writes its
-  plan from its own exploration today.
+- Plan documents are prompt-driven. The section structure (Goal / Scope /
+  Decisions / Steps / Acceptance criteria) comes from the template in the
+  plan mode prompt; core does not parse or repair a plan.md the model wrote
+  differently — it only verifies *where* plan writes may land and reports
+  which plan documents exist.
+- A question nobody answers is not an error and not an approval: after the
+  timeout the agent proceeds on assumptions it must state (marked
+  `(assumed)`), which the user can correct in a follow-up.
+- Approve & Execute is Web-only for now. The CLI answers questions with
+  full parity, but executing a plan there is a manual new goal naming the
+  plan file.
 - Edited commands are re-split on whitespace: quoting inside an edited
   command line is not preserved (the original model-produced call keeps its
   exact argv).

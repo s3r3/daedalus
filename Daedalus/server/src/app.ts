@@ -1216,6 +1216,40 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
+    // Id-addressed question answer (the Web chat question card): the body
+    // carries the user's answer verbatim — a chosen option's label or their
+    // own free text. Unknown question ids 404, like approvals.
+    const questionMatch = /^\/tasks\/([^/]+)\/questions\/([^/]+)$/.exec(url.pathname);
+    if (method === "POST" && questionMatch?.[1] !== undefined && questionMatch[2] !== undefined) {
+      void (async () => {
+        const taskId = questionMatch[1] as string;
+        const questionId = questionMatch[2] as string;
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json" });
+          return;
+        }
+        const answer = typeof parsed.answer === "string" ? parsed.answer : "";
+        if (answer.trim().length === 0) {
+          sendJson(res, 400, { error: "answer_required" });
+          return;
+        }
+        // The URL names the task the user is looking at (often the
+        // orchestrator parent); the pending question may live on any
+        // active runner, so fall back to whichever broker actually holds it.
+        const candidates = new Set<TaskRunner>([...(ctx.activeRunners.get(taskId) ? [ctx.activeRunners.get(taskId)!] : []), ...ctx.activeRunners.values()]);
+        let success = false;
+        for (const runner of candidates) {
+          if (runner.questions.answer(questionId, answer)) {
+            success = true;
+            break;
+          }
+        }
+        sendJson(res, success ? 200 : 404, { success, question_id: questionId, ...(success ? {} : { error: "question_not_pending" }) });
+      })();
+      return;
+    }
+
     const cancelMatch = /^\/tasks\/([^/]+)\/cancel$/.exec(url.pathname);
     if (method === "POST" && cancelMatch?.[1] !== undefined) {
       const taskId = cancelMatch[1] as string;

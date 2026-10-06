@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
-import { ArrowDown, ShieldAlert, Square } from 'lucide-react'
+import { ArrowDown, CircleQuestionMark, ShieldAlert, Square } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { EmptyState, Panel } from '../common/panel'
@@ -8,8 +8,10 @@ import { api } from '../../api/client'
 import { useActiveTaskId, useTaskEvents } from '../../state/hooks'
 import { useDaedalusStore } from '../../state/taskStore'
 import { CHAT_HEIGHT, loadChatHeight, saveChatHeight } from '../../state/prefs'
-import { chatTranscript, pendingApprovals, taskStatus, type ChatEntry } from '../../state/selectors'
+import { chatTranscript, pendingApprovals, pendingQuestions, taskStatus, type ChatEntry } from '../../state/selectors'
 import { ApprovalCard } from '../approval/approval-card'
+import { QuestionCard } from '../approval/question-card'
+import { ExecutePlanBar } from './execute-plan-bar'
 import { STATUS_TONE, type Tone } from './status-tone'
 
 /**
@@ -26,8 +28,9 @@ export function ChatPanel() {
   const thinking = useDaedalusStore((state) => state.composer.thinking)
   const entries = useMemo(() => chatTranscript(events, thinking), [events, thinking])
   const pending = useMemo(() => pendingApprovals(events), [events])
-  const status = taskStatus(events, pending.length)
-  const running = status === 'running' || status === 'awaiting-approval'
+  const questions = useMemo(() => pendingQuestions(events), [events])
+  const status = taskStatus(events, pending.length, questions.length)
+  const running = status === 'running' || status === 'awaiting-approval' || status === 'awaiting-answer'
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const pinnedRef = useRef(true)
@@ -211,6 +214,18 @@ export function ChatPanel() {
           </p>
         </div>
       ) : null}
+
+      {questions.length > 0 ? (
+        <div className="mt-2 border-t border-line pt-2">
+          <QuestionCard />
+          <p className="mt-2 flex items-start gap-1.5 text-[11px] text-info" data-testid="chat-question-pending">
+            <CircleQuestionMark className="mt-[1px] size-3.5 shrink-0" />
+            <span>waiting for your answer — the agent resumes as soon as you answer above.</span>
+          </p>
+        </div>
+      ) : null}
+
+      <ExecutePlanBar />
     </Panel>
   )
 }

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { approvalPreviewLine, buildProgram, formatEvent, makeSigintHandler, parseApproval, parsePositiveInt } from '../src/index.ts'
+import { approvalPreviewLine, buildProgram, formatEvent, makeSigintHandler, parseApproval, parsePositiveInt, parseQuestionAnswer, questionPromptText } from '../src/index.ts'
 import { VERSION } from '@daedalus/core'
 import { exitCodeFor } from '@daedalus/core'
 
@@ -88,6 +88,62 @@ describe('CLI', () => {
     })
     test('"x" denies', () => {
       expect(parseApproval('x')).toEqual({ decision: 'deny', remember: false })
+    })
+  })
+
+  describe('parseQuestionAnswer', () => {
+    const options = [{ label: 'Website e-commerce' }, { label: 'Website e-learning' }, { label: 'Blog' }]
+
+    test('a bare number selects that option label', () => {
+      expect(parseQuestionAnswer('2', options)).toBe('Website e-learning')
+      expect(parseQuestionAnswer(' 1 ', options)).toBe('Website e-commerce')
+    })
+
+    test('an out-of-range number is the user\'s own text, not an option', () => {
+      expect(parseQuestionAnswer('7', options)).toBe('7')
+      expect(parseQuestionAnswer('0', options)).toBe('0')
+    })
+
+    test('anything else passes through verbatim as free text', () => {
+      expect(parseQuestionAnswer('Portfolio pribadi untuk fotografi', options)).toBe('Portfolio pribadi untuk fotografi')
+      expect(parseQuestionAnswer('2 tapi dark mode', options)).toBe('2 tapi dark mode')
+    })
+
+    test('empty input abstains so the caller can re-prompt', () => {
+      expect(parseQuestionAnswer('', options)).toBeNull()
+      expect(parseQuestionAnswer('   ', options)).toBeNull()
+    })
+  })
+
+  describe('question rendering', () => {
+    test('QUESTION_REQUESTED prints the question with numbered options', () => {
+      const out = formatEvent({
+        type: 'QUESTION_REQUESTED',
+        task_id: 't',
+        payload: {
+          question: {
+            id: 'q-1', taskId: 't', question: 'Website ini untuk apa?', createdAt: '',
+            allowFreeText: true,
+            options: [{ label: 'Toko online', description: 'Jual produk' }, { label: 'Kursus' }],
+          },
+        },
+      })
+      expect(out).toContain('Website ini untuk apa?')
+      expect(out).toContain('1. Toko online — Jual produk')
+      expect(out).toContain('2. Kursus')
+      expect(out).toContain('reply with a number, or type your own answer')
+    })
+
+    test('allowFreeText=false drops the free-text hint', () => {
+      const text = questionPromptText({ question: 'Stack?', options: [{ label: 'React' }], allowFreeText: false })
+      expect(text).toContain('reply with a number')
+      expect(text).not.toContain('type your own')
+    })
+
+    test('QUESTION_ANSWERED renders the receipt, timeout, and cancellation', () => {
+      expect(formatEvent({ type: 'QUESTION_ANSWERED', task_id: 't', payload: { outcome: 'answered', answer: 'Kursus' } })).toContain('You answered: Kursus')
+      expect(formatEvent({ type: 'QUESTION_ANSWERED', task_id: 't', payload: { outcome: 'timeout', timed_out: true } })).toContain('continues with stated assumptions')
+      expect(formatEvent({ type: 'QUESTION_ANSWERED', task_id: 't', payload: { outcome: 'cancelled', cancelled: true } })).toContain('cancelled')
     })
   })
 

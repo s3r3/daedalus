@@ -27,7 +27,8 @@ import { reviewDiff } from './agent/review.ts';
 import { loadPins } from './pins.ts';
 import type { EditFormat, ModelTier, PromptFamily, PromptFamilySetting, ReviewGateReport } from './contracts.ts';
 import { TextProtocolProvider, type ProtocolSwitchInfo } from './providers/llm/text-protocol.ts';
-import { ModeController, restrictMode } from './interaction/modes.ts';
+import { ModeController, isPlanDocumentPath, restrictMode } from './interaction/modes.ts';
+import { QuestionBroker, createAskUserTool, resolveQuestionTimeoutMs } from './interaction/questions.ts';
 import { ProviderRegistry } from './interaction/providers.ts';
 import { OrchestratorRunner, decomposeTask, type ChildTaskInput } from './interaction/orchestrator.ts';
 import { McpManager, loadMcpConfig, type McpServerConfig, type McpServerStatus } from './mcp/index.ts';
@@ -70,6 +71,10 @@ export type TaskRunnerOptions = {
   store?: TaskStore;
   /** Shared approval broker (worktree re-dispatch reuses the parent's so decisions reach child runs). */
   approvalBroker?: ApprovalBroker;
+  /** Shared question broker (worktree re-dispatch reuses the parent's so answers reach child runs). */
+  questionBroker?: QuestionBroker;
+  /** How long a user question (ask_user) may wait for an answer before the agent proceeds on stated assumptions. Defaults to DAEDALUS_QUESTION_TIMEOUT_MS / 15 minutes. */
+  questionTimeoutMs?: number;
   /** How long an approval may wait for a human before it counts as declined. Defaults to DAEDALUS_APPROVAL_TIMEOUT_MS / 10 minutes. */
   approvalTimeoutMs?: number;
   /**
@@ -175,6 +180,26 @@ function settingsThinking(settings: Settings): boolean {
 
 const STOP_REASONS = new Set(['aborted', 'max_iterations', 'max_errors', 'no_progress', 'invalid_action']);
 
+/**
+ * Plan documents a run actually wrote, from its FILE_CHANGED evidence:
+ * normalized `.daedalus/plans/**` paths to a plan.md / PRD.md, deduplicated,
+ * plan.md first. Paths are reported as the model wrote them (workspace
+ * relative), which is what the Web links and the follow-up goal quotes.
+ */
+export function planDocumentsFromEvents(events: Event[]): string[] {
+  const seen = new Set<string>();
+  for (const event of events) {
+    if (event.type !== 'FILE_CHANGED') continue;
+    const path = (event.payload as { path?: unknown }).path;
+    if (typeof path !== 'string' || !isPlanDocumentPath(path)) continue;
+    const segments = path.replace(/\\/g, '/').split('/').filter((segment) => segment.length > 0 && segment !== '.');
+    const clean = segments.join('/');
+    const name = segments[segments.length - 1];
+    if (name === 'plan.md' || name === 'PRD.md') seen.add(clean);
+  }
+  return [...seen].sort((a, b) => Number(a.endsWith('PRD.md')) - Number(b.endsWith('PRD.md')));
+}
+
 /** Tools whose execution is a process → COMMAND_* events for the terminal surface. */
 const COMMAND_TOOLS = new Set(['run_command', 'git_status', 'git_diff']);
 /** Tools that target a workspace file → FILE_CHANGED diff evidence. */
@@ -184,6 +209,7 @@ export class TaskRunner {
   readonly bus: EventBus;
   readonly store: TaskStore;
   readonly approvals: ApprovalBroker;
+  readonly questions: QuestionBroker;
   readonly harness: ExecutionHarness;
   readonly validator: Validator;
   readonly modeController: ModeController;
@@ -205,6 +231,7 @@ export class TaskRunner {
     this.bus = options.bus ?? new EventBus();
     this.store = options.store ?? new TaskStore(resolveDaedalusHome(this.#settings.daedalusHome, options.workspaceRoot));
     this.approvals = options.approvalBroker ?? new ApprovalBroker({ timeoutMs: resolveApprovalTimeoutMs(options.approvalTimeoutMs) });
+    this.questions = options.questionBroker ?? new QuestionBroker({ timeoutMs: resolveQuestionTimeoutMs(options.questionTimeoutMs) });
     this.modeController = options.modeController ?? new ModeController(options.mode ?? 'auto', options.autoApprove ?? options.approvalPolicy === 'auto');
     if (options.autoApprove !== undefined) this.modeController.setAutoApprove(options.autoApprove);
     this.providerRegistry = options.providerRegistry;
@@ -221,8 +248,11 @@ export class TaskRunner {
           return parent ? [key.taskId, parent] : [key.taskId];
         },
         policyFor: (key, tool) => {
-          const modePolicy = this.modeController.approvalFor(tool.name);
+          // Call-aware: the Plan mode carve-out allows plan documents and
+          // denies every other mutating path, per call.
+          const modePolicy = this.modeController.approvalForCall(tool.name, key.path);
           if (!modePolicy.visible) return 'deny';
+          if (modePolicy.approval === 'deny') return 'deny';
           if (key.action === 'read') return 'auto';
           if (options.approvalPolicy === 'deny') return 'deny';
           if (userPolicyFor) return userPolicyFor(key, tool);
@@ -368,6 +398,9 @@ export class TaskRunner {
     // as a decline (never an allow) so the blocked loop can observe the
     // cancellation instead of hanging on a card nobody will answer.
     this.approvals.cancelTasks([taskId]);
+    // Same for a pending user question: it settles as cancelled and the
+    // tool returns a denial the stopping loop can unwind on.
+    this.questions.cancelTasks([taskId]);
     // A runner executes one user task at a time (plus its orchestrator
     // children), so cancelling it stops every loop currently active here.
     for (const [activeTaskId, loop] of this.#activeLoops) loop.stop(activeTaskId);
@@ -462,6 +495,21 @@ export class TaskRunner {
       } catch {
         // A name collision with a built-in tool is skipped, never fatal.
       }
+    }
+    // The interactive question tool (Plan mode's ask_user): one instance
+    // per run, bound to this task and the runner's shared question broker.
+    try {
+      registry.register(createAskUserTool({
+        questions: this.questions,
+        bus: this.bus,
+        store: this.store,
+        taskId: spec.id,
+        modeFor: () => this.modeController.mode,
+        ...(options.parentTaskId ? { parentTaskId: options.parentTaskId } : {}),
+        questionTimeoutMs: resolveQuestionTimeoutMs(this.#options.questionTimeoutMs),
+      }));
+    } catch {
+      // Already registered (e.g. a future default): keep the existing one.
     }
     // Tailor suite, resolved once per run from runner options < provider
     // config < settings: capability tiers (pool routing + escalation),
@@ -561,6 +609,18 @@ export class TaskRunner {
       this.#activeLsp = undefined;
       await extensions.close();
       this.bus.on('*', listener); // no-op keeps handler identity stable for GC
+    }
+
+    // Plan mode's deliverables are files: when the run wrote plan documents
+    // under .daedalus/plans/, a closing PLAN_CREATED names them so the Web
+    // can link the documents and offer Approve & Execute. The steps ride
+    // along unchanged, so plan consumers keep reading the same payload.
+    if (spec.mode === 'plan') {
+      const documents = planDocumentsFromEvents(collected);
+      if (documents.length > 0) {
+        emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'PLAN_CREATED', { plan: state.plan, mode: 'plan', documents });
+        await this.bus.drain();
+      }
     }
 
     const validation = this.#lastValidation(collected);
@@ -714,6 +774,9 @@ export class TaskRunner {
       // The inner run shares the approval channel: a decision made on the
       // outer surface must reach a worktree task blocked on its card.
       approvalBroker: this.approvals,
+      // …and the question channel, for the same reason.
+      questionBroker: this.questions,
+      questionTimeoutMs: this.#options.questionTimeoutMs,
       approvalMemory: this.#options.approvalMemory,
       approvalTimeoutMs: this.#options.approvalTimeoutMs,
       harness: this.#options.harness,

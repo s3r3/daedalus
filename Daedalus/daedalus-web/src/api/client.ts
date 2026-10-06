@@ -181,6 +181,17 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ decision, ...(extra ?? {}) }) },
     ),
 
+  /**
+   * Answer one pending user question (the Plan mode ask_user card): the
+   * answer is delivered to the agent verbatim — a chosen option's label or
+   * the user's own typed text.
+   */
+  answerQuestion: (taskId: string, questionId: string, answer: string) =>
+    request<{ success: boolean; question_id: string }>(
+      `/tasks/${encodeURIComponent(taskId)}/questions/${encodeURIComponent(questionId)}`,
+      { method: 'POST', body: JSON.stringify({ answer }) },
+    ),
+
   roots: () => request<{ roots: WorkspaceRoot[]; cwd: string }>('/workspace/roots'),
 
   tree: (root: string, path = '.', depth = 2) =>
