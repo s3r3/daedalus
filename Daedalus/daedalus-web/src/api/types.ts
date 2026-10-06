@@ -3,7 +3,6 @@ import type {
   ApprovalRequestInfo,
   Attachment,
   ChildTask,
-  ChildTaskBudget,
   Event,
   FinalReport,
   PermissionKey,
@@ -155,14 +154,6 @@ export type ProviderTestResult = {
   providerId: string
   models: string[]
   message: string
-}
-
-export type ChildTaskInput = {
-  goal: string
-  mode?: AgentMode
-  budget?: ChildTaskBudget
-  agent?: string
-  isolation?: 'worktree'
 }
 
 export type ReviewResponse = {

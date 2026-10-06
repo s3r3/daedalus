@@ -9,7 +9,7 @@ import type { ConversationTurn } from '../../api/types'
 import { useActiveTaskId, useTaskEvents } from '../../state/hooks'
 import { useDaedalusStore } from '../../state/taskStore'
 import { CHAT_HEIGHT, loadChatHeight, saveChatHeight, saveActiveConversationId } from '../../state/prefs'
-import { approvalId, chatTranscript, pendingApprovals, pendingQuestions, taskStatus, type ChatEntry } from '../../state/selectors'
+import { approvalId, chatTranscript, pendingApprovals, pendingQuestions, taskStatus, taskUsage, type ChatEntry } from '../../state/selectors'
 import { ApprovalCard } from '../approval/approval-card'
 import { QuestionCard } from '../approval/question-card'
 import { ExecutePlanBar } from './execute-plan-bar'
@@ -46,6 +46,7 @@ export function ChatPanel() {
   const pending = useMemo(() => pendingApprovals(events), [events])
   const questions = useMemo(() => pendingQuestions(events), [events])
   const status = taskStatus(events, pending.length, questions.length)
+  const usage = useMemo(() => taskUsage(events), [events])
   const running = status === 'running' || status === 'awaiting-approval' || status === 'awaiting-answer'
 
   const rows = useMemo<ChatRowModel[]>(() => {
@@ -347,9 +348,22 @@ export function ChatPanel() {
         </div>
       )}
 
+      {usage.requests > 0 ? (
+        <p className="mt-2 border-t border-line pt-1.5 font-mono text-[10px] text-muted" data-testid="chat-token-usage">
+          {usage.reported > 0
+            ? `tokens ${formatCount(usage.inputTokens)} in · ${formatCount(usage.outputTokens)} out · ${formatCount(usage.totalTokens)} total · ${usage.requests} request${usage.requests === 1 ? '' : 's'}${usage.reported < usage.requests ? ` (usage reported for ${usage.reported} of ${usage.requests})` : ''}`
+            : `${usage.requests} model request${usage.requests === 1 ? '' : 's'} · token usage not reported by the provider`}
+        </p>
+      ) : null}
+
+
       <ExecutePlanBar />
     </Panel>
   )
+}
+
+function formatCount(value: number): string {
+  return value.toLocaleString('en-US')
 }
 
 /** A recorded conversation turn (finished task or fast-path exchange in this session). */

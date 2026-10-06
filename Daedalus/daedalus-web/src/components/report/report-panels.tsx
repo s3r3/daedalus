@@ -18,6 +18,14 @@ const METRIC_LABELS: Record<string, string> = {
   recoveries: 'recoveries',
   replans: 'replans',
   approvals: 'approvals',
+  child_tasks: 'subagent tasks',
+  child_tasks_done: 'subagents done',
+  child_tasks_failed: 'subagents failed',
+  model_requests: 'model requests',
+  tokens_input: 'tokens in',
+  tokens_output: 'tokens out',
+  tokens_total: 'tokens total',
+  token_requests_reported: 'requests reporting usage',
   checks_passed: 'checks passed',
   checks_failed: 'checks failed',
   duration_ms: 'duration (ms)',
@@ -55,7 +63,7 @@ export function AttachmentsPanel() {
   )
 }
 
-/** Child tasks coordinated by Orchestrator mode, from child-task events. */
+/** Child tasks the agent delegated to via the spawn_subagent tool, from child-task events. */
 export function ChildTasksPanel() {
   const events = useTaskEvents()
   const children = useMemo(() => childTasks(events), [events])
@@ -63,14 +71,14 @@ export function ChildTasksPanel() {
   return (
     <Panel title="child tasks" data-testid="child-tasks-panel" action={<Badge tone="neutral">{children.length}</Badge>} bodyClassName="flex flex-col gap-1">
       {children.length === 0 ? (
-        <EmptyState title="No child tasks" hint="Orchestrator mode records decomposed child tasks here." />
+        <EmptyState title="No child tasks" hint="Subagents the agent spawns (spawn_subagent) are recorded here." />
       ) : (
         <ul className="flex flex-col gap-0.5">
           {children.map((child) => (
             <li key={child.id} className="rounded border border-line px-1.5 py-1 text-[11px]" data-testid="child-task-entry" data-status={child.status}>
               <div className="flex items-center gap-1.5">
                 <Badge tone={child.status === 'done' ? 'success' : child.status === 'failed' ? 'error' : child.status === 'running' ? 'info' : 'neutral'}>{child.status}</Badge>
-                <span className="truncate text-foreground">{child.goal}</span>
+                <span className="truncate text-foreground">{child.label ?? child.goal}</span>
               </div>
               {child.result_summary ? <p className="mt-0.5 text-[10px] text-muted">{child.result_summary}</p> : null}
               {child.budget ? (

@@ -39,7 +39,7 @@ export type SlashCommandContext = {
 
 export const SLASH_COMMANDS: SlashCommand[] = [
   { name: 'help', description: 'Show command help', usage: '/help [command]' },
-  { name: 'mode', description: 'Show or switch agent mode', usage: '/mode [ask|manual|auto|code|plan|orchestrator]' },
+  { name: 'mode', description: 'Show or switch agent mode', usage: '/mode [ask|manual|auto|code|plan]' },
   { name: 'models', description: 'List or switch models', usage: '/models [provider/model]' },
   { name: 'providers', description: 'List providers or test one', usage: '/providers [add|test <id>]' },
   { name: 'settings', description: 'Show or update settings', usage: '/settings [key value]' },

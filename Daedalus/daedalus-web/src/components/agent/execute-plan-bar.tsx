@@ -20,7 +20,7 @@ export function ExecutePlanBar() {
   const composer = useDaedalusStore((state) => state.composer)
   const setTask = useDaedalusStore((state) => state.setTask)
   const setComposer = useDaedalusStore((state) => state.setComposer)
-  const [busy, setBusy] = useState<'auto' | 'orchestrator' | null>(null)
+  const [busy, setBusy] = useState<'auto' | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
 
   const status = taskStatus(events, pendingApprovals(events).length, pendingQuestions(events).length)
@@ -29,7 +29,7 @@ export function ExecutePlanBar() {
 
   if (!taskId || !planDoc || (status !== 'done' && status !== 'partial')) return null
 
-  const execute = async (mode: 'auto' | 'orchestrator'): Promise<void> => {
+  const execute = async (mode: 'auto'): Promise<void> => {
     setBusy(mode)
     setFailure(null)
     try {
@@ -90,15 +90,6 @@ export function ExecutePlanBar() {
           data-testid="execute-plan-auto"
         >
           <Play className="size-3.5" /> Execute with Auto
-        </Button>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy !== null}
-          onClick={() => void execute('orchestrator')}
-          data-testid="execute-plan-orchestrator"
-        >
-          <ListChecks className="size-3.5" /> Execute with Orchestrator
         </Button>
       </div>
       {failure ? <p className="text-[10px] text-error">{failure}</p> : null}

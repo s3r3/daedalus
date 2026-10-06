@@ -5,7 +5,7 @@ import type { TaskStore } from '../persistence.ts';
 import type { LLMProvider, Message, ModelPhase } from '../providers/llm/types.ts';
 import { classifyLLMError, LLMAuthError, LLMContentPolicyError, type LLMErrorKind } from '../providers/llm/errors.ts';
 import { asModelController, modelPoolFailureReason } from '../providers/llm/model-pool.ts';
-import type { Event, ModelTier, Plan, PlanStep, TaskSpec, TaskState, ToolCall, ToolResult } from '../contracts.ts';
+import type { AgentMode, Event, ModelTier, Plan, PlanStep, TaskSpec, TaskState, ToolCall, ToolResult } from '../contracts.ts';
 import type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor } from './types.ts';
 import type { Validator } from '../validation/index.ts';
 import { completionGate, normalizeError, validationFailed, validationFailureSignature } from '../validation/index.ts';
@@ -18,6 +18,7 @@ import { resolveToolOutputLimits, shapeToolOutput, type ToolOutputLimits } from 
 import { evaluateStopConditions, noProgressCondition } from './stop.ts';
 import { ModeController, isToolCallDenied, isToolVisible, modeDenialMessage } from '../interaction/modes.ts';
 import { isPlanDocumentChange, planDecisionsFromEvents, planDocumentRepairDirective } from '../interaction/plans.ts';
+import { SPAWN_SUBAGENT_TOOL_NAME } from '../interaction/subagents.ts';
 
 export type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor };
 export { interpretTask };
@@ -67,6 +68,13 @@ export type AgentLoopOptions = {
    * disables. No-op without a multi-model pool.
    */
   qualityEscalation?: boolean;
+  /**
+   * Drain pending system notices for a task (background-subagent results
+   * the runtime queued since the last turn). Drained once per step and
+   * appended to the next request as user-role notes, the same carriage as
+   * anti-loop guidance.
+   */
+  noticesFor?: (taskId: string) => string[];
 };
 
 
@@ -101,6 +109,7 @@ export class AgentLoop {
   readonly #toolOutputLimits: ToolOutputLimits;
   readonly #modelTiers: Record<string, ModelTier>;
   readonly #qualityEscalation: boolean;
+  readonly #noticesFor?: (taskId: string) => string[];
   readonly #spillCounters = new Map<string, number>();
   readonly #loopGuards = new Map<string, LoopGuard>();
   readonly #pendingGuidance = new Map<string, string>();
@@ -146,6 +155,7 @@ export class AgentLoop {
     this.#toolOutputLimits = resolveToolOutputLimits(options.toolOutput);
     this.#modelTiers = options.modelTiers ?? {};
     this.#qualityEscalation = options.qualityEscalation !== false;
+    this.#noticesFor = options.noticesFor;
   }
 
   get modeController(): ModeController {
@@ -350,6 +360,12 @@ export class AgentLoop {
       this.#pendingGuidance.delete(state.id);
       messages = [...messages, { role: 'user', content: guidance }];
     }
+    // System notices (background subagent results that landed since the
+    // last turn) ride along the same way, drained exactly once.
+    const notices = this.#noticesFor?.(state.id) ?? [];
+    if (notices.length > 0) {
+      messages = [...messages, ...notices.map((content) => ({ role: 'user' as const, content }))];
+    }
     const meter = contextMeter(messages, this.#contextLimitTokens);
     // Phase hint (tailor suite): the pool spends strong models on edit and
     // repair turns and fast/balanced ones on exploration. Stamped onto the
@@ -446,131 +462,253 @@ export class AgentLoop {
       this.#store.saveState(state.id, updated);
       return updated;
     }
-    // Execute every tool call in the model's response, sequentially. Many
-    // OpenAI-compatible models batch exploration/edit calls in one turn;
-    // dropping all but the first (the old behaviour) made otherwise capable
-    // models re-read the same files for several turns and never reach the
-    // edit. Sequential execution preserves approval/mode checks per call.
+    // Execute every tool call in the model's response. Most calls run
+    // sequentially (approval/mode checks and edit ordering are per call),
+    // but a burst of consecutive spawn_subagent calls in one response runs
+    // CONCURRENTLY (cap 3): parallel delegation is the tool's whole point,
+    // and serializing it would hand the parent three context rebuilds in a
+    // row. Observations are still applied in call order afterwards.
     const rawCalls = response.message.tool_calls ?? [];
     let current: TaskState = { ...successfulState, turns: (state.turns ?? 0) + 1 };
+    const parsedCalls: Array<{ call: ToolCall } | { parseError: ToolResult }> = [];
     for (const rawCall of rawCalls) {
-      let call: ToolCall;
       try {
         const args = JSON.parse(rawCall.function.arguments || '{}') as unknown;
-        call = {
-          id: rawCall.id || `call-${Date.now()}`,
-          task_id: state.id,
-          turn_id: turnId,
-          tool: rawCall.function.name,
-          args,
-          started_at: new Date().toISOString(),
-        };
+        parsedCalls.push({
+          call: {
+            id: rawCall.id || `call-${Date.now()}`,
+            task_id: state.id,
+            turn_id: turnId,
+            tool: rawCall.function.name,
+            args,
+            started_at: new Date().toISOString(),
+          },
+        });
       } catch {
-        const result = {
-          call_id: rawCall.id || `call-${Date.now()}`,
-          status: 'error' as const,
-          output: `invalid JSON arguments for tool ${rawCall.function.name}`,
-          truncated: false,
-          meta: { tool: rawCall.function.name, mode: turnMode, reason: 'invalid_arguments' },
-        };
+        parsedCalls.push({
+          parseError: {
+            call_id: rawCall.id || `call-${Date.now()}`,
+            status: 'error' as const,
+            output: `invalid JSON arguments for tool ${rawCall.function.name}`,
+            truncated: false,
+            meta: { tool: rawCall.function.name, mode: turnMode, reason: 'invalid_arguments' },
+          },
+        });
+      }
+    }
+    let index = 0;
+    while (index < parsedCalls.length) {
+      const entry = parsedCalls[index]!;
+      if ('parseError' in entry) {
+        const result = entry.parseError;
         current = { ...this.#observe.handle({ kind: 'tool_result', result }, current), mode: turnMode, last_tool_call_id: result.call_id, tool_result: result };
+        index++;
         continue;
       }
-      call.turn_id = turnId;
-      await this.#emit(state.id, turnId, 'TOOL_CALL_STARTED', { call });
-      // Anti-loop guard: the 3rd identical (or same-path) call warns
-      // (guidance is injected into the next request); further duplicates are
-      // suppressed with a cached-repeat result instead of being executed
-      // again. Repeat read_skill calls are suppressed immediately with an
-      // "already loaded" note so the full skill text is not re-served.
-      const guardCall = this.#guardFor(state).observe(call.tool, call.args);
-      if (guardCall.decision !== 'execute') {
-        await this.#emit(state.id, turnId, 'LOOP_WARNING', {
-          tool: call.tool,
-          repeats: guardCall.repeats,
-          suppressed: guardCall.decision === 'suppress',
-          ...(guardCall.repeatKind ? { repeat_kind: guardCall.repeatKind } : {}),
-        });
-        this.#pendingGuidance.set(state.id, loopGuidanceNote(call.tool, guardCall.repeats));
-      }
-      const result = isToolCallDenied(turnMode, call.tool, toolCallTargetPath(call.args))
-        ? {
-            call_id: call.id,
-            status: 'denied' as const,
-            output: modeDenialMessage(turnMode, call.tool),
-            truncated: false,
-            meta: { tool: call.tool, mode: turnMode, reason: 'mode_policy' },
-          }
-        : guardCall.decision === 'suppress'
-          ? {
-              call_id: call.id,
-              // Not an error: the call was answered from the repeat cache.
-              // `mutating: false` keeps the observation handler from treating
-              // it as implementation progress, and the unchanged observation
-              // lets the no_progress backstop remain the final safety.
-              status: 'ok' as const,
-              output: guardCall.suppressedOutput ?? REPEAT_SUPPRESSED_OUTPUT,
-              truncated: false,
-              meta: { tool: call.tool, mode: turnMode, reason: 'repeat_suppressed', repeats: guardCall.repeats, mutating: false, ...(guardCall.repeatKind ? { repeat_kind: guardCall.repeatKind } : {}) },
-            }
-          : await this.#executeTool(call);
-      // Phase routing bookkeeping: once a task has actually mutated the
-      // workspace, its later turns are edit turns and earn strong models.
-      if (result.meta?.mutating === true) this.#taskMutated.add(state.id);
-      if (result.meta?.mutating === true) {
-        // Validation bookkeeping: remember which files the task changed
-        // (checks are scoped to their packages) and that this failure is
-        // no longer "unchanged" for the anti-thrash guard below.
-        const stall = this.#validationStalls.get(state.id);
-        if (stall) stall.changedSince = true;
-        const changedPath = (call.args as { path?: unknown } | undefined)?.path;
-        if (typeof changedPath === 'string' && changedPath.length > 0) {
-          let files = this.#changedFiles.get(state.id);
-          if (!files) {
-            files = new Set<string>();
-            this.#changedFiles.set(state.id, files);
-          }
-          files.add(changedPath);
+      if (entry.call.tool === SPAWN_SUBAGENT_TOOL_NAME) {
+        const group: ToolCall[] = [];
+        while (index < parsedCalls.length) {
+          const next = parsedCalls[index]!;
+          if (!('call' in next) || next.call.tool !== SPAWN_SUBAGENT_TOOL_NAME) break;
+          group.push(next.call);
+          index++;
         }
+        current = group.length > 1
+          ? await this.#executeSpawnGroup(state, current, group, turnMode, turnId)
+          : await this.#executeToolCall(state, current, group[0]!, turnMode, turnId);
+        continue;
       }
-      // Shape the result before it enters the model context (the single
-      // choke point every tool's output passes through): over-cap output is
-      // kept head+tail with the full text spilled to the task store, so a
-      // huge command dump or minified-file grep can neither flood the next
-      // request nor lose its tail, where failures summarize. The event log
-      // keeps the executor's untouched result — only the model-facing copy
-      // is shortened — and the event gains additive truncation flags so the
-      // Web can show that shaping happened.
-      const shaped = await shapeToolOutput(result.output, {
-        tool: call.tool,
-        limits: this.#toolOutputLimits,
-        spillPathFor: (tool) => this.#spillPathFor(state.id, tool),
-      });
-      const modelResult: ToolResult = shaped.truncated
-        ? {
-            ...result,
-            output: shaped.output,
-            truncated: true,
-            meta: {
-              ...result.meta,
-              output_truncated: true,
-              ...(shaped.spillPath ? { spill_path: shaped.spillPath } : {}),
-              output_original_chars: shaped.totalChars,
-              output_original_lines: shaped.totalLines,
-              output_shown_lines: shaped.shownLines,
-            },
-          }
-        : result;
-      await this.#emit(state.id, turnId, 'TOOL_CALL_FINISHED', {
-        call,
-        result,
-        ...(shaped.truncated ? { output_truncated: true, ...(shaped.spillPath ? { spill_path: shaped.spillPath } : {}) } : {}),
-      });
-      current = { ...this.#observe.handle({ kind: 'tool_result', result: modelResult }, current), mode: turnMode, last_tool_call_id: call.id, tool_result: modelResult };
+      current = await this.#executeToolCall(state, current, entry.call, turnMode, turnId);
+      index++;
     }
     this.#invalidActions.delete(state.id);
     this.#store.saveState(state.id, current);
     return current;
+  }
+
+  /**
+   * Prepare one tool call for execution: announce it, consult the
+   * anti-loop guard, and apply the mode gate. Returns either a finished
+   * result (denied/suppressed — never executed) or the call to execute.
+   */
+  async #prepareToolCall(
+    state: TaskState,
+    call: ToolCall,
+    turnMode: AgentMode,
+    turnId: string,
+  ): Promise<{ result: ToolResult } | { execute: true }> {
+    await this.#emit(state.id, turnId, 'TOOL_CALL_STARTED', { call });
+    // Anti-loop guard: the 3rd identical (or same-path) call warns
+    // (guidance is injected into the next request); further duplicates are
+    // suppressed with a cached-repeat result instead of being executed
+    // again. Repeat read_skill calls are suppressed immediately with an
+    // "already loaded" note so the full skill text is not re-served.
+    const guardCall = this.#guardFor(state).observe(call.tool, call.args);
+    if (guardCall.decision !== 'execute') {
+      await this.#emit(state.id, turnId, 'LOOP_WARNING', {
+        tool: call.tool,
+        repeats: guardCall.repeats,
+        suppressed: guardCall.decision === 'suppress',
+        ...(guardCall.repeatKind ? { repeat_kind: guardCall.repeatKind } : {}),
+      });
+      this.#pendingGuidance.set(state.id, loopGuidanceNote(call.tool, guardCall.repeats));
+    }
+    if (isToolCallDenied(turnMode, call.tool, toolCallTargetPath(call.args))) {
+      return {
+        result: {
+          call_id: call.id,
+          status: 'denied' as const,
+          output: modeDenialMessage(turnMode, call.tool),
+          truncated: false,
+          meta: { tool: call.tool, mode: turnMode, reason: 'mode_policy' },
+        },
+      };
+    }
+    if (guardCall.decision === 'suppress') {
+      return {
+        result: {
+          call_id: call.id,
+          // Not an error: the call was answered from the repeat cache.
+          // `mutating: false` keeps the observation handler from treating
+          // it as implementation progress, and the unchanged observation
+          // lets the no_progress backstop remain the final safety.
+          status: 'ok' as const,
+          output: guardCall.suppressedOutput ?? REPEAT_SUPPRESSED_OUTPUT,
+          truncated: false,
+          meta: { tool: call.tool, mode: turnMode, reason: 'repeat_suppressed', repeats: guardCall.repeats, mutating: false, ...(guardCall.repeatKind ? { repeat_kind: guardCall.repeatKind } : {}) },
+        },
+      };
+    }
+    return { execute: true };
+  }
+
+  /**
+   * Record one finished tool call: phase/validation bookkeeping, output
+   * shaping, the TOOL_CALL_FINISHED event, and the observation fold into
+   * state. Shared by the sequential and the parallel spawn paths so both
+   * observe identical semantics.
+   */
+  async #recordToolResult(
+    state: TaskState,
+    current: TaskState,
+    call: ToolCall,
+    result: ToolResult,
+    turnMode: AgentMode,
+    turnId: string,
+  ): Promise<TaskState> {
+    // Phase routing bookkeeping: once a task has actually mutated the
+    // workspace, its later turns are edit turns and earn strong models.
+    if (result.meta?.mutating === true) this.#taskMutated.add(state.id);
+    if (result.meta?.mutating === true) {
+      // Validation bookkeeping: remember which files the task changed
+      // (checks are scoped to their packages) and that this failure is
+      // no longer "unchanged" for the anti-thrash guard below.
+      const stall = this.#validationStalls.get(state.id);
+      if (stall) stall.changedSince = true;
+      const changedPath = (call.args as { path?: unknown } | undefined)?.path;
+      if (typeof changedPath === 'string' && changedPath.length > 0) {
+        let files = this.#changedFiles.get(state.id);
+        if (!files) {
+          files = new Set<string>();
+          this.#changedFiles.set(state.id, files);
+        }
+        files.add(changedPath);
+      }
+    }
+    // Shape the result before it enters the model context (the single
+    // choke point every tool's output passes through): over-cap output is
+    // kept head+tail with the full text spilled to the task store, so a
+    // huge command dump or minified-file grep can neither flood the next
+    // request nor lose its tail, where failures summarize. The event log
+    // keeps the executor's untouched result — only the model-facing copy
+    // is shortened — and the event gains additive truncation flags so the
+    // Web can show that shaping happened.
+    const shaped = await shapeToolOutput(result.output, {
+      tool: call.tool,
+      limits: this.#toolOutputLimits,
+      spillPathFor: (tool) => this.#spillPathFor(state.id, tool),
+    });
+    const modelResult: ToolResult = shaped.truncated
+      ? {
+          ...result,
+          output: shaped.output,
+          truncated: true,
+          meta: {
+            ...result.meta,
+            output_truncated: true,
+            ...(shaped.spillPath ? { spill_path: shaped.spillPath } : {}),
+            output_original_chars: shaped.totalChars,
+            output_original_lines: shaped.totalLines,
+            output_shown_lines: shaped.shownLines,
+          },
+        }
+      : result;
+    await this.#emit(state.id, turnId, 'TOOL_CALL_FINISHED', {
+      call,
+      result,
+      ...(shaped.truncated ? { output_truncated: true, ...(shaped.spillPath ? { spill_path: shaped.spillPath } : {}) } : {}),
+    });
+    return { ...this.#observe.handle({ kind: 'tool_result', result: modelResult }, current), mode: turnMode, last_tool_call_id: call.id, tool_result: modelResult };
+  }
+
+  /** Execute a single tool call end to end (the sequential path). */
+  async #executeToolCall(
+    state: TaskState,
+    current: TaskState,
+    call: ToolCall,
+    turnMode: AgentMode,
+    turnId: string,
+  ): Promise<TaskState> {
+    const prepared = await this.#prepareToolCall(state, call, turnMode, turnId);
+    const result = 'result' in prepared ? prepared.result : await this.#executeTool(call);
+    return this.#recordToolResult(state, current, call, result, turnMode, turnId);
+  }
+
+  /**
+   * Execute a burst of spawn_subagent calls concurrently (cap 3). Calls
+   * are prepared sequentially (events/guard/mode in order), the executable
+   * ones run in parallel, and their results are recorded in call order.
+   * One child's failure never takes its siblings down: an executor throw
+   * becomes that call's error result.
+   */
+  async #executeSpawnGroup(
+    state: TaskState,
+    current: TaskState,
+    calls: ToolCall[],
+    turnMode: AgentMode,
+    turnId: string,
+  ): Promise<TaskState> {
+    const prepared: Array<{ call: ToolCall; result?: ToolResult }> = [];
+    for (const call of calls) {
+      const ready = await this.#prepareToolCall(state, call, turnMode, turnId);
+      prepared.push('result' in ready ? { call, result: ready.result } : { call });
+    }
+    const executable = prepared.filter((entry) => entry.result === undefined);
+    const results = new Map<string, ToolResult>();
+    let cursor = 0;
+    const workers = Array.from({ length: Math.min(3, executable.length) }, async () => {
+      while (cursor < executable.length) {
+        const entry = executable[cursor++]!;
+        try {
+          results.set(entry.call.id, await this.#executeTool(entry.call));
+        } catch (error) {
+          results.set(entry.call.id, {
+            call_id: entry.call.id,
+            status: 'error',
+            output: String(error),
+            truncated: false,
+            meta: { tool: entry.call.tool, mode: turnMode, reason: 'execution_error' },
+          });
+        }
+      }
+    });
+    await Promise.all(workers);
+    let next = current;
+    for (const entry of prepared) {
+      const result = entry.result ?? results.get(entry.call.id)!;
+      next = await this.#recordToolResult(state, next, entry.call, result, turnMode, turnId);
+    }
+    return next;
   }
 
   #guardFor(state: TaskState): LoopGuard {

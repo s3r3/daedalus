@@ -136,12 +136,13 @@ beforeEach(() => {
 afterEach(() => cleanup())
 
 describe('shared core interaction contracts in Web', () => {
-  test('mode cycle order is Ask → Manual → Auto → Plan → Orchestrator', () => {
-    expect(AGENT_MODE_ORDER).toEqual(['ask', 'manual', 'auto', 'plan', 'orchestrator'])
+  test('mode cycle order is Ask → Manual → Auto → Plan (orchestrator retired)', () => {
+    expect(AGENT_MODE_ORDER).toEqual(['ask', 'manual', 'auto', 'plan'])
     expect(nextAgentMode('ask')).toBe('manual')
     expect(nextAgentMode('manual')).toBe('auto')
     expect(nextAgentMode('auto')).toBe('plan')
-    expect(nextAgentMode('plan')).toBe('orchestrator')
+    expect(nextAgentMode('plan')).toBe('ask')
+    // Legacy records still resolve: the retired name cycles as Auto's slot.
     expect(nextAgentMode('orchestrator')).toBe('ask')
     expect(modeCssVar('orchestrator')).toBe('var(--daedalus-modeOrchestrator)')
   })

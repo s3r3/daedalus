@@ -196,7 +196,8 @@ describe('ExecutePlanBar', () => {
     render(<ExecutePlanBar />)
     expect(screen.getByTestId('execute-plan-bar').textContent).toContain('.daedalus/plans/website-sekolah/plan.md')
     expect(screen.getByTestId('execute-plan-auto')).toBeTruthy()
-    expect(screen.getByTestId('execute-plan-orchestrator')).toBeTruthy()
+    // Auto is the only execution mode now (delegation is the model's tool).
+    expect(screen.queryByTestId('execute-plan-orchestrator')).toBeNull()
   })
 
   test('stays hidden while the task is still running', () => {
@@ -227,14 +228,4 @@ describe('ExecutePlanBar', () => {
     expect(state.composer.mode).toBe('auto')
   })
 
-  test('Execute with Orchestrator creates the follow-up in orchestrator mode', async () => {
-    seed(finishedPlanEvents())
-    render(<ExecutePlanBar />)
-    await userEvent.click(screen.getByTestId('execute-plan-orchestrator'))
-    await waitFor(() => expect(createTask).toHaveBeenCalledTimes(1))
-    const input = createTask.mock.calls[0]?.[0] as Record<string, unknown>
-    expect(input.plan_task_id).toBe('task-1')
-    expect(input.mode).toBe('orchestrator')
-    expect(useDaedalusStore.getState().composer.mode).toBe('orchestrator')
-  })
 })

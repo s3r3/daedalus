@@ -15,6 +15,7 @@ export {
   modeIntent,
   modePromptContract,
   nextAgentMode,
+  normalizeAgentMode,
   restrictMode,
   toolCallPolicy,
   toolModePolicy,
@@ -70,15 +71,18 @@ export {
 
 export {
   MAX_CHILD_SUMMARY_CHARS,
-  OrchestratorRunner,
   childTaskFromInput,
-  decomposeTask,
   distillChildSummary,
-  shouldRunDirect,
   type ChildFileChange,
-  type ChildRunContext,
   type ChildTaskExecution,
-  type ChildTaskExecutor,
   type ChildTaskInput,
-  type OrchestratorResult,
 } from './orchestrator.ts';
+
+export {
+  SPAWN_SUBAGENT_TOOL_NAME,
+  backgroundFinishedNotice,
+  createSpawnSubagentTool,
+  type SpawnDispatch,
+  type SpawnSubagentInput,
+  type SpawnSubagentToolDeps,
+} from './subagents.ts';

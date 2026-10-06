@@ -99,8 +99,9 @@ export function modeLabel(mode: AgentMode): string {
 
 export function normalizeModeName(value: string): AgentMode | undefined {
   const normalized = value.trim().toLowerCase();
-  if (normalized === 'code') return 'auto';
-  return ['ask', 'manual', 'auto', 'plan', 'orchestrator'].includes(normalized) ? normalized as AgentMode : undefined;
+  // `code` displays auto; the retired `orchestrator` maps to auto as well.
+  if (normalized === 'code' || normalized === 'orchestrator') return 'auto';
+  return ['ask', 'manual', 'auto', 'plan'].includes(normalized) ? normalized as AgentMode : undefined;
 }
 const COMMAND_SHORTCUTS: Record<string, string> = {
   mode: 'shift+tab',

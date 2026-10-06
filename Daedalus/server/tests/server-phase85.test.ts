@@ -169,7 +169,16 @@ describe('settings, session, providers', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ cycle: true }),
     });
-    expect((await json<{ session: { mode: string } }>(cycled)).session.mode).toBe('orchestrator');
+    expect((await json<{ session: { mode: string } }>(cycled)).session.mode).toBe('ask');
+
+    // The retired orchestrator mode still loads, mapped to auto.
+    const legacy = await fetch(new URL('/session', base), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: 'orchestrator' }),
+    });
+    expect(legacy.status).toBe(200);
+    expect((await json<{ session: { mode: string } }>(legacy)).session.mode).toBe('auto');
 
     const invalid = await fetch(new URL('/session', base), {
       method: 'PUT',

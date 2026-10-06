@@ -1,11 +1,10 @@
-import type { AgentMode, Attachment, ChildTaskErrorReason, Event, FinalReport, ModelStrategy, ProviderConfig, TaskSpec, TaskState, ToolCall, ToolResult, ValidationResult } from './contracts.ts';
+import type { AgentMode, Attachment, ChildTask, ChildTaskErrorReason, Event, FinalReport, ModelStrategy, ProviderConfig, TaskSpec, TaskState, ToolCall, ToolResult, ValidationResult } from './contracts.ts';
 import { EventBus, emitEvent } from './events.ts';
 import { TaskStore } from './persistence.ts';
 import { AgentLoop } from './agent/agent-loop.ts';
 import type { ToolOutputLimits } from './agent/tool-output.ts';
 import { DefaultContextManager } from './agent/context.ts';
 import { interpretTask } from './agent/interpreter.ts';
-import { createPlan } from './agent/planner.ts';
 import { loadProjectRules } from './agent/rules.ts';
 import { guardEditedFile } from './agent/edit-guard.ts';
 import { loadHooksConfig, runPostToolHooks, runPreToolHooks, type HooksConfig } from './agent/hooks.ts';
@@ -18,7 +17,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { changedLineCounts, diffLines, renderPatch } from './tools/filesystem/diff.ts';
 import { ApprovalBroker, ExecutionHarness, resolveApprovalTimeoutMs, type ApprovalDecision, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
-import { CommandValidator, validationSatisfied, type ValidationCommand, type Validator } from './validation/index.ts';
+import { CommandValidator, type ValidationCommand, type Validator } from './validation/index.ts';
 import { createProviderFromSettings } from './providers/index.ts';
 import { OpenAICompatProvider } from './providers/llm/openai-compat.ts';
 import { ModelPoolProvider, asModelController, normalizeModelList } from './providers/llm/model-pool.ts';
@@ -27,11 +26,12 @@ import { reviewDiff } from './agent/review.ts';
 import { loadPins } from './pins.ts';
 import type { EditFormat, ModelTier, PromptFamily, PromptFamilySetting, ReviewGateReport } from './contracts.ts';
 import { TextProtocolProvider, type ProtocolSwitchInfo } from './providers/llm/text-protocol.ts';
-import { ModeController, isPlanDocumentPath, restrictMode } from './interaction/modes.ts';
+import { ModeController, isPlanDocumentPath, normalizeAgentMode, restrictMode } from './interaction/modes.ts';
 import { QuestionBroker, createAskUserTool, resolveQuestionTimeoutMs } from './interaction/questions.ts';
 import { assembledPlanPath, planDecisionsFromEvents, renderAssembledPlan } from './interaction/plans.ts';
 import { ProviderRegistry } from './interaction/providers.ts';
-import { OrchestratorRunner, decomposeTask, shouldRunDirect, type ChildFileChange, type ChildTaskInput } from './interaction/orchestrator.ts';
+import { childTaskFromInput, distillChildSummary, type ChildFileChange } from './interaction/orchestrator.ts';
+import { backgroundFinishedNotice, createSpawnSubagentTool, type SpawnDispatch, type SpawnSubagentInput } from './interaction/subagents.ts';
 import { McpManager, loadMcpConfig, type McpServerConfig, type McpServerStatus } from './mcp/index.ts';
 import { LspManager, loadLspConfig, type LspServerConfig, type LspServerStatus } from './lsp/index.ts';
 import { SkillRegistry, createReadSkillTool, loadSkills, resolveSkillSearchDirs, type SkillInfo, type SkillSearchDir } from './skills/index.ts';
@@ -171,7 +171,6 @@ export type RunOptions = {
   toolAllowlist?: string[];
   /** Run this task in its own git worktree (overrides TaskRunnerOptions.isolation). */
   isolation?: 'worktree';
-  children?: Array<{ goal: string; mode?: AgentMode; budget?: { max_iterations: number; max_errors: number }; agent?: string; isolation?: 'worktree' }>;
   onEvent?: (event: Event) => void;
   onApproval?: (key: { taskId: string; tool: string; action: 'read' | 'write' | 'execute'; path?: string }) => Promise<{ decision: 'grant' | 'deny'; remember?: boolean }>;
 };
@@ -230,10 +229,50 @@ function childFileChanges(events: Event[]): ChildFileChange[] {
   return [...byPath.values()];
 }
 
+/**
+ * Roll provider-reported token usage out of a run's collected events
+ * (its own turns plus its spawned children's, which share the bus).
+ * `reported` counts only requests whose provider actually returned a
+ * usage block — totals are never fabricated from estimates.
+ */
+function accumulateUsage(events: Event[]): { requests: number; reported: number; input_tokens: number; output_tokens: number; total_tokens: number } {
+  let requests = 0;
+  let reported = 0;
+  let input = 0;
+  let output = 0;
+  let total = 0;
+  for (const event of events) {
+    if (event.type !== 'MODEL_REQUEST_FINISHED') continue;
+    requests++;
+    const usage = (event.payload as { usage?: { prompt_tokens?: unknown; completion_tokens?: unknown; total_tokens?: unknown } }).usage;
+    if (typeof usage?.prompt_tokens === 'number' && typeof usage?.completion_tokens === 'number' && typeof usage?.total_tokens === 'number') {
+      reported++;
+      input += usage.prompt_tokens;
+      output += usage.completion_tokens;
+      total += usage.total_tokens;
+    }
+  }
+  return { requests, reported, input_tokens: input, output_tokens: output, total_tokens: total };
+}
+
 /** Tools whose execution is a process → COMMAND_* events for the terminal surface. */
 const COMMAND_TOOLS = new Set(['run_command', 'git_status', 'git_diff']);
 /** Tools that target a workspace file → FILE_CHANGED diff evidence. */
 const FILE_TOOLS = new Set(['read_file', 'write_file', 'edit_file', 'edit_search_replace', 'create_dir']);
+
+/**
+ * Live subagent tooling of one top-level run: the spawn_subagent tool plus
+ * the drains the runtime needs at turn boundaries (notices) and at task
+ * end (background results). Created per run by #createSubagentTooling.
+ */
+type SubagentTooling = {
+  tool: ToolDefinition;
+  drainNotices: () => string[];
+  /** Wait for every background child and return the finished ones (report evidence). */
+  settleBackground: () => Promise<ChildTask[]>;
+  /** Refuse new spawns and cancel running background children (task Stop). */
+  stop: () => void;
+};
 
 export class TaskRunner {
   readonly bus: EventBus;
@@ -250,6 +289,8 @@ export class TaskRunner {
   readonly #activeLoops = new Map<string, AgentLoop>();
   /** Child task id → orchestrator parent task id, for approval surfacing. */
   readonly #taskParents = new Map<string, string>();
+  /** Parent task id → its live subagent tooling, so cancel() can stop background children. */
+  readonly #spawners = new Map<string, SubagentTooling>();
   #extensionStatus: ExtensionStatus = { mcp: [], lsp: [], skills: [], agents: [] };
   /** Language servers of the in-flight run, used by the edit guard. */
   #activeLsp: LspManager | undefined;
@@ -424,6 +465,10 @@ export class TaskRunner {
 
   cancel(taskId: string): void {
     this.harness.cancelTask(taskId);
+    // Background subagents belong to the task: refuse new spawns and stop
+    // the running children with it (their loops are in #activeLoops too,
+    // but a child between turns settles through its run, not the loop).
+    this.#spawners.get(taskId)?.stop();
     // A pending approval is a wait, not work: stopping the task settles it
     // as a decline (never an allow) so the blocked loop can observe the
     // cancellation instead of hanging on a card nobody will answer.
@@ -454,7 +499,11 @@ export class TaskRunner {
         );
       }
     }
-    const effectiveMode = options.mode ?? agent?.mode;
+    // The retired Orchestrator mode maps to Auto before anything records
+    // it: legacy persisted tasks/settings load and run (with the
+    // spawn_subagent tool available) instead of fanning out or failing.
+    const requestedMode = options.mode ?? agent?.mode;
+    const effectiveMode = requestedMode === undefined ? undefined : normalizeAgentMode(requestedMode);
     const effectiveOptions: RunOptions = agent
       ? { ...options, model: options.model ?? agent.model, mode: effectiveMode }
       : options;
@@ -507,44 +556,24 @@ export class TaskRunner {
     }
     if (options.conversationId) spec.conversation_id = options.conversationId;
     const collected: Event[] = [];
+    // The subagent pool is debited by the parent's own model turns too:
+    // parent turns + child iterations together never exceed the task's
+    // max_iterations (see #createSubagentTooling).
+    let parentModelTurns = 0;
     const listener = (event: Event): void => {
       // Mirrored child FILE_CHANGED events (see #emitFileChanged) exist for
       // the parent's persisted log and the Web's diff view; this run's own
       // metrics/diff accounting already sees the child's original event, so
       // counting the mirror too would double every orchestrated change.
       if ((event.payload as { mirrored?: unknown } | undefined)?.mirrored === true) return;
-      collected.push(event);
+      if (event.task_id === spec.id && event.type === 'MODEL_REQUEST_FINISHED') parentModelTurns++;
+      // Only events of this run (itself + spawned descendants) feed its
+      // report: with parallel subagents, a sibling's events must not leak
+      // into a child's metrics, diff, or validation.
+      if (this.#belongsToRun(spec.id, event.task_id)) collected.push(event);
       options.onEvent?.(event);
     };
     this.bus.on('*', listener);
-
-    if (spec.mode === 'orchestrator' && !options.parentTaskId) {
-      const decomposedChildren = options.children ? undefined : await decomposeTask(spec);
-      const inputs: ChildTaskInput[] = (options.children ?? decomposedChildren!).map((child) => ({
-        goal: child.goal,
-        mode: child.mode,
-        budget: child.budget,
-        ...(child.agent ? { agent: child.agent } : {}),
-        ...(child.isolation ? { isolation: child.isolation } : {}),
-      }));
-      // Small-task bypass: a decomposed fan-out of fewer than two children,
-      // or exactly the canned inspect → implement → validate pipeline over
-      // one goal, is one loop's work — run it directly on this task (mode
-      // stays 'orchestrator' on the record) instead of paying three
-      // sequential context rebuilds. Caller-provided children always fan
-      // out: the caller asked for them explicitly.
-      const stepIntents = spec.done_criteria.length > 1 ? [] : (await createPlan(spec)).steps.map((step) => step.intent);
-      if (decomposedChildren && shouldRunDirect(spec, decomposedChildren, stepIntents)) {
-        emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'ORCHESTRATION_SKIPPED', {
-          reason: 'single_path',
-          mode: 'orchestrator',
-          decomposed_children: inputs.length,
-          note: 'decomposition is a single sequential path; running one agent loop directly instead of child tasks',
-        });
-      } else {
-        return this.#runOrchestrated(options, spec, collected, startedAt, inputs);
-      }
-    }
 
     const isolation = options.isolation ?? this.#options.isolation;
     if (isolation === 'worktree') {
@@ -575,6 +604,23 @@ export class TaskRunner {
       }));
     } catch {
       // Already registered (e.g. a future default): keep the existing one.
+    }
+    // The subagent delegation tool (spawn_subagent): top-level runs only.
+    // Child runs are built WITHOUT it, so subagents can never delegate
+    // further (depth 1 hard stop, by construction rather than by check).
+    let subagentTooling: SubagentTooling | undefined;
+    if (!options.parentTaskId) {
+      subagentTooling = this.#createSubagentTooling({
+        spec,
+        options,
+        parentModelTurns: () => parentModelTurns,
+      });
+      try {
+        registry.register(subagentTooling.tool);
+      } catch {
+        // Already registered (e.g. a future default): keep the existing one.
+      }
+      this.#spawners.set(spec.id, subagentTooling);
     }
     // Tailor suite, resolved once per run from runner options < provider
     // config < settings: capability tiers (pool routing + escalation),
@@ -636,6 +682,9 @@ export class TaskRunner {
       toolOutput: this.#options.toolOutput ?? this.#settings.toolOutput,
       modelTiers: tiers,
       qualityEscalation,
+      ...(subagentTooling
+        ? { noticesFor: (taskId: string) => (taskId === spec.id ? subagentTooling.drainNotices() : []) }
+        : {}),
       executeTool: async (call) => {
         if (allowlist && !allowlist.includes(call.tool)) {
           return {
@@ -675,6 +724,14 @@ export class TaskRunner {
       await extensions.close();
       this.bus.on('*', listener); // no-op keeps handler identity stable for GC
     }
+
+    // Background subagents: the parent may only finish once its background
+    // children have settled (their results join the report below; results
+    // that landed mid-run were already delivered as turn notices). The wait
+    // is bounded by the children's own budgets and approval/question
+    // timeouts — a background child never outlives the task record.
+    const backgroundChildren = subagentTooling ? await subagentTooling.settleBackground() : [];
+    if (subagentTooling) this.#spawners.delete(spec.id);
 
     // Plan mode's deliverables are files: when the run wrote plan documents
     // under .daedalus/plans/, a closing PLAN_CREATED names them so the Web
@@ -724,7 +781,7 @@ export class TaskRunner {
       }
     }
 
-    const validation = this.#lastValidation(collected);
+    const validation = this.#lastValidation(collected, spec.id);
     // Cross-model review gate (tailor suite, default off): a strong-model
     // read of the diff before completion is declared. Report-only — a
     // blocking verdict demotes success to partial; it never blocks the
@@ -733,6 +790,10 @@ export class TaskRunner {
     let outcome = this.#outcome(state, validation);
     if (review?.blocking && outcome === 'success') outcome = 'partial';
     const modelFailureEvidence = this.#modelFailureEvidence(collected, state);
+    // Token accounting: provider-reported usage over this run's lineage
+    // (own turns + spawned children). Token fields appear only when at
+    // least one request actually reported usage — never fabricated.
+    const usageTotals = accumulateUsage(collected);
     const report: FinalReport = {
       task_id: spec.id,
       outcome: outcome === 'success' ? 'success' : outcome === 'partial' ? 'partial' : 'failed',
@@ -744,6 +805,9 @@ export class TaskRunner {
           ? [`plan document assembled by the harness (${assembledPlanDocument}): the model finished plan mode without writing a plan file, so the harness wrote it from the plan steps and the recorded Q&A decisions — review it before executing`]
           : []),
         ...this.#fileChangeEvidence(collected),
+        ...(backgroundChildren.length > 0
+          ? backgroundChildren.map((child) => `background subagent "${child.label ?? 'subagent'}" (${child.id}) ${child.status}: ${child.result_summary ?? child.status}`)
+          : []),
         ...(review ? [
           `review by ${review.model}: ${review.blocking ? 'blocking issues found' : 'no blocking issues'} (${review.findings.length} finding${review.findings.length === 1 ? '' : 's'})`,
           ...review.findings.map((finding) => `review [${finding.severity}] ${finding.file}${finding.line ? `:${finding.line}` : ''} — ${finding.message}`),
@@ -762,8 +826,20 @@ export class TaskRunner {
         recoveries: collected.filter((e) => e.type === 'RECOVERY_STARTED').length,
         replans: collected.filter((e) => e.type === 'REPLAN_CREATED').length,
         approvals: collected.filter((e) => e.type === 'APPROVAL_REQUESTED').length,
+        child_tasks: collected.filter((e) => e.type === 'CHILD_TASK_STARTED').length,
+        child_tasks_done: collected.filter((e) => e.type === 'CHILD_TASK_FINISHED' && (e.payload as { child?: { status?: string } }).child?.status === 'done').length,
+        child_tasks_failed: collected.filter((e) => e.type === 'CHILD_TASK_FINISHED' && (e.payload as { child?: { status?: string } }).child?.status === 'failed').length,
         checks_passed: validation?.checks.filter((c) => c.status === 'pass').length ?? 0,
         checks_failed: validation?.checks.filter((c) => c.status !== 'pass').length ?? 0,
+        model_requests: usageTotals.requests,
+        ...(usageTotals.reported > 0
+          ? {
+              tokens_input: usageTotals.input_tokens,
+              tokens_output: usageTotals.output_tokens,
+              tokens_total: usageTotals.total_tokens,
+              token_requests_reported: usageTotals.reported,
+            }
+          : {}),
         review_findings: review?.findings.length ?? 0,
         review_blocking: review?.blocking ? 1 : 0,
         duration_ms: Date.now() - startedAt,
@@ -925,50 +1001,50 @@ export class TaskRunner {
     return { ...innerResult, report };
   }
 
-  async #runOrchestrated(options: RunOptions, spec: TaskSpec, collected: Event[], startedAt: number, inputs: ChildTaskInput[]): Promise<RunResult> {
-    const target = { bus: this.bus, store: this.store };
-    const plan = await createPlan(spec);
-    let state: TaskState = {
-      ...spec,
-      mode: 'orchestrator',
-      turns: 0,
-      plan,
-      steps: plan.steps,
-      status: 'active',
+  /**
+   * Build the subagent tooling for one top-level run: the spawn_subagent
+   * tool, its iteration pool, and the background-child bookkeeping.
+   *
+   * Pool semantics: the pool equals the parent task's own max_iterations.
+   * It is debited by the parent's model turns AND by every child's actual
+   * iterations, so parent turns + child iterations together never exceed
+   * it. Each spawn reserves a slice up front (floor 8 turns or an even
+   * share of what remains, whichever is larger, never more than remains);
+   * the reservation is settled to actual usage when the child finishes,
+   * which keeps accounting exact under parallel spawns. A spawn that finds
+   * the pool spent is refused with an explanation, never queued.
+   */
+  #createSubagentTooling(input: { spec: TaskSpec; options: RunOptions; parentModelTurns: () => number }): SubagentTooling {
+    const { spec, options } = input;
+    const parentId = spec.id;
+    const poolTotal = options.maxIterations ?? this.#options.maxIterations ?? 25;
+    const childMaxErrors = options.maxErrors ?? 5;
+    // Inheritance rule: a child may tighten the parent's posture, never
+    // loosen it — and never become a delegator itself (no nesting).
+    const childMode = restrictMode(spec.mode ?? 'auto', 'auto');
+    let usedIterations = 0;
+    let reservedIterations = 0;
+    let stopped = false;
+    const notices: string[] = [];
+    const background = new Map<string, Promise<ChildTask>>();
+    const backgroundFinished: ChildTask[] = [];
+
+    const allocateSlice = (): number | undefined => {
+      const remaining = poolTotal - input.parentModelTurns() - usedIterations - reservedIterations;
+      if (remaining <= 0) return undefined;
+      return Math.max(1, Math.min(remaining, Math.max(8, Math.floor(remaining / 2))));
     };
-    emitEvent(target, spec.id, undefined, 'TASK_STARTED', { spec, orchestrated: true });
-    emitEvent(target, spec.id, undefined, 'PLAN_CREATED', { plan });
-    this.store.saveState(spec.id, state);
 
-    // File-defined subagents are validated up front: a child naming an
-    // agent that does not exist fails the whole run with a clear error
-    // before any child starts, instead of half-running and degrading.
-    const agentRegistry = await loadAgents([workspaceAgentsDir(this.#workspaceRoot)]);
-    for (const child of inputs) {
-      if (child.agent && !agentRegistry.get(child.agent)) {
-        const defined = agentRegistry.list().map((definition) => definition.name);
-        throw new Error(
-          `unknown agent "${child.agent}" named by an orchestrator child task: no .daedalus/agents/${child.agent}.md exists in ${this.#workspaceRoot}` +
-          (defined.length ? ` (defined: ${defined.join(', ')})` : ' (no agents are defined in this workspace)'),
-        );
-      }
-    }
-
-    const orchestrator = new OrchestratorRunner({
-      bus: this.bus,
-      store: this.store,
-      totalBudget: { max_iterations: options.maxIterations ?? this.#options.maxIterations ?? 25, max_errors: options.maxErrors ?? 5 },
-      executeChild: async (child, context) => {
-        const definition = child.agent ? agentRegistry.get(child.agent) : undefined;
-        // Inheritance rule: a child may tighten the parent's posture, never
-        // loosen it (and never become an orchestrator itself — no nesting).
-        const requestedMode = child.mode ?? definition?.mode ?? 'auto';
-        const childMode = restrictMode(spec.mode ?? 'orchestrator', requestedMode === 'orchestrator' ? 'auto' : requestedMode);
+    const executeChild = async (child: ChildTask): Promise<ChildTask> => {
+      child.status = 'running';
+      emitEvent({ bus: this.bus, store: this.store }, parentId, undefined, 'CHILD_TASK_STARTED', { child: { ...child } });
+      await this.bus.drain();
+      try {
         const childResult = await this.run({
           goal: child.goal,
           taskId: child.id,
           mode: childMode,
-          parentTaskId: spec.id,
+          parentTaskId: parentId,
           providerId: options.providerId,
           model: options.model,
           models: options.models ?? this.#options.models,
@@ -978,120 +1054,103 @@ export class TaskRunner {
           autoApprove: options.autoApprove,
           maxIterations: child.budget?.max_iterations,
           maxErrors: child.budget?.max_errors,
-          agentName: child.agent,
-          agentDefinition: definition,
-          isolation: child.isolation,
-          // Findings handoff: earlier siblings' distilled results ride in
-          // as prior context so this child acts on what they found instead
-          // of re-deriving (and re-paying for) the same exploration.
-          ...(context.priorFindings ? { priorContext: context.priorFindings } : {}),
         });
-        return {
-          status: childResult.state.status === 'done' ? 'done' : childResult.state.status === 'failed' ? 'failed' : 'cancelled',
+        child.status = childResult.state.status === 'done' ? 'done' : childResult.state.status === 'failed' ? 'failed' : 'cancelled';
+        if (child.status !== 'done') {
+          child.error_reason = (childResult.state.last_error === 'max_iterations' || childResult.state.last_error === 'max_errors'
+            ? 'budget_exceeded'
+            : childResult.state.status === 'failed'
+              ? 'child_failed'
+              : 'cancelled') as ChildTaskErrorReason;
+        }
+        child.result_summary = distillChildSummary({
+          status: child.status,
+          ...(child.error_reason ? { errorReason: child.error_reason } : {}),
           // The raw last observation rides along only as the distiller's
-          // closing-line candidate (orchestrator.ts drops it when it is a
-          // tool-output dump); the structured fields below are what the
-          // distilled summary is actually built from.
+          // closing-line candidate (it drops tool-output dumps); the
+          // structured fields are what the summary is built from.
           summary: childResult.state.last_observation ?? childResult.state.last_error ?? childResult.outcome,
-          files_changed: childFileChanges(childResult.events),
+          filesChanged: childFileChanges(childResult.events),
           evidence: childResult.report.evidence.slice(0, 4),
-          diff: childResult.report.diff,
-          iterations: childResult.report.metrics.turns,
-          errors: childResult.state.status === 'failed' ? 1 : 0,
-          // Budget exhaustion is a typed result for the parent: the child
-          // ran out of iterations/errors and its partial state is reported
-          // as such, not dressed up as a success.
-          ...(childResult.state.status !== 'done'
-            ? {
-                error_reason: (childResult.state.last_error === 'max_iterations' || childResult.state.last_error === 'max_errors'
-                  ? 'budget_exceeded'
-                  : childResult.state.status === 'failed'
-                    ? 'child_failed'
-                    : 'cancelled') as ChildTaskErrorReason,
-              }
+        });
+        child.iterations_used = childResult.report.metrics.turns;
+        // Token roll-up: the child's own usage rides its record so the
+        // parent's live accounting includes subagent iterations too.
+        const childMetrics = childResult.report.metrics;
+        child.usage = {
+          requests: childMetrics.model_requests ?? 0,
+          reported: childMetrics.token_requests_reported ?? 0,
+          ...(typeof childMetrics.tokens_total === 'number'
+            ? { input_tokens: childMetrics.tokens_input ?? 0, output_tokens: childMetrics.tokens_output ?? 0, total_tokens: childMetrics.tokens_total }
             : {}),
         };
-      },
-    });
+      } catch (error) {
+        child.status = 'failed';
+        child.error_reason = 'child_failed';
+        child.result_summary = distillChildSummary({ status: 'failed', errorReason: 'child_failed', summary: String(error) });
+        child.iterations_used = 1;
+      }
+      emitEvent({ bus: this.bus, store: this.store }, parentId, undefined, 'CHILD_TASK_FINISHED', { child: { ...child } });
+      await this.bus.drain();
+      return child;
+    };
 
-    const orchestration = await orchestrator.run(spec.id, inputs);
-    this.modeController.set('orchestrator');
-
-    let validation: ValidationResult | undefined;
-    if (orchestration.status === 'done') {
-      emitEvent(target, spec.id, undefined, 'VALIDATION_STARTED', { task_id: spec.id, orchestrated: true });
-      const changedFiles = collected
-        .filter((e) => e.type === 'FILE_CHANGED')
-        .map((e) => (e.payload as { path?: unknown }).path)
-        .filter((path): path is string => typeof path === 'string' && path.length > 0);
-      validation = await this.validator.validate({
-        workspaceRoot: this.#workspaceRoot,
-        commands: this.#options.validationCommands,
-        ...(changedFiles.length > 0 ? { changedFiles } : {}),
+    const spawn = async (spawnInput: SpawnSubagentInput, signal?: AbortSignal): Promise<SpawnDispatch> => {
+      if (stopped) {
+        return { kind: 'error', output: 'cannot spawn a subagent: this task is stopping. Finish the remaining work yourself or report partial progress.' };
+      }
+      const slice = allocateSlice();
+      if (slice === undefined) {
+        return {
+          kind: 'error',
+          output: `cannot spawn a subagent: the task iteration budget (${poolTotal} iterations, shared between this task and its subagents) is exhausted. Do the remaining work yourself or report partial progress instead of delegating.`,
+        };
+      }
+      reservedIterations += slice;
+      const child = childTaskFromInput(parentId, {
+        goal: spawnInput.goal,
+        label: spawnInput.description,
+        mode: childMode,
+        budget: { max_iterations: slice, max_errors: childMaxErrors },
       });
-      emitEvent(target, spec.id, undefined, validationSatisfied(validation) ? 'VALIDATION_PASSED' : 'VALIDATION_FAILED', { result: validation });
-    }
-
-    const validationFailedCombined = validation !== undefined && !validationSatisfied(validation);
-    state = {
-      ...state,
-      status: orchestration.status === 'done' && !validationFailedCombined ? 'done' : 'failed',
-      last_error: orchestration.no_progress ? 'no_progress' : orchestration.budget_exceeded ? 'budget_exceeded' : orchestration.status !== 'done' ? 'child_task_failed' : validationFailedCombined ? 'validation_failed' : undefined,
-      last_observation: orchestration.summary,
-      turns: orchestration.children.length,
-      steps: state.steps.map((step, index) => ({
-        ...step,
-        status: orchestration.children[index]?.status === 'done' ? 'done' : orchestration.status === 'done' && !validationFailedCombined ? 'done' : step.status,
-      })),
+      const finish = async (): Promise<ChildTask> => {
+        const finished = await executeChild(child);
+        reservedIterations -= slice;
+        usedIterations += finished.iterations_used ?? 1;
+        return finished;
+      };
+      if (signal && !spawnInput.background) {
+        // A stopped parent (harness abort) takes its foreground child
+        // with it instead of leaving the child running unattended.
+        const onAbort = (): void => { this.cancel(child.id); };
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
+      }
+      if (spawnInput.background) {
+        const promise = finish().then((finished) => {
+          backgroundFinished.push(finished);
+          notices.push(backgroundFinishedNotice(finished));
+          return finished;
+        });
+        background.set(child.id, promise);
+        return { kind: 'background', child };
+      }
+      const finished = await finish();
+      return { kind: 'completed', child: finished };
     };
-    // Counts decide the outcome: every child done → the success path; some
-    // done and some not → partial (the finished children's work stands; the
-    // failed ones are named in the evidence, not papered over).
-    const outcome: 'success' | 'partial' | 'failed' = orchestration.status === 'done' && !validationFailedCombined
-      ? 'success'
-      : orchestration.status === 'partial'
-        ? 'partial'
-        : 'failed';
-    emitEvent(target, spec.id, undefined, 'TASK_COMPLETED', {
-      state,
-      outcome,
-      reason: state.last_error ?? 'completed',
-      children: orchestration.children,
-    });
-    this.store.saveState(spec.id, state);
 
-    const report: FinalReport = {
-      task_id: spec.id,
-      outcome,
-      diff: orchestration.diff || this.#aggregateDiff(collected),
-      evidence: [
-        orchestration.budget_summary,
-        ...orchestration.children.map((child) => `child ${child.id} (${child.status}): ${child.result_summary ?? child.goal}`),
-        ...this.#validationEvidence(validation),
-        ...this.#fileChangeEvidence(collected),
-      ],
-      ...(spec.title ? { title: spec.title } : {}),
-      ...(spec.rules_files?.length ? { rules_files: spec.rules_files } : {}),
-      ...(validation?.source ? { validation_source: validation.source } : {}),
-      metrics: {
-        turns: collected.filter((e) => e.type === 'TOOL_CALL_FINISHED').length,
-        tool_calls: collected.filter((e) => e.type === 'TOOL_CALL_STARTED').length,
-        events: collected.length,
-        commands: collected.filter((e) => e.type === 'COMMAND_FINISHED').length,
-        files_changed: collected.filter((e) => e.type === 'FILE_CHANGED').length,
-        recoveries: collected.filter((e) => e.type === 'RECOVERY_STARTED').length,
-        replans: collected.filter((e) => e.type === 'REPLAN_CREATED').length,
-        approvals: collected.filter((e) => e.type === 'APPROVAL_REQUESTED').length,
-        checks_passed: validation?.checks.filter((c) => c.status === 'pass').length ?? 0,
-        checks_failed: validation?.checks.filter((c) => c.status !== 'pass').length ?? 0,
-        child_tasks: orchestration.children.length,
-        child_tasks_done: orchestration.children.filter((child) => child.status === 'done').length,
-        child_tasks_failed: orchestration.children.filter((child) => child.status === 'failed').length,
-        duration_ms: Date.now() - startedAt,
+    return {
+      tool: createSpawnSubagentTool({ spawn }),
+      drainNotices: () => notices.splice(0, notices.length),
+      settleBackground: async () => {
+        await Promise.all([...background.values()].map((promise) => promise.catch(() => undefined)));
+        return backgroundFinished;
+      },
+      stop: () => {
+        stopped = true;
+        for (const childId of background.keys()) this.cancel(childId);
       },
     };
-    this.store.saveReport(spec.id, report);
-    return { state, events: collected, validation, outcome, report };
   }
 
   #aggregateDiff(events: Event[]): string {
@@ -1392,9 +1451,27 @@ export class TaskRunner {
     }
   }
 
-  #lastValidation(events: Event[]): ValidationResult | undefined {
+  /**
+   * Whether an event belongs to a run's lineage: the task itself or one of
+   * its spawned descendants (walked via the runner's task-parent map).
+   * Collected events are scoped this way so a run's report never absorbs a
+   * parallel sibling's usage, diff, or validation.
+   */
+  #belongsToRun(rootTaskId: string, taskId: string | undefined): boolean {
+    let current = taskId;
+    while (current !== undefined) {
+      if (current === rootTaskId) return true;
+      current = this.#taskParents.get(current);
+    }
+    return false;
+  }
+
+  #lastValidation(events: Event[], taskId?: string): ValidationResult | undefined {
     for (let i = events.length - 1; i >= 0; i--) {
       const event = events[i];
+      // A task's report quotes its OWN validation; subagent children
+      // validate themselves and report through their distilled summaries.
+      if (taskId && event && event.task_id !== taskId) continue;
       if (event?.type !== 'VALIDATION_PASSED' && event?.type !== 'VALIDATION_FAILED') continue;
       const payload = event.payload as { result?: ValidationResult };
       return payload.result;
