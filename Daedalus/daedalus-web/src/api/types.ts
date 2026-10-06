@@ -68,6 +68,22 @@ export type TaskSnapshot = {
 }
 
 export type WorkspaceRoot = { path: string; name: string }
+
+/**
+ * One terminal tab. `agent` sessions are the read-only per-workspace sink
+ * the harness' commands are mirrored into; `user` sessions are the human's
+ * own interactive shells. Sessions live in the server process.
+ */
+export type TerminalSession = {
+  id: string
+  kind: 'user' | 'agent'
+  title: string
+  cwd: string
+  status: 'running' | 'exited'
+  exitCode: number | null
+  pid: number | null
+  createdAt: string
+}
 export type WorkspaceEntry = { name: string; path: string; isDirectory: boolean; size?: number }
 export type WorkspaceTreeNode = WorkspaceEntry & { children?: WorkspaceTreeNode[] }
 export type WorkspaceFile = { path: string; content: string; size: number }

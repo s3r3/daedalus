@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import type { AgentMode, Attachment, Event, FinalReport, ProviderConfigPublic } from '@daedalus/core'
-import type { StreamStatus } from '../api/eventStream'
-import type { Conversation, ProviderModel, ProviderPreset, SessionState, TaskSummary } from '../api/types'
+import type { StreamStatus, TerminalWireMessage } from '../api/eventStream'
+import type { Conversation, ProviderModel, ProviderPreset, SessionState, TaskSummary, TerminalSession } from '../api/types'
 import { composerPrefsOf, saveComposerPrefs } from './prefs'
 
 /**
@@ -35,6 +35,15 @@ export type ComposerState = {
   error: string | null
 }
 
+export type TerminalState = {
+  sessions: TerminalSession[]
+  /** session id → accumulated output (server buffer is the authority; this mirrors it live). */
+  buffers: Record<string, string>
+  activeId: string | null
+  /** WS replay requester, registered by the event-stream owner while connected. */
+  subscribe: ((sessionId: string) => void) | null
+}
+
 export type DaedalusState = {
   connection: StreamStatus
   reconnectAttempt: number
@@ -44,6 +53,7 @@ export type DaedalusState = {
   conversation: Conversation | null
   events: Event[]
   report: FinalReport | null
+  terminals: TerminalState
   workspace: WorkspaceState
   composer: ComposerState
   session: SessionState | null
@@ -73,6 +83,12 @@ export type DaedalusState = {
   addAttachments: (attachments: Attachment[]) => void
   removeAttachment: (id: string) => void
   setSettingsOpen: (open: boolean) => void
+  setTerminalSessions: (sessions: TerminalSession[]) => void
+  upsertTerminalSession: (session: TerminalSession) => void
+  removeTerminalSession: (id: string) => void
+  setActiveTerminal: (id: string | null) => void
+  setTerminalSubscribe: (subscribe: ((sessionId: string) => void) | null) => void
+  applyTerminalMessage: (message: TerminalWireMessage) => void
   bumpWorkspaceRevision: () => void
   setTheme: (theme: 'daedalus-dark' | 'daedalus-light') => void
   setOpenFile: (path: string | null) => void
@@ -96,6 +112,14 @@ const initialComposer: ComposerState = {
   error: null,
 }
 
+const initialTerminals: TerminalState = { sessions: [], buffers: {}, activeId: null, subscribe: null }
+
+/** Client mirror of the server's ring buffer (same cap, same marker spirit). */
+const TERMINAL_BUFFER_CAP = 200_000
+function capBuffer(text: string): string {
+  return text.length <= TERMINAL_BUFFER_CAP ? text : text.slice(-TERMINAL_BUFFER_CAP)
+}
+
 export const useDaedalusStore = create<DaedalusState>((set) => ({
   connection: 'idle',
   reconnectAttempt: 0,
@@ -104,6 +128,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   conversation: null,
   events: [],
   report: null,
+  terminals: initialTerminals,
   workspace: initialWorkspace,
   composer: initialComposer,
   session: null,
@@ -173,12 +198,71 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   removeAttachment: (id) =>
     set((state) => ({ composer: { ...state.composer, attachments: state.composer.attachments.filter((attachment) => attachment.id !== id) } })),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+  setTerminalSessions: (sessions) =>
+    set((state) => ({
+      terminals: {
+        ...state.terminals,
+        sessions,
+        activeId:
+          state.terminals.activeId && sessions.some((session) => session.id === state.terminals.activeId)
+            ? state.terminals.activeId
+            : (sessions.find((session) => session.kind === 'agent')?.id ?? sessions[0]?.id ?? null),
+      },
+    })),
+  upsertTerminalSession: (session) =>
+    set((state) => {
+      const known = state.terminals.sessions.some((existing) => existing.id === session.id)
+      return {
+        terminals: {
+          ...state.terminals,
+          sessions: known
+            ? state.terminals.sessions.map((existing) => (existing.id === session.id ? session : existing))
+            : [...state.terminals.sessions, session],
+          activeId: state.terminals.activeId ?? session.id,
+        },
+      }
+    }),
+  removeTerminalSession: (id) =>
+    set((state) => {
+      const sessions = state.terminals.sessions.filter((session) => session.id !== id)
+      const buffers = { ...state.terminals.buffers }
+      delete buffers[id]
+      return {
+        terminals: {
+          ...state.terminals,
+          sessions,
+          buffers,
+          activeId: state.terminals.activeId === id ? (sessions.find((s) => s.kind === 'agent')?.id ?? sessions[0]?.id ?? null) : state.terminals.activeId,
+        },
+      }
+    }),
+  setActiveTerminal: (activeId) => set((state) => ({ terminals: { ...state.terminals, activeId } })),
+  setTerminalSubscribe: (subscribe) => set((state) => ({ terminals: { ...state.terminals, subscribe } })),
+  applyTerminalMessage: (message) =>
+    set((state) => {
+      if (message.kind === 'terminal_status') {
+        const known = state.terminals.sessions.some((existing) => existing.id === message.session.id)
+        return {
+          terminals: {
+            ...state.terminals,
+            sessions: known
+              ? state.terminals.sessions.map((existing) => (existing.id === message.session.id ? message.session : existing))
+              : [...state.terminals.sessions, message.session],
+            activeId: state.terminals.activeId ?? message.session.id,
+          },
+        }
+      }
+      const current = state.terminals.buffers[message.session_id] ?? ''
+      const next = message.replay ? message.data : capBuffer(current + message.data)
+      if (!message.replay && next === current) return state
+      return { terminals: { ...state.terminals, buffers: { ...state.terminals.buffers, [message.session_id]: next } } }
+    }),
   bumpWorkspaceRevision: () => set((state) => ({ workspaceRevision: state.workspaceRevision + 1 })),
   setTheme: (theme) => set({ theme }),
   setOpenFile: (openFilePath) => set({ openFilePath }),
   setError: (error) => set({ error }),
   reset: () =>
-    set({
+    set((state) => ({
       connection: 'idle',
       reconnectAttempt: 0,
       tasks: [],
@@ -186,6 +270,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
       conversation: null,
       events: [],
       report: null,
+      terminals: { ...initialTerminals, subscribe: state.terminals.subscribe },
       workspace: initialWorkspace,
       composer: initialComposer,
       session: null,
@@ -197,7 +282,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
       workspaceRevision: 0,
       openFilePath: null,
       error: null,
-    }),
+    })),
 }))
 
 /** Events for the active task in seq order — the single feed every panel reads. */
