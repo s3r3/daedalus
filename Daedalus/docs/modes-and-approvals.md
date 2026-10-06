@@ -82,6 +82,18 @@ Every outcome lands back on the event log as `APPROVAL_DECIDED` (decision,
 approval id, note, `edited`, `timed_out`, `cancelled`), and the Web renders it
 as a collapsed receipt line in the chat transcript.
 
+In the Web, the pending approval card (and the `ask_user` question card) is
+not panel furniture bolted under the chat: it renders **inside the scrollable
+transcript as its last block**, after the conversation turns and entries. The
+panel therefore keeps its bounded height no matter how tall a card is, and
+the card's action row is always reachable by the panel's own scroll. A card
+arriving while you are pinned to the bottom scrolls itself into view; if you
+have scrolled up to re-read, nothing yanks you down — a "waiting for
+approval / your answer" chip appears at the panel's bottom edge instead and
+jumps to the card on click. Inside the card, the untruncated preview scrolls
+in its own region under a viewport-relative cap (`max-h-[80vh]`), so the
+Allow / Decline row at the card's end stays visible even for huge writes.
+
 ### Remembered approvals ("Allow & remember")
 
 A card may offer *Allow & remember* **only when it can show exactly what will

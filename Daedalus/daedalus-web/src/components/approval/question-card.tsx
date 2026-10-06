@@ -70,7 +70,7 @@ export function QuestionCard() {
       data-testid="question-card"
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      className="motion-approval-rise rounded-md border-2 border-info bg-info/10 px-3 py-2"
+      className="motion-approval-rise flex max-h-[80vh] flex-col rounded-md border-2 border-info bg-info/10 px-3 py-2"
     >
       <div className="flex flex-wrap items-center gap-1.5 text-info">
         <CircleQuestionMark className="size-4" />
@@ -79,6 +79,9 @@ export function QuestionCard() {
         {pending.length > 1 ? <Badge tone="warning">+{pending.length - 1} queued</Badge> : null}
       </div>
 
+      {/* Question, options, and the free-text affordance scroll inside the
+          card; the card is capped so it can never outgrow the viewport. */}
+      <div className="min-h-0 overflow-y-auto" data-testid="question-card-scroll">
       <p className="mt-1.5 text-[12px] font-medium text-foreground" data-testid="question-text">
         {info.question}
       </p>
@@ -148,6 +151,7 @@ export function QuestionCard() {
       ) : (
         <p className="mt-2 text-[10px] text-muted">This question takes one of the options above — free-text answers are off.</p>
       )}
+      </div>
 
       {failure ? <p className="mt-1 text-[10px] text-error">{failure}</p> : null}
     </section>

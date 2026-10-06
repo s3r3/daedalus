@@ -9,7 +9,7 @@ import type { ConversationTurn } from '../../api/types'
 import { useActiveTaskId, useTaskEvents } from '../../state/hooks'
 import { useDaedalusStore } from '../../state/taskStore'
 import { CHAT_HEIGHT, loadChatHeight, saveChatHeight, saveActiveConversationId } from '../../state/prefs'
-import { chatTranscript, pendingApprovals, pendingQuestions, taskStatus, type ChatEntry } from '../../state/selectors'
+import { approvalId, chatTranscript, pendingApprovals, pendingQuestions, taskStatus, type ChatEntry } from '../../state/selectors'
 import { ApprovalCard } from '../approval/approval-card'
 import { QuestionCard } from '../approval/question-card'
 import { ExecutePlanBar } from './execute-plan-bar'
@@ -139,12 +139,19 @@ export function ChatPanel() {
     if (!running) setStopping(false)
   }, [running, taskId])
 
+  // The pending cards are the transcript's last blocks, so their head ids are
+  // scroll dependencies on purpose: a request landing while the reader is
+  // pinned scrolls the card itself into view, not just the receipt line.
+  const pendingHeadId = pending[0] ? (pending[0].approval?.id ?? approvalId(pending[0].key)) : null
+  const questionHeadId = questions[0]?.question.id ?? null
+  const waiting = pending.length > 0 || questions.length > 0
+
   // Follow the tail only while the reader is at the bottom; scrolling up to
   // re-read history is never yanked back by incoming events.
   useEffect(() => {
     const el = scrollRef.current
     if (el && pinnedRef.current) el.scrollTop = el.scrollHeight
-  }, [rows, status])
+  }, [rows, status, pendingHeadId, questionHeadId])
 
   const onScroll = (): void => {
     const el = scrollRef.current
@@ -245,7 +252,7 @@ export function ChatPanel() {
         </span>
       }
     >
-      {rows.length === 0 ? (
+      {rows.length === 0 && !waiting ? (
         <EmptyState title="No conversation yet" hint="Run a task to see the conversation here." />
       ) : (
         <div className="relative">
@@ -253,7 +260,7 @@ export function ChatPanel() {
             ref={scrollRef}
             onScroll={onScroll}
             className="overflow-y-auto pr-1"
-            style={{ height: `${height}px` }}
+            style={{ height: `${height}px`, maxHeight: 'calc(100vh - 16rem)' }}
             data-testid="chat-scroll"
           >
             <ol className="flex flex-col gap-1.5" data-testid="chat-entries">
@@ -269,10 +276,48 @@ export function ChatPanel() {
                   <Spinner label="agent working" /> agent is working…
                 </li>
               ) : null}
+
+              {/* Pending cards are transcript blocks, not panel furniture:
+                  they render inside this scroll region as its last items, so
+                  the panel keeps its bounded height no matter how tall a card
+                  is, and its buttons are always reachable by this scroll. */}
+              {pending.length > 0 ? (
+                <li data-testid="chat-approval-block">
+                  <ApprovalCard />
+                  <p className="mt-2 flex items-start gap-1.5 text-[11px] text-warning" data-testid="chat-approval-pending">
+                    <ShieldAlert className="mt-[1px] size-3.5 shrink-0" />
+                    <span>
+                      waiting for approval: {pending[0]?.key.tool} [{pending[0]?.key.action}]
+                      {pending[0]?.key.path ? ` ${pending[0].key.path}` : ''} — allow or decline it in the card above, or type a
+                      reply in the composer to decline with that note.
+                    </span>
+                  </p>
+                </li>
+              ) : null}
+
+              {questions.length > 0 ? (
+                <li data-testid="chat-question-block">
+                  <QuestionCard />
+                  <p className="mt-2 flex items-start gap-1.5 text-[11px] text-info" data-testid="chat-question-pending">
+                    <CircleQuestionMark className="mt-[1px] size-3.5 shrink-0" />
+                    <span>waiting for your answer — the agent resumes as soon as you answer above.</span>
+                  </p>
+                </li>
+              ) : null}
             </ol>
           </div>
 
-          {!pinned ? (
+          {!pinned && waiting ? (
+            <button
+              type="button"
+              onClick={jumpToLatest}
+              data-testid="chat-waiting-chip"
+              className="absolute right-2 bottom-2 inline-flex items-center gap-1 rounded-full border border-warning bg-warning/20 px-2 py-1 text-[10px] font-semibold text-foreground shadow hover:border-warning"
+            >
+              <ArrowDown className="size-3" /> {pending.length > 0 ? 'waiting for approval' : 'waiting for your answer'} — jump to the
+              card
+            </button>
+          ) : !pinned ? (
             <button
               type="button"
               onClick={jumpToLatest}
@@ -301,30 +346,6 @@ export function ChatPanel() {
           </div>
         </div>
       )}
-
-      {pending.length > 0 ? (
-        <div className="mt-2 border-t border-line pt-2">
-          <ApprovalCard />
-          <p className="mt-2 flex items-start gap-1.5 text-[11px] text-warning" data-testid="chat-approval-pending">
-            <ShieldAlert className="mt-[1px] size-3.5 shrink-0" />
-            <span>
-              waiting for approval: {pending[0]?.key.tool} [{pending[0]?.key.action}]
-              {pending[0]?.key.path ? ` ${pending[0].key.path}` : ''} — allow or decline it in the card above, or type a
-              reply in the composer to decline with that note.
-            </span>
-          </p>
-        </div>
-      ) : null}
-
-      {questions.length > 0 ? (
-        <div className="mt-2 border-t border-line pt-2">
-          <QuestionCard />
-          <p className="mt-2 flex items-start gap-1.5 text-[11px] text-info" data-testid="chat-question-pending">
-            <CircleQuestionMark className="mt-[1px] size-3.5 shrink-0" />
-            <span>waiting for your answer — the agent resumes as soon as you answer above.</span>
-          </p>
-        </div>
-      ) : null}
 
       <ExecutePlanBar />
     </Panel>

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { Event } from '@daedalus/core'
 import { useDaedalusStore } from './state/taskStore'
 import { ChatPanel } from './components/agent/chat-panel'
@@ -219,5 +219,143 @@ describe('ChatPanel stop + resize', () => {
     fireEvent.click(jump)
     expect(scroll.scrollTop).toBe(1000)
     expect(screen.queryByTestId('chat-jump-latest')).toBeNull()
+  })
+})
+
+describe('ChatPanel pending cards inside the transcript', () => {
+  const writeKey = { taskId: 'task-1', tool: 'write_file', action: 'create', path: 'src/health.ts' }
+
+  const approvalWithPreview = (content: string) =>
+    ev('APPROVAL_REQUESTED', {
+      key: writeKey,
+      policy: 'ask',
+      approval: {
+        id: 'approval-1',
+        key: writeKey,
+        policy: 'ask',
+        tool: 'write_file',
+        preview: { kind: 'write', path: 'src/health.ts', content },
+        rememberPattern: { kind: 'tool-path', tool: 'write_file', path: 'src/health.ts', label: 'write_file on src/health.ts' },
+        mode: 'manual',
+        requestedBy: { taskId: 'task-1' },
+      },
+    })
+
+  const questionEvent = () =>
+    ev('QUESTION_REQUESTED', {
+      question: {
+        id: 'q-1',
+        taskId: 'task-1',
+        question: 'Website ini mau dipakai untuk apa?',
+        options: [
+          { label: 'Website e-commerce', description: 'Jual produk online' },
+          { label: 'Website e-learning' },
+        ],
+        allowFreeText: true,
+        mode: 'plan',
+        createdAt: new Date().toISOString(),
+      },
+    })
+
+  test('renders the pending approval card inside the scroll region with its actions reachable', () => {
+    seed([started(), approvalWithPreview('export const health = true\n')])
+    render(<ChatPanel />)
+    const scroll = screen.getByTestId('chat-scroll')
+    const card = screen.getByTestId('approval-card')
+    expect(scroll.contains(card)).toBe(true)
+    expect(scroll.contains(screen.getByTestId('approval-allow'))).toBe(true)
+    expect(scroll.contains(screen.getByTestId('approval-deny'))).toBe(true)
+    expect(scroll.contains(screen.getByTestId('approval-remember'))).toBe(true)
+    expect(scroll.contains(screen.getByTestId('chat-approval-pending'))).toBe(true)
+    // The card is the transcript's last block, after the recorded entries.
+    expect(screen.getByTestId('chat-entries').lastElementChild?.contains(card)).toBe(true)
+  })
+
+  test('a huge write preview stays scroll-constrained inside the card and keeps the action row', () => {
+    const big = Array.from({ length: 400 }, (_, i) => `line ${i} of the new file`).join('\n')
+    seed([started(), approvalWithPreview(big)])
+    render(<ChatPanel />)
+    const card = screen.getByTestId('approval-card')
+    const preview = screen.getByTestId('approval-preview')
+    expect(card.className).toMatch(/max-h-\[/)
+    expect(preview.className).toContain('overflow-auto')
+    expect(preview.className).toMatch(/max-h-/)
+    expect(screen.getByTestId('approval-card-scroll').contains(preview)).toBe(true)
+    expect(card.contains(screen.getByTestId('approval-allow'))).toBe(true)
+    expect(textOf(preview)).toContain('line 399 of the new file')
+  })
+
+  test('renders the pending question card inside the scroll region as the last block', () => {
+    seed([started(), questionEvent()])
+    render(<ChatPanel />)
+    const scroll = screen.getByTestId('chat-scroll')
+    const card = screen.getByTestId('question-card')
+    expect(scroll.contains(card)).toBe(true)
+    expect(scroll.contains(screen.getByTestId('question-option-0'))).toBe(true)
+    expect(scroll.contains(screen.getByTestId('chat-question-pending'))).toBe(true)
+    expect(card.className).toMatch(/max-h-\[/)
+    expect(screen.getByTestId('question-card-scroll').contains(screen.getByTestId('question-option-0'))).toBe(true)
+    expect(screen.getByTestId('chat-entries').lastElementChild?.contains(card)).toBe(true)
+  })
+
+  test('scrolls the card into view when a request lands while pinned to the bottom', () => {
+    const base = [started()]
+    seed(base)
+    render(<ChatPanel />)
+    const scroll = screen.getByTestId('chat-scroll')
+    Object.defineProperty(scroll, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 320, configurable: true })
+    scroll.scrollTop = 680 // exactly at the bottom: still pinned
+    fireEvent.scroll(scroll)
+    expect(screen.queryByTestId('approval-card')).toBeNull()
+
+    act(() => {
+      useDaedalusStore.setState({ events: [...base, approvalWithPreview('export const health = true\n')] })
+    })
+    expect(screen.getByTestId('approval-card')).toBeTruthy()
+    expect(scroll.scrollTop).toBe(1000)
+  })
+
+  test('never yanks a scrolled-up reader; the waiting chip jumps to the card instead', () => {
+    const base = [started()]
+    seed(base)
+    render(<ChatPanel />)
+    const scroll = screen.getByTestId('chat-scroll')
+    Object.defineProperty(scroll, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 320, configurable: true })
+    scroll.scrollTop = 0
+    fireEvent.scroll(scroll) // the reader deliberately went up
+
+    act(() => {
+      useDaedalusStore.setState({ events: [...base, approvalWithPreview('export const health = true\n')] })
+    })
+    const chip = screen.getByTestId('chat-waiting-chip')
+    expect(textOf(chip)).toContain('waiting for approval')
+    expect(scroll.scrollTop).toBe(0)
+    fireEvent.click(chip)
+    expect(scroll.scrollTop).toBe(1000)
+    expect(screen.queryByTestId('chat-waiting-chip')).toBeNull()
+  })
+
+  test('in an active conversation the approval card still lands after the recorded turns, inside the scroll region', () => {
+    seed([started(), approvalWithPreview('export const health = true\n')])
+    useDaedalusStore.getState().setConversation({
+      id: 'conv-1',
+      root: '/workspace',
+      created_at: new Date().toISOString(),
+      turns: [
+        { role: 'user', text: 'pertanyaan kemarin', task_id: 'task-0', ts: new Date().toISOString() },
+        { role: 'assistant', text: 'jawaban kemarin', task_id: 'task-0', ts: new Date().toISOString() },
+        { role: 'user', text: 'add a health endpoint', task_id: 'task-1', ts: new Date().toISOString() },
+      ],
+    })
+    render(<ChatPanel />)
+    const scroll = screen.getByTestId('chat-scroll')
+    const card = screen.getByTestId('approval-card')
+    expect(scroll.contains(card)).toBe(true)
+    const transcript = textOf(screen.getByTestId('chat-entries'))
+    expect(transcript).toContain('jawaban kemarin')
+    expect(transcript.indexOf('jawaban kemarin')).toBeLessThan(transcript.indexOf('approval required'))
+    expect(screen.getByTestId('chat-entries').lastElementChild?.contains(card)).toBe(true)
   })
 })
