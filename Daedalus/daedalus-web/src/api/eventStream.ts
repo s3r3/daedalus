@@ -12,10 +12,16 @@ import type { Event } from '@daedalus/core'
 
 export type StreamStatus = 'idle' | 'connecting' | 'open' | 'reconnecting' | 'closed'
 
+/** Live terminal traffic on the same socket (session output + lifecycle). */
+export type TerminalWireMessage =
+  | { kind: 'terminal_output'; session_id: string; data: string; replay?: boolean }
+  | { kind: 'terminal_status'; session: import('./types').TerminalSession }
+
 export type StreamHandlers = {
   onEvent: (event: Event) => void
   onStatus: (status: StreamStatus, detail?: { attempt: number; nextRetryMs?: number }) => void
   onProtocol?: (message: { kind: string; [key: string]: unknown }) => void
+  onTerminal?: (message: TerminalWireMessage) => void
 }
 
 export type EventStreamOptions = {
@@ -111,6 +117,13 @@ export class EventStreamClient {
     this.#socket?.close()
   }
 
+  /** Ask the server to replay one terminal session's buffered history here. */
+  subscribeTerminal(sessionId: string): void {
+    const socket = this.#socket
+    if (!socket || socket.readyState !== 1) return
+    socket.send(JSON.stringify({ kind: 'terminal_subscribe', session_id: sessionId }))
+  }
+
   #open(): void {
     if (this.#stopped) return
     this.#options.handlers.onStatus(this.#attempt === 0 ? 'connecting' : 'reconnecting', { attempt: this.#attempt })
@@ -161,6 +174,10 @@ export class EventStreamClient {
       return
     }
     this.#options.onProtocol?.(parsed as { kind: string })
+    if (parsed.kind === 'terminal_output' || parsed.kind === 'terminal_status') {
+      this.#options.handlers.onTerminal?.(parsed as TerminalWireMessage)
+      return
+    }
     if (parsed.kind !== 'event') return
     const event = parsed.event as Event | undefined
     if (!event || typeof event.seq !== 'number' || typeof event.task_id !== 'string') return

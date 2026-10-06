@@ -16,12 +16,15 @@ export function useEventStream(url: string = defaultEventStreamUrl()): void {
       handlers: {
         onEvent: (event) => useDaedalusStore.getState().appendEvent(event),
         onStatus: (status, detail) => useDaedalusStore.getState().setConnection(status, detail?.attempt ?? 0),
+        onTerminal: (message) => useDaedalusStore.getState().applyTerminalMessage(message),
       },
     })
     clientRef.current = client
+    useDaedalusStore.getState().setTerminalSubscribe((sessionId) => client.subscribeTerminal(sessionId))
     client.seed(useDaedalusStore.getState().events)
     client.start()
     return () => {
+      useDaedalusStore.getState().setTerminalSubscribe(null)
       client.stop()
       clientRef.current = null
     }

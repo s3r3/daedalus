@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
+import { Plus, RotateCcw, Square, X } from 'lucide-react'
 import { Badge } from '../ui/badge'
+import { Button } from '../ui/button'
 import { EmptyState, Panel } from '../common/panel'
 import { Spinner } from '../common/spinner'
 import { useTaskEvents } from '../../state/hooks'
@@ -7,13 +9,17 @@ import { useDaedalusStore } from '../../state/taskStore'
 import { commands, type CommandView } from '../../state/selectors'
 import { TERMINAL_HEIGHT, loadTerminalHeight, saveTerminalHeight } from '../../state/prefs'
 import { terminalTheme, type ITheme } from '../../theme/terminal-theme'
+import { api } from '../../api/client'
+import type { TerminalSession } from '../../api/types'
 
 /**
- * Terminal surface (PLAN.md §3.6): streamed COMMAND_OUTPUT plus the process
- * status from COMMAND_STARTED / COMMAND_FINISHED. The agent owns the process;
- * this pane is a read-only log of what the harness ran. Its height is the
- * user's: dragged by the handle on its top edge (up grows), persisted,
- * double-click resets — the same interaction as the chat panel.
+ * Terminal surface (PLAN.md §3.6): a tab strip over server-side sessions.
+ * The `agent` tab is the read-only harness log it has always been (the
+ * agent owns its processes; COMMAND_* from the active task render here).
+ * `user` tabs are the human's own interactive shells: they keep running
+ * (a dev server stays up) until the human closes the tab; the agent can
+ * never write into, signal, or kill one. Height is the user's: dragged by
+ * the handle on the top edge, persisted, double-click resets.
  */
 export function TerminalPane() {
   const events = useTaskEvents()
@@ -21,9 +27,65 @@ export function TerminalPane() {
   const running = views.filter((view) => view.status === 'running')
   const last = views.at(-1)
 
+  const root = useDaedalusStore((state) => state.workspace.root)
+  const sessions = useDaedalusStore((state) => state.terminals.sessions)
+  const activeId = useDaedalusStore((state) => state.terminals.activeId)
+  const buffers = useDaedalusStore((state) => state.terminals.buffers)
+  const subscribe = useDaedalusStore((state) => state.terminals.subscribe)
+  const active = sessions.find((session) => session.id === activeId) ?? sessions[0]
+
   const [height, setHeight] = useState<number>(() => loadTerminalHeight())
   const heightRef = useRef(height)
   heightRef.current = height
+  const historiesRef = useRef(new Map<string, { lines: string[]; cursor: number }>())
+
+  // Session list for this workspace (the server ensures the agent sink).
+  useEffect(() => {
+    if (!root) return
+    let cancelled = false
+    void (async () => {
+      try {
+        const response = await api.terminals(root)
+        if (!cancelled) useDaedalusStore.getState().setTerminalSessions(response.terminals)
+      } catch {
+        /* gateway unreachable: the tab strip simply stays empty */
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [root])
+
+  // Reopening a tab replays its buffered history over the socket.
+  useEffect(() => {
+    if (active?.id) subscribe?.(active.id)
+  }, [active?.id, subscribe])
+
+  const createUserSession = async (): Promise<void> => {
+    if (!root) return
+    try {
+      const { terminal } = await api.createTerminal({ root })
+      const store = useDaedalusStore.getState()
+      store.upsertTerminalSession(terminal)
+      store.setActiveTerminal(terminal.id)
+    } catch {
+      /* surfaced by the empty strip; nothing else to do */
+    }
+  }
+
+  const closeSession = async (session: TerminalSession): Promise<void> => {
+    try {
+      await api.deleteTerminal(session.id)
+    } catch {
+      /* already gone server-side; drop it locally too */
+    }
+    useDaedalusStore.getState().removeTerminalSession(session.id)
+  }
+
+  const restartSession = async (session: TerminalSession): Promise<void> => {
+    await closeSession(session)
+    await createUserSession()
+  }
 
   const clampHeight = (value: number): number => Math.min(TERMINAL_HEIGHT.max, Math.max(TERMINAL_HEIGHT.min, Math.round(value)))
 
@@ -85,7 +147,17 @@ export function TerminalPane() {
         title="terminal"
         data-testid="terminal-panel"
         action={
-          running.length > 0 ? (
+          active?.kind === 'user' ? (
+            active.status === 'running' ? (
+              <Badge tone="info" data-testid="terminal-running">
+                <Spinner label="process running" /> running
+              </Badge>
+            ) : (
+              <Badge tone="error" data-testid="terminal-exit">
+                exit {active.exitCode ?? 'n/a'}
+              </Badge>
+            )
+          ) : running.length > 0 ? (
             <Badge tone="info" data-testid="terminal-running">
               <Spinner label="process running" /> {running.length} running
             </Badge>
@@ -101,7 +173,62 @@ export function TerminalPane() {
         bodyClassName="flex min-h-0 flex-1 flex-col gap-2"
         style={{ height: `${height}px` }}
       >
-        {views.length === 0 ? (
+        <div className="flex shrink-0 items-center gap-1 overflow-x-auto" role="tablist" aria-label="terminal sessions" data-testid="terminal-tabs">
+          {sessions.map((session) => (
+            <span
+              key={session.id}
+              className={`flex shrink-0 items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ${
+                active?.id === session.id ? 'border-primary text-foreground' : 'border-line text-muted'
+              }`}
+            >
+              <button
+                type="button"
+                role="tab"
+                aria-selected={active?.id === session.id}
+                data-testid="terminal-tab"
+                data-kind={session.kind}
+                data-session-id={session.id}
+                className="flex items-center gap-1.5"
+                onClick={() => useDaedalusStore.getState().setActiveTerminal(session.id)}
+              >
+                {session.title}
+                {session.kind === 'agent' ? <Badge tone="info">agent</Badge> : null}
+                {session.status === 'exited' ? <Badge tone="error">exit {session.exitCode ?? '?'}</Badge> : null}
+              </button>
+              {session.kind === 'user' ? (
+                <button
+                  type="button"
+                  aria-label={`close ${session.title}`}
+                  data-testid="terminal-close"
+                  data-session-id={session.id}
+                  className="rounded p-0.5 hover:bg-surface"
+                  onClick={() => void closeSession(session)}
+                >
+                  <X className="size-3" />
+                </button>
+              ) : null}
+            </span>
+          ))}
+          <button
+            type="button"
+            aria-label="new terminal"
+            data-testid="terminal-new"
+            className="flex shrink-0 items-center gap-1 rounded border border-line px-1.5 py-0.5 text-[11px] text-muted hover:border-primary hover:text-foreground"
+            onClick={() => void createUserSession()}
+          >
+            <Plus className="size-3" /> new
+          </button>
+        </div>
+
+        {active?.kind === 'user' ? (
+          <UserTerminal
+            key={active.id}
+            session={active}
+            buffer={buffers[active.id] ?? ''}
+            histories={historiesRef.current}
+            onRestart={(session) => void restartSession(session)}
+          />
+        ) : views.length === 0 ? (
           <EmptyState title="No commands yet" hint="Process output streams here as the harness runs commands." />
         ) : (
           <>
@@ -110,6 +237,124 @@ export function TerminalPane() {
           </>
         )}
       </Panel>
+    </>
+  )
+}
+
+/**
+ * One interactive user shell: streamed output plus an input line. The
+ * server echoes submitted lines into the transcript; ↑/↓ walk this
+ * session's own history. Ctrl+C is a button (the input keeps real Ctrl+C
+ * for copy) and sends SIGINT to the process group.
+ */
+function UserTerminal({
+  session,
+  buffer,
+  histories,
+  onRestart,
+}: {
+  session: TerminalSession
+  buffer: string
+  histories: Map<string, { lines: string[]; cursor: number }>
+  onRestart: (session: TerminalSession) => void
+}) {
+  const [draft, setDraft] = useState('')
+  const outputRef = useRef<HTMLPreElement>(null)
+  const running = session.status === 'running'
+
+  useEffect(() => {
+    const el = outputRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [buffer])
+
+  const history = (): { lines: string[]; cursor: number } => {
+    let entry = histories.get(session.id)
+    if (!entry) {
+      entry = { lines: [], cursor: 0 }
+      histories.set(session.id, entry)
+    }
+    return entry
+  }
+
+  const submit = async (): Promise<void> => {
+    const line = draft
+    setDraft('')
+    const entry = history()
+    if (line.trim().length > 0) entry.lines.push(line)
+    entry.cursor = entry.lines.length
+    try {
+      await api.terminalInput(session.id, `${line}\n`)
+    } catch {
+      /* exited between render and send; the tab badge shows it */
+    }
+  }
+
+  const onInputKeyDown = (event: KeyboardEvent<HTMLInputElement>): void => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      void submit()
+      return
+    }
+    if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+      const entry = history()
+      if (entry.lines.length === 0) return
+      event.preventDefault()
+      entry.cursor = event.key === 'ArrowUp' ? Math.max(0, entry.cursor - 1) : Math.min(entry.lines.length, entry.cursor + 1)
+      setDraft(entry.lines[entry.cursor] ?? '')
+    }
+  }
+
+  const interrupt = async (): Promise<void> => {
+    try {
+      await api.terminalSignal(session.id, 'SIGINT')
+    } catch {
+      /* already exited */
+    }
+  }
+
+  return (
+    <>
+      <pre
+        ref={outputRef}
+        data-testid="terminal-user-output"
+        className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words rounded border border-line bg-surface-base p-2 font-mono text-[11px] text-foreground"
+      >
+        {buffer}
+      </pre>
+      {running ? (
+        <div className="flex shrink-0 items-center gap-1">
+          <span className="font-mono text-[11px] text-muted">$</span>
+          <input
+            aria-label={`input for ${session.title}`}
+            data-testid="terminal-input"
+            className="h-7 min-w-0 flex-1 rounded border border-line bg-surface px-2 font-mono text-[11px] text-foreground"
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={onInputKeyDown}
+            placeholder="type a command — Enter runs it (e.g. npm run dev)"
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            data-testid="terminal-interrupt"
+            aria-label="send Ctrl+C"
+            title="Send SIGINT (Ctrl+C)"
+            onClick={() => void interrupt()}
+          >
+            <Square className="fill-current" /> Ctrl+C
+          </Button>
+        </div>
+      ) : (
+        <div className="flex shrink-0 items-center gap-2 text-[11px] text-muted" data-testid="terminal-exited">
+          <span>
+            process exited{session.exitCode === null ? '' : ` with code ${session.exitCode}`} — this shell is closed.
+          </span>
+          <Button type="button" variant="outline" size="sm" data-testid="terminal-restart" onClick={() => onRestart(session)}>
+            <RotateCcw /> restart
+          </Button>
+        </div>
+      )}
     </>
   )
 }

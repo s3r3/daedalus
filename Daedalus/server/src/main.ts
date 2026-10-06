@@ -19,6 +19,7 @@ server.listen(settings.server.port, settings.server.host, () => {
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     ctx.log.info("shutting down", { signal });
+    ctx.terminals.dispose();
     channel.close();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1000).unref();

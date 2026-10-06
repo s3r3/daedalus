@@ -9,10 +9,13 @@ import type { Event } from "@daedalus/core";
  *
  * Protocol (versioned):
  *   client → { kind: "subscribe", task_id: "<id>" | "*", since_seq: <number> }
+ *   client → { kind: "terminal_subscribe", session_id: "<id>" }
  *   client → { kind: "ping" }
  *   server → { kind: "hello", protocol, version, server_ts }
  *   server → { kind: "subscribed", task_id, since_seq, replayed, last_seq }
  *   server → { kind: "event", event: Event }      // replayed first, then live
+ *   server → { kind: "terminal_status", session }  // terminal lifecycle
+ *   server → { kind: "terminal_output", session_id, data, replay? }
  *   server → { kind: "pong" }
  *   server → { kind: "error", error }
  *
@@ -49,6 +52,20 @@ export function attachWebSocket(ctx: AppContext, server: Server): EventChannel {
         send(socket, { kind: "pong", server_ts: new Date().toISOString() });
         return;
       }
+      if (parsed.kind === "terminal_subscribe") {
+        // Replay the session's buffered history, then live output follows
+        // on the same socket — reopening a tab shows the whole transcript.
+        const sessionId = typeof (parsed as { session_id?: unknown }).session_id === "string" ? (parsed as { session_id: string }).session_id : "";
+        const session = ctx.terminals.get(sessionId);
+        if (!session) {
+          send(socket, { kind: "error", error: "terminal_not_found" });
+          return;
+        }
+        send(socket, { kind: "terminal_status", session });
+        const buffered = ctx.terminals.output(sessionId);
+        if (buffered) send(socket, { kind: "terminal_output", session_id: sessionId, data: buffered, replay: true });
+        return;
+      }
       if (parsed.kind !== "subscribe") {
         send(socket, { kind: "error", error: "unsupported_message" });
         return;
@@ -80,6 +97,13 @@ export function attachWebSocket(ctx: AppContext, server: Server): EventChannel {
     }
   });
 
+  const unsubscribeTerminals = ctx.terminals.onMessage((message) => {
+    const wire = JSON.stringify(message);
+    for (const socket of sockets) {
+      if (socket.readyState === socket.OPEN) socket.send(wire);
+    }
+  });
+
   const heartbeat = setInterval(() => {
     for (const socket of sockets) {
       if (socket.readyState === socket.OPEN) socket.ping();
@@ -92,6 +116,7 @@ export function attachWebSocket(ctx: AppContext, server: Server): EventChannel {
     close(): void {
       clearInterval(heartbeat);
       unsubscribe();
+      unsubscribeTerminals();
       for (const socket of sockets) socket.close();
       sockets.clear();
       wss.close();

@@ -22,6 +22,7 @@ import type {
   WorkspacePins,
   WorkspaceRoot,
   WorkspaceTreeNode,
+  TerminalSession,
 } from './types'
 
 /**
@@ -252,6 +253,29 @@ export const api = {
 
   savePins: (root: string, pins: string[]) =>
     request<WorkspacePins>('/workspace/pins', { method: 'PUT', body: JSON.stringify({ root, pins }) }),
+
+  /** Terminal sessions for one workspace root (the agent sink is ensured server-side). */
+  terminals: (root: string) => request<{ terminals: TerminalSession[]; root: string }>(`/terminals${query({ root })}`),
+
+  createTerminal: (input: { root: string; kind?: 'user' | 'agent'; title?: string }) =>
+    request<{ terminal: TerminalSession }>('/terminals', { method: 'POST', body: JSON.stringify(input) }),
+
+  terminal: (id: string) => request<{ terminal: TerminalSession; output: string }>(`/terminals/${encodeURIComponent(id)}`),
+
+  terminalInput: (id: string, data: string) =>
+    request<{ terminal: TerminalSession }>(`/terminals/${encodeURIComponent(id)}/input`, {
+      method: 'POST',
+      body: JSON.stringify({ data }),
+    }),
+
+  terminalSignal: (id: string, signal: 'SIGINT' | 'SIGTERM') =>
+    request<{ terminal: TerminalSession }>(`/terminals/${encodeURIComponent(id)}/signal`, {
+      method: 'POST',
+      body: JSON.stringify({ signal }),
+    }),
+
+  deleteTerminal: (id: string) =>
+    request<{ killed: boolean; terminal: TerminalSession }>(`/terminals/${encodeURIComponent(id)}`, { method: 'DELETE' }),
 
   upload: (form: FormData) => request<UploadResponse>('/uploads', { method: 'POST', body: form }),
 

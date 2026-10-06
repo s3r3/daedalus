@@ -50,6 +50,7 @@ import {
   type Conversation,
   type ConversationTurn,
 } from "./conversations.ts";
+import { TerminalError, TerminalManager } from "./terminals.ts";
 import { UPLOAD_LIMITS, extractZipEntries, guessMimeType, parseMultipart, sanitizeRelativePath, type UploadPart } from "./uploads.ts";
 
 /**
@@ -88,6 +89,11 @@ export type AppContext = {
    * server forgets every remembered grant.
    */
   approvalMemory: Map<string, ApprovalDecision>;
+  /**
+   * Interactive terminal sessions (user shells + per-workspace agent sink).
+   * Server-process state: sessions survive page reloads, die with the server.
+   */
+  terminals: TerminalManager;
   settings: Settings;
   providerStore: ProviderRegistryStore;
   session: SessionState;
@@ -113,6 +119,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     cwd,
     activeRunners: overrides.activeRunners ?? new Map<string, TaskRunner>(),
     approvalMemory: overrides.approvalMemory ?? new Map<string, ApprovalDecision>(),
+    terminals: overrides.terminals ?? new TerminalManager(),
     settings,
     providerStore: overrides.providerStore ?? new ProviderRegistryStore(resolveDaedalusHome(settings.daedalusHome, cwd)),
     session,
@@ -141,7 +148,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(data);
 }
 
-const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workspace", "/uploads", "/upload", "/attachments", "/extensions", "/review"];
+const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workspace", "/uploads", "/upload", "/attachments", "/extensions", "/review", "/terminals"];
 
 function webContentType(path: string): string {
   switch (extname(path).toLowerCase()) {
@@ -379,6 +386,85 @@ function applySettingsUpdate(ctx: AppContext, parsed: Record<string, unknown>): 
   if (typeof parsed.model === "string") ctx.session.model = parsed.model;
   if (typeof parsed.providerId === "string") ctx.session.providerId = parsed.providerId;
   if (typeof parsed.provider_id === "string") ctx.session.providerId = parsed.provider_id;
+}
+
+/**
+ * Interactive terminal sessions (docs/terminal.md). User shells are the
+ * human's own processes; the per-workspace agent session is a read-only
+ * sink the harness' COMMAND_* events are mirrored into — input, signals,
+ * and kills against it are refused so nothing here can touch the agent's
+ * processes, and the agent never gets a path into user sessions.
+ */
+async function handleTerminals(ctx: AppContext, req: IncomingMessage, res: ServerResponse, url: URL, method: string, requestId: string): Promise<void> {
+  try {
+    if (method === "GET" && url.pathname === "/terminals") {
+      const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || undefined);
+      sendJson(res, 200, { terminals: ctx.terminals.list(root), root, request_id: requestId });
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/terminals") {
+      const parsed = await readJson(req);
+      if (!parsed) {
+        sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+        return;
+      }
+      const root = resolveAllowedRoot(ctx, typeof parsed.root === "string" ? parsed.root : undefined);
+      const kind = parsed.kind === "agent" ? "agent" : "user";
+      const terminal = ctx.terminals.create({ root, kind, ...(typeof parsed.title === "string" ? { title: parsed.title } : {}) });
+      sendJson(res, 201, { terminal, request_id: requestId });
+      return;
+    }
+
+    const inputMatch = /^\/terminals\/([^/]+)\/input$/.exec(url.pathname);
+    if (method === "POST" && inputMatch?.[1]) {
+      const parsed = await readJson(req);
+      if (!parsed || typeof parsed.data !== "string") {
+        sendJson(res, 400, { error: "data_string_required", request_id: requestId });
+        return;
+      }
+      const terminal = ctx.terminals.writeInput(decodeURIComponent(inputMatch[1]), parsed.data);
+      sendJson(res, 200, { terminal, request_id: requestId });
+      return;
+    }
+
+    const signalMatch = /^\/terminals\/([^/]+)\/signal$/.exec(url.pathname);
+    if (method === "POST" && signalMatch?.[1]) {
+      const parsed = await readJson(req);
+      const signal = parsed?.signal;
+      if (signal !== "SIGINT" && signal !== "SIGTERM") {
+        sendJson(res, 400, { error: "signal_must_be_SIGINT_or_SIGTERM", request_id: requestId });
+        return;
+      }
+      const terminal = ctx.terminals.signal(decodeURIComponent(signalMatch[1]), signal);
+      sendJson(res, 200, { terminal, request_id: requestId });
+      return;
+    }
+
+    const sessionMatch = /^\/terminals\/([^/]+)$/.exec(url.pathname);
+    if (sessionMatch?.[1]) {
+      const id = decodeURIComponent(sessionMatch[1]);
+      if (method === "GET") {
+        const terminal = ctx.terminals.get(id);
+        if (!terminal) {
+          sendJson(res, 404, { error: "terminal_not_found", request_id: requestId });
+          return;
+        }
+        sendJson(res, 200, { terminal, output: ctx.terminals.output(id) ?? "", request_id: requestId });
+        return;
+      }
+      if (method === "DELETE") {
+        const terminal = ctx.terminals.kill(id);
+        sendJson(res, 200, { killed: true, terminal, request_id: requestId });
+        return;
+      }
+    }
+
+    sendJson(res, 404, { error: "not_found", request_id: requestId });
+  } catch (error) {
+    const status = error instanceof TerminalError ? error.status : errorStatus(error);
+    sendJson(res, status, { error: errorMessage(error), request_id: requestId });
+  }
 }
 
 async function handleProviders(ctx: AppContext, req: IncomingMessage, res: ServerResponse, url: URL, method: string, requestId: string): Promise<void> {
@@ -788,6 +874,15 @@ async function extensionStatus(ctx: AppContext, rootValue: unknown): Promise<Ext
 }
 
 export function createApp(ctx: AppContext) {
+  // Mirror the harness' command lifecycle into the per-workspace agent
+  // terminal sink (the root is resolved from the owning task's state —
+  // event payloads do not carry it).
+  ctx.terminals.attach(ctx.bus, (taskId) => {
+    const lookup = findTask(ctx, taskId);
+    const state = (lookup?.state ?? {}) as { repo_path?: unknown; spec?: { repo_path?: unknown } };
+    const repoPath = typeof state.repo_path === "string" ? state.repo_path : typeof state.spec?.repo_path === "string" ? state.spec.repo_path : undefined;
+    return repoPath ? resolve(repoPath) : undefined;
+  });
   return createServer((req, res) => {
     const requestId = crypto.randomUUID();
     const url = new URL(req.url ?? "/", "http://localhost");
@@ -902,6 +997,11 @@ export function createApp(ctx: AppContext) {
         ctx.session.autoApprove = parsed.enabled;
         sendJson(res, 200, { session: publicSession(ctx) });
       })();
+      return;
+    }
+
+    if (url.pathname === "/terminals" || url.pathname.startsWith("/terminals/")) {
+      void handleTerminals(ctx, req, res, url, method, requestId);
       return;
     }
 
