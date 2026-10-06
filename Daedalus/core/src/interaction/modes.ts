@@ -182,7 +182,7 @@ export function modePromptContract(mode: AgentMode): string {
     case 'manual':
       return 'Current mode: Manual. Reads are free, but every file change and every command pauses for the user\'s approval first. Propose one concrete action at a time and let the approval flow gate it; a declined action comes back with the user\'s instructions — follow them instead of retrying the same action. When the goal is ambiguous, ask with ask_user (2-4 options) before proposing actions.';
     case 'auto':
-      return 'Current mode: Auto. Reads and file edits proceed directly; commands run without asking only while auto-approve is on, otherwise each command pauses for approval. Work the plan to completion and let validation prove the result. When a requirement is ambiguous, ask with ask_user.';
+      return 'Current mode: Auto. Reads and edits proceed directly; commands run without asking while auto-approve is on, otherwise each command pauses for approval. Work the plan to completion and let validation prove the result. When a requirement is ambiguous, ask with ask_user.';
     case 'orchestrator':
       return 'Current mode: Orchestrator. Your work is decomposed into child tasks that run under policies no looser than yours. Coordinate: keep each child\'s goal self-contained, respect the budgets, and treat a child\'s budget exhaustion as a partial result to report, not a success.';
     default:
