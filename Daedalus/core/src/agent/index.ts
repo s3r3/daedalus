@@ -4,6 +4,9 @@ export { createPlan, replan } from './planner.ts';
 export {
   DefaultContextManager,
   CONDENSED_TOOL_OUTPUT,
+  MAX_PINNED_FILES_IN_PROMPT,
+  MAX_PINNED_LINES_PER_FILE,
+  MAX_PINNED_TOTAL_CHARS,
   condenseToolOutputs,
   contextMeter,
   estimateMessageTokens,
@@ -64,7 +67,27 @@ export {
   type ChatIntent,
 } from './conversation.ts';
 export { handleObservation } from './observation.ts';
+export {
+  DEFAULT_TOOL_OUTPUT_LIMITS,
+  TOOL_OUTPUT_HEAD_RATIO,
+  TOOL_OUTPUT_MAX_CHARS,
+  TOOL_OUTPUT_MAX_LINES,
+  resolveToolOutputLimits,
+  shapeToolOutput,
+  truncateHeadTail,
+  type ShapeToolOutputOptions,
+  type ShapedToolOutput,
+  type ToolOutputLimits,
+} from './tool-output.ts';
 export { evaluateStopConditions, noProgressCondition } from './stop.ts';
+export {
+  PROMPT_FAMILIES,
+  detectPromptFamily,
+  normalizePromptFamilySetting,
+  parsePromptFamilySetting,
+  promptFamilyFragment,
+  resolvePromptFamily,
+} from './prompt-dialects.ts';
 export type {
   Action,
   CompleteAction,

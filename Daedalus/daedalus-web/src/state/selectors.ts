@@ -338,7 +338,10 @@ export function activity(events: Event[], thinking = true): ActivityEntry[] {
         push({
           kind: 'observation',
           title: `${finished?.call.tool ?? 'tool'} ${finished?.result.status ?? 'result'}`,
-          detail: (finished?.result.output ?? '').trim().slice(0, 240) || undefined,
+          detail: [
+            (finished?.result.output ?? '').trim().slice(0, 240) || undefined,
+            finished?.output_truncated ? '(output truncated for the model — head+tail kept, full text in the task spill file)' : undefined,
+          ].filter(Boolean).join(' ') || undefined,
           status: finished?.result.status === 'ok' ? 'ok' : 'error',
         })
         break
@@ -403,7 +406,28 @@ export function activity(events: Event[], thinking = true): ActivityEntry[] {
           })
           break
         }
+        if (changed?.reason === 'quality_escalation') {
+          push({
+            kind: 'system',
+            title: 'escalated to stronger model',
+            detail: `validation failed under ${changed.from_model ?? 'a weaker model'}, so the rest of this task runs on ${changed.to_model ?? 'the strongest model'}`,
+            status: 'info',
+          })
+          break
+        }
         push({ kind: 'system', title: 'provider changed', detail: `${changed?.providerId ?? changed?.provider_id ?? 'default'}${changed?.model ? `/${changed.model}` : ''}`, status: 'info' })
+        break
+      }
+      case 'REVIEW_COMPLETED': {
+        const review = payloadOf(event, 'REVIEW_COMPLETED')
+        push({
+          kind: 'validation',
+          title: review?.blocking ? 'strong-model review: blocking issues' : 'strong-model review: no blocking issues',
+          detail: review
+            ? `${review.model} reviewed ${review.author_model ?? 'the task model'}'s changes · ${review.findings.length} finding${review.findings.length === 1 ? '' : 's'}${review.blocking ? ' · outcome demoted to partial' : ''}`
+            : undefined,
+          status: review?.blocking ? 'warning' : 'ok',
+        })
         break
       }
       case 'ATTACHMENT_ADDED': {

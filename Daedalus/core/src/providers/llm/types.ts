@@ -53,6 +53,14 @@ export type ChatResponse = {
   raw?: unknown;
 };
 
+/**
+ * What kind of work a chat call is doing (tailor suite phase routing). The
+ * agent loop stamps each request so a model pool can spend strong models on
+ * editing/repair turns and fast/balanced models on exploration and Q&A.
+ * Providers that do no routing simply ignore it.
+ */
+export type ModelPhase = "explore" | "edit" | "repair" | "question";
+
 export type ChatOptions = {
   temperature?: number;
   max_tokens?: number;
@@ -60,6 +68,8 @@ export type ChatOptions = {
   stop?: string[];
   signal?: AbortSignal;
   timeout_ms?: number;
+  /** Tailor-suite phase hint for tier routing; ignored by non-pool providers. */
+  phase?: ModelPhase;
 };
 
 export type StreamChunk =
