@@ -84,6 +84,8 @@ export type CreateTaskInput = {
   attachments?: Attachment[]
   children?: ChildTaskInput[]
   isolation?: 'worktree'
+  /** Follow up on a plan drafted by this earlier task; core injects its steps as a constraint. */
+  plan_task_id?: string
 }
 
 export const api = {
@@ -162,6 +164,33 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ key, decision, remember }),
     }),
+
+  /**
+   * Decide one pending approval by its id. `allow_remember` stores the exact
+   * pattern shown on the card for the rest of this server session; `decline`
+   * can carry the user's redirect text, and a command can run edited args.
+   */
+  decideApproval: (
+    taskId: string,
+    approvalId: string,
+    decision: 'allow' | 'allow_remember' | 'decline',
+    extra?: { note?: string; editedArgs?: Record<string, unknown> },
+  ) =>
+    request<{ success: boolean; decision: string; approval_id: string }>(
+      `/tasks/${encodeURIComponent(taskId)}/approvals/${encodeURIComponent(approvalId)}`,
+      { method: 'POST', body: JSON.stringify({ decision, ...(extra ?? {}) }) },
+    ),
+
+  /**
+   * Answer one pending user question (the Plan mode ask_user card): the
+   * answer is delivered to the agent verbatim — a chosen option's label or
+   * the user's own typed text.
+   */
+  answerQuestion: (taskId: string, questionId: string, answer: string) =>
+    request<{ success: boolean; question_id: string }>(
+      `/tasks/${encodeURIComponent(taskId)}/questions/${encodeURIComponent(questionId)}`,
+      { method: 'POST', body: JSON.stringify({ answer }) },
+    ),
 
   roots: () => request<{ roots: WorkspaceRoot[]; cwd: string }>('/workspace/roots'),
 

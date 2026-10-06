@@ -1,4 +1,4 @@
-import type { Attachment, ChildTask, Event, FinalReport, Plan, PlanStep, ToolCall, ToolResult, ValidationResult } from '@daedalus/core'
+import type { Attachment, ChildTask, Event, FinalReport, Plan, PlanStep, ToolCall, ToolResult, UserQuestionInfo, ValidationResult } from '@daedalus/core'
 import { payloadOf, type ApprovalRequested, type CommandFinished, type CommandStarted, type FileChange, type RecoveryStarted } from '../api/types'
 
 /**
@@ -6,7 +6,7 @@ import { payloadOf, type ApprovalRequested, type CommandFinished, type CommandSt
  * these, so the UI is a function of recorded events only (§3.4 rule 6).
  */
 
-export type TaskStatus = 'idle' | 'running' | 'awaiting-approval' | 'done' | 'failed' | 'partial' | 'stopped'
+export type TaskStatus = 'idle' | 'running' | 'awaiting-approval' | 'awaiting-answer' | 'done' | 'failed' | 'partial' | 'stopped'
 
 export type ToolCallView = {
   call: ToolCall
@@ -41,6 +41,8 @@ export type PendingApproval = {
   seq: number
   key: ApprovalRequested['key']
   policy: string
+  /** Full card data (id, untruncated preview, remember pattern) when core sent it. */
+  approval?: ApprovalRequested['approval']
 }
 
 export type ErrorEntry = {
@@ -218,22 +220,62 @@ export function replanCount(events: Event[]): number {
 }
 
 export function pendingApprovals(events: Event[]): PendingApproval[] {
-  const decided = new Set(
-    events
-      .flatMap((event) => {
-        const payload = payloadOf(event, 'APPROVAL_DECIDED')
-        return payload ? [approvalId(payload.key)] : []
-      }),
-  )
+  // A decision retires its request by approval id when core sent one, and by
+  // the legacy composite key otherwise — both are recorded so old and new
+  // event logs alike stop showing the card.
+  const decided = new Set<string>()
+  for (const event of events) {
+    const payload = payloadOf(event, 'APPROVAL_DECIDED')
+    if (!payload) continue
+    decided.add(approvalId(payload.key))
+    if (payload.approval_id) decided.add(payload.approval_id)
+  }
   return events.flatMap((event) => {
     const payload = payloadOf(event, 'APPROVAL_REQUESTED')
-    if (!payload || decided.has(approvalId(payload.key))) return []
-    return [{ seq: event.seq, key: payload.key, policy: payload.policy }]
+    if (!payload) return []
+    const settled = decided.has(approvalId(payload.key)) || (payload.approval?.id ? decided.has(payload.approval.id) : false)
+    return settled ? [] : [{ seq: event.seq, key: payload.key, policy: payload.policy, ...(payload.approval ? { approval: payload.approval } : {}) }]
   })
 }
 
 export function approvalId(key: { taskId: string; tool: string; action: string; path?: string }): string {
   return `${key.taskId}:${key.tool}:${key.action}:${key.path ?? ''}`
+}
+
+export type PendingQuestion = {
+  seq: number
+  question: UserQuestionInfo
+}
+
+/**
+ * Questions still waiting for the user: a QUESTION_REQUESTED with no
+ * QUESTION_ANSWERED of the same id yet. The question card renders the
+ * first; the rest queue behind it (the agent asks one at a time).
+ */
+export function pendingQuestions(events: Event[]): PendingQuestion[] {
+  const answered = new Set<string>()
+  for (const event of events) {
+    const payload = payloadOf(event, 'QUESTION_ANSWERED')
+    if (payload?.question_id) answered.add(payload.question_id)
+  }
+  return events.flatMap((event) => {
+    const payload = payloadOf(event, 'QUESTION_REQUESTED')
+    if (!payload?.question || answered.has(payload.question.id)) return []
+    return [{ seq: event.seq, question: payload.question }]
+  })
+}
+
+/**
+ * Plan documents a finished plan task wrote (`.daedalus/plans/**` plan.md /
+ * PRD.md), from the closing PLAN_CREATED that names them. Empty for every
+ * other kind of task — this is what gates the Approve & Execute bar.
+ */
+export function planDocuments(events: Event[]): string[] {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const payload = payloadOf(events[i] as Event, 'PLAN_CREATED')
+    if (payload?.documents && payload.documents.length > 0) return payload.documents
+  }
+  return []
 }
 
 export function errors(events: Event[]): ErrorEntry[] {
@@ -369,12 +411,38 @@ export function activity(events: Event[], thinking = true): ActivityEntry[] {
         push({ kind: 'recovery', title: `recovery ${recovery?.strategy ?? ''}`, detail: `${recovery?.reason ?? ''} (attempt ${recovery?.attempt ?? 0})`, status: 'warning' })
         break
       }
+      case 'QUESTION_REQUESTED': {
+        const requested = payloadOf(event, 'QUESTION_REQUESTED')
+        push({ kind: 'approval', title: 'question asked', detail: requested?.question.question, status: 'warning' })
+        break
+      }
+      case 'QUESTION_ANSWERED': {
+        const answered = payloadOf(event, 'QUESTION_ANSWERED')
+        push({
+          kind: 'approval',
+          title: answered?.timed_out ? 'question timed out — proceeding with assumptions' : answered?.cancelled ? 'question cancelled' : 'question answered',
+          detail: answered?.answer,
+          status: answered?.outcome === 'answered' ? 'ok' : 'warning',
+        })
+        break
+      }
       case 'APPROVAL_REQUESTED':
         push({ kind: 'approval', title: 'approval requested', detail: approvalLabel(payloadOf(event, 'APPROVAL_REQUESTED')?.key), status: 'warning' })
         break
       case 'APPROVAL_DECIDED': {
         const decided = payloadOf(event, 'APPROVAL_DECIDED')
-        push({ kind: 'approval', title: `approval ${decided?.decision ?? 'decided'}`, detail: approvalLabel(decided?.key), status: decided?.decision === 'grant' ? 'ok' : 'error' })
+        push({
+          kind: 'approval',
+          title: decided?.timed_out ? 'approval timed out' : `approval ${decided?.decision ?? 'decided'}`,
+          detail: [
+            approvalLabel(decided?.key),
+            decided?.timed_out ? 'timed out — treated as declined' : undefined,
+            decided?.cancelled ? 'cancelled — treated as declined' : undefined,
+            decided?.edited ? 'edited before running' : undefined,
+            decided?.note ? `note: ${decided.note}` : undefined,
+          ].filter(Boolean).join(' · '),
+          status: decided?.decision === 'grant' ? 'ok' : 'error',
+        })
         break
       }
       case 'TASK_COMPLETED': {
@@ -468,7 +536,7 @@ export function latestContextPercent(events: Event[]): number | undefined {
   return undefined
 }
 
-export function taskStatus(events: Event[], pendingApprovalsCount: number): TaskStatus {
+export function taskStatus(events: Event[], pendingApprovalsCount: number, pendingQuestionsCount = 0): TaskStatus {
   const completed = [...events].reverse().find((event) => event.type === 'TASK_COMPLETED')
   const hasStarted = events.some((event) => event.type === 'TASK_STARTED')
   if (completed) {
@@ -481,6 +549,7 @@ export function taskStatus(events: Event[], pendingApprovalsCount: number): Task
     return 'failed'
   }
   if (pendingApprovalsCount > 0) return 'awaiting-approval'
+  if (pendingQuestionsCount > 0) return 'awaiting-answer'
   if (hasStarted) return 'running'
   return 'idle'
 }
@@ -606,14 +675,57 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
         entries.push({
           ...base,
           role: 'approval',
-          text: `approval ${decided?.decision ?? 'decided'} — ${approvalLabel(decided?.key)}`,
+          text: decided?.timed_out
+            ? `approval timed out — treated as declined — ${approvalLabel(decided?.key)}`
+            : `approval ${decided?.decision ?? 'decided'} — ${approvalLabel(decided?.key)}`,
+          detail: [
+            decided?.cancelled ? 'cancelled — treated as declined' : undefined,
+            decided?.edited ? 'edited before running' : undefined,
+            decided?.note ? `note: ${decided.note}` : undefined,
+          ].filter(Boolean).join(' · ') || undefined,
           status: decided?.decision === 'grant' ? 'ok' : 'error',
         })
         break
       }
+      case 'QUESTION_REQUESTED': {
+        const requested = payloadOf(event, 'QUESTION_REQUESTED')
+        entries.push({
+          ...base,
+          role: 'status',
+          text: `the agent asked — ${truncateChat(requested?.question.question ?? '', 300)}`,
+          detail: 'answer it in the question card below',
+          status: 'warning',
+        })
+        break
+      }
+      case 'QUESTION_ANSWERED': {
+        const answered = payloadOf(event, 'QUESTION_ANSWERED')
+        entries.push({
+          ...base,
+          role: 'status',
+          text: answered?.timed_out
+            ? 'no answer — the agent continues with stated assumptions'
+            : answered?.cancelled
+              ? 'question cancelled'
+              : `you answered — ${truncateChat(answered?.answer ?? '', 300)}`,
+          detail: answered?.question ? `Q: ${truncateChat(answered.question, 200)}` : undefined,
+          status: answered?.outcome === 'answered' ? 'ok' : 'warning',
+        })
+        break
+      }
       case 'PLAN_CREATED': {
-        const plan = payloadOf(event, 'PLAN_CREATED')?.plan
-        entries.push({ ...base, role: 'status', text: `plan created · ${plan?.steps.length ?? 0} steps`, status: 'info' })
+        const created = payloadOf(event, 'PLAN_CREATED')
+        if (created?.documents && created.documents.length > 0) {
+          entries.push({
+            ...base,
+            role: 'status',
+            text: 'plan documents written',
+            detail: created.documents.join(', '),
+            status: 'ok',
+          })
+        } else {
+          entries.push({ ...base, role: 'status', text: `plan created · ${created?.plan?.steps.length ?? 0} steps`, status: 'info' })
+        }
         break
       }
       case 'REPLAN_CREATED':

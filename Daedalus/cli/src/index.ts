@@ -39,6 +39,7 @@ import {
   type Message,
   type ModelStrategy,
   type PermissionKey,
+  type UserQuestionInfo,
 } from "@daedalus/core";
 import {
   createInPlaceFrameRenderer,
@@ -127,6 +128,59 @@ export function parseApproval(answer: string): { decision: "grant" | "deny"; rem
   if (a.startsWith("r")) return { decision: "grant", remember: true };
   if (a.startsWith("a")) return { decision: "grant", remember: false };
   return { decision: "deny", remember: false };
+}
+
+/**
+ * Map a typed answer line to a user-question answer (ask_user): a bare
+ * number inside the option range selects that option's label; anything
+ * else is the user's own words, delivered verbatim. Empty input abstains
+ * (null) so the caller can re-prompt instead of answering with noise.
+ */
+export function parseQuestionAnswer(line: string, options: Array<{ label: string }>): string | null {
+  const text = line.trim();
+  if (!text) return null;
+  const n = Number(text);
+  if (Number.isInteger(n) && n >= 1 && n <= options.length) return options[n - 1]?.label ?? text;
+  return text;
+}
+
+/** The question block every CLI surface shows: question, numbered options, how to answer. */
+export function questionPromptText(info: {
+  question: string;
+  options: Array<{ label: string; description?: string }>;
+  allowFreeText?: boolean;
+}): string {
+  const options = info.options
+    .map((option, index) => `  ${index + 1}. ${option.label}${option.description ? ` — ${option.description}` : ""}`)
+    .join("\n");
+  const hint = info.allowFreeText === false ? "reply with a number" : "reply with a number, or type your own answer";
+  return `${paint(palette.info, "?")} ${bold("The agent asks:")} ${info.question}\n${options}\n${dim(`  ${hint}`)}`;
+}
+
+/**
+ * One-line terminal rendering of an approval preview so the CLI shows the
+ * exact artifact being approved (verbatim command; path + size for writes;
+ * the patch, capped, for edits) instead of just a tool name.
+ */
+export function approvalPreviewLine(payload: {
+  approval?: { preview?: { kind: string; command?: string; path?: string; content?: string; patch?: string; args?: unknown } };
+  key?: { tool: string; path?: string };
+}): string | undefined {
+  const preview = payload.approval?.preview;
+  if (!preview) return undefined;
+  if (preview.kind === "command" && preview.command !== undefined) return `$ ${preview.command}`;
+  if (preview.kind === "write" && preview.path !== undefined) {
+    return `write ${preview.path} (${(preview.content ?? "").length} chars)`;
+  }
+  if (preview.kind === "edit" && preview.path !== undefined) {
+    const lines = (preview.patch ?? "").split("\n").filter((line) => line.trim());
+    const shown = lines.slice(0, 24).join("\n");
+    return `edit ${preview.path}\n${shown}${lines.length > 24 ? `\n… (${lines.length - 24} more lines)` : ""}`;
+  }
+  if (preview.kind === "args") {
+    return `${payload.key?.tool ?? "tool"} ${JSON.stringify(preview.args ?? {})}`;
+  }
+  return undefined;
 }
 
 const AGENT_MODES: AgentMode[] = ["ask", "manual", "auto", "plan", "orchestrator"];
@@ -236,8 +290,25 @@ export function formatEvent(event: Omit<Event, "seq" | "ts">): string {
       return `${paint(palette.warning, "↻")} Recovery: ${p.strategy} (attempt ${p.attempt}) — ${p.reason}\n`;
     }
     case "APPROVAL_REQUESTED": {
-      const p = event.payload as { key?: { tool: string; action: string; path?: string } };
-      return `${paint(palette.warning, "▲")} Approval requested: ${p.key?.tool} [${p.key?.action}] ${p.key?.path ?? ""}\n`;
+      const p = event.payload as {
+        key?: { tool: string; action: string; path?: string };
+        approval?: Parameters<typeof approvalPreviewLine>[0]["approval"];
+      };
+      const preview = approvalPreviewLine(p);
+      return `${paint(palette.warning, "▲")} Approval requested: ${p.key?.tool} [${p.key?.action}] ${p.key?.path ?? ""}${preview ? `\n  ${preview.split("\n").join("\n  ")}` : ""}\n`;
+    }
+    case "QUESTION_REQUESTED": {
+      const p = event.payload as {
+        question?: { question?: string; options?: Array<{ label: string; description?: string }>; allowFreeText?: boolean };
+      };
+      if (!p.question?.question) return "";
+      return `${questionPromptText({ question: p.question.question, options: p.question.options ?? [], allowFreeText: p.question.allowFreeText })}\n`;
+    }
+    case "QUESTION_ANSWERED": {
+      const p = event.payload as { answer?: string; timed_out?: boolean; cancelled?: boolean };
+      if (p.timed_out) return `${paint(palette.warning, "?")} No answer arrived — the agent continues with stated assumptions.\n`;
+      if (p.cancelled) return `${paint(palette.warning, "?")} Question cancelled.\n`;
+      return `${paint(palette.success, "?")} You answered: ${p.answer ?? ""}\n`;
     }
     case "MODE_CHANGED": {
       const p = event.payload as { from?: string; to?: string; replan_required?: boolean };
@@ -320,6 +391,7 @@ type FullscreenRunner = {
   run: (input: Record<string, unknown>) => Promise<{ outcome: string; events: unknown[]; state: { steps: Array<{ intent: string; status: string }> }; report: { metrics: { files_changed?: number } } }>;
   cancel: (taskId: string) => void;
   approvals: { decide: (key: PermissionKey, decision: "grant" | "deny", remember: boolean) => void };
+  questions: { answer: (questionId: string, answer: string) => boolean };
   extensionStatus?: ExtensionStatus;
 };
 
@@ -359,6 +431,7 @@ async function runFullscreenChat(options: {
   let closed = false;
   let currentTaskId: string | undefined;
   let pendingApproval: PermissionKey | undefined;
+  let pendingQuestion: UserQuestionInfo | undefined;
 
   let forceFullClear = true;
   let lastColumns = 0;
@@ -422,6 +495,17 @@ async function runFullscreenChat(options: {
     session.jumpTranscriptToBottom();
     session.closeCommandPalette();
     if (!line.trim()) { draw(); return; }
+    if (pendingQuestion) {
+      // While the agent is blocked on a question, the next line IS the
+      // answer — a number picks an option, anything else is sent verbatim.
+      const parsed = parseQuestionAnswer(line, pendingQuestion.options);
+      if (parsed !== null) {
+        runner.questions.answer(pendingQuestion.id, parsed);
+        pendingQuestion = undefined;
+      }
+      draw();
+      return;
+    }
     if (running) {
       session.addSystemLine("Task is running. Press esc to cancel it, or wait for it to finish.");
       draw();
@@ -458,14 +542,28 @@ async function runFullscreenChat(options: {
             if (plan?.steps) session.setPlan(plan.steps.map((step, index) => `${index + 1}. [${step.status ?? "pending"}] ${step.intent}`).join("\n"));
           }
           if (event.type === "APPROVAL_REQUESTED") {
-            const key = (event.payload as { key?: PermissionKey }).key;
-            if (key) {
-              pendingApproval = key;
-              session.addSystemLine(`Approval requested: ${key.tool} [${key.action}] ${key.path ?? ""} — press a approve · d deny · r remember`);
+            const payload = event.payload as {
+              key?: PermissionKey;
+              approval?: Parameters<typeof approvalPreviewLine>[0]["approval"];
+            };
+            if (payload.key) {
+              pendingApproval = payload.key;
+              const preview = approvalPreviewLine(payload);
+              session.addSystemLine(`Approval requested: ${payload.key.tool} [${payload.key.action}] ${payload.key.path ?? ""}${preview ? `\n  ${preview.split("\n").join("\n  ")}` : ""} — press a approve · d deny · r remember`);
             }
             draw();
             return;
           }
+          if (event.type === "QUESTION_REQUESTED") {
+            const payload = event.payload as { question?: UserQuestionInfo };
+            if (payload.question) {
+              pendingQuestion = payload.question;
+              session.addSystemLine(questionPromptText(payload.question));
+            }
+            draw();
+            return;
+          }
+          if (event.type === "QUESTION_ANSWERED") pendingQuestion = undefined;
           const formatted = formatEvent(event).trimEnd();
           if (formatted && event.type !== "THOUGHT") session.addTranscript(formatted);
           draw();
@@ -480,6 +578,7 @@ async function runFullscreenChat(options: {
     } finally {
       running = false;
       pendingApproval = undefined;
+      pendingQuestion = undefined;
       if (runner.extensionStatus) applyExtensionStatus(session, runner.extensionStatus);
       draw();
     }
@@ -863,14 +962,21 @@ export async function runInteractiveChat(options: {
     });
   }
 
-  const promptApproval = async (key: PermissionKey): Promise<void> => {
+  const promptApproval = async (key: PermissionKey, preview?: string): Promise<void> => {
     const answer = await askLine(
       rl,
-      `${paint(palette.warning, "▲ Approval requested: ")} ${bold(key.tool)} ${dim(`[${key.action}] ${key.path ?? ""}`)}\n  approve (a) / deny (d) / remember (r)? `,
+      `${paint(palette.warning, "▲ Approval requested: ")} ${bold(key.tool)} ${dim(`[${key.action}] ${key.path ?? ""}`)}${preview ? `\n  ${preview.split("\n").join("\n  ")}` : ""}\n  approve (a) / deny (d) / remember (r)? `,
     );
     if (answer === null) return;
     const parsed = parseApproval(answer);
     runner.approvals.decide(key, parsed.decision, parsed.remember);
+  };
+
+  const promptQuestion = async (info: UserQuestionInfo): Promise<void> => {
+    const answer = await askLine(rl, `${questionPromptText(info)}\n  answer: `);
+    if (answer === null) return; // stdin closed; the question settles on its own timeout
+    const parsed = parseQuestionAnswer(answer, info.options);
+    if (parsed !== null) runner.questions.answer(info.id, parsed);
   };
 
   process.stdout.write(`${paint(palette.primary, "Daedalus interactive CLI")}\n`);
@@ -920,8 +1026,16 @@ export async function runInteractiveChat(options: {
               if (plan?.steps) session.setPlan(plan.steps.map((step, index) => `${index + 1}. [${step.status ?? "pending"}] ${step.intent}`).join("\n"));
             }
             if (event.type === "APPROVAL_REQUESTED") {
-              const key = (event.payload as { key?: PermissionKey }).key;
-              if (key) void promptApproval(key);
+              const payload = event.payload as {
+                key?: PermissionKey;
+                approval?: Parameters<typeof approvalPreviewLine>[0]["approval"];
+              };
+              if (payload.key) void promptApproval(payload.key, approvalPreviewLine(payload));
+              return;
+            }
+            if (event.type === "QUESTION_REQUESTED") {
+              const payload = event.payload as { question?: UserQuestionInfo };
+              if (payload.question) void promptQuestion(payload.question);
               return;
             }
             const formatted = formatEvent(event);
@@ -1193,14 +1307,24 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
       let stopSpinner: (() => void) | undefined;
       let rl: ReturnType<typeof createInterface> | undefined;
 
-      const promptApproval = async (key: PermissionKey): Promise<void> => {
+      const promptApproval = async (key: PermissionKey, preview?: string): Promise<void> => {
         rl ??= createInterface({ input: process.stdin });
         const answer = await new Promise<string>((resolve) => rl!.question(
-          `${paint(palette.warning, "▲ Approval requested: ")} ${bold(key.tool)} ${dim(`[${key.action}] ${key.path ?? ""}`)}\n  approve (a) / deny (d) / remember (r)? `,
+          `${paint(palette.warning, "▲ Approval requested: ")} ${bold(key.tool)} ${dim(`[${key.action}] ${key.path ?? ""}`)}${preview ? `\n  ${preview.split("\n").join("\n  ")}` : ""}\n  approve (a) / deny (d) / remember (r)? `,
           resolve,
         ));
         const { decision, remember } = parseApproval(answer);
         runner.approvals.decide(key, decision, remember);
+      };
+
+      const promptQuestion = async (info: UserQuestionInfo): Promise<void> => {
+        rl ??= createInterface({ input: process.stdin });
+        const answer = await new Promise<string>((resolve) => rl!.question(
+          `${questionPromptText(info)}\n  answer: `,
+          resolve,
+        ));
+        const parsed = parseQuestionAnswer(answer, info.options);
+        if (parsed !== null) runner.questions.answer(info.id, parsed);
       };
 
       const startSpinner = (label: string): void => {
@@ -1248,10 +1372,20 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
               if (event.type === "APPROVAL_REQUESTED") {
                 stopSpinner?.();
                 stopSpinner = undefined;
-                const key = (event.payload as { key?: PermissionKey }).key;
+                const payload = event.payload as {
+                  key?: PermissionKey;
+                  approval?: Parameters<typeof approvalPreviewLine>[0]["approval"];
+                };
                 // CI mode never prompts (policy already denies); the guard
                 // keeps even a stray request from touching stdin.
-                if (key && !ci) void promptApproval(key);
+                if (payload.key && !ci) void promptApproval(payload.key, approvalPreviewLine(payload));
+              } else if (event.type === "QUESTION_REQUESTED") {
+                stopSpinner?.();
+                stopSpinner = undefined;
+                const payload = event.payload as { question?: UserQuestionInfo };
+                // Same CI guard as approvals: never touch stdin there; the
+                // question settles on its own timeout with assumptions.
+                if (payload.question && !ci) void promptQuestion(payload.question);
               } else {
                 stopSpinner?.();
                 stopSpinner = undefined;

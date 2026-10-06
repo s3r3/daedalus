@@ -99,6 +99,19 @@ export function validationFailed(result: ValidationResult): ValidationCheck[] {
   return result.checks.filter((check) => check.status !== 'pass');
 }
 
+/**
+ * Stable signature of a validation failure: the sorted names of the failing
+ * checks. Two attempts with the same signature failed in exactly the same
+ * way; the agent loop uses this to stop spending recovery retries when a
+ * repeat failure arrives with no changes made in between.
+ */
+export function validationFailureSignature(result: ValidationResult): string {
+  return validationFailed(result)
+    .map((check) => check.name)
+    .sort()
+    .join(',');
+}
+
 /** Validation gate: a task may only complete on validated evidence. */
 export function completionGate(result: ValidationResult | undefined, stopReason: string | undefined): { complete: boolean; reason: string } {
   if (stopReason !== undefined) return { complete: true, reason: `stop_condition:${stopReason}` };

@@ -12,7 +12,6 @@ import { ChatPanel } from './components/agent/chat-panel'
 import { TerminalPane } from './components/terminal/terminal-pane'
 import { ValidationPanel } from './components/validation/validation-panel'
 import { ErrorPanel, RecoveryPanel } from './components/recovery/recovery-panel'
-import { ApprovalCard } from './components/approval/approval-card'
 import { AttachmentsPanel, ChildTasksPanel, FilesChangedPanel, FinalReportView, ValidationSummary } from './components/report/report-panels'
 import { ScrollArea } from './components/ui/scroll-area'
 import { useEventStream } from './api/useEventStream'
@@ -167,7 +166,6 @@ export function App() {
             <div className="flex flex-col gap-2 pr-1">
               <ExtensionsPanel />
               <PlanPanel />
-              <ApprovalCard />
               <ActivityTimeline />
               <ValidationPanel />
               <RecoveryPanel />

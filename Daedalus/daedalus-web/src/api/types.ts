@@ -1,5 +1,6 @@
 import type {
   AgentMode,
+  ApprovalRequestInfo,
   Attachment,
   ChildTask,
   ChildTaskBudget,
@@ -10,6 +11,7 @@ import type {
   ProviderConfigPublic,
   ToolCall,
   ToolResult,
+  UserQuestionInfo,
   ValidationResult,
 } from '@daedalus/core'
 
@@ -173,8 +175,17 @@ export type CommandStarted = { call_id: string; command: string; tool: string; c
 export type CommandOutput = { call_id: string; chunk: string }
 export type CommandFinished = { call_id: string; status: string; exit_code: number | null; killed: boolean; truncated: boolean }
 export type RecoveryStarted = { reason: string; strategy: 'retry' | 'fix' | 'replan' | 'abort' | string; attempt: number }
-export type ApprovalRequested = { key: PermissionKey; policy: string }
-export type ApprovalDecided = { key: PermissionKey; decision: 'grant' | 'deny'; remember: boolean }
+export type ApprovalRequested = { key: PermissionKey; policy: string; approval?: ApprovalRequestInfo }
+export type ApprovalDecided = {
+  key: PermissionKey
+  decision: 'grant' | 'deny'
+  remember: boolean
+  approval_id?: string
+  note?: string
+  edited?: boolean
+  timed_out?: boolean
+  cancelled?: boolean
+}
 export type TaskCompleted = { state?: Record<string, unknown>; outcome: string; reason: string; error_summary?: string; summary?: string; model_error?: Record<string, unknown> }
 export type ModelRequestFailed = { error: string; error_kind?: string; error_reason?: string; model?: string; models_tried?: string[]; timeout_ms?: number }
 export type ModeChanged = { from: AgentMode; to: AgentMode; turn_boundary: boolean; replan_required: boolean }
@@ -201,10 +212,21 @@ export type ReviewCompleted = {
 export type AttachmentAdded = { attachment: Attachment }
 export type ChildTaskEvent = { child: ChildTask }
 export type SlashCommandExecuted = { command: string; text?: string; action?: string }
+export type PlanCreated = { plan: Plan; mode?: AgentMode; documents?: string[] }
+export type QuestionRequested = { question: UserQuestionInfo }
+export type QuestionAnswered = {
+  question_id: string
+  question: string
+  answer?: string
+  outcome: 'answered' | 'timeout' | 'cancelled'
+  option_index?: number
+  timed_out?: boolean
+  cancelled?: boolean
+}
 
 export type EventPayloads = {
   TASK_STARTED: { spec: { id: string; goal: string; repo_path: string; constraints: string[]; done_criteria: string[] } }
-  PLAN_CREATED: { plan: Plan }
+  PLAN_CREATED: PlanCreated
   THOUGHT: { text: string; source?: string; truncated?: boolean; original_length?: number }
   LOOP_WARNING: { tool: string; repeats: number; suppressed: boolean }
   REPLAN_CREATED: { plan: Plan; previous_plan?: Plan; reason?: string }
@@ -223,6 +245,8 @@ export type EventPayloads = {
   RECOVERY_STARTED: RecoveryStarted
   APPROVAL_REQUESTED: ApprovalRequested
   APPROVAL_DECIDED: ApprovalDecided
+  QUESTION_REQUESTED: QuestionRequested
+  QUESTION_ANSWERED: QuestionAnswered
   TASK_COMPLETED: TaskCompleted
   MODE_CHANGED: ModeChanged
   PROVIDER_CHANGED: ProviderChanged

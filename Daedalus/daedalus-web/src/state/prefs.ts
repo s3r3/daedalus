@@ -95,9 +95,11 @@ export function composerPrefsOf(composer: {
  * never collapse a panel out of reach.
  */
 export const CHAT_HEIGHT_KEY = 'daedalus.web.chat-height.v1'
+export const TERMINAL_HEIGHT_KEY = 'daedalus.web.terminal-height.v1'
 export const COLUMN_WIDTHS_KEY = 'daedalus.web.column-widths.v1'
 
 export const CHAT_HEIGHT = { min: 140, max: 720, default: 320 } as const
+export const TERMINAL_HEIGHT = { min: 120, max: 560, default: 180 } as const
 export const COLUMN_WIDTHS = {
   left: { min: 240, max: 480, default: 320 },
   right: { min: 280, max: 560, default: 360 },
@@ -123,6 +125,25 @@ export function saveChatHeight(height: number, storage: Storage | undefined = de
   if (!storage) return
   try {
     storage.setItem(CHAT_HEIGHT_KEY, String(clamp(height, CHAT_HEIGHT.min, CHAT_HEIGHT.max)))
+  } catch {
+    /* unavailable storage just keeps the height session-local */
+  }
+}
+
+export function loadTerminalHeight(storage: Storage | undefined = defaultStorage()): number {
+  if (!storage) return TERMINAL_HEIGHT.default
+  try {
+    const parsed = Number(storage.getItem(TERMINAL_HEIGHT_KEY))
+    return Number.isFinite(parsed) && parsed > 0 ? clamp(parsed, TERMINAL_HEIGHT.min, TERMINAL_HEIGHT.max) : TERMINAL_HEIGHT.default
+  } catch {
+    return TERMINAL_HEIGHT.default
+  }
+}
+
+export function saveTerminalHeight(height: number, storage: Storage | undefined = defaultStorage()): void {
+  if (!storage) return
+  try {
+    storage.setItem(TERMINAL_HEIGHT_KEY, String(clamp(height, TERMINAL_HEIGHT.min, TERMINAL_HEIGHT.max)))
   } catch {
     /* unavailable storage just keeps the height session-local */
   }

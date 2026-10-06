@@ -6,7 +6,7 @@ export type ToolCall = { id: string; task_id: string; turn_id: string; tool: str
 export type ToolResultStatus = 'ok' | 'error' | 'denied' | 'timeout';
 export type ToolResult = { call_id: string; status: ToolResultStatus; output: string; truncated: boolean; meta: Record<string, unknown> };
 export type ValidationCheck = { name: string; cmd: string; status: 'pass' | 'fail' | 'error' | 'skipped'; exit_code: number | null; summary: string; diagnostics: Array<{ file?: string; line?: number; message: string }>; source?: 'profile' | 'default'; required?: boolean };
-export type ValidationResult = { checks: ValidationCheck[]; source?: 'profile' | 'default'; warning?: string };
+export type ValidationResult = { checks: ValidationCheck[]; source?: 'profile' | 'default'; warning?: string; note?: string };
 export type RecoveryAction = { reason: string; strategy: 'retry' | 'fix' | 'replan' | 'abort'; attempt: number; limits: Record<string, number> };
 export type FinalReport = { task_id: string; outcome: 'success' | 'partial' | 'failed'; diff: string; evidence: string[]; metrics: Record<string, number>; title?: string; rules_files?: string[]; validation_source?: 'profile' | 'default'; worktree?: WorktreeReport; review?: ReviewGateReport };
 /** Strong-model review gate verdict recorded on the final report (tailor suite). */
@@ -17,7 +17,7 @@ export type ReviewGateReport = {
   findings: Array<{ severity: 'high' | 'medium' | 'low'; file: string; line?: number; message: string }>;
 };
 export type TaskState = TaskSpec & { plan: Plan; steps: PlanStep[]; status: 'pending' | 'active' | 'done' | 'failed'; current_step_id?: string; last_observation?: string; last_error?: string; last_tool_call_id?: string; tool_result?: ToolResult; mode?: AgentMode; turns?: number };
-export const EVENT_TYPES = ['TASK_STARTED','PLAN_CREATED','THOUGHT','LOOP_WARNING','TOOL_CALL_STARTED','TOOL_CALL_FINISHED','FILE_CHANGED','COMMAND_STARTED','COMMAND_OUTPUT','COMMAND_FINISHED','VALIDATION_STARTED','VALIDATION_FAILED','VALIDATION_PASSED','RECOVERY_STARTED','REPLAN_CREATED','TASK_COMPLETED','MODEL_REQUEST_STARTED','MODEL_REQUEST_FINISHED','MODEL_REQUEST_FAILED','APPROVAL_REQUESTED','APPROVAL_DECIDED','MODE_CHANGED','SLASH_COMMAND_EXECUTED','PROVIDER_CHANGED','REVIEW_COMPLETED','ATTACHMENT_ADDED','CHILD_TASK_STARTED','CHILD_TASK_FINISHED','HOOK_EXECUTED'] as const;
+export const EVENT_TYPES = ['TASK_STARTED','PLAN_CREATED','THOUGHT','LOOP_WARNING','TOOL_CALL_STARTED','TOOL_CALL_FINISHED','FILE_CHANGED','COMMAND_STARTED','COMMAND_OUTPUT','COMMAND_FINISHED','VALIDATION_STARTED','VALIDATION_FAILED','VALIDATION_PASSED','RECOVERY_STARTED','REPLAN_CREATED','TASK_COMPLETED','MODEL_REQUEST_STARTED','MODEL_REQUEST_FINISHED','MODEL_REQUEST_FAILED','APPROVAL_REQUESTED','APPROVAL_DECIDED','QUESTION_REQUESTED','QUESTION_ANSWERED','MODE_CHANGED','SLASH_COMMAND_EXECUTED','PROVIDER_CHANGED','REVIEW_COMPLETED','ATTACHMENT_ADDED','CHILD_TASK_STARTED','CHILD_TASK_FINISHED','HOOK_EXECUTED'] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 export type Event = { seq: number; task_id: string; turn_id?: string; type: EventType; payload: unknown; ts: string };
 
@@ -99,6 +99,8 @@ export type Attachment = {
 };
 
 export type ChildTaskBudget = { max_iterations: number; max_errors: number };
+/** Why a child ended without completing: budget exhaustion is a typed partial result for the parent, never a silent success. */
+export type ChildTaskErrorReason = 'budget_exceeded' | 'no_progress' | 'child_failed' | 'cancelled';
 export type ChildTask = {
   id: string;
   parent_task_id: string;
@@ -107,6 +109,7 @@ export type ChildTask = {
   status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
   budget?: ChildTaskBudget;
   result_summary?: string;
+  error_reason?: ChildTaskErrorReason;
   created_at: string;
   /** Name of a file-defined subagent (.daedalus/agents/<name>.md) running this child. */
   agent?: string;

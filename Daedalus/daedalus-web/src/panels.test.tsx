@@ -15,6 +15,7 @@ import { FilesChangedPanel, FinalReportView, ValidationSummary } from './compone
 // Every panel reads its facts from the event log, so the whole suite drives
 // components through seeded events rather than through the socket.
 const approve = vi.fn()
+const decideApproval = vi.fn()
 const createTask = vi.fn()
 const listTasks = vi.fn()
 const task = vi.fn()
@@ -24,6 +25,7 @@ const updateSession = vi.fn()
 vi.mock('./api/client', () => ({
   api: {
     approve: (...args: unknown[]) => approve(...args),
+    decideApproval: (...args: unknown[]) => decideApproval(...args),
     createTask: (...args: unknown[]) => createTask(...args),
     listTasks: (...args: unknown[]) => listTasks(...args),
     task: (...args: unknown[]) => task(...args),
@@ -52,6 +54,8 @@ beforeEach(() => {
   seq = 0
   approve.mockReset()
   approve.mockResolvedValue({ success: true, decision: 'grant', remember: false })
+  decideApproval.mockReset()
+  decideApproval.mockResolvedValue({ success: true, decision: 'grant', approval_id: 'approval-1' })
   createTask.mockReset()
   createTask.mockResolvedValue({ id: 'task-new', goal: 'do the thing' })
   listTasks.mockReset()
@@ -136,6 +140,98 @@ describe('Composer', () => {
     expect(textOf(await screen.findByTestId('slash-output'))).toContain('fake-lsp: configured · .ts')
   })
 
+  test('Enter sends the task while Shift+Enter stays a newline', async () => {
+    useDaedalusStore.getState().setComposer({ goal: 'add a health endpoint' })
+    render(<Composer />)
+    await userEvent.type(screen.getByTestId('composer-input'), '{Enter}')
+    expect(createTask).toHaveBeenCalled()
+
+    cleanup()
+    createTask.mockClear()
+    useDaedalusStore.getState().setComposer({ goal: 'line one' })
+    render(<Composer />)
+    await userEvent.type(screen.getByTestId('composer-input'), '{Shift>}{Enter}{/Shift}')
+    expect(createTask).not.toHaveBeenCalled()
+  })
+
+  test('text submitted while an approval is pending declines it with that note instead of starting a task', async () => {
+    seed([
+      ev('APPROVAL_REQUESTED', {
+        key: { taskId: 'task-1', tool: 'run_command', action: 'execute' },
+        policy: 'ask',
+        approval: {
+          id: 'approval-9',
+          key: { taskId: 'task-1', tool: 'run_command', action: 'execute' },
+          policy: 'ask',
+          tool: 'run_command',
+          preview: { kind: 'command', command: 'rm -rf build' },
+          requestedBy: { taskId: 'task-1' },
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    ])
+    useDaedalusStore.getState().setComposer({ goal: 'dont run that, clean the cache instead' })
+    render(<Composer />)
+    // While approval is pending the Run button is a Stop button; the text is
+    // submitted with Enter, which is exactly the path a user takes.
+    await userEvent.type(screen.getByTestId('composer-input'), '{Enter}')
+    expect(decideApproval).toHaveBeenCalledWith('task-1', 'approval-9', 'decline', { note: 'dont run that, clean the cache instead' })
+    expect(createTask).not.toHaveBeenCalled()
+  })
+
+  test('the model combobox filters by typing and Enter selects the match', async () => {
+    useDaedalusStore.getState().setModels([
+      { providerId: 'kr', model: 'claude-sonnet', supportsVision: true },
+      { providerId: 'gemini', model: 'gemini-flash', supportsVision: false },
+      { providerId: 'kr', model: 'gpt-5', supportsVision: false },
+    ])
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('model-picker-button'))
+    expect(screen.getAllByTestId('model-option').map((option) => option.getAttribute('data-value'))).toEqual([
+      '',
+      'gemini/gemini-flash',
+      'kr/claude-sonnet',
+      'kr/gpt-5',
+    ])
+    await userEvent.type(screen.getByTestId('model-picker-filter'), 'sonnet')
+    expect(screen.getAllByTestId('model-option').map((option) => option.getAttribute('data-value'))).toEqual(['', 'kr/claude-sonnet'])
+    await userEvent.type(screen.getByTestId('model-picker-filter'), '{Enter}')
+    expect(useDaedalusStore.getState().composer).toMatchObject({ providerId: 'kr', model: 'claude-sonnet' })
+  })
+
+  test('picking the default entry clears provider and model', async () => {
+    useDaedalusStore.getState().setModels([{ providerId: 'kr', model: 'claude-sonnet', supportsVision: true }])
+    useDaedalusStore.getState().setComposer({ providerId: 'kr', model: 'claude-sonnet' })
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('model-picker-button'))
+    await userEvent.click(screen.getAllByTestId('model-option')[0] as HTMLElement)
+    expect(useDaedalusStore.getState().composer.providerId).toBe('')
+    expect(useDaedalusStore.getState().composer.model).toBe('')
+  })
+
+  test('hundreds of models render capped with a keep-typing hint', async () => {
+    const many = Array.from({ length: 250 }, (_, index) => ({ providerId: 'r', model: `m-${index}`, supportsVision: false }))
+    useDaedalusStore.getState().setModels(many)
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('model-picker-button'))
+    expect(screen.getAllByTestId('model-option').length).toBe(101)
+    expect(textOf(screen.getByTestId('model-picker-more'))).toContain('+150 more')
+  })
+
+  test('a follow-up after a plan carries plan_task_id so the steps execute in context', async () => {
+    seed([
+      ev('TASK_STARTED', { spec: { goal: 'rencanakan landing page' } }),
+      ev('PLAN_CREATED', {
+        plan: { steps: [{ intent: 'buat folder ayid', status: 'pending' }, { intent: 'tulis index.html', status: 'pending' }] },
+        mode: 'plan',
+      }),
+    ])
+    useDaedalusStore.getState().setComposer({ goal: 'jalankan rencananya', mode: 'auto' })
+    render(<Composer />)
+    await userEvent.type(screen.getByTestId('composer-input'), '{Enter}')
+    expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ goal: 'jalankan rencananya', plan_task_id: 'task-1' }))
+  })
+
   test('thinking toggle persists through the session and /settings thinking works', async () => {
     render(<Composer />)
     await userEvent.click(screen.getByTestId('thinking-toggle'))
@@ -184,15 +280,31 @@ describe('ApprovalCard', () => {
     seed([approvalEvent()])
     render(<ApprovalCard />)
     await userEvent.click(screen.getByTestId('approval-deny'))
+    await userEvent.click(screen.getByTestId('approval-decline-confirm'))
     expect(approve).toHaveBeenCalledWith('task-1', expect.objectContaining({ tool: 'write_file' }), 'deny', false)
   })
 
-  test('the remember checkbox is carried into the decision', async () => {
-    seed([approvalEvent()])
+  test('a remembered decision carries the exact pattern label the card showed', async () => {
+    seed([
+      ev('APPROVAL_REQUESTED', {
+        key: { taskId: 'task-1', tool: 'run_command', action: 'execute' },
+        policy: 'ask',
+        approval: {
+          id: 'approval-cmd',
+          key: { taskId: 'task-1', tool: 'run_command', action: 'execute' },
+          policy: 'ask',
+          tool: 'run_command',
+          preview: { kind: 'command', command: 'npm test' },
+          rememberPattern: { kind: 'command-prefix', tool: 'run_command', token: 'npm', label: 'run_command starting with "npm"' },
+          mode: 'manual',
+          requestedBy: { taskId: 'task-1' },
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    ])
     render(<ApprovalCard />)
-    await userEvent.click(screen.getByLabelText(/remember for this task/i))
-    await userEvent.click(screen.getByTestId('approval-allow'))
-    expect(approve).toHaveBeenCalledWith('task-1', expect.anything(), 'grant', true)
+    await userEvent.click(screen.getByTestId('approval-remember'))
+    expect(decideApproval).toHaveBeenCalledWith('task-1', 'approval-cmd', 'allow_remember', {})
   })
 
   test('a decided approval unblocks the card', () => {
@@ -208,6 +320,98 @@ describe('ApprovalCard', () => {
     render(<ApprovalCard />)
     await userEvent.click(screen.getByTestId('approval-allow'))
     expect(textOf(await screen.findByText(/expired/i))).not.toBe('')
+  })
+
+  const commandApproval = () =>
+    ev('APPROVAL_REQUESTED', {
+      key: { taskId: 'task-1', tool: 'run_command', action: 'execute' },
+      policy: 'ask',
+      approval: {
+        id: 'approval-cmd',
+        key: { taskId: 'task-1', tool: 'run_command', action: 'execute' },
+        policy: 'ask',
+        tool: 'run_command',
+        preview: { kind: 'command', command: 'npm test -- --watchPathIgnorePatterns=very/long/path/that/must/not/be/cut' },
+        rememberPattern: { kind: 'command-prefix', tool: 'run_command', token: 'npm', label: 'run_command starting with "npm"' },
+        mode: 'manual',
+        requestedBy: { taskId: 'task-1' },
+        createdAt: new Date().toISOString(),
+      },
+    })
+
+  test('the command preview is verbatim and the remember label shows the exact pattern', () => {
+    seed([commandApproval()])
+    render(<ApprovalCard />)
+    expect(textOf(screen.getByTestId('approval-preview'))).toContain('$ npm test -- --watchPathIgnorePatterns=very/long/path/that/must/not/be/cut')
+    expect(textOf(screen.getByTestId('approval-remember'))).toContain('run_command starting with "npm"')
+    expect(textOf(screen.getByTestId('approval-card'))).toContain('manual mode')
+  })
+
+  test('allow once decides by approval id', async () => {
+    seed([commandApproval()])
+    render(<ApprovalCard />)
+    await userEvent.click(screen.getByTestId('approval-allow'))
+    expect(decideApproval).toHaveBeenCalledWith('task-1', 'approval-cmd', 'allow', {})
+  })
+
+  test('Enter on the card allows, Escape opens the decline note', async () => {
+    seed([commandApproval()])
+    render(<ApprovalCard />)
+    await userEvent.type(screen.getByTestId('approval-card'), '{Escape}')
+    expect(screen.getByTestId('approval-note')).toBeTruthy()
+    cleanup()
+    seed([commandApproval()])
+    render(<ApprovalCard />)
+    await userEvent.type(screen.getByTestId('approval-card'), '{Enter}')
+    expect(decideApproval).toHaveBeenCalledWith('task-1', 'approval-cmd', 'allow', {})
+  })
+
+  test('edit & allow runs the edited command, not the original', async () => {
+    seed([commandApproval()])
+    render(<ApprovalCard />)
+    await userEvent.click(screen.getByTestId('approval-edit'))
+    const input = screen.getByTestId('approval-edit-input') as HTMLInputElement
+    expect(input.value).toContain('npm test')
+    await userEvent.clear(input)
+    await userEvent.type(input, 'npm run lint')
+    await userEvent.click(screen.getByTestId('approval-edit-confirm'))
+    expect(decideApproval).toHaveBeenCalledWith('task-1', 'approval-cmd', 'allow', { editedArgs: { command: 'npm', args: ['run', 'lint'] } })
+  })
+
+  test('decline delivers the typed note to the agent', async () => {
+    seed([commandApproval()])
+    render(<ApprovalCard />)
+    await userEvent.click(screen.getByTestId('approval-deny'))
+    await userEvent.type(screen.getByTestId('approval-note'), 'use the server package only')
+    await userEvent.click(screen.getByTestId('approval-decline-confirm'))
+    expect(decideApproval).toHaveBeenCalledWith('task-1', 'approval-cmd', 'decline', { note: 'use the server package only' })
+  })
+
+  test('a child task request names the child and its parent', () => {
+    seed([
+      ev('APPROVAL_REQUESTED', {
+        key: { taskId: 'child-9', tool: 'write_file', action: 'create', path: 'src/kid.ts' },
+        policy: 'ask',
+        approval: {
+          id: 'approval-kid',
+          key: { taskId: 'child-9', tool: 'write_file', action: 'create', path: 'src/kid.ts' },
+          policy: 'ask',
+          tool: 'write_file',
+          preview: { kind: 'write', path: 'src/kid.ts', content: 'export const kid = true\n' },
+          requestedBy: { taskId: 'child-9', parentTaskId: 'task-1' },
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    ])
+    render(<ApprovalCard />)
+    expect(textOf(screen.getByTestId('approval-requester'))).toContain('requested by child task child-9 (child of task-1)')
+    expect(textOf(screen.getByTestId('approval-preview'))).toContain('export const kid = true')
+  })
+
+  test('queued requests show a count badge', () => {
+    seed([commandApproval(), commandApproval()])
+    render(<ApprovalCard />)
+    expect(textOf(screen.getByTestId('approval-card'))).toContain('+1 queued')
   })
 })
 

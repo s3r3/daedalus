@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { ChildTask, ChildTaskBudget, Event, TaskSpec } from '../contracts.ts';
+import type { ChildTask, ChildTaskBudget, ChildTaskErrorReason, Event, TaskSpec } from '../contracts.ts';
 import type { EventBus } from '../events.ts';
 import { emitEvent } from '../events.ts';
 import type { TaskStore } from '../persistence.ts';
@@ -21,6 +21,8 @@ export type ChildTaskExecution = {
   diff?: string;
   iterations?: number;
   errors?: number;
+  /** Typed failure for the parent when the child did not complete. */
+  error_reason?: ChildTaskErrorReason;
 };
 
 export type ChildTaskExecutor = (child: ChildTask) => Promise<ChildTaskExecution>;
@@ -95,12 +97,14 @@ export class OrchestratorRunner {
     for (const child of children) {
       if (noProgress) {
         child.status = 'cancelled';
+        child.error_reason = 'no_progress';
         child.result_summary = 'cancelled after no-progress stop';
         continue;
       }
       if (budgetExceeded || this.#budgetExhausted(totalIterations, totalErrors)) {
         budgetExceeded = true;
         child.status = 'cancelled';
+        child.error_reason = 'budget_exceeded';
         child.result_summary = 'cancelled after total budget exceeded';
         continue;
       }
@@ -110,6 +114,9 @@ export class OrchestratorRunner {
         const execution = await this.#executeChild({ ...child });
         child.status = execution.status;
         child.result_summary = execution.summary;
+        if (execution.status !== 'done') {
+          child.error_reason = execution.error_reason ?? (execution.status === 'cancelled' ? 'cancelled' : 'child_failed');
+        }
         totalIterations += execution.iterations ?? 1;
         totalErrors += execution.errors ?? (execution.status === 'failed' ? 1 : 0);
         if (this.#budgetExceeded(totalIterations, totalErrors)) budgetExceeded = true;
@@ -120,6 +127,7 @@ export class OrchestratorRunner {
         previousFingerprint = fingerprint;
       } catch (error) {
         child.status = 'failed';
+        child.error_reason = 'child_failed';
         child.result_summary = String(error);
         totalIterations += 1;
         totalErrors += 1;

@@ -11,6 +11,10 @@ import {
   saveChatHeight,
   saveColumnWidths,
   saveComposerPrefs,
+  TERMINAL_HEIGHT,
+  TERMINAL_HEIGHT_KEY,
+  loadTerminalHeight,
+  saveTerminalHeight,
 } from './prefs'
 import { useDaedalusStore } from './taskStore'
 
@@ -103,6 +107,19 @@ describe('panel layout prefs (chat height + column widths)', () => {
     expect(loadChatHeight()).toBe(CHAT_HEIGHT.min)
     localStorage.setItem(CHAT_HEIGHT_KEY, 'not-a-number')
     expect(loadChatHeight()).toBe(CHAT_HEIGHT.default)
+  })
+
+  test('terminal height defaults, round-trips, and clamps to its sane range', () => {
+    expect(loadTerminalHeight()).toBe(TERMINAL_HEIGHT.default)
+    saveTerminalHeight(300)
+    expect(loadTerminalHeight()).toBe(300)
+    expect(localStorage.getItem(TERMINAL_HEIGHT_KEY)).toBe('300')
+    saveTerminalHeight(10_000)
+    expect(loadTerminalHeight()).toBe(TERMINAL_HEIGHT.max)
+    saveTerminalHeight(10)
+    expect(loadTerminalHeight()).toBe(TERMINAL_HEIGHT.min)
+    localStorage.setItem(TERMINAL_HEIGHT_KEY, 'not-a-number')
+    expect(loadTerminalHeight()).toBe(TERMINAL_HEIGHT.default)
   })
 
   test('column widths default, round-trip, clamp, and survive corrupt storage', () => {

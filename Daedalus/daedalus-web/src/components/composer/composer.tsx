@@ -7,9 +7,10 @@ import { Button } from '../ui/button'
 import { Textarea } from '../ui/input'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useTaskEvents } from '../../state/hooks'
-import { fileChanges, latestPlan, parseModelPool, pendingApprovals, taskStatus, validation } from '../../state/selectors'
+import { approvalId, fileChanges, latestPlan, parseModelPool, pendingApprovals, pendingQuestions, taskStatus, validation } from '../../state/selectors'
 import { api } from '../../api/client'
 import type { WorkspaceFileEntry } from '../../api/types'
+import { ModelPicker } from './model-picker'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 
 type UploadKind = 'file' | 'folder' | 'image' | 'zip'
@@ -85,8 +86,8 @@ export function Composer() {
 
   // While the selected task is running, the Run button morphs into Stop —
   // the user should never have to hunt for how to halt a run they started.
-  const activeStatus = taskStatus(events, pendingApprovals(events).length)
-  const activeRunning = Boolean(activeTaskId) && (activeStatus === 'running' || activeStatus === 'awaiting-approval')
+  const activeStatus = taskStatus(events, pendingApprovals(events).length, pendingQuestions(events).length)
+  const activeRunning = Boolean(activeTaskId) && (activeStatus === 'running' || activeStatus === 'awaiting-approval' || activeStatus === 'awaiting-answer')
 
   useEffect(() => {
     if (!activeRunning) setStopping(false)
@@ -198,6 +199,9 @@ export function Composer() {
     const state = useDaedalusStore.getState()
     let providerId = state.composer.providerId
     let model = selection.trim()
+    // An empty selection is the "default model" entry: clear both halves so
+    // the next task really runs on the gateway default.
+    if (!model) providerId = ''
     const known = state.models.find((entry) => `${entry.providerId}/${entry.model}` === model || entry.model === model)
     if (known) {
       providerId = known.providerId
@@ -440,6 +444,20 @@ export function Composer() {
       setTouched(true)
       return
     }
+    // Cline pattern: text submitted while an approval is pending answers the
+    // approval itself — declined, with this text delivered to the agent
+    // verbatim as the reason — instead of starting a second task.
+    const firstPending = pendingApprovals(events)[0]
+    if (firstPending && activeTaskId) {
+      try {
+        await api.decideApproval(activeTaskId, firstPending.approval?.id ?? approvalId(firstPending.key), 'decline', { note: goal })
+        setComposer({ goal: '', error: null })
+        setSlashOutput(`Declined the pending ${firstPending.key.tool} request and sent your note to the agent.`)
+      } catch (error) {
+        setComposer({ error: errorMessage(error) })
+      }
+      return
+    }
     setComposer({ submitting: true, error: null })
     try {
       const attachmentsForTask = visionWarning ? composer.attachments.filter((attachment) => attachment.kind !== 'image') : composer.attachments
@@ -447,6 +465,10 @@ export function Composer() {
       // pick for this task; the provider still selects the connection, and
       // core routes across the pool with the chosen strategy.
       const pool = parseModelPool(composer.modelPool)
+      // Plan continuity (Cline-style): when the task on screen produced a
+      // plan, the follow-up task carries it — switching to Auto/Manual and
+      // sending "jalankan rencananya" executes those steps in this context.
+      const planTaskId = activeTaskId && latestPlan(events) && composer.mode !== 'plan' ? activeTaskId : undefined
       const created = await api.createTask({
         goal,
         repo_path: workspaceRoot,
@@ -458,6 +480,7 @@ export function Composer() {
         ...(pool.length > 0 ? { models: pool } : { model: composer.model || undefined }),
         ...(pool.length > 1 ? { model_strategy: composer.modelStrategy } : {}),
         attachments: attachmentsForTask,
+        ...(planTaskId ? { plan_task_id: planTaskId } : {}),
       })
       setTask(created.id, goal)
       setComposer({ submitting: false, goal, attachments: [] })
@@ -531,10 +554,9 @@ export function Composer() {
   }
 
   const onModelSelect = (value: string): void => {
-    if (!value) return
-    const [providerId, ...rest] = value.split('::')
-    const model = rest.join('::')
-    void changeModel(providerId && model ? `${providerId}/${model}` : value)
+    // '' is the combobox's "default model" entry; changeModel clears both
+    // provider and model for it.
+    void changeModel(value)
   }
 
   return (
@@ -679,20 +701,7 @@ export function Composer() {
 
         <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
           model
-          <select
-            aria-label="model picker"
-            data-testid="model-picker"
-            className="h-6 max-w-[260px] rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
-            value={composer.providerId && composer.model ? `${composer.providerId}::${composer.model}` : ''}
-            onChange={(event) => onModelSelect(event.target.value)}
-          >
-            <option value="">{composer.model ? `${composer.providerId ? `${composer.providerId}/` : ''}${composer.model}` : 'default model'}</option>
-            {models.map((entry) => (
-              <option key={`${entry.providerId}::${entry.model}`} value={`${entry.providerId}::${entry.model}`}>
-                {entry.providerId}/{entry.model}{entry.supportsVision ? ' · vision' : ''}
-              </option>
-            ))}
-          </select>
+          <ModelPicker models={models} providerId={composer.providerId} model={composer.model} onSelect={onModelSelect} />
         </label>
 
         <div className="ml-auto flex items-center gap-1">

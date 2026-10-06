@@ -86,19 +86,30 @@ describe('agent modes', () => {
     expect(controller.set('manual').replanRequired).toBe(false);
   });
 
-  test('Ask and Plan expose only read tools; unknown tools are never visible', () => {
+  test('Ask exposes only read tools; Plan adds the path-gated plan-write tools; unknown tools are never visible', () => {
     for (const mode of ['ask', 'plan'] as const) {
       expect(isToolVisible(mode, 'read_file')).toBe(true);
-      expect(isToolVisible(mode, 'write_file')).toBe(false);
-      expect(isToolVisible(mode, 'create_dir')).toBe(false);
       expect(isToolVisible(mode, 'run_command')).toBe(false);
     }
+    expect(isToolVisible('ask', 'write_file')).toBe(false);
+    expect(isToolVisible('ask', 'create_dir')).toBe(false);
+    // Plan sees the plan-write tools so the .daedalus/plans carve-out is
+    // callable; toolCallPolicy still denies every path outside it.
+    expect(isToolVisible('plan', 'write_file')).toBe(true);
+    expect(isToolVisible('plan', 'create_dir')).toBe(true);
+    expect(isToolVisible('plan', 'mcp__demo__write')).toBe(false);
     expect(isToolVisible('auto', 'not_a_real_tool')).toBe(false);
     expect(toolModePolicy('manual', 'write_file')).toEqual({ visible: true, approval: 'ask' });
     expect(toolModePolicy('manual', 'run_command')).toEqual({ visible: true, approval: 'ask' });
     expect(toolModePolicy('auto', 'write_file', true)).toEqual({ visible: true, approval: 'auto' });
-    expect(toolModePolicy('auto', 'write_file', false)).toEqual({ visible: true, approval: 'ask' });
+    // Auto: edits are free; only execution is gated by the auto-approve toggle.
+    expect(toolModePolicy('auto', 'write_file', false)).toEqual({ visible: true, approval: 'auto' });
+    expect(toolModePolicy('auto', 'run_command', false)).toEqual({ visible: true, approval: 'ask' });
+    expect(toolModePolicy('auto', 'run_command', true)).toEqual({ visible: true, approval: 'auto' });
+    expect(toolModePolicy('orchestrator', 'write_file', false)).toEqual({ visible: true, approval: 'auto' });
+    expect(toolModePolicy('orchestrator', 'run_command', false)).toEqual({ visible: true, approval: 'ask' });
     expect(toolModePolicy('ask', 'write_file')).toEqual({ visible: false, approval: 'deny' });
+    expect(toolModePolicy('plan', 'run_command')).toEqual({ visible: false, approval: 'deny' });
   });
 
   test('AgentLoop filters offered tools and denies a fabricated write in Ask mode', async () => {

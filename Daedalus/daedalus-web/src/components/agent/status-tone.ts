@@ -9,6 +9,7 @@ export const STATUS_TONE: Record<TaskStatus, Tone> = {
   idle: 'neutral',
   running: 'info',
   'awaiting-approval': 'warning',
+  'awaiting-answer': 'warning',
   done: 'success',
   partial: 'warning',
   failed: 'error',

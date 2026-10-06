@@ -1,7 +1,9 @@
 export {
+  MAX_SKILLS_IN_PROMPT,
   SkillRegistry,
   createReadSkillTool,
   daedalusGlobalSkillsDir,
+  dedupeSkillsByName,
   formatSkillOrigin,
   globalSkillSearchDirs,
   loadSkills,
