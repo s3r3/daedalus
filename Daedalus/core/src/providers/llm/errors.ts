@@ -50,6 +50,47 @@ export class LLMContentPolicyError extends LLMError {
   }
 }
 
+export type LLMErrorKind = "transient" | "fatal" | "other";
+
+/**
+ * Classify provider failures for agent-loop error accounting. Transient
+ * failures (timeouts, rate limits, network errors, and provider 5xx errors)
+ * may succeed on a later request or another model; auth and content-policy
+ * failures will not be fixed by retrying the same request.
+ */
+export function classifyLLMError(error: unknown): LLMErrorKind {
+  if (error instanceof LLMAuthError || error instanceof LLMContentPolicyError) return "fatal";
+  if (error instanceof LLMTimeoutError || error instanceof LLMRateLimitError) return "transient";
+
+  const code = (error as { code?: unknown } | null)?.code;
+  const codeText = typeof code === "string" ? code.toLowerCase() : "";
+  if (codeText === "auth" || codeText === "content_policy") return "fatal";
+  if (["transient", "network", "rate_limit", "timeout"].includes(codeText)) return "transient";
+
+  const summary = (error instanceof Error ? `${error.name}: ${error.message}` : String(error)).toLowerCase();
+  if (summary.includes("content_policy") || summary.includes("content policy") || summary.includes("content_filter") || summary.includes("authentication failed") || summary.includes("invalid api key")) return "fatal";
+  if (
+    summary.includes("rate limit") ||
+    summary.includes("too many requests") ||
+    summary.includes("timed out") ||
+    summary.includes("timeout") ||
+    summary.includes("fetch failed") ||
+    summary.includes("network") ||
+    /http 5\d\d/.test(summary) ||
+    summary.includes("temporarily unavailable") ||
+    summary.includes("overloaded")
+  ) return "transient";
+  return "other";
+}
+
+export function isTransientLLMError(error: unknown): boolean {
+  return classifyLLMError(error) === "transient";
+}
+
+export function isFatalLLMError(error: unknown): boolean {
+  return classifyLLMError(error) === "fatal";
+}
+
 export function classifyProviderError(status: number, body: unknown): LLMError {
   if (status === 401 || status === 403) return new LLMAuthError("provider auth failed");
   if (status === 429) {

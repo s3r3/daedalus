@@ -2,6 +2,8 @@ import type { EventBus } from '../events.ts';
 import { emitEvent } from '../events.ts';
 import type { TaskStore } from '../persistence.ts';
 import type { LLMProvider, Message } from '../providers/llm/types.ts';
+import { classifyLLMError, LLMAuthError, LLMContentPolicyError, type LLMErrorKind } from '../providers/llm/errors.ts';
+import { modelPoolFailureReason } from '../providers/llm/model-pool.ts';
 import type { Event, Plan, PlanStep, TaskSpec, TaskState, ToolCall } from '../contracts.ts';
 import type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor } from './types.ts';
 import type { Validator } from '../validation/index.ts';
@@ -46,6 +48,18 @@ export type AgentLoopOptions = {
   condense?: boolean;
 };
 
+
+type ModelFailure = {
+  provider: string;
+  model?: string;
+  modelsTried: string[];
+  error: string;
+  reason: string;
+  kind: LLMErrorKind;
+  timeoutMs?: number;
+  consecutive: number;
+};
+
 export class AgentLoop {
   readonly #provider: LLMProvider;
   readonly #bus: EventBus;
@@ -65,6 +79,7 @@ export class AgentLoop {
   readonly #condense: boolean;
   readonly #loopGuards = new Map<string, LoopGuard>();
   readonly #pendingGuidance = new Map<string, string>();
+  readonly #modelFailures = new Map<string, ModelFailure>();
   #cancelled = new Set<string>();
   readonly #invalidActions = new Map<string, number>();
 
@@ -106,6 +121,7 @@ export class AgentLoop {
     } finally {
       this.#loopGuards.delete(spec.id);
       this.#pendingGuidance.delete(spec.id);
+      this.#modelFailures.delete(spec.id);
     }
   }
 
@@ -125,7 +141,19 @@ export class AgentLoop {
     for (;;) {
       if (this.#cancelled.has(state.id) || this.#store.isCancelRequested(state.id)) { state = { ...state, status: 'failed', last_error: 'aborted' }; await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: 'aborted' }); this.#store.saveState(state.id, state); return state; }
       const stop = evaluateStopConditions({ ...state, }, iteration, { ...this.#stopPolicy, max_errors: this.#stopPolicy.max_errors });
-      if (errors >= this.#stopPolicy.max_errors) { state = { ...state, status: 'failed', last_error: 'max_errors' }; await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: 'max_errors' }); this.#store.saveState(state.id, state); return state; }
+      if (errors >= this.#stopPolicy.max_errors) {
+        const failure = this.#modelFailures.get(state.id);
+        const errorSummary = failure ? summarizeModelFailure(failure, this.#stopPolicy.max_errors) : undefined;
+        state = { ...state, status: 'failed', last_error: 'max_errors' };
+        await this.#emit(state.id, undefined, 'TASK_COMPLETED', {
+          state,
+          outcome: 'failed',
+          reason: 'max_errors',
+          ...(errorSummary ? { error_summary: errorSummary, model_error: failure } : {}),
+        });
+        this.#store.saveState(state.id, state);
+        return state;
+      }
       if (stop === 'completed' || this.#done(state)) {
         let completed = true;
         if (this.#validator && completed) {
@@ -228,38 +256,88 @@ export class AgentLoop {
       response = await this.#provider.chat(messages, visibleTools, this.#chatOptions);
       await this.#emit(state.id, turnId, 'MODEL_REQUEST_FINISHED', { message: response.message, usage: response.usage, finish_reason: response.finish_reason, ...meter });
       await this.#emitThought(state.id, turnId, response.message);
+      this.#modelFailures.delete(state.id);
     } catch (error) {
-      await this.#emit(state.id, turnId, 'MODEL_REQUEST_FAILED', { error: String(error), ...meter });
-      return { ...state, mode: turnMode, turns: (state.turns ?? 0) + 1, last_error: String(error) };
+      const errorText = formatError(error);
+      const kind = classifyLLMError(error);
+      const reason = error instanceof LLMAuthError
+        ? 'auth'
+        : error instanceof LLMContentPolicyError
+          ? 'content_policy'
+          : modelPoolFailureReason(error);
+      const modelsTried = providerAttemptedModels(this.#provider, state);
+      const model = providerAttemptedModel(this.#provider, state, modelsTried);
+      const timeoutMs = this.#chatOptions?.timeout_ms ?? providerTimeoutMs(this.#provider);
+      await this.#emit(state.id, turnId, 'MODEL_REQUEST_FAILED', {
+        error: errorText,
+        error_kind: kind,
+        error_reason: reason,
+        ...(model ? { model } : {}),
+        models_tried: modelsTried,
+        ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
+        ...meter,
+      });
+      if (kind === 'fatal') {
+        const failure: ModelFailure = {
+          provider: this.#provider.name,
+          ...(model ? { model } : {}),
+          modelsTried,
+          error: errorText,
+          reason,
+          kind,
+          ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          consecutive: (this.#modelFailures.get(state.id)?.consecutive ?? 0) + 1,
+        };
+        return {
+          ...state,
+          mode: turnMode,
+          turns: (state.turns ?? 0) + 1,
+          status: 'failed',
+          last_error: summarizeFatalModelFailure(failure),
+        };
+      }
+      const failure: ModelFailure = {
+        provider: this.#provider.name,
+        ...(model ? { model } : {}),
+        modelsTried,
+        error: errorText,
+        reason,
+        kind,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        consecutive: (this.#modelFailures.get(state.id)?.consecutive ?? 0) + 1,
+      };
+      this.#modelFailures.set(state.id, failure);
+      return { ...state, mode: turnMode, turns: (state.turns ?? 0) + 1, last_error: errorText };
     }
-    const action = parseAction(state, response.message);
+    const successfulState: TaskState = { ...state, mode: turnMode, last_error: undefined };
+    const action = parseAction(successfulState, response.message);
     if (action.kind === 'stop' && action.reason === 'invalid_action') {
       const canMutate = turnMode === 'auto' || turnMode === 'manual' || turnMode === 'orchestrator';
       const attempts = (this.#invalidActions.get(state.id) ?? 0) + 1;
       this.#invalidActions.set(state.id, attempts);
       if (canMutate && attempts < this.#stopPolicy.max_errors) {
         const directive = 'Invalid model response: the previous reply was not a tool call, done:, replan:, or stop:. Call a concrete tool next (for implementation work use write_file, edit_file, create_dir, or run_command); read-only inspection alone does not complete an implementation step.';
-        const updated = { ...state, mode: turnMode, turns: (state.turns ?? 0) + 1, last_error: undefined, last_observation: directive };
+        const updated = { ...successfulState, turns: (state.turns ?? 0) + 1, last_error: undefined, last_observation: directive };
         this.#store.saveState(state.id, updated);
         return updated;
       }
-      return { ...state, mode: turnMode, turns: (state.turns ?? 0) + 1, status: 'failed', last_error: 'invalid_action' };
+      return { ...successfulState, turns: (state.turns ?? 0) + 1, status: 'failed', last_error: 'invalid_action' };
     }
     if (action.kind === 'complete') {
       this.#invalidActions.delete(state.id);
-      return { ...state, mode: turnMode, turns: (state.turns ?? 0) + 1, last_observation: action.summary };
+      return { ...successfulState, turns: (state.turns ?? 0) + 1, last_observation: action.summary };
     }
     if (action.kind === 'stop') {
-      if (action.reason === 'completed') return { ...state, mode: turnMode, turns: (state.turns ?? 0) + 1, status: 'done' };
-      return { ...state, mode: turnMode, turns: (state.turns ?? 0) + 1, status: 'failed', last_error: action.reason };
+      if (action.reason === 'completed') return { ...successfulState, turns: (state.turns ?? 0) + 1, status: 'done' };
+      return { ...successfulState, turns: (state.turns ?? 0) + 1, status: 'failed', last_error: action.reason };
     }
     if (action.kind === 'replan') {
       this.#invalidActions.delete(state.id);
-      const previous = state.plan;
-      const next = await this.#planner.replan(toSpec(state), previous, { kind: 'assistant', message: response.message });
+      const previous = successfulState.plan;
+      const next = await this.#planner.replan(toSpec(successfulState), previous, { kind: 'assistant', message: response.message });
       await this.#emit(state.id, turnId, 'REPLAN_CREATED', { previous_plan: previous, plan: next, reason: action.reason });
       await this.#emit(state.id, turnId, 'PLAN_CREATED', { plan: next });
-      const updated = { ...state, mode: turnMode, turns: (state.turns ?? 0) + 1, plan: next, steps: next.steps };
+      const updated = { ...successfulState, turns: (state.turns ?? 0) + 1, plan: next, steps: next.steps };
       this.#store.saveState(state.id, updated);
       return updated;
     }
@@ -269,7 +347,7 @@ export class AgentLoop {
     // models re-read the same files for several turns and never reach the
     // edit. Sequential execution preserves approval/mode checks per call.
     const rawCalls = response.message.tool_calls ?? [];
-    let current: TaskState = { ...state, mode: turnMode, turns: (state.turns ?? 0) + 1 };
+    let current: TaskState = { ...successfulState, turns: (state.turns ?? 0) + 1 };
     for (const rawCall of rawCalls) {
       let call: ToolCall;
       try {
@@ -363,6 +441,88 @@ export class AgentLoop {
 }
 
 const MAX_THOUGHT_CHARS = 4_000;
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+
+function providerAttemptedModels(provider: LLMProvider, state: TaskState): string[] {
+  const candidate = provider as { lastAttemptedModels?: unknown; lastAttemptedModel?: unknown; model?: unknown };
+  if (Array.isArray(candidate.lastAttemptedModels)) {
+    const models = candidate.lastAttemptedModels.filter((model): model is string => typeof model === 'string' && model.length > 0);
+    if (models.length > 0) return models;
+  }
+  if (typeof candidate.lastAttemptedModel === 'string' && candidate.lastAttemptedModel) return [candidate.lastAttemptedModel];
+  if (typeof candidate.model === 'string' && candidate.model) return [candidate.model];
+  if (state.models && state.models.length > 0) return [...state.models];
+  if (state.model) return [state.model];
+  return [];
+}
+
+function providerAttemptedModel(provider: LLMProvider, state: TaskState, modelsTried: string[]): string | undefined {
+  return modelsTried[modelsTried.length - 1]
+    ?? (provider as { activeModel?: unknown }).activeModel as string | undefined
+    ?? state.model;
+}
+
+function providerTimeoutMs(provider: LLMProvider): number | undefined {
+  const timeout = (provider as { defaultTimeoutMs?: unknown }).defaultTimeoutMs;
+  return typeof timeout === 'number' && Number.isFinite(timeout) && timeout > 0 ? timeout : undefined;
+}
+
+function summarizeModelFailure(failure: ModelFailure, maxErrors: number): string {
+  const subject = failure.model ? `Model ${failure.model}` : `Model provider ${failure.provider}`;
+  const tried = failure.modelsTried.length > 0
+    ? ` Tried ${failure.modelsTried.length} model${failure.modelsTried.length === 1 ? '' : 's'} (${failure.modelsTried.join(', ')}).`
+    : '';
+  return `${subject} ${modelFailureDetail(failure)}.${tried} Stopped after ${failure.consecutive} consecutive model request failure${failure.consecutive === 1 ? '' : 's'} (error limit ${maxErrors}).`;
+}
+
+function summarizeFatalModelFailure(failure: ModelFailure): string {
+  const subject = failure.model ? `Model ${failure.model}` : `Model provider ${failure.provider}`;
+  if (failure.reason === 'auth') {
+    return `auth: ${subject} could not be used because provider authentication failed. Daedalus stopped immediately; check the provider or API key. Original error: ${shortError(failure.error)}`;
+  }
+  if (failure.reason === 'content_policy') {
+    return `content_policy: ${subject} refused the request (content policy). Daedalus stopped immediately instead of routing around the refusal. Original error: ${shortError(failure.error)}`;
+  }
+  return `fatal_provider_error: ${subject} failed with a fatal provider error. Daedalus stopped immediately. Original error: ${shortError(failure.error)}`;
+}
+
+function modelFailureDetail(failure: ModelFailure): string {
+  switch (failure.reason) {
+    case 'timeout': return `timed out${timeoutDurationText(failure)}`;
+    case 'rate_limit': return 'was rate limited by the provider';
+    case 'quota': return `ran into a provider quota limit (${shortError(failure.error)})`;
+    case 'context_or_token_limit': return `exceeded the model context/token limit (${shortError(failure.error)})`;
+    case 'model_not_found': return `was not available (${shortError(failure.error)})`;
+    case 'network': return `could not reach the provider (${shortError(failure.error)})`;
+    case 'format_or_empty': return `returned an unusable response (${shortError(failure.error)})`;
+    default: return `failed (${shortError(failure.error)})`;
+  }
+}
+
+function timeoutDurationText(failure: ModelFailure): string {
+  const timeoutMs = failure.timeoutMs ?? parseTimeoutMs(failure.error);
+  return timeoutMs === undefined ? '' : ` after ${formatDuration(timeoutMs)}`;
+}
+
+function parseTimeoutMs(error: string): number | undefined {
+  const match = /after\s+(\d+(?:\.\d+)?)ms/i.exec(error);
+  if (!match) return undefined;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function formatDuration(ms: number): string {
+  if (ms >= 1000 && ms % 1000 === 0) return `${ms / 1000}s`;
+  return `${ms}ms`;
+}
+
+function shortError(error: string): string {
+  const text = error.replace(/\s+/g, ' ').trim();
+  return text.length <= 240 ? text : `${text.slice(0, 237)}...`;
+}
 
 export function thoughtFromMessage(message: Message): { text: string; source: 'provider_reasoning' | 'assistant_tool_call_content'; truncated: boolean; original_length: number } | undefined {
   const explicit = [message.reasoning_content, message.reasoning, message.thinking]

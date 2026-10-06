@@ -12,12 +12,18 @@ export type ModelPoolSwitch = {
   strategy: ModelStrategy;
 };
 
+export const DEFAULT_MODEL_COOLDOWN_MS = 60_000;
+
 export type ModelPoolOptions = {
   name?: string;
   models: string[];
   strategy?: ModelStrategy;
   createProvider: (model: string) => LLMProvider;
   onSwitch?: (event: ModelPoolSwitch) => void | Promise<void>;
+  /** How long a model is skipped after a retryable failure. Set 0 to disable. */
+  cooldownMs?: number;
+  /** Clock override for tests. */
+  now?: () => number;
 };
 
 export function parseModelStrategy(value: string | undefined, source = "LLM_MODEL_STRATEGY"): ModelStrategy {
@@ -46,8 +52,12 @@ export class ModelPoolProvider implements LLMProvider {
   readonly #createProvider: (model: string) => LLMProvider;
   readonly #onSwitch?: ModelPoolOptions["onSwitch"];
   readonly #providers = new Map<string, LLMProvider>();
+  readonly #cooldownUntil = new Map<string, number>();
+  readonly #cooldownMs: number;
+  readonly #now: () => number;
   #activeIndex = 0;
   #roundRobinCursor = 0;
+  #lastAttemptedModels: string[] = [];
 
   constructor(options: ModelPoolOptions) {
     this.#models = normalizeModelList(options.models);
@@ -55,6 +65,8 @@ export class ModelPoolProvider implements LLMProvider {
     this.#strategy = options.strategy ?? "failover";
     this.#createProvider = options.createProvider;
     this.#onSwitch = options.onSwitch;
+    this.#cooldownMs = options.cooldownMs ?? DEFAULT_MODEL_COOLDOWN_MS;
+    this.#now = options.now ?? Date.now;
     this.name = options.name ?? "model-pool";
   }
 
@@ -70,20 +82,37 @@ export class ModelPoolProvider implements LLMProvider {
     return this.#models[this.#activeIndex] ?? this.#models[0]!;
   }
 
+  get cooldownMs(): number {
+    return this.#cooldownMs;
+  }
+
+  /** Models actually attempted by the most recent chat/stream call, in order. */
+  get lastAttemptedModels(): string[] {
+    return [...this.#lastAttemptedModels];
+  }
+
+  get lastAttemptedModel(): string | undefined {
+    return this.#lastAttemptedModels[this.#lastAttemptedModels.length - 1];
+  }
+
   async chat(messages: Message[], tools?: ToolDefinition[], options: ChatOptions = {}): Promise<ChatResponse> {
     const order = this.#attemptOrder();
+    this.#lastAttemptedModels = [];
     let lastError: unknown;
     for (let attempt = 0; attempt < order.length; attempt++) {
       const model = order[attempt]!;
+      this.#lastAttemptedModels.push(model);
       const provider = this.#providerFor(model);
       try {
         const response = await provider.chat(messages, tools, options);
         assertUsableResponse(response);
+        this.#cooldownUntil.delete(model);
         this.#activeIndex = this.#models.indexOf(model);
         return response;
       } catch (error) {
         lastError = error;
         if (!isModelPoolRetryableError(error)) throw error;
+        this.#startCooldown(model);
         const next = order[attempt + 1];
         if (next) await this.#emitSwitch(model, next, error, attempt + 1);
       }
@@ -93,9 +122,11 @@ export class ModelPoolProvider implements LLMProvider {
 
   async *stream(messages: Message[], tools?: ToolDefinition[], options: ChatOptions = {}): AsyncIterable<StreamChunk> {
     const order = this.#attemptOrder();
+    this.#lastAttemptedModels = [];
     let lastError: unknown;
     for (let attempt = 0; attempt < order.length; attempt++) {
       const model = order[attempt]!;
+      this.#lastAttemptedModels.push(model);
       const provider = this.#providerFor(model);
       let yielded = false;
       try {
@@ -103,6 +134,7 @@ export class ModelPoolProvider implements LLMProvider {
           yielded = true;
           yield chunk;
         }
+        this.#cooldownUntil.delete(model);
         this.#activeIndex = this.#models.indexOf(model);
         return;
       } catch (error) {
@@ -110,6 +142,7 @@ export class ModelPoolProvider implements LLMProvider {
         // Once bytes have been yielded, restarting on another model could
         // duplicate output/tool fragments. Only pre-output failures fail over.
         if (yielded || !isModelPoolRetryableError(error)) throw error;
+        this.#startCooldown(model);
         const next = order[attempt + 1];
         if (next) await this.#emitSwitch(model, next, error, attempt + 1);
       }
@@ -127,13 +160,28 @@ export class ModelPoolProvider implements LLMProvider {
   }
 
   #attemptOrder(): string[] {
-    if (this.#models.length === 1) return [...this.#models];
-    if (this.#strategy === "round-robin") {
+    let base: string[];
+    if (this.#models.length === 1) base = [...this.#models];
+    else if (this.#strategy === "round-robin") {
       const start = this.#roundRobinCursor % this.#models.length;
       this.#roundRobinCursor = (start + 1) % this.#models.length;
-      return rotate(this.#models, start);
-    }
-    return rotate(this.#models, this.#activeIndex);
+      base = rotate(this.#models, start);
+    } else base = rotate(this.#models, this.#activeIndex);
+
+    if (this.#cooldownMs <= 0) return base;
+    const now = this.#now();
+    const available = base.filter((model) => (this.#cooldownUntil.get(model) ?? 0) <= now);
+    if (available.length > 0) return available;
+    // Every model is cooling down. A single earliest-expiring probe is a
+    // better failure than fabricating a local "all models down" error or
+    // hammering the whole pool again in the same request.
+    const earliest = [...base].sort((a, b) => (this.#cooldownUntil.get(a) ?? 0) - (this.#cooldownUntil.get(b) ?? 0))[0];
+    return earliest ? [earliest] : base;
+  }
+
+  #startCooldown(model: string): void {
+    if (this.#cooldownMs <= 0) return;
+    this.#cooldownUntil.set(model, this.#now() + this.#cooldownMs);
   }
 
   async #emitSwitch(from: string, to: string, error: unknown, attempt: number): Promise<void> {

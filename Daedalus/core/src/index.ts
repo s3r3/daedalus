@@ -145,6 +145,7 @@ export {
   type ValidatorOptions,
   validationFailed,
   validationPassed,
+  validationSatisfied,
 } from "./validation/index.ts";
 
 export {
@@ -307,6 +308,8 @@ export {
 } from "./agent/edit-guard.ts";
 
 export {
+  DEFAULT_LLM_TIMEOUT_MS,
+  DEFAULT_MODEL_COOLDOWN_MS,
   DEFAULT_RETRY_POLICY,
   LLMAuthError,
   LLMContentPolicyError,
@@ -317,6 +320,7 @@ export {
   ModelPoolProvider,
   OpenAICompatProvider,
   buildPrompt,
+  classifyLLMError,
   classifyProviderError,
   clearProviders,
   createProviderForConfig,
@@ -325,8 +329,10 @@ export {
   estimateTokens,
   getProvider,
   instrumentProvider,
+  isFatalLLMError,
   isModelPoolRetryableError,
   isRetryable,
+  isTransientLLMError,
   modelPoolFailureReason,
   normalizeModelList,
   parseModelStrategy,
@@ -339,6 +345,7 @@ export {
   type ContentBlock,
   type ImageContent,
   type LLMProvider,
+  type LLMErrorKind,
   type Message,
   type ModelPoolOptions,
   type ModelPoolSwitch,

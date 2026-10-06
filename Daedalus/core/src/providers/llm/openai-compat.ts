@@ -1,6 +1,8 @@
 import { LLMAuthError, LLMContentPolicyError, LLMError, LLMFormatError, LLMRateLimitError, LLMTimeoutError } from "./errors.ts";
 import type { ChatOptions, ChatResponse, LLMProvider, Message, StreamChunk, ToolDefinition, ToolCall, Usage } from "./types.ts";
 
+export const DEFAULT_LLM_TIMEOUT_MS = 180_000;
+
 export type OpenAICompatOptions = {
   baseUrl: string;
   apiKey: string;
@@ -33,7 +35,15 @@ export class OpenAICompatProvider implements LLMProvider {
     this.#apiKey = options.apiKey;
     this.#model = options.model;
     this.#fetch = options.fetch ?? fetch;
-    this.#defaultTimeoutMs = options.defaultTimeoutMs ?? 30_000;
+    this.#defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_LLM_TIMEOUT_MS;
+  }
+
+  get model(): string {
+    return this.#model;
+  }
+
+  get defaultTimeoutMs(): number {
+    return this.#defaultTimeoutMs;
   }
 
   async chat(messages: Message[], tools?: ToolDefinition[], options: ChatOptions = {}): Promise<ChatResponse> {
@@ -99,7 +109,8 @@ export class OpenAICompatProvider implements LLMProvider {
   }
 
   async #request(messages: Message[], tools: ToolDefinition[] | undefined, options: ChatOptions, stream: boolean): Promise<Response> {
-    const signal = timeoutSignal(options.signal, options.timeout_ms ?? this.#defaultTimeoutMs);
+    const timeoutMs = options.timeout_ms ?? this.#defaultTimeoutMs;
+    const signal = timeoutSignal(options.signal, timeoutMs);
     try {
       return await this.#fetch(`${this.#baseUrl}/chat/completions`, {
         method: "POST",
@@ -108,7 +119,7 @@ export class OpenAICompatProvider implements LLMProvider {
         signal,
       });
     } catch (error) {
-      if (signal.aborted) throw new LLMTimeoutError("LLM request timed out", { cause: error });
+      if (signal.aborted) throw new LLMTimeoutError(`LLM request timed out after ${timeoutMs}ms`, { cause: error });
       throw new LLMError("LLM request failed", { cause: error, code: "network" });
     }
   }

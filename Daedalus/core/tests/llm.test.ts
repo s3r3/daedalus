@@ -1,18 +1,23 @@
 import { describe, expect, test, vi } from "vitest";
 import {
+  DEFAULT_LLM_TIMEOUT_MS,
   DEFAULT_RETRY_POLICY,
   EventBus,
   LLMAuthError,
+  LLMError,
   LLMFormatError,
   LLMRateLimitError,
   LLMTimeoutError,
   OpenAICompatProvider,
   buildPrompt,
+  classifyLLMError,
   clearProviders,
   defaultTemplate,
   estimateTokens,
   getProvider,
   instrumentProvider,
+  isFatalLLMError,
+  isTransientLLMError,
   registerProvider,
   systemMessage,
   userMessage,
@@ -178,6 +183,33 @@ describe("OpenAICompatProvider non-streaming", () => {
     await expect(provider.chat([userMessage("hi")], undefined, { timeout_ms: 20 })).rejects.toThrow(
       LLMTimeoutError,
     );
+  });
+
+  test("uses defaultTimeoutMs when timeout_ms is omitted", async () => {
+    const fetchImpl = fakeFetch(
+      (_req) =>
+        new Promise((_resolve, reject) => {
+          setTimeout(() => reject(new Error("aborted")), 100);
+        }),
+    );
+    const provider = new OpenAICompatProvider({
+      baseUrl: "https://llm.ayid.cc.cd/v1",
+      apiKey: "k",
+      model: "m",
+      fetch: fetchImpl,
+      defaultTimeoutMs: 20,
+    });
+    await expect(provider.chat([userMessage("hi")])).rejects.toThrow("LLM request timed out after 20ms");
+  });
+
+  test("uses a 180s provider default and classifies provider failures", () => {
+    expect(DEFAULT_LLM_TIMEOUT_MS).toBe(180_000);
+    expect(classifyLLMError(new LLMTimeoutError("timed out"))).toBe("transient");
+    expect(isTransientLLMError(new LLMError("provider returned HTTP 503", { code: "transient" }))).toBe(true);
+    expect(isTransientLLMError(new LLMRateLimitError("slow down"))).toBe(true);
+    expect(classifyLLMError(new LLMAuthError("bad key"))).toBe("fatal");
+    expect(isFatalLLMError(new LLMError("refused", { code: "content_policy" }))).toBe(true);
+    expect(classifyLLMError(new LLMFormatError("bad format"))).toBe("other");
   });
 
   test("throws LLMFormatError on malformed choice response", async () => {

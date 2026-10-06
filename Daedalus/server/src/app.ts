@@ -1112,9 +1112,10 @@ export function createApp(ctx: AppContext) {
             sendJson(res, 400, { error: "no_provider_configured", request_id: requestId });
             return;
           }
+          const providerOptions = { defaultTimeoutMs: ctx.settings.llm.timeoutMs ?? undefined };
           const provider = config
-            ? createProviderForConfig(config, model)
-            : createProviderForConfig({ baseUrl: ctx.settings.llm.baseUrl, apiKey: ctx.settings.llm.apiKey }, model);
+            ? createProviderForConfig(config, model, providerOptions)
+            : createProviderForConfig({ baseUrl: ctx.settings.llm.baseUrl, apiKey: ctx.settings.llm.apiKey }, model, providerOptions);
           const rules = await loadProjectRules(workspaceRoot, { globalHome: resolveDaedalusHome(ctx.settings.daedalusHome, workspaceRoot) });
           const result = await reviewDiff({ provider, diff: diffText, rulesText: rules.text ? rules.text : undefined, source });
           sendJson(res, 200, { ...result, request_id: requestId });

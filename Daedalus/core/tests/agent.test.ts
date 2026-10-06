@@ -7,6 +7,8 @@ import {
   createPlan,
   DefaultContextManager,
   EventBus,
+  LLMAuthError,
+  LLMTimeoutError,
   TaskStore,
   evaluateStopConditions,
   handleObservation,
@@ -194,6 +196,88 @@ describe('AgentLoop (fake provider + fake tool)', () => {
     expect(events.map((e) => e.type)).toEqual(seen);
     expect(events.every((e, i) => e.seq === i + 1)).toBe(true);
     cleanup();
+  });
+
+  test('resets the consecutive model-error budget after a successful model request', async () => {
+    const { store, cleanup } = tmpStore();
+    const bus = new EventBus();
+    let calls = 0;
+    const provider: LLMProvider = {
+      name: 'flaky',
+      async chat() {
+        calls++;
+        if ([1, 2, 4, 5].includes(calls)) throw new LLMTimeoutError('LLM request timed out after 180000ms');
+        return {
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [{ id: `call-${calls}`, type: 'function' as const, function: { name: 'read_file', arguments: '{"path":"README.md"}' } }],
+          },
+        };
+      },
+      async *stream() {},
+    };
+    const loop = new AgentLoop({
+      provider,
+      bus,
+      store,
+      stopPolicy: { max_iterations: 10, max_errors: 3 },
+    });
+    const state = await loop.run('Fix readme\ndone: docs updated\ndone: lint passes');
+    cleanup();
+    expect(calls).toBe(6);
+    expect(state.status).toBe('done');
+  });
+
+  test('summarizes exhausted transient model errors instead of only saying max_errors', async () => {
+    const { store, cleanup } = tmpStore();
+    const bus = new EventBus();
+    const provider = {
+      name: 'single',
+      model: 'slow-model',
+      async chat() { throw new LLMTimeoutError('LLM request timed out after 180000ms'); },
+      async *stream() {},
+    } as LLMProvider & { model: string };
+    const loop = new AgentLoop({
+      provider,
+      bus,
+      store,
+      stopPolicy: { max_iterations: 10, max_errors: 2 },
+    });
+    const state = await loop.run('Never reaches the model');
+    const completed = store.replay(state.id).at(-1);
+    const failed = store.replay(state.id).find((event) => event.type === 'MODEL_REQUEST_FAILED');
+    cleanup();
+    expect(state.status).toBe('failed');
+    expect(state.last_error).toBe('max_errors');
+    expect(failed?.payload).toMatchObject({ error_kind: 'transient', error_reason: 'timeout', model: 'slow-model' });
+    expect(completed?.payload).toMatchObject({ outcome: 'failed', reason: 'max_errors' });
+    expect((completed?.payload as { error_summary?: string }).error_summary).toContain('Model slow-model timed out after 180s');
+    expect((completed?.payload as { error_summary?: string }).error_summary).toContain('Tried 1 model');
+    expect((completed?.payload as { error_summary?: string }).error_summary).toContain('2 consecutive model request failures');
+  });
+
+  test('fails fast on fatal provider auth errors', async () => {
+    const { store, cleanup } = tmpStore();
+    const bus = new EventBus();
+    let calls = 0;
+    const provider: LLMProvider = {
+      name: 'auth-broken',
+      async chat() { calls++; throw new LLMAuthError('invalid API key'); },
+      async *stream() {},
+    };
+    const loop = new AgentLoop({
+      provider,
+      bus,
+      store,
+      stopPolicy: { max_iterations: 10, max_errors: 5 },
+    });
+    const state = await loop.run('Never reaches the model');
+    cleanup();
+    expect(calls).toBe(1);
+    expect(state.status).toBe('failed');
+    expect(state.last_error).toContain('auth:');
+    expect(state.last_error).toContain('authentication failed');
   });
 
   test('recovers from malformed actions and stops on invalid_action policy', async () => {
