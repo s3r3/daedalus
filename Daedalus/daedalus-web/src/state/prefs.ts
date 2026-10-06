@@ -86,3 +86,75 @@ export function composerPrefsOf(composer: {
     modelStrategy: composer.modelStrategy,
   }
 }
+
+/**
+ * Panel layout the user arranged by hand: the Chat panel's height and, when
+ * the wide three-column layout is on screen, the two side column widths.
+ * The user drags these once and expects them back on the next visit, so
+ * they persist alongside the composer defaults — clamped to ranges that can
+ * never collapse a panel out of reach.
+ */
+export const CHAT_HEIGHT_KEY = 'daedalus.web.chat-height.v1'
+export const COLUMN_WIDTHS_KEY = 'daedalus.web.column-widths.v1'
+
+export const CHAT_HEIGHT = { min: 140, max: 720, default: 320 } as const
+export const COLUMN_WIDTHS = {
+  left: { min: 240, max: 480, default: 320 },
+  right: { min: 280, max: 560, default: 360 },
+} as const
+
+export type ColumnWidths = { left: number; right: number }
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, Math.round(value)))
+}
+
+export function loadChatHeight(storage: Storage | undefined = defaultStorage()): number {
+  if (!storage) return CHAT_HEIGHT.default
+  try {
+    const parsed = Number(storage.getItem(CHAT_HEIGHT_KEY))
+    return Number.isFinite(parsed) && parsed > 0 ? clamp(parsed, CHAT_HEIGHT.min, CHAT_HEIGHT.max) : CHAT_HEIGHT.default
+  } catch {
+    return CHAT_HEIGHT.default
+  }
+}
+
+export function saveChatHeight(height: number, storage: Storage | undefined = defaultStorage()): void {
+  if (!storage) return
+  try {
+    storage.setItem(CHAT_HEIGHT_KEY, String(clamp(height, CHAT_HEIGHT.min, CHAT_HEIGHT.max)))
+  } catch {
+    /* unavailable storage just keeps the height session-local */
+  }
+}
+
+export function loadColumnWidths(storage: Storage | undefined = defaultStorage()): ColumnWidths {
+  const fallback: ColumnWidths = { left: COLUMN_WIDTHS.left.default, right: COLUMN_WIDTHS.right.default }
+  if (!storage) return fallback
+  try {
+    const raw = storage.getItem(COLUMN_WIDTHS_KEY)
+    if (!raw) return fallback
+    const parsed = JSON.parse(raw) as { left?: unknown; right?: unknown }
+    return {
+      left: typeof parsed.left === 'number' && Number.isFinite(parsed.left) ? clamp(parsed.left, COLUMN_WIDTHS.left.min, COLUMN_WIDTHS.left.max) : fallback.left,
+      right: typeof parsed.right === 'number' && Number.isFinite(parsed.right) ? clamp(parsed.right, COLUMN_WIDTHS.right.min, COLUMN_WIDTHS.right.max) : fallback.right,
+    }
+  } catch {
+    return fallback
+  }
+}
+
+export function saveColumnWidths(widths: ColumnWidths, storage: Storage | undefined = defaultStorage()): void {
+  if (!storage) return
+  try {
+    storage.setItem(
+      COLUMN_WIDTHS_KEY,
+      JSON.stringify({
+        left: clamp(widths.left, COLUMN_WIDTHS.left.min, COLUMN_WIDTHS.left.max),
+        right: clamp(widths.right, COLUMN_WIDTHS.right.min, COLUMN_WIDTHS.right.max),
+      }),
+    )
+  } catch {
+    /* unavailable storage just keeps the widths session-local */
+  }
+}

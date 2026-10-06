@@ -12,6 +12,7 @@ export const STATUS_TONE: Record<TaskStatus, Tone> = {
   done: 'success',
   partial: 'warning',
   failed: 'error',
+  stopped: 'warning',
 }
 
 export const RESULT_TONE: Record<string, Tone> = {

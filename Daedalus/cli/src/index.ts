@@ -8,8 +8,10 @@ import {
   TaskRunner,
   TaskStore,
   answerConversational,
+  answerQuestion,
   applyTaskWorktree,
   conversationalFallbackReply,
+  questionFallbackReply,
   createProviderForConfig,
   exitCodeFor,
   loadAgents,
@@ -20,12 +22,12 @@ import {
   loadSkills,
   removeTaskWorktree,
   resolveDaedalusHome,
+  resolveSkillSearchDirs,
   createProviderFromSettings,
   reviewDiff,
   seedProviderFromSettings,
   unstagedDiff,
   workspaceAgentsDir,
-  workspaceSkillsDir,
   VERSION,
   bold,
   dim,
@@ -39,6 +41,7 @@ import {
   type PermissionKey,
 } from "@daedalus/core";
 import {
+  createInPlaceFrameRenderer,
   ensureDaemon,
   fetchDaemonWorkspace,
   getDaemonStatus,
@@ -187,7 +190,10 @@ export function formatEvent(event: Omit<Event, "seq" | "ts">): string {
     }
     case "THOUGHT": {
       const p = event.payload as { text?: string; source?: string };
-      return p.text ? `${dim(`thinking · ${p.text}`)}\n` : "";
+      if (!p.text) return "";
+      const collapsed = p.text.replace(/\s+/g, " ").trim();
+      const shown = collapsed.length > 240 ? `${collapsed.slice(0, 240)} …` : collapsed;
+      return `${dim(`thinking · ${shown}`)}\n`;
     }
     case "LOOP_WARNING": {
       const p = event.payload as { tool?: string; repeats?: number; suppressed?: boolean };
@@ -201,14 +207,18 @@ export function formatEvent(event: Omit<Event, "seq" | "ts">): string {
     }
     case "TOOL_CALL_STARTED": {
       const p = event.payload as { call?: { tool: string; args: unknown } };
-      return `  ${paint(palette.warning, "⠋")} ${dim(p.call?.tool ?? "")} ${JSON.stringify(p.call?.args ?? {})}\n`;
+      const args = JSON.stringify(p.call?.args ?? {});
+      const shortArgs = args.length > 64 ? `${args.slice(0, 61)}…` : args;
+      return `${paint(palette.warning, "⚙")} ${p.call?.tool ?? ""} ${dim(shortArgs)}\n`;
     }
     case "TOOL_CALL_FINISHED": {
       const p = event.payload as { call?: { tool: string }; result?: { status: string; output: string } };
       const ok = p.result?.status === "ok";
       const icon = ok ? paint(palette.success, "✔") : paint(palette.error, "✖");
-      const snippet = (p.result?.output ?? "").trim().slice(0, 80);
-      return `  ${icon} ${dim(`${p.call?.tool} -> ${snippet}`)}\n`;
+      const outputLines = (p.result?.output ?? "").trim().split(/\r?\n/).filter((line) => line.trim().length > 0);
+      const first = (outputLines[0] ?? "").slice(0, 100);
+      const more = outputLines.length > 1 ? ` … (${outputLines.length - 1} more lines)` : "";
+      return `  ↳ ${icon} ${dim(`${p.call?.tool ?? ""} -> ${first}${more}`)}\n`;
     }
     case "VALIDATION_STARTED": {
       return `${paint(palette.info, "◆")} Running validation checks...\n`;
@@ -288,6 +298,15 @@ function colorizeScreen(screen: string): string {
   if (!supportsColor()) return screen;
   return screen.split("\n").map((line) => {
     if (line.includes("› /")) return `\x1b[48;2;107;80;255m\x1b[97m${line}\x1b[0m`;
+    // Transcript entry kinds, keyed by the formatter's prefixes.
+    const trimmed = line.trimStart();
+    if (trimmed.startsWith("You ›")) return paint(palette.accent, line);
+    if (trimmed.startsWith("Daedalus ›")) return paint(palette.primary, line);
+    if (trimmed.startsWith("thinking ·")) return `${fg(palette.fgMostSubtle)}\x1b[2;3m${line}\x1b[0m`;
+    if (trimmed.startsWith("⚙")) return paint(palette.warning, line);
+    if (trimmed.startsWith("↳")) return dim(line);
+    if (trimmed.startsWith("· ")) return paint(palette.fgMoreSubtle, line);
+    if (trimmed.startsWith("▲ scrolled")) return paint(palette.warningMuted, line);
     if (line.includes("DAEDALUS")) return paint(palette.secondary, line);
     if (line.startsWith("> ")) return paint(palette.success, line);
     if (line.includes("Modified Files") || line.includes("LSPs") || line.includes("MCPs") || line.includes("Skills")) return dim(line);
@@ -375,20 +394,36 @@ async function runFullscreenChat(options: {
     if (closed) return;
     closed = true;
     stdin.off("keypress", onKeypress);
+    stdin.off("data", onMouseData);
     stdout.off("resize", onResize);
     stdin.setRawMode?.(false);
     stdin.pause();
-    stdout.write("\x1b[?25h\x1b[?1049l");
+    stdout.write("\x1b[?25h\x1b[?1006l\x1b[?1000l\x1b[?1049l");
+  };
+
+  // Best-effort mouse wheel: SGR reports arrive as raw stdin data alongside
+  // keypress events; button 64 scrolls up (older), 65 down (newer).
+  const onMouseData = (chunk: Buffer | string): void => {
+    if (closed) return;
+    const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+    let used = false;
+    for (const match of text.matchAll(/\x1b\[<(\d+);\d+;\d+[Mm]/g)) {
+      const button = Number(match[1]);
+      if (button === 64) { session.scrollTranscript(3); used = true; }
+      else if (button === 65) { session.scrollTranscript(-3); used = true; }
+    }
+    if (used) draw();
   };
 
   const submit = async (): Promise<void> => {
     const line = input;
     input = "";
     cursor = 0;
+    session.jumpTranscriptToBottom();
     session.closeCommandPalette();
     if (!line.trim()) { draw(); return; }
     if (running) {
-      session.addTranscript("Task is running. Press esc to cancel it, or wait for it to finish.");
+      session.addSystemLine("Task is running. Press esc to cancel it, or wait for it to finish.");
       draw();
       return;
     }
@@ -399,7 +434,7 @@ async function runFullscreenChat(options: {
       draw();
       return;
     }
-    if (handled.kind === "chat") { draw(); return; }
+    if (handled.kind === "chat" || handled.kind === "question") { draw(); return; }
 
     running = true;
     session.setStatus("running");
@@ -426,7 +461,7 @@ async function runFullscreenChat(options: {
             const key = (event.payload as { key?: PermissionKey }).key;
             if (key) {
               pendingApproval = key;
-              session.addTranscript(`Approval requested: ${key.tool} [${key.action}] ${key.path ?? ""} — press a approve · d deny · r remember`);
+              session.addSystemLine(`Approval requested: ${key.tool} [${key.action}] ${key.path ?? ""} — press a approve · d deny · r remember`);
             }
             draw();
             return;
@@ -438,10 +473,10 @@ async function runFullscreenChat(options: {
       });
       session.setStatus(result.outcome);
       session.setPlan(result.state.steps.map((step, index) => `${index + 1}. [${step.status}] ${step.intent}`).join("\n"));
-      session.addTranscript(`Outcome: ${result.outcome} · events ${result.events.length} · files changed ${result.report.metrics.files_changed ?? 0}`);
+      session.addSystemLine(`Outcome: ${result.outcome} · events ${result.events.length} · files changed ${result.report.metrics.files_changed ?? 0}`);
     } catch (error) {
       session.setStatus("failed");
-      session.addTranscript(`Error: ${String(error)}`);
+      session.addSystemLine(`Error: ${String(error)}`);
     } finally {
       running = false;
       pendingApproval = undefined;
@@ -459,7 +494,7 @@ async function runFullscreenChat(options: {
       if (["a", "d", "r"].includes(answer)) {
         const parsed = parseApproval(answer);
         runner.approvals.decide(pendingApproval, parsed.decision, parsed.remember);
-        session.addTranscript(`Approval ${parsed.decision === "grant" ? "granted" : "denied"}${parsed.remember ? " (remembered)" : ""}: ${pendingApproval.tool}`);
+        session.addSystemLine(`Approval ${parsed.decision === "grant" ? "granted" : "denied"}${parsed.remember ? " (remembered)" : ""}: ${pendingApproval.tool}`);
         pendingApproval = undefined;
       }
       draw();
@@ -469,7 +504,7 @@ async function runFullscreenChat(options: {
     if (key.ctrl && name === "c") {
       if (running && currentTaskId) {
         runner.cancel(currentTaskId);
-        session.addTranscript(`Cancellation requested for task ${currentTaskId}.`);
+        session.addSystemLine(`Cancellation requested for task ${currentTaskId}.`);
         draw();
         return;
       }
@@ -550,10 +585,20 @@ async function runFullscreenChat(options: {
       }
     }
 
+    // Transcript scrolling: PgUp/PgDn by page, Shift+arrows by a few lines.
+    // While scrolled, Home/End belong to the transcript (End jumps back to
+    // the bottom); at the bottom they keep their composer meaning below.
+    if (name === "pageup") { session.scrollTranscriptPage(1); draw(); return; }
+    if (name === "pagedown") { session.scrollTranscriptPage(-1); draw(); return; }
+    if (name === "up" && key.shift) { session.scrollTranscript(3); draw(); return; }
+    if (name === "down" && key.shift) { session.scrollTranscript(-3); draw(); return; }
+    if (name === "home" && session.isTranscriptScrolled) { session.jumpTranscriptToTop(); draw(); return; }
+    if (name === "end" && session.isTranscriptScrolled) { session.jumpTranscriptToBottom(); cursor = input.length; draw(); return; }
+
     if (name === "escape") {
       if (running && currentTaskId) {
         runner.cancel(currentTaskId);
-        session.addTranscript(`Cancellation requested for task ${currentTaskId}.`);
+        session.addSystemLine(`Cancellation requested for task ${currentTaskId}.`);
       }
       draw();
       return;
@@ -595,8 +640,9 @@ async function runFullscreenChat(options: {
   stdin.setRawMode?.(true);
   emitKeypressEvents(stdin);
   stdin.resume();
-  stdout.write("\x1b[?1049h\x1b[2J\x1b[?25l");
+  stdout.write("\x1b[?1049h\x1b[2J\x1b[?25l\x1b[?1000h\x1b[?1006h");
   stdin.on("keypress", onKeypress);
+  stdin.on("data", onMouseData);
   stdout.on("resize", onResize);
   draw();
   await new Promise<void>((resolve) => {
@@ -634,7 +680,7 @@ export async function runInteractiveChat(options: {
   // set per run from the same `.daedalus/` config files.
   const mcpConfig = await loadMcpConfig(workspaceRoot);
   const lspConfig = await loadLspConfig(workspaceRoot);
-  const skillRegistry = await loadSkills([workspaceSkillsDir(workspaceRoot)]);
+  const skillRegistry = await loadSkills(resolveSkillSearchDirs(workspaceRoot));
   const displayMcp = new McpManager(mcpConfig.servers);
   if (mcpConfig.servers.length > 0) await displayMcp.connectAll();
   session.setMcps(displayMcp.status().map((status) => ({
@@ -668,17 +714,30 @@ export async function runInteractiveChat(options: {
   });
 
   let currentTaskId: string | undefined;
+  // One provider resolution shared by the casual-chat, fast-Q&A, and
+  // /review paths: the currently selected provider/model — the same
+  // resolution /review has always used.
+  const resolveChatProvider = () => {
+    const config = providerStore.registry.listInternal().find((provider) => provider.id === session.providerId && provider.enabled)
+      ?? providerStore.registry.listInternal().find((provider) => provider.enabled);
+    const model = session.model ?? config?.defaultModel ?? config?.models[0] ?? settings.llm.model;
+    if (!model) return undefined;
+    return config ? createProviderForConfig(config, model) : createProviderFromSettings(settings);
+  };
   session.setCallbacks({
     chatReply: async ({ input, history }) => {
-      // Casual chat: one tool-less provider call with the currently selected
-      // provider/model — same resolution the /review command uses. No
-      // provider yet means a friendly local fallback, never a fake task.
-      const config = providerStore.registry.listInternal().find((provider) => provider.id === session.providerId && provider.enabled)
-        ?? providerStore.registry.listInternal().find((provider) => provider.enabled);
-      const model = session.model ?? config?.defaultModel ?? config?.models[0] ?? settings.llm.model;
-      if (!model) return conversationalFallbackReply();
-      const provider = config ? createProviderForConfig(config, model) : createProviderFromSettings(settings);
+      // Casual chat: one tool-less provider call. No provider yet means a
+      // friendly local fallback, never a fake task.
+      const provider = resolveChatProvider();
+      if (!provider) return conversationalFallbackReply();
       return answerConversational(provider, input, history);
+    },
+    questionReply: async ({ input, history }) => {
+      // Fast Q&A: locally grounded, one tool-less provider call. Modes
+      // govern tasks; a question is answered, never planned.
+      const provider = resolveChatProvider();
+      if (!provider) return questionFallbackReply();
+      return answerQuestion(provider, input, { workspaceDir: workspaceRoot, history });
     },
     cancel: async () => {
       if (!currentTaskId) return { text: "No running task to cancel.", action: "cancel" };
@@ -837,7 +896,7 @@ export async function runInteractiveChat(options: {
         if (handled.action === "exit") break;
         continue;
       }
-      if (handled.kind === "chat") {
+      if (handled.kind === "chat" || handled.kind === "question") {
         process.stdout.write(`${handled.text}\n`);
         continue;
       }
@@ -872,7 +931,7 @@ export async function runInteractiveChat(options: {
         session.setStatus(result.outcome);
         applyExtensionStatus(session, runner.extensionStatus);
         session.setPlan(result.state.steps.map((step, index) => `${index + 1}. [${step.status}] ${step.intent}`).join("\n"));
-        session.addTranscript(`Outcome: ${result.outcome} · events ${result.events.length} · files changed ${result.report.metrics.files_changed ?? 0}`);
+        session.addSystemLine(`Outcome: ${result.outcome} · events ${result.events.length} · files changed ${result.report.metrics.files_changed ?? 0}`);
         process.stdout.write(`\nOutcome: ${result.outcome} · events ${result.events.length} · files changed ${result.report.metrics.files_changed ?? 0}\n`);
         if ((process.stdout as { isTTY?: boolean }).isTTY) process.stdout.write(`${session.renderLayout({ columns: process.stdout.columns })}\n`);
       } catch (error) {
@@ -888,6 +947,7 @@ export async function runInteractiveChat(options: {
 
 export type CliProgramDeps = {
   ensureDaemon?: typeof ensureDaemon;
+  stopDaemon?: typeof stopDaemon;
   openBrowser?: typeof openBrowser;
   runInteractiveChat?: (options: { cwd: string }) => Promise<void>;
   readChoice?: () => Promise<string | null>;
@@ -972,14 +1032,31 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
     const stdin = process.stdin as NodeJS.ReadStream;
     const stdout = process.stdout as NodeJS.WriteStream;
     const isTTY = Boolean(stdin.isTTY && stdout.isTTY);
+    // Exit in the launcher shuts the daemon down through the exact same
+    // mechanism as `daedalus stop`, anchored at this invocation directory.
+    const stopServer = async (): Promise<{ stopped: boolean; pid?: number; reason: string }> => {
+      const result = await (deps.stopDaemon ?? stopDaemon)({ cwd });
+      return { stopped: result.stopped, pid: result.pid, reason: result.reason };
+    };
     if (isTTY) {
       const keys = createLauncherKeyReader(stdin);
-      let drawnLines = 0;
+      const renderer = createInPlaceFrameRenderer({
+        write: (text) => {
+          stdout.write(text);
+        },
+        columns: () => stdout.columns ?? 80,
+      });
       try {
         await runLauncherMenu({
           status: ensured.status,
-          print,
+          // Close the in-place frame before anything prints, so messages
+          // land below the one clean menu copy left in the scrollback.
+          print: (text) => {
+            renderer.close();
+            print(text);
+          },
           openCli: async () => {
+            renderer.close();
             keys.setSuspended(true);
             try {
               await openCli();
@@ -987,16 +1064,17 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
               keys.setSuspended(false);
             }
           },
-          openWeb,
-          hideToTray,
-          render: (frame: string) => {
-            if (drawnLines > 0) stdout.write(`\x1b[${drawnLines}A`);
-            stdout.write(`\x1b[J${frame}\n`);
-            drawnLines = frame.split("\n").length;
+          openWeb: async () => {
+            renderer.close();
+            await openWeb();
           },
+          hideToTray,
+          stopServer,
+          render: renderer.paint,
           readKey: keys.readKey,
         });
       } finally {
+        renderer.close();
         keys.close();
       }
       return;
@@ -1018,6 +1096,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
         await openWeb();
       },
       hideToTray,
+      stopServer,
     });
   });
 
@@ -1356,7 +1435,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
 
   const skillsCommand = program
     .command("skills")
-    .description("list bundled starter skills and skills installed in a workspace");
+    .description("list bundled starter skills and every detected skill (workspace + global)");
 
   const printSkills = async (cwd: string): Promise<void> => {
     const listing = await listSkills({ workspaceRoot: cwd });
@@ -1369,7 +1448,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
 
   skillsCommand
     .command("list")
-    .description("show bundled starter skills and workspace-installed skills")
+    .description("show bundled starter skills, all detected skills with their origin, and the directories searched")
     .option("--cwd <path>", "workspace directory", process.cwd())
     .action(async (options: { cwd: string }) => {
       await printSkills(options.cwd);
@@ -1377,20 +1456,22 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
 
   skillsCommand
     .command("install")
-    .description("copy bundled starter skills into <workspace>/.daedalus/skills/")
+    .description("copy bundled starter skills into <workspace>/.daedalus/skills/ (or the global skills directory with --global)")
     .argument("[names...]", "bundled skill names to install")
     .option("--all", "install every bundled skill", false)
+    .option("--global", "install into the global skills directory (~/.daedalus/skills) so the skills are available in every workspace", false)
     .option("--force", "overwrite an already-installed skill with the same name", false)
     .option("--cwd <path>", "workspace directory", process.cwd())
-    .action(async (names: string[], options: { all?: boolean; force?: boolean; cwd: string }) => {
+    .action(async (names: string[], options: { all?: boolean; global?: boolean; force?: boolean; cwd: string }) => {
       try {
         const result = await installBundledSkills({
           workspaceRoot: options.cwd,
           names,
           all: options.all === true,
+          global: options.global === true,
           force: options.force === true,
         });
-        for (const name of result.installed) process.stdout.write(`installed ${name}\n`);
+        for (const name of result.installed) process.stdout.write(`installed ${name} -> ${result.targetDir}\n`);
         for (const skipped of result.skipped) process.stdout.write(`skipped ${skipped.name}: ${skipped.reason}\n`);
         if (result.installed.length === 0 && result.skipped.length > 0) process.exitCode = 1;
       } catch (error) {

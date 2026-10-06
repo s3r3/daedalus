@@ -1,16 +1,8 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, isAbsolute, join, resolve } from 'node:path';
 import type { ToolDefinition } from '../tools/registry.ts';
 import type { ToolResult } from '../contracts.ts';
-
-export type SkillInfo = {
-  name: string;
-  description: string;
-  /** Directory the skill was loaded from (the SKILL.md parent). */
-  source: string;
-};
-
-export type Skill = SkillInfo & { body: string; path: string };
 
 /**
  * Skills are playbook folders: `<dir>/<name>/SKILL.md` with a minimal YAML
@@ -18,7 +10,61 @@ export type Skill = SkillInfo & { body: string; path: string };
  * The registry only stores what was actually found on disk — the CLI sidebar
  * and the agent context both read from it, so a skill is only ever advertised
  * when it really exists.
+ *
+ * Skill directory resolution (highest precedence first; the first directory
+ * providing a given skill name wins):
+ *   1. Workspace: `<workspace>/.daedalus/skills` (origin `workspace`).
+ *   2. Daedalus global (origin `global`): `$DAEDALUS_HOME/skills` when
+ *      DAEDALUS_HOME is set to an absolute path (an explicit global override),
+ *      otherwise `~/.daedalus/skills`. Applies to every workspace.
+ *   3. `$DAEDALUS_SKILLS_DIR` when set (origin `global`): one extra
+ *      Daedalus-managed directory.
+ *   4. Other AI tools' global skill directories (read-only detection; the
+ *      same `<name>/SKILL.md` layout): `~/.claude/skills` (`claude`),
+ *      `$CODEX_HOME/skills` or `~/.codex/skills` (`codex`),
+ *      `~/.config/opencode/skills` then `~/.opencode/skills` (`opencode`),
+ *      `~/.kilocode/skills` (`kilo`).
+ * Missing directories are skipped silently, so a machine without any of
+ * these tools simply detects fewer skills.
  */
+
+export type SkillOrigin = 'workspace' | 'global' | 'claude' | 'codex' | 'opencode' | 'kilo';
+
+export type SkillInfo = {
+  name: string;
+  description: string;
+  /** Directory the skill was loaded from (the skills root, parent of `<name>/`). */
+  source: string;
+  /** Where the skill came from: this workspace, a Daedalus global dir, or another AI tool's global dir. */
+  origin: SkillOrigin;
+};
+
+export type Skill = SkillInfo & { body: string; path: string };
+
+/** A skills root directory to scan, tagged with the origin its skills get. */
+export type SkillSearchDir = {
+  dir: string;
+  origin: SkillOrigin;
+};
+
+/** Inputs for skill-directory resolution; injectable so tests can use a fake HOME. */
+export type SkillDirOptions = {
+  env?: Record<string, string | undefined>;
+  homeDir?: string;
+};
+
+/** Human label for an origin, e.g. `global · claude` for a Claude Code skill. */
+export function formatSkillOrigin(origin: SkillOrigin): string {
+  switch (origin) {
+    case 'workspace':
+      return 'workspace';
+    case 'global':
+      return 'global';
+    default:
+      return `global · ${origin}`;
+  }
+}
+
 export class SkillRegistry {
   readonly #skills = new Map<string, Skill>();
 
@@ -29,7 +75,7 @@ export class SkillRegistry {
   }
 
   list(): SkillInfo[] {
-    return [...this.#skills.values()].map(({ name, description, source }) => ({ name, description, source }));
+    return [...this.#skills.values()].map(({ name, description, source, origin }) => ({ name, description, source, origin }));
   }
 
   get(name: string): Skill | undefined {
@@ -70,10 +116,14 @@ export function parseSkillMarkdown(raw: string, fallbackName: string): { name: s
   return { name, description, body };
 }
 
-/** Scan skill directories (`<dir>/<name>/SKILL.md`); missing dirs are fine. */
-export async function loadSkills(dirs: string[]): Promise<SkillRegistry> {
+/** Scan tagged skill directories (`<dir>/<name>/SKILL.md`); first name wins, missing dirs are fine. */
+async function scanSkillDirs(searchDirs: SkillSearchDir[]): Promise<SkillRegistry> {
   const skills: Skill[] = [];
-  for (const dir of dirs) {
+  const seenDirs = new Set<string>();
+  for (const { dir, origin } of searchDirs) {
+    const key = resolve(dir);
+    if (seenDirs.has(key)) continue;
+    seenDirs.add(key);
     let entries: Array<{ name: string; isDirectory: () => boolean }> = [];
     try {
       entries = await readdir(dir, { withFileTypes: true });
@@ -88,7 +138,7 @@ export async function loadSkills(dirs: string[]): Promise<SkillRegistry> {
         if (!info.isFile()) continue;
         const raw = await readFile(skillPath, 'utf8');
         const parsed = parseSkillMarkdown(raw, entry.name);
-        skills.push({ name: parsed.name, description: parsed.description, source: dir, body: parsed.body, path: skillPath });
+        skills.push({ name: parsed.name, description: parsed.description, source: dir, origin, body: parsed.body, path: skillPath });
       } catch {
         continue;
       }
@@ -97,9 +147,77 @@ export async function loadSkills(dirs: string[]): Promise<SkillRegistry> {
   return new SkillRegistry(skills);
 }
 
+/**
+ * Load skills from directories scanned in order (first skill with a given
+ * name wins). Bare string entries are plain directories tagged `workspace`;
+ * pass `SkillSearchDir` entries to tag another origin.
+ */
+export async function loadSkills(dirs: Array<string | SkillSearchDir>): Promise<SkillRegistry> {
+  return scanSkillDirs(dirs.map((entry) => (typeof entry === 'string' ? { dir: entry, origin: 'workspace' as SkillOrigin } : entry)));
+}
+
 /** The default per-workspace skills directory for a workspace root. */
 export function workspaceSkillsDir(workspaceRoot: string): string {
   return join(workspaceRoot, WORKSPACE_SKILLS_RELATIVE_PATH);
+}
+
+function resolveHomeDir(options?: SkillDirOptions): string {
+  return options?.homeDir ?? homedir();
+}
+
+/**
+ * The Daedalus-global skills directory: `$DAEDALUS_HOME/skills` when
+ * DAEDALUS_HOME is an absolute path (an explicit global override), otherwise
+ * `~/.daedalus/skills`. A relative DAEDALUS_HOME is a per-workspace state
+ * root, never a global anchor.
+ */
+export function daedalusGlobalSkillsDir(options?: SkillDirOptions): string {
+  const env = options?.env ?? process.env;
+  const configured = env.DAEDALUS_HOME?.trim();
+  if (configured && isAbsolute(configured)) return join(configured, 'skills');
+  return join(resolveHomeDir(options), '.daedalus', 'skills');
+}
+
+/**
+ * Every global skill directory in precedence order (after the workspace dir):
+ * the Daedalus global dir, `$DAEDALUS_SKILLS_DIR`, then the other-AI-tool
+ * directories. Only directories that exist are ever scanned, but all resolved
+ * candidates are returned so callers can show exactly what was searched.
+ */
+export function globalSkillSearchDirs(options?: SkillDirOptions): SkillSearchDir[] {
+  const env = options?.env ?? process.env;
+  const home = resolveHomeDir(options);
+  const dirs: SkillSearchDir[] = [{ dir: daedalusGlobalSkillsDir(options), origin: 'global' }];
+
+  const extra = env.DAEDALUS_SKILLS_DIR?.trim();
+  if (extra) dirs.push({ dir: extra, origin: 'global' });
+
+  dirs.push({ dir: join(home, '.claude', 'skills'), origin: 'claude' });
+
+  const codexHome = env.CODEX_HOME?.trim();
+  dirs.push({ dir: codexHome ? join(codexHome, 'skills') : join(home, '.codex', 'skills'), origin: 'codex' });
+
+  dirs.push({ dir: join(home, '.config', 'opencode', 'skills'), origin: 'opencode' });
+  dirs.push({ dir: join(home, '.opencode', 'skills'), origin: 'opencode' });
+
+  dirs.push({ dir: join(home, '.kilocode', 'skills'), origin: 'kilo' });
+
+  const seen = new Set<string>();
+  return dirs.filter(({ dir }) => {
+    const key = resolve(dir);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * The full skill search path for a workspace: its own `.daedalus/skills`
+ * first (workspace skills shadow same-name globals), then every global
+ * directory. Feed the result to `loadSkills`.
+ */
+export function resolveSkillSearchDirs(workspaceRoot: string, options?: SkillDirOptions): SkillSearchDir[] {
+  return [{ dir: workspaceSkillsDir(workspaceRoot), origin: 'workspace' }, ...globalSkillSearchDirs(options)];
 }
 
 const MAX_SKILL_OUTPUT = 16_000;
@@ -141,7 +259,7 @@ export function createReadSkillTool(registry: SkillRegistry): ToolDefinition {
         status: 'ok',
         output: `# Skill: ${skill.name}\n${skill.description ? `${skill.description}\n\n` : ''}${body}`,
         truncated: skill.body.length > MAX_SKILL_OUTPUT,
-        meta: { skill: skill.name, source: skill.source },
+        meta: { skill: skill.name, source: skill.source, origin: skill.origin },
       };
     },
   };

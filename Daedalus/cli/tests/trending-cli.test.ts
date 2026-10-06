@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SLASH_COMMANDS, loadSkills, workspaceSkillsDir } from '@daedalus/core';
 import { buildProgram, formatEvent, parseIsolation } from '../src/index.ts';
 import { InteractiveSession } from '../src/interactive.ts';
-import { installBundledSkills, listSkills } from '../src/skills-bundled.ts';
+import { formatSkillsListing, installBundledSkills, listSkills } from '../src/skills-bundled.ts';
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -51,6 +51,76 @@ describe('bundled starter skills', () => {
 
     const unknown = await installBundledSkills({ workspaceRoot: workspace, names: ['nope'] });
     expect(unknown.skipped).toEqual([{ name: 'nope', reason: 'not a bundled skill' }]);
+  });
+});
+
+describe('global skills (CLI surface)', () => {
+  function writeSkill(root: string, name: string, description: string, body = 'Body.'): void {
+    const dir = join(root, name);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n${body}`);
+  }
+
+  test('list shows detected skills with origins and every directory searched', async () => {
+    const home = temp('daedalus-cli-home-');
+    const workspace = temp('daedalus-cli-ws-');
+    writeSkill(join(workspace, '.daedalus', 'skills'), 'local-skill', 'Only in this workspace');
+    writeSkill(join(home, '.daedalus', 'skills'), 'global-skill', 'In every workspace');
+    writeSkill(join(home, '.claude', 'skills'), 'claude-skill', 'Borrowed from Claude Code');
+
+    const listing = await listSkills({ workspaceRoot: workspace, env: {}, homeDir: home });
+    expect(listing.detected).toEqual([
+      { name: 'claude-skill', description: 'Borrowed from Claude Code', origin: 'claude', dir: join(home, '.claude', 'skills') },
+      { name: 'global-skill', description: 'In every workspace', origin: 'global', dir: join(home, '.daedalus', 'skills') },
+      { name: 'local-skill', description: 'Only in this workspace', origin: 'workspace', dir: join(workspace, '.daedalus', 'skills') },
+    ]);
+    expect(listing.installed.map((skill) => skill.name)).toEqual(['local-skill']);
+    expect(listing.globalDir).toBe(join(home, '.daedalus', 'skills'));
+    expect(listing.searchedDirs.map((entry) => entry.dir)).toEqual([
+      join(workspace, '.daedalus', 'skills'),
+      join(home, '.daedalus', 'skills'),
+      join(home, '.claude', 'skills'),
+      join(home, '.codex', 'skills'),
+      join(home, '.config', 'opencode', 'skills'),
+      join(home, '.opencode', 'skills'),
+      join(home, '.kilocode', 'skills'),
+    ]);
+    const kilo = listing.searchedDirs.find((entry) => entry.origin === 'kilo');
+    expect(kilo?.exists).toBe(false);
+
+    const text = formatSkillsListing(listing);
+    expect(text).toContain('local-skill (workspace)');
+    expect(text).toContain('global-skill (global)');
+    expect(text).toContain('claude-skill (global · claude)');
+    expect(text).toContain(join(home, '.kilocode', 'skills'));
+    expect(text).toContain('not present');
+  });
+
+  test('install --global writes to the global dir, dedupes, and is detected from other workspaces', async () => {
+    const home = temp('daedalus-cli-home-');
+    const workspace = temp('daedalus-cli-ws-');
+    const globalDir = join(home, '.daedalus', 'skills');
+
+    const first = await installBundledSkills({ workspaceRoot: workspace, names: ['code-review'], global: true, env: {}, homeDir: home });
+    expect(first.installed).toEqual(['code-review']);
+    expect(first.targetDir).toBe(globalDir);
+    expect(existsSync(join(globalDir, 'code-review', 'SKILL.md'))).toBe(true);
+    // Nothing leaked into the workspace itself.
+    expect(existsSync(join(workspace, '.daedalus', 'skills', 'code-review', 'SKILL.md'))).toBe(false);
+
+    const second = await installBundledSkills({ workspaceRoot: workspace, names: ['code-review'], global: true, env: {}, homeDir: home });
+    expect(second.installed).toEqual([]);
+    expect(second.skipped).toHaveLength(1);
+    expect(second.skipped[0]?.reason).toContain('--force');
+
+    const forced = await installBundledSkills({ workspaceRoot: workspace, names: ['code-review'], global: true, force: true, env: {}, homeDir: home });
+    expect(forced.installed).toEqual(['code-review']);
+
+    // A different workspace now detects the globally installed skill.
+    const otherWorkspace = temp('daedalus-cli-ws-other-');
+    const listing = await listSkills({ workspaceRoot: otherWorkspace, env: {}, homeDir: home });
+    expect(listing.detected).toContainEqual(expect.objectContaining({ name: 'code-review', origin: 'global' }));
+    expect(listing.installed).toEqual([]);
   });
 });
 

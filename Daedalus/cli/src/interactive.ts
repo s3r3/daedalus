@@ -7,6 +7,7 @@ import {
   SlashCommandRegistry,
   classifyChatIntent,
   conversationalFallbackReply,
+  questionFallbackReply,
   modeAccent,
   type AgentMode,
   type Attachment,
@@ -26,6 +27,12 @@ export type InteractiveCallbacks = {
    * configured provider. Without it, a friendly local fallback is used.
    */
   chatReply?: (request: { input: string; history: Message[] }) => Promise<string>;
+  /**
+   * Answer one information-seeking question ("repo ini tentang apa?") with
+   * the grounded fast Q&A path. Runs in every mode: modes govern tasks,
+   * never questions. Without it, a friendly local fallback is used.
+   */
+  questionReply?: (request: { input: string; history: Message[] }) => Promise<string>;
   validate?: () => Promise<string> | string;
   diff?: () => Promise<string> | string;
   rewind?: () => Promise<SlashCommandResult> | SlashCommandResult;
@@ -36,7 +43,7 @@ export type InteractiveCallbacks = {
 };
 
 export type InteractiveHandleResult = {
-  kind: 'empty' | 'slash' | 'task' | 'chat';
+  kind: 'empty' | 'slash' | 'task' | 'chat' | 'question';
   text: string;
   action?: string;
   data?: unknown;
@@ -130,6 +137,10 @@ export class InteractiveSession {
   #contextPercent?: number;
   #rulesFiles: string[] = [];
   #palette = { open: false, filter: '', selectedIndex: 0 };
+  /** Wrapped transcript lines hidden below the viewport (0 = pinned to bottom). */
+  #scrollOffset = 0;
+  /** Content rows of the most recent fullscreen render; the scroll page size. */
+  #lastContentRows = 12;
   #modelPicker: { open: boolean; filter: string; selectedIndex: number; items: ModelPickerItem[]; loading: boolean } = {
     open: false,
     filter: '',
@@ -421,6 +432,54 @@ export class InteractiveSession {
     if (this.#transcript.length > 200) this.#transcript.splice(0, this.#transcript.length - 200);
   }
 
+  /**
+   * Transcript entry kinds, visually distinct like the reference TUIs:
+   * the user speaks as "You ›", the assistant's answer as "Daedalus ›",
+   * thinking stays "thinking ·" (dimmed), tool calls are compact "⚙"
+   * lines with indented "↳" results, and system/status lines carry "·".
+   * The fullscreen shell colors each kind by its prefix.
+   */
+  addUserLine(text: string): void {
+    this.addTranscript(`You › ${text}`);
+  }
+
+  addAssistantLine(text: string): void {
+    const lines = text.split(/\r?\n/);
+    lines.forEach((line, index) => this.addTranscript(index === 0 ? `Daedalus › ${line}` : line));
+  }
+
+  addSystemLine(text: string): void {
+    const lines = text.split(/\r?\n/);
+    lines.forEach((line, index) => this.addTranscript(index === 0 ? `· ${line}` : line));
+  }
+
+  /** Wrapped lines currently scrolled out of view at the bottom (0 = at bottom). */
+  get scrollOffset(): number {
+    return this.#scrollOffset;
+  }
+
+  get isTranscriptScrolled(): boolean {
+    return this.#scrollOffset > 0;
+  }
+
+  /** Scroll the transcript: positive delta moves toward older lines. Clamped at render. */
+  scrollTranscript(deltaLines: number): void {
+    this.#scrollOffset = Math.max(0, this.#scrollOffset + deltaLines);
+  }
+
+  /** Page through the transcript using the last rendered page size. */
+  scrollTranscriptPage(direction: 1 | -1): void {
+    this.scrollTranscript(direction * Math.max(1, this.#lastContentRows - 1));
+  }
+
+  jumpTranscriptToBottom(): void {
+    this.#scrollOffset = 0;
+  }
+
+  jumpTranscriptToTop(): void {
+    this.#scrollOffset = Number.MAX_SAFE_INTEGER;
+  }
+
   observeEvent(event: Event): void {
     if (event.type === 'MODEL_REQUEST_STARTED' || event.type === 'MODEL_REQUEST_FINISHED') {
       const payload = event.payload as { context_percent?: number };
@@ -430,7 +489,14 @@ export class InteractiveSession {
     if (event.type === 'THOUGHT') {
       if (!this.#thinking) return;
       const payload = event.payload as { text?: string };
-      if (payload.text) this.addTranscript(`thinking · ${payload.text}`);
+      if (payload.text) {
+        // Collapsed like the reference TUI's thinking block: a few dimmed
+        // lines at most, with the hidden remainder counted, never a wall.
+        const lines = payload.text.split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line.trim().length > 0);
+        const shown = lines.slice(0, 3);
+        shown.forEach((line, index) => this.addTranscript(index === 0 ? `thinking · ${line}` : `  ${line}`));
+        if (lines.length > shown.length) this.addTranscript(`thinking · … (${lines.length - shown.length} more lines)`);
+      }
       return;
     }
     if (event.type === 'FILE_CHANGED') {
@@ -443,7 +509,7 @@ export class InteractiveSession {
           removed: payload.removed,
           tool: payload.tool,
         });
-        this.addTranscript(`file ${payload.operation ?? 'changed'} ${payload.path}`);
+        this.addSystemLine(`file ${payload.operation ?? 'changed'} ${payload.path}`);
       }
       return;
     }
@@ -455,7 +521,7 @@ export class InteractiveSession {
         this.#model = nextModel;
       }
       if (payload.provider_id) this.#providerId = payload.provider_id;
-      this.addTranscript(`provider changed → ${nextModel ?? 'unknown model'}`);
+      this.addSystemLine(`provider changed → ${nextModel ?? 'unknown model'}`);
       return;
     }
     if (event.type === 'PLAN_CREATED') {
@@ -711,7 +777,7 @@ export class InteractiveSession {
     const result = !item.providerId || item.providerId === 'default'
       ? this.setModelSelection(item.model)
       : this.setModelSelection(`${item.providerId}/${item.model}`);
-    this.addTranscript(result.text);
+    this.addSystemLine(result.text);
     return result;
   }
 
@@ -872,18 +938,27 @@ export class InteractiveSession {
       `╭${composerTitle}${'─'.repeat(Math.max(0, composerWidth - 2 - visibleWidth(composerTitle)))}╮`,
       `│ > ${padVisibleEnd(shownInput, composerWidth - 6)} │`,
       `╰${'─'.repeat(composerWidth - 2)}╯`,
-      'tab focus chat · shift+tab mode · / or ctrl+p commands · ctrl+m models · ctrl+b toggle sidebar · shift+enter newline · ctrl+c quit',
+      'pgup/pgdn scroll · shift+tab mode · / or ctrl+p commands · ctrl+m models · ctrl+b toggle sidebar · shift+enter newline · ctrl+c quit',
     ];
     const contentRows = Math.max(6, rows - footerLines.length);
+    this.#lastContentRows = contentRows;
     const transcript = options.transcript ?? this.#transcript;
     const displayTranscript = (transcript.length ? transcript : ['Type a goal below, or press / for commands.'])
-      .map((line) => sanitizeTerminalText(line.startsWith('> ') ? `│ ${line.slice(2)}` : line));
+      .map((line) => sanitizeTerminalText(line));
     const wrapped: string[] = [];
     for (const line of displayTranscript) {
       wrapped.push(...wrapText(line, Math.max(20, mainWidth - 4)));
     }
-    const visible = wrapped.slice(-contentRows);
+    // Scroll window: offset counts wrapped lines hidden below the viewport.
+    // New output never yanks a scrolled view back to the bottom; submitting
+    // or pressing End calls jumpTranscriptToBottom instead.
+    const maxOffset = Math.max(0, wrapped.length - contentRows);
+    const offset = Math.min(this.#scrollOffset, maxOffset);
+    this.#scrollOffset = offset;
+    const windowEnd = wrapped.length - offset;
+    const visible = wrapped.slice(Math.max(0, windowEnd - contentRows), windowEnd);
     while (visible.length < contentRows) visible.push('');
+    if (offset > 0) visible[contentRows - 1] = '▲ scrolled — End to jump back';
     const sidebar = showSidebar ? this.renderSidebarLines(sidebarWidth) : [];
     const screen: string[] = [];
     for (let i = 0; i < contentRows; i++) {
@@ -981,30 +1056,33 @@ export class InteractiveSession {
       // the (potentially hundreds-long) model list into the transcript.
       if (parsed?.name === 'models' && parsed.args.length === 0) {
         const items = await this.openModelPicker();
-        this.addTranscript(`> ${trimmed}`);
+        this.addUserLine(trimmed);
         return { kind: 'slash', text: '', action: 'models', data: { picker: true, count: items.length } };
       }
       const result = await this.commands.execute(trimmed, this.#slashContext());
       this.closeCommandPalette();
-      this.addTranscript(`> ${trimmed}`);
-      if (result.text) this.addTranscript(result.text);
+      this.addUserLine(trimmed);
+      if (result.text) this.addSystemLine(result.text);
       if (result.action === 'exit') this.#status = 'closed';
       return { kind: 'slash', text: result.text, action: result.action, data: result.data };
     }
-    this.addTranscript(`> ${trimmed}`);
-    if (classifyChatIntent(trimmed) === 'conversational') {
-      // Casual chat ("hai", "kamu siapa", thanks, smalltalk) is answered
-      // directly — never planned, never a task, in every mode. Modes keep
-      // their semantics for real work only.
-      const reply = await this.#conversationalReply(trimmed);
+    this.addUserLine(trimmed);
+    const intent = classifyChatIntent(trimmed);
+    if (intent === 'conversational' || intent === 'question') {
+      // Chat and questions are answered directly — never planned, never a
+      // task, in every mode. Modes govern tasks only; a question is just
+      // the model replying, like in the reference agents.
+      const reply = intent === 'question'
+        ? await this.#questionReply(trimmed)
+        : await this.#conversationalReply(trimmed);
       this.#chatHistory.push(
         { role: 'user', content: trimmed },
         { role: 'assistant', content: reply },
       );
       if (this.#chatHistory.length > 12) this.#chatHistory.splice(0, this.#chatHistory.length - 12);
-      this.addTranscript(reply);
+      this.addAssistantLine(reply);
       this.#status = 'idle';
-      return { kind: 'chat', text: reply };
+      return { kind: intent === 'question' ? 'question' : 'chat', text: reply };
     }
     return { kind: 'task', text: trimmed };
   }
@@ -1021,6 +1099,16 @@ export class InteractiveSession {
       return reply.trim() ? reply : conversationalFallbackReply();
     } catch {
       return 'Maaf, saya gagal menjawab barusan (provider error). Coba lagi ya — atau langsung jelaskan tugas coding-nya kalau ada.';
+    }
+  }
+
+  async #questionReply(input: string): Promise<string> {
+    if (!this.#callbacks.questionReply) return questionFallbackReply();
+    try {
+      const reply = await this.#callbacks.questionReply({ input, history: [...this.#chatHistory] });
+      return reply.trim() ? reply : questionFallbackReply();
+    } catch {
+      return 'Maaf, saya gagal menjawab pertanyaan itu barusan (provider error). Coba tanya lagi ya.';
     }
   }
 

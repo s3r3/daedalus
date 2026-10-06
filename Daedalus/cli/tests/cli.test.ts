@@ -135,6 +135,27 @@ test('PLAN_CREATED uses ✦ glyph, never 📋', () => {
       const out = formatEvent({ type: 'THOUGHT', task_id: 't', payload: { text: 'inspect first', source: 'provider_reasoning' } })
       expect(out).toContain('thinking · inspect first')
     })
+
+    test('TOOL_CALL_STARTED is one compact ⚙ line with short args', () => {
+      process.env.NO_COLOR = '1'
+      delete process.env.FORCE_COLOR
+      const out = formatEvent({ type: 'TOOL_CALL_STARTED', task_id: 't', payload: { call: { tool: 'read_file', args: { path: 'src/app.ts' } } } })
+      expect(out).toContain('⚙')
+      expect(out).toContain('read_file')
+      expect(out).toContain('src/app.ts')
+      expect(out.trim().split('\n')).toHaveLength(1)
+    })
+
+    test('TOOL_CALL_FINISHED is an indented ↳ result truncated with a line count', () => {
+      process.env.NO_COLOR = '1'
+      delete process.env.FORCE_COLOR
+      const output = ['first line', 'second line', 'third line', 'fourth line'].join('\n')
+      const out = formatEvent({ type: 'TOOL_CALL_FINISHED', task_id: 't', payload: { call: { tool: 'read_file' }, result: { status: 'ok', output } } })
+      expect(out).toContain('↳')
+      expect(out).toContain('read_file -> first line')
+      expect(out).toContain('… (3 more lines)')
+      expect(out).not.toContain('fourth line')
+    })
   })
 
 describe('run flags', () => {
