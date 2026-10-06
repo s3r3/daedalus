@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, test } from 'vitest';
 import {
   aggregateValidation,
@@ -7,6 +10,7 @@ import {
   normalizeError,
   validationFailed,
   validationPassed,
+  validationSatisfied,
   type NormalizedError,
   type RecoveryContext,
   type ValidationCheck,
@@ -139,8 +143,24 @@ describe('Validation & Error Recovery — validation gate', () => {
     expect(completionGate(undefined, 'max_iterations')).toEqual({ complete: true, reason: 'stop_condition:max_iterations' });
   });
 
-  test('discoverChecks returns standard npm build/lint/test commands', () => {
-    const checks = discoverChecks('.');
-    expect(checks.map((c) => c.name)).toEqual(['test', 'lint', 'build']);
+  test('discoverChecks only suggests npm checks whose scripts exist', () => {
+    const root = mkdtempSync(join(tmpdir(), 'daedalus-discover-'));
+    try {
+      // No package.json at all (bare folder / static site): no checks.
+      expect(discoverChecks(root)).toEqual([]);
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'x', scripts: { build: 'tsc', test: 'vitest' } }));
+      expect(discoverChecks(root).map((c) => c.name)).toEqual(['test', 'build']);
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ name: 'x', scripts: {} }));
+      expect(discoverChecks(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('validation with no configured checks is skipped, not failed', () => {
+    const empty: ValidationResult = { checks: [] };
+    expect(completionGate(empty, undefined)).toEqual({ complete: true, reason: 'validation_skipped' });
+    expect(validationSatisfied(empty)).toBe(true);
+    expect(validationPassed(empty)).toBe(false);
   });
 });

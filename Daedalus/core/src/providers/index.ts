@@ -21,23 +21,30 @@ export function createProviderFromSettings(settings: Settings = loadSettings()):
           baseUrl: settings.llm.baseUrl,
           apiKey: settings.llm.apiKey,
           model,
+          defaultTimeoutMs: settings.llm.timeoutMs ?? undefined,
         }),
       })
     : new OpenAICompatProvider({
         baseUrl: settings.llm.baseUrl,
         apiKey: settings.llm.apiKey,
         model: settings.llm.model || models[0] || "",
+        defaultTimeoutMs: settings.llm.timeoutMs ?? undefined,
       });
   registerProvider(provider);
   return provider;
 }
 
 /** Build a provider for one stored provider configuration + model (single-model, no pool). */
-export function createProviderForConfig(config: { baseUrl?: string; apiKey?: string } | undefined, model: string): LLMProvider {
+export function createProviderForConfig(
+  config: { baseUrl?: string; apiKey?: string } | undefined,
+  model: string,
+  options: { defaultTimeoutMs?: number } = {},
+): LLMProvider {
   return new OpenAICompatProvider({
     baseUrl: config?.baseUrl ?? "",
     apiKey: config?.apiKey ?? "",
     model,
+    defaultTimeoutMs: options.defaultTimeoutMs,
   });
 }
 

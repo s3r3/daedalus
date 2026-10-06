@@ -1,7 +1,7 @@
 import { describe, expect, test, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import type { Event } from '@daedalus/core'
-import { activity, latestContextPercent } from './state/selectors'
+import { activity, chatTranscript, latestContextPercent } from './state/selectors'
 import { useDaedalusStore } from './state/taskStore'
 import { TopBar } from './components/layout/top-bar'
 
@@ -52,6 +52,13 @@ describe('selectors: loop warnings and context meter', () => {
       ev('TOOL_CALL_STARTED', { call: { tool: 'read_file' } }),
     ]
     expect(latestContextPercent(events)).toBe(30)
+  })
+
+  test('TASK_COMPLETED prefers the plain-language model error summary over max_errors', () => {
+    const summary = 'Model slow-model timed out after 180s. Tried 1 model (slow-model).'
+    const events = [ev('TASK_COMPLETED', { outcome: 'failed', reason: 'max_errors', error_summary: summary })]
+    expect(activity(events)[0]?.detail).toBe(summary)
+    expect(chatTranscript(events)[0]?.detail).toBe(summary)
   })
 })
 

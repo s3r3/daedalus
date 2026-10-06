@@ -17,7 +17,7 @@ import { readFile } from 'node:fs/promises';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { changedLineCounts, diffLines, renderPatch } from './tools/filesystem/diff.ts';
 import { ApprovalBroker, ExecutionHarness, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
-import { CommandValidator, validationPassed, type ValidationCommand, type Validator } from './validation/index.ts';
+import { CommandValidator, validationSatisfied, type ValidationCommand, type Validator } from './validation/index.ts';
 import { createProviderFromSettings } from './providers/index.ts';
 import { OpenAICompatProvider } from './providers/llm/openai-compat.ts';
 import { ModelPoolProvider, normalizeModelList } from './providers/llm/model-pool.ts';
@@ -263,11 +263,26 @@ export class TaskRunner {
     return this.#options.editGuard ?? (this.#settings.editGuard !== false);
   }
 
+  /** Plain-language model failure for the final report, when the run died on provider errors. */
+  #modelFailureEvidence(events: Event[], state: TaskState): string | undefined {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const event = events[i];
+      if (event?.type !== 'TASK_COMPLETED') continue;
+      const payload = event.payload as { error_summary?: unknown };
+      if (typeof payload.error_summary === 'string' && payload.error_summary.length > 0) return payload.error_summary;
+    }
+    if (state.status === 'failed' && state.last_error && /^(auth|content_policy|fatal_provider_error):/.test(state.last_error)) {
+      return state.last_error;
+    }
+    return undefined;
+  }
+
   /** Evidence lines for a validation result: profile warning first, then one line per check. */
   #validationEvidence(validation: ValidationResult | undefined): string[] {
     if (!validation) return [];
     return [
       ...(validation.warning ? [`validation profile warning: ${validation.warning}`] : []),
+      ...(validation.checks.length === 0 ? ['validation skipped: no validation commands configured for this workspace'] : []),
       ...validation.checks.map((check) => `${check.name}: ${check.status} (${check.cmd})${check.source === 'profile' ? ' [profile]' : ''}`),
     ];
   }
@@ -445,11 +460,13 @@ export class TaskRunner {
 
     const validation = this.#lastValidation(collected);
     const outcome = this.#outcome(state, validation);
+    const modelFailureEvidence = this.#modelFailureEvidence(collected, state);
     const report: FinalReport = {
       task_id: spec.id,
       outcome: outcome === 'success' ? 'success' : outcome === 'partial' ? 'partial' : 'failed',
       diff: this.#aggregateDiff(collected),
       evidence: [
+        ...(modelFailureEvidence ? [`model failure: ${modelFailureEvidence}`] : []),
         ...this.#validationEvidence(validation),
         ...this.#fileChangeEvidence(collected),
       ],
@@ -619,10 +636,10 @@ export class TaskRunner {
     if (orchestration.status === 'done') {
       emitEvent(target, spec.id, undefined, 'VALIDATION_STARTED', { task_id: spec.id, orchestrated: true });
       validation = await this.validator.validate({ workspaceRoot: this.#workspaceRoot, commands: this.#options.validationCommands });
-      emitEvent(target, spec.id, undefined, validationPassed(validation) ? 'VALIDATION_PASSED' : 'VALIDATION_FAILED', { result: validation });
+      emitEvent(target, spec.id, undefined, validationSatisfied(validation) ? 'VALIDATION_PASSED' : 'VALIDATION_FAILED', { result: validation });
     }
 
-    const validationFailedCombined = validation !== undefined && !validationPassed(validation);
+    const validationFailedCombined = validation !== undefined && !validationSatisfied(validation);
     state = {
       ...state,
       status: orchestration.status === 'done' && !validationFailedCombined ? 'done' : 'failed',
@@ -722,7 +739,12 @@ export class TaskRunner {
       return new ModelPoolProvider({
         models: modelConfig.models,
         strategy: modelConfig.strategy,
-        createProvider: (model) => new OpenAICompatProvider({ baseUrl, apiKey, model }),
+        createProvider: (model) => new OpenAICompatProvider({
+          baseUrl,
+          apiKey,
+          model,
+          defaultTimeoutMs: this.#settings.llm.timeoutMs ?? undefined,
+        }),
         onSwitch: (switched) => {
           emitEvent({ bus: this.bus, store: this.store }, taskId, undefined, 'PROVIDER_CHANGED', {
             from_model: switched.from,
@@ -745,6 +767,7 @@ export class TaskRunner {
       baseUrl: config.baseUrl || this.#settings.llm.baseUrl,
       apiKey: config.apiKey ?? '',
       model: modelConfig.models[0] ?? model,
+      defaultTimeoutMs: this.#settings.llm.timeoutMs ?? undefined,
     });
   }
 

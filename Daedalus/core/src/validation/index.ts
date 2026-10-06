@@ -8,6 +8,7 @@ import {
   normalizeError,
   validationFailed,
   validationPassed,
+  validationSatisfied,
   type NormalizedError,
   type RecoveryContext,
   type RecoveryPolicy,
@@ -81,12 +82,26 @@ export class CommandValidator implements Validator {
 }
 
 export function discoverChecks(workspaceRoot: string): ValidationCommand[] {
-  void workspaceRoot;
-  return [
+  // Default checks mirror the workspace's own package.json scripts: a check
+  // is only suggested when the script actually exists. A workspace without
+  // package.json (or without test/lint/build scripts — a bare folder, a
+  // static HTML site) gets NO default checks, so validation is skipped
+  // instead of failing on commands the project never defined.
+  let scripts: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(workspaceRoot, 'package.json'), 'utf8'));
+    if (typeof parsed === 'object' && parsed !== null && typeof (parsed as { scripts?: unknown }).scripts === 'object' && (parsed as { scripts?: unknown }).scripts !== null) {
+      scripts = (parsed as { scripts: Record<string, unknown> }).scripts;
+    }
+  } catch {
+    return [];
+  }
+  const candidates: ValidationCommand[] = [
     { name: 'test', cmd: 'npm', args: ['test', '--', '--run'], source: 'default' },
     { name: 'lint', cmd: 'npm', args: ['run', 'lint'], source: 'default' },
     { name: 'build', cmd: 'npm', args: ['run', 'build'], source: 'default' },
   ];
+  return candidates.filter((check) => typeof scripts[check.name] === 'string' && (scripts[check.name] as string).trim() !== '');
 }
 
 export function aggregateValidation(result: ValidationResult): { passed: boolean; result: ValidationResult } {
@@ -200,6 +215,7 @@ export {
   normalizeError,
   validationFailed,
   validationPassed,
+  validationSatisfied,
   type NormalizedError,
   type RecoveryContext,
   type RecoveryPolicy,

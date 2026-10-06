@@ -73,8 +73,9 @@ export function resolveFastPathProvider(ctx: AppContext, selection: FastPathSele
   const registry = ctx.providerStore.registry;
   const config = (selection.providerId ? registry.get(selection.providerId) : undefined) ?? registry.listInternal().find((provider) => provider.enabled);
   const model = selection.model || selection.poolModels[0] || config?.defaultModel || config?.models[0] || ctx.settings.llm.model;
-  if (config) return createProviderForConfig(config, model);
-  if (ctx.settings.llm.baseUrl) return createProviderForConfig({ baseUrl: ctx.settings.llm.baseUrl, apiKey: ctx.settings.llm.apiKey }, model);
+  const providerOptions = { defaultTimeoutMs: ctx.settings.llm.timeoutMs ?? undefined };
+  if (config) return createProviderForConfig(config, model, providerOptions);
+  if (ctx.settings.llm.baseUrl) return createProviderForConfig({ baseUrl: ctx.settings.llm.baseUrl, apiKey: ctx.settings.llm.apiKey }, model, providerOptions);
   return undefined;
 }
 

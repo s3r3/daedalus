@@ -85,6 +85,16 @@ export function validationPassed(result: ValidationResult): boolean {
   return result.checks.length > 0 && blocking.every((check) => check.status === 'pass');
 }
 
+/**
+ * Completion-level verdict: a result with NO checks at all means the
+ * workspace configures no validation commands (bare folder, static site),
+ * so validation is skipped — satisfied, not failed. Failing real checks
+ * still fail.
+ */
+export function validationSatisfied(result: ValidationResult): boolean {
+  return result.checks.length === 0 || validationPassed(result);
+}
+
 export function validationFailed(result: ValidationResult): ValidationCheck[] {
   return result.checks.filter((check) => check.status !== 'pass');
 }
@@ -93,5 +103,6 @@ export function validationFailed(result: ValidationResult): ValidationCheck[] {
 export function completionGate(result: ValidationResult | undefined, stopReason: string | undefined): { complete: boolean; reason: string } {
   if (stopReason !== undefined) return { complete: true, reason: `stop_condition:${stopReason}` };
   if (result === undefined) return { complete: false, reason: 'validation_missing' };
+  if (result.checks.length === 0) return { complete: true, reason: 'validation_skipped' };
   return validationPassed(result) ? { complete: true, reason: 'validation_passed' } : { complete: false, reason: 'validation_failed' };
 }
