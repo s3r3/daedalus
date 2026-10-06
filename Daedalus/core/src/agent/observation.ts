@@ -18,6 +18,12 @@ export function handleObservation(observation: Observation, state: TaskState): T
   if (observation.kind === 'tool_result') {
     const { result } = observation;
     const evidence = `${result.status}: ${result.output.slice(0, 500)}`;
+    // Model-facing observation: the full result text. The agent loop shapes
+    // every result to the tool-output caps (head+tail + spill marker) before
+    // it gets here, so a blind head slice is no longer needed — it would cut
+    // off the tail and the marker, which are the parts that stop re-runs.
+    // Step evidence above stays a short excerpt for the persisted plan.
+    const observationText = `${result.status}: ${result.output}`;
     const active = state.steps.find((step) => step.status === 'active');
     const mutating = result.meta?.mutating;
     const readOnlyCannotComplete = result.status === 'ok'
@@ -33,7 +39,7 @@ export function handleObservation(observation: Observation, state: TaskState): T
       return {
         ...state,
         steps,
-        last_observation: `${evidence}\n${hint}`,
+        last_observation: `${observationText}\n${hint}`,
         last_error: undefined,
         plan: { ...state.plan, steps, status: state.plan.status },
       };
@@ -50,7 +56,7 @@ export function handleObservation(observation: Observation, state: TaskState): T
     return {
       ...state,
       steps: withNext,
-      last_observation: evidence,
+      last_observation: observationText,
       last_error: result.status === 'ok' ? undefined : `${result.status}: ${result.output.slice(0, 200)}`,
       plan: { ...state.plan, steps: withNext, status: withNext.every((s) => s.status === 'done' || s.status === 'skipped') ? 'complete' : state.plan.status },
     };

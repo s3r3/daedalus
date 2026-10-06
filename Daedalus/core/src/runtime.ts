@@ -2,6 +2,7 @@ import type { AgentMode, Attachment, Event, FinalReport, ModelStrategy, Provider
 import { EventBus, emitEvent } from './events.ts';
 import { TaskStore } from './persistence.ts';
 import { AgentLoop } from './agent/agent-loop.ts';
+import type { ToolOutputLimits } from './agent/tool-output.ts';
 import { DefaultContextManager } from './agent/context.ts';
 import { interpretTask } from './agent/interpreter.ts';
 import { createPlan } from './agent/planner.ts';
@@ -87,6 +88,8 @@ export type TaskRunnerOptions = {
   contextLimitTokens?: number;
   /** Condense older tool outputs past 70% of the context limit. Defaults to settings.context.condense (on). */
   condense?: boolean;
+  /** Tool-output caps + spill (head+tail in model context, full text in the task store). Defaults to settings.toolOutput. */
+  toolOutput?: ToolOutputLimits;
   /** Cheap helper model used only to title tasks (DAEDALUS_HELPER_MODEL). */
   helperModel?: string;
   /** Injected helper provider (tests); production builds one from settings. */
@@ -433,6 +436,7 @@ export class TaskRunner {
       thinking: spec.thinking ?? options.thinking ?? this.#options.thinking ?? settingsThinking(this.#settings),
       contextLimitTokens: this.#options.contextLimitTokens ?? this.#settings.context?.limitTokens,
       condense: this.#options.condense ?? (this.#settings.context?.condense !== false),
+      toolOutput: this.#options.toolOutput ?? this.#settings.toolOutput,
       executeTool: async (call) => {
         if (allowlist && !allowlist.includes(call.tool)) {
           return {
@@ -529,6 +533,7 @@ export class TaskRunner {
       editGuard: this.#options.editGuard,
       contextLimitTokens: this.#options.contextLimitTokens,
       condense: this.#options.condense,
+      toolOutput: this.#options.toolOutput,
       helperModel: this.#options.helperModel,
       helperProvider: this.#options.helperProvider,
       hooks: this.#options.hooks,

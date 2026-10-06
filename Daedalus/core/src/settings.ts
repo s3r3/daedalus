@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { normalizeModelList, parseModelStrategy, type ModelStrategy } from "./providers/llm/model-pool.ts";
 import { parseToolProtocol, type ToolProtocol } from "./providers/llm/text-protocol.ts";
+import { TOOL_OUTPUT_MAX_CHARS, TOOL_OUTPUT_MAX_LINES, type ToolOutputLimits } from "./agent/tool-output.ts";
 
 export type { ToolProtocol };
 
@@ -14,6 +15,13 @@ export type Settings = {
   hooks?: boolean;
   /** Context-window budgeting: token limit estimate + automatic condensing (DAEDALUS_CONTEXT_LIMIT / DAEDALUS_CONDENSE). */
   context: { limitTokens: number; condense: boolean };
+  /**
+   * Hard tool-output caps + spill files: over-cap results enter the model
+   * context head+tail with the full text saved under the task store
+   * (DAEDALUS_TOOL_OUTPUT_MAX_CHARS / DAEDALUS_TOOL_OUTPUT_MAX_LINES /
+   * DAEDALUS_TOOL_SPILL=off disables the spill file; caps still apply).
+   */
+  toolOutput: ToolOutputLimits;
   daedalusHome: string;
 };
 
@@ -53,6 +61,11 @@ export function loadSettings(env: Env = process.env): Settings {
     context: {
       limitTokens: positiveTokenLimit(env.DAEDALUS_CONTEXT_LIMIT),
       condense: parseBoolean(env.DAEDALUS_CONDENSE, true, "DAEDALUS_CONDENSE"),
+    },
+    toolOutput: {
+      maxChars: positiveIntOrDefault(env.DAEDALUS_TOOL_OUTPUT_MAX_CHARS, TOOL_OUTPUT_MAX_CHARS, "DAEDALUS_TOOL_OUTPUT_MAX_CHARS"),
+      maxLines: positiveIntOrDefault(env.DAEDALUS_TOOL_OUTPUT_MAX_LINES, TOOL_OUTPUT_MAX_LINES, "DAEDALUS_TOOL_OUTPUT_MAX_LINES"),
+      spill: parseBoolean(env.DAEDALUS_TOOL_SPILL, true, "DAEDALUS_TOOL_SPILL"),
     },
     daedalusHome: env.DAEDALUS_HOME ?? ".daedalus",
   };
@@ -95,6 +108,16 @@ function positiveTokenLimit(value: string | undefined): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) {
     throw new Error(`Invalid DAEDALUS_CONTEXT_LIMIT: ${value} (expected a positive integer number of tokens)`);
+  }
+  return parsed;
+}
+
+/** Positive-integer setting with a default; invalid values fail fast like the other numeric settings. */
+function positiveIntOrDefault(value: string | undefined, fallback: number, name: string): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name}: ${value} (expected a positive integer)`);
   }
   return parsed;
 }
