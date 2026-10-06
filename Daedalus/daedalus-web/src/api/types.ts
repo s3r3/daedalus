@@ -110,6 +110,9 @@ export type ProviderInput = {
 
 export type WorkspacePins = { root: string; pins: string[] }
 
+export type WorkspaceFileEntry = { path: string; type: 'file' | 'dir' }
+export type WorkspaceFiles = { root: string; files: WorkspaceFileEntry[]; truncated: boolean }
+
 export type ProviderTestResult = {
   ok: boolean
   providerId: string

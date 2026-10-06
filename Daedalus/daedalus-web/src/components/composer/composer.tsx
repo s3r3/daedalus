@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { ImagePlus, Paperclip, Play, Square, UploadCloud, X } from 'lucide-react'
 import type { AgentMode, Attachment } from '@daedalus/core'
 import { AGENT_MODE_ORDER, nextAgentMode } from '@daedalus/core/interaction/modes'
@@ -9,6 +9,7 @@ import { useDaedalusStore } from '../../state/taskStore'
 import { useTaskEvents } from '../../state/hooks'
 import { fileChanges, latestPlan, parseModelPool, pendingApprovals, taskStatus, validation } from '../../state/selectors'
 import { api } from '../../api/client'
+import type { WorkspaceFileEntry } from '../../api/types'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 
 type UploadKind = 'file' | 'folder' | 'image' | 'zip'
@@ -38,10 +39,49 @@ export function Composer() {
   const [slashOutput, setSlashOutput] = useState<string | null>(null)
   const [activeSuggestion, setActiveSuggestion] = useState(0)
   const [stopping, setStopping] = useState(false)
+  // @-mention completion: the caret drives token detection; the workspace
+  // file index is fetched once per workspace and filtered client-side.
+  const [caret, setCaret] = useState(0)
+  const [activeMention, setActiveMention] = useState(0)
+  const [dismissedMention, setDismissedMention] = useState<string | null>(null)
+  const [fileIndex, setFileIndex] = useState<{ root: string; entries: WorkspaceFileEntry[] }>({ root: '', entries: [] })
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const pendingCaret = useRef<number | null>(null)
+  const indexRequestedFor = useRef('')
   const registry = useMemo(() => new SlashCommandRegistry(), [])
+
+  useEffect(() => {
+    if (!workspaceRoot || indexRequestedFor.current === workspaceRoot) return
+    indexRequestedFor.current = workspaceRoot
+    let cancelled = false
+    void (async () => {
+      try {
+        const response = await api.files(workspaceRoot)
+        if (!cancelled) setFileIndex({ root: workspaceRoot, entries: response.files })
+      } catch {
+        if (!cancelled) setFileIndex({ root: workspaceRoot, entries: [] })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [workspaceRoot])
+
+  // After a mention insertion the controlled textarea re-renders with the
+  // new goal; restore the caret to just after the inserted `@path `.
+  useLayoutEffect(() => {
+    if (pendingCaret.current === null) return
+    const position = pendingCaret.current
+    pendingCaret.current = null
+    const node = textareaRef.current
+    if (!node) return
+    node.focus()
+    node.setSelectionRange(position, position)
+    setCaret(position)
+  }, [composer.goal])
 
   // While the selected task is running, the Run button morphs into Stop —
   // the user should never have to hunt for how to halt a run they started.
@@ -73,6 +113,27 @@ export function Composer() {
     if (/^\/\S+\s/.test(goal)) return []
     return slashCommandSuggestions(goal)
   }, [composer.goal])
+
+  const mentionToken = useMemo(() => activeMentionToken(composer.goal, caret), [composer.goal, caret])
+  const mentionKey = mentionToken ? `${mentionToken.start}:${mentionToken.query}` : null
+  const mentionCandidates = useMemo(() => {
+    // Only one menu at a time: an open slash palette wins over @ completion.
+    if (!mentionToken || mentionKey === dismissedMention || suggestions.length > 0) return []
+    const entries = fileIndex.root === workspaceRoot ? fileIndex.entries : []
+    const needle = mentionToken.query.toLowerCase()
+    return entries.filter((entry) => entry.path.toLowerCase().includes(needle)).slice(0, 12)
+  }, [mentionToken, mentionKey, dismissedMention, suggestions.length, fileIndex, workspaceRoot])
+  const mentionOpen = mentionToken !== null && mentionCandidates.length > 0
+
+  const insertMention = (entry: WorkspaceFileEntry): void => {
+    if (!mentionToken) return
+    const inserted = `@${entry.path} `
+    const nextGoal = composer.goal.slice(0, mentionToken.start) + inserted + composer.goal.slice(caret)
+    pendingCaret.current = mentionToken.start + inserted.length
+    setDismissedMention(null)
+    setActiveMention(0)
+    setComposer({ goal: nextGoal })
+  }
 
   const selectedModel = useMemo(
     () => models.find((entry) => entry.providerId === composer.providerId && entry.model === composer.model),
@@ -364,8 +425,12 @@ export function Composer() {
     setComposer({ goal: '', error: null })
   }
 
-  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+  const submit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
+    void submitGoal()
+  }
+
+  const submitGoal = async (): Promise<void> => {
     const goal = composer.goal.trim()
     if (goal.startsWith('/')) {
       await executeSlash(goal)
@@ -408,22 +473,49 @@ export function Composer() {
       void cycleMode()
       return
     }
-    if (suggestions.length === 0) return
-    if (event.key === 'ArrowDown') {
-      event.preventDefault()
-      setActiveSuggestion((current) => (current + 1) % suggestions.length)
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault()
-      setActiveSuggestion((current) => (current - 1 + suggestions.length) % suggestions.length)
-    } else if (event.key === 'Tab' || event.key === 'Enter') {
-      const suggestion = suggestions[activeSuggestion] ?? suggestions[0]
-      if (suggestion) {
+    if (suggestions.length > 0) {
+      if (event.key === 'ArrowDown') {
         event.preventDefault()
-        setComposer({ goal: `/${suggestion.name} ` })
+        setActiveSuggestion((current) => (current + 1) % suggestions.length)
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setActiveSuggestion((current) => (current - 1 + suggestions.length) % suggestions.length)
+      } else if (event.key === 'Tab' || event.key === 'Enter') {
+        const suggestion = suggestions[activeSuggestion] ?? suggestions[0]
+        if (suggestion) {
+          event.preventDefault()
+          setComposer({ goal: `/${suggestion.name} ` })
+        }
+      } else if (event.key === 'Escape') {
+        setActiveSuggestion(0)
+        setComposer({ goal: '' })
       }
-    } else if (event.key === 'Escape') {
-      setActiveSuggestion(0)
-      setComposer({ goal: '' })
+      return
+    }
+    if (mentionOpen && mentionToken) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setActiveMention((current) => (current + 1) % mentionCandidates.length)
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setActiveMention((current) => (current - 1 + mentionCandidates.length) % mentionCandidates.length)
+      } else if (event.key === 'Tab' || event.key === 'Enter') {
+        const entry = mentionCandidates[activeMention] ?? mentionCandidates[0]
+        if (entry) {
+          event.preventDefault()
+          insertMention(entry)
+        }
+      } else if (event.key === 'Escape') {
+        event.preventDefault()
+        setDismissedMention(mentionKey)
+      }
+      return
+    }
+    // Chat convention: Enter sends, Shift+Enter adds a line. With no menu
+    // open, Enter takes the exact same path as the run-task button.
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault()
+      void submitGoal()
     }
   }
 
@@ -447,7 +539,7 @@ export function Composer() {
 
   return (
     <form
-      onSubmit={(event) => void submit(event)}
+      onSubmit={submit}
       className={`flex flex-col gap-2 border-b border-line bg-surface-base px-3 py-2 ${activeTaskId ? 'motion-composer-collapse' : ''}`}
       data-testid="composer"
     >
@@ -478,7 +570,7 @@ export function Composer() {
             ))}
           </select>
         </label>
-        <span className="text-[10px] text-muted">Shift+Tab switches mode at the next turn boundary</span>
+        <span className="text-[10px] text-muted">Shift+Tab switches mode at the next turn boundary · Enter sends · Shift+Enter = new line</span>
         <span className="ml-auto text-[10px] text-muted" data-testid="composer-session-summary">
           {providers.length ? `${providers.filter((provider) => provider.enabled).length} providers · ` : ''}
           {models.length ? `${models.length} models` : 'models load from settings'}
@@ -486,18 +578,45 @@ export function Composer() {
       </div>
 
       <Textarea
+        ref={textareaRef}
         aria-label="task goal"
         data-testid="composer-input"
         rows={2}
-        placeholder="Describe the coding task… or type /help for slash commands"
+        placeholder="Describe the coding task… type @ to reference a file or folder, /help for slash commands"
         value={composer.goal}
         onChange={(event) => {
           setComposer({ goal: event.target.value })
           setActiveSuggestion(0)
+          setActiveMention(0)
+          setCaret(event.target.selectionStart ?? event.target.value.length)
         }}
+        onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
         onKeyDown={onComposerKeyDown}
         onPaste={onPaste}
       />
+
+      {mentionOpen ? (
+        <div className="flex max-h-48 flex-col gap-0.5 overflow-auto" data-testid="mention-palette" role="listbox" aria-label="workspace files">
+          {mentionCandidates.map((entry, index) => (
+            <button
+              key={entry.path}
+              type="button"
+              role="option"
+              aria-selected={index === activeMention}
+              data-testid="mention-suggestion"
+              data-path={entry.path}
+              data-type={entry.type}
+              className={`flex items-center gap-2 rounded border px-1.5 py-0.5 text-left text-[11px] ${index === activeMention ? 'border-primary text-primary' : 'border-line text-muted'}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setActiveMention(index)}
+              onClick={() => insertMention(entry)}
+            >
+              <span className="truncate">{entry.path}</span>
+              <span className="ml-auto shrink-0 text-[10px] text-muted">{entry.type === 'dir' ? 'folder' : 'file'}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {suggestions.length > 0 ? (
         <div className="flex flex-wrap gap-1" data-testid="slash-palette" role="listbox" aria-label="slash commands">
@@ -649,6 +768,23 @@ export function Composer() {
       ) : null}
     </form>
   )
+}
+
+const MENTION_PATH_CHAR = /[A-Za-z0-9._/-]/
+
+/**
+ * The @-token the caret is currently inside, if any. Mirrors core's
+ * extraction rule (mentions.ts): `@` at the start of the text or right after
+ * whitespace, followed by path characters — `foo@bar` is not a mention.
+ * Returns the index of the `@` and the partial path typed so far.
+ */
+function activeMentionToken(goal: string, caret: number): { start: number; query: string } | null {
+  if (caret <= 0 || caret > goal.length) return null
+  let start = caret - 1
+  while (start >= 0 && MENTION_PATH_CHAR.test(goal[start]!)) start -= 1
+  if (goal[start] !== '@') return null
+  if (start !== 0 && !/\s/.test(goal[start - 1]!)) return null
+  return { start, query: goal.slice(start + 1, caret) }
 }
 
 function relativePathOf(file: File): string {

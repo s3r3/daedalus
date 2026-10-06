@@ -14,9 +14,10 @@ export function Input({ className, ...props }: ComponentProps<'input'>) {
   )
 }
 
-export function Textarea({ className, ...props }: ComponentProps<'textarea'>) {
+export function Textarea({ className, ref, ...props }: ComponentProps<'textarea'>) {
   return (
     <textarea
+      ref={ref}
       data-slot="textarea"
       className={cn(
         'w-full resize-none rounded-md border border-line bg-surface px-2.5 py-2 text-xs text-foreground placeholder:text-muted',
