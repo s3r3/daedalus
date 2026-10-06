@@ -4,6 +4,7 @@ import type { ContentBlock, Message, ToolDefinition } from '../providers/llm/typ
 import type { Attachment, TaskState } from '../contracts.ts';
 import { buildPrompt, estimateTokens, systemMessage, userMessage } from '../providers/index.ts';
 import { formatSkillOrigin, type SkillInfo } from '../skills/index.ts';
+import { walkTreeLines } from '../tools/filesystem/index.ts';
 import type { ContextManager, Observation } from './types.ts';
 
 export type ContextManagerOptions = {
@@ -63,19 +64,26 @@ export class DefaultContextManager implements ContextManager {
   }
 
   async buildMessages(state: TaskState, observations: Observation[], tools?: ToolDefinition[]): Promise<Message[]> {
+    const workspaceOverview = await this.#workspaceOverview(state);
     const template = {
       version: '1.0.0',
       sections: [
         { id: 'role', content: 'You are Daedalus, an autonomous coding agent operating on a local repository.' },
         { id: 'task', content: state.goal },
         { id: 'repo', content: `Repository: ${state.repo_path}` },
+        ...(workspaceOverview
+          ? [{
+              id: 'workspace',
+              content: workspaceOverview,
+            }]
+          : []),
         { id: 'plan', content: state.steps.map((s) => `- [${s.status}] ${s.intent}`).join('\n') || '(no plan yet)' },
         { id: 'mode', content: `Current mode: ${state.mode ?? 'auto'}. Ask/Plan are read-only; Manual requires approval for mutations; Auto follows the session approval policy; Orchestrator coordinates child tasks.` },
         { id: 'constraints', content: state.constraints.join('\n') || '(none)' },
         {
           id: 'protocol',
           content:
-            'Respond with a tool call to act, or reply starting with "done: <summary>" when every plan step is satisfied, "replan: <reason>" to amend the plan, or "stop: <reason>" to abort. Read-only inspection (list/read/search) is evidence only: it can finish an inspection step, but it does not satisfy an implementation criterion. Before using "done:" for a mutating task, call a mutating tool (write_file, edit_file, create_dir) or run_command as appropriate and let the validation gate prove the result. If a previous model response was invalid prose, answer with a concrete tool call next.',
+            'Respond with a tool call to act, or reply starting with "done: <summary>" when every plan step is satisfied, "replan: <reason>" to amend the plan, or "stop: <reason>" to abort. Read-only inspection (list/read/search) is evidence only: it can finish an inspection step, but it does not satisfy an implementation criterion. Before using "done:" for a mutating task, call a mutating tool (write_file, edit_file, create_dir) or run_command as appropriate and let the validation gate prove the result. If a previous model response was invalid prose, answer with a concrete tool call next. Do not repeat list_dir/read on the same path: the workspace overview below (and any listing already returned) is your structure reference — once you have enough structure, proceed to the actual mutation (create_dir, write_file, edit_file) instead of exploring further.',
         },
         ...(this.#skills.length
           ? [{
@@ -111,6 +119,31 @@ export class DefaultContextManager implements ContextManager {
       messages.push(userMessage(`Available tools: ${tools.map((t) => t.function.name).join(', ')}`));
     }
     return this.compact(messages, this.#budget);
+  }
+
+  /**
+   * Shallow, filtered workspace tree shipped with every prompt, so the model
+   * starts with the repository structure instead of spending its first turns
+   * re-listing the root (the classic exploration loop). Dependency/state
+   * folders are pruned by the shared tree walker; failures are silent (the
+   * section is simply omitted).
+   */
+  async #workspaceOverview(state: TaskState): Promise<string | undefined> {
+    const root = this.#workspaceRoot ?? state.repo_path;
+    if (!root) return undefined;
+    try {
+      const { lines, total, truncated } = await walkTreeLines(resolve(root), { maxDepth: 2, maxEntries: 60 });
+      if (lines.length === 0) return undefined;
+      const remainder = truncated ? `\n… (${total - lines.length} more entries, truncated)` : '';
+      return [
+        `Workspace overview (shallow tree of ${root}; node_modules, .git, .daedalus and dist omitted):`,
+        ...lines,
+        remainder.trim() ? remainder.trim() : undefined,
+        'You already have this overview — do not call list_dir on the workspace root again just to see the structure. List one specific subfolder only when you need deeper detail, and never re-list a directory you have already listed.',
+      ].filter(Boolean).join('\n');
+    } catch {
+      return undefined;
+    }
   }
 
   async #attachmentMessage(state: TaskState): Promise<Message | undefined> {

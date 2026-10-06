@@ -112,6 +112,33 @@ describe('file tools', () => {
     expect(result.output).not.toContain('node_modules');
   });
 
+  test('list_dir hides .daedalus state and dist so listings stay about the project', async () => {
+    const root = workspace();
+    mkdirSync(join(root, '.daedalus', 'tasks', 'task-1'), { recursive: true });
+    writeFileSync(join(root, '.daedalus', 'tasks', 'task-1', 'events.jsonl'), '{}\n');
+    mkdirSync(join(root, 'dist'));
+    writeFileSync(join(root, 'dist', 'bundle.js'), '');
+    mkdirSync(join(root, 'src'));
+    writeFileSync(join(root, 'src', 'index.ts'), '');
+    const result = await listDirTool.execute({ path: '.' }, ctx(root));
+    expect(result.output).toContain('src/');
+    expect(result.output).not.toContain('.daedalus');
+    expect(result.output).not.toContain('events.jsonl');
+    expect(result.output).not.toContain('dist/');
+  });
+
+  test('list_dir caps very large listings and reports how many entries were omitted', async () => {
+    const root = workspace();
+    mkdirSync(join(root, 'src'));
+    for (let i = 0; i < 175; i++) writeFileSync(join(root, 'src', `file-${String(i).padStart(3, '0')}.ts`), '');
+    const result = await listDirTool.execute({ path: '.' }, ctx(root));
+    const lines = result.output.split('\n');
+    expect(lines.length).toBeLessThanOrEqual(151); // 150 entries + remainder note
+    expect(lines[lines.length - 1]).toMatch(/^… \(\d+ more entries, truncated\)$/);
+    expect(result.meta.truncated).toBe(true);
+    expect(result.meta.entries).toBe(150);
+  });
+
   test('all path-taking file tools deny workspace escapes', async () => {
     const root = workspace();
     for (const tool of [readFileTool, writeFileTool, editFileTool, listDirTool]) {
@@ -154,6 +181,18 @@ describe('search tools', () => {
     const result = await globTool.execute({ pattern: 'src/*.ts' }, ctx(root));
     expect(result.output).toContain('src/index.ts');
     expect((await globTool.execute({ pattern: {} }, ctx(root))).status).toBe('error');
+  });
+
+  test('grep and glob never descend into .daedalus state', async () => {
+    const root = workspace();
+    mkdirSync(join(root, '.daedalus', 'tasks', 't1'), { recursive: true });
+    writeFileSync(join(root, '.daedalus', 'tasks', 't1', 'log.txt'), 'needle in state\n');
+    writeFileSync(join(root, 'real.ts'), 'const needle = 1;');
+    const grepResult = await grepTool.execute({ pattern: 'needle' }, ctx(root));
+    expect(grepResult.output).toContain('real.ts:1:');
+    expect(grepResult.output).not.toContain('.daedalus');
+    const globResult = await globTool.execute({ pattern: '**/*.txt' }, ctx(root));
+    expect(globResult.output).not.toContain('.daedalus');
   });
 });
 

@@ -373,15 +373,18 @@ export class AgentLoop {
       }
       call.turn_id = turnId;
       await this.#emit(state.id, turnId, 'TOOL_CALL_STARTED', { call });
-      // Anti-loop guard: the 3rd identical call warns (guidance is injected
-      // into the next request); further exact duplicates are suppressed with
-      // a cached-repeat result instead of being executed again.
-      const guardCall = this.#guardFor(state.id).observe(call.tool, call.args);
+      // Anti-loop guard: the 3rd identical (or same-path) call warns
+      // (guidance is injected into the next request); further duplicates are
+      // suppressed with a cached-repeat result instead of being executed
+      // again. Repeat read_skill calls are suppressed immediately with an
+      // "already loaded" note so the full skill text is not re-served.
+      const guardCall = this.#guardFor(state).observe(call.tool, call.args);
       if (guardCall.decision !== 'execute') {
         await this.#emit(state.id, turnId, 'LOOP_WARNING', {
           tool: call.tool,
           repeats: guardCall.repeats,
           suppressed: guardCall.decision === 'suppress',
+          ...(guardCall.repeatKind ? { repeat_kind: guardCall.repeatKind } : {}),
         });
         this.#pendingGuidance.set(state.id, loopGuidanceNote(call.tool, guardCall.repeats));
       }
@@ -401,9 +404,9 @@ export class AgentLoop {
               // it as implementation progress, and the unchanged observation
               // lets the no_progress backstop remain the final safety.
               status: 'ok' as const,
-              output: REPEAT_SUPPRESSED_OUTPUT,
+              output: guardCall.suppressedOutput ?? REPEAT_SUPPRESSED_OUTPUT,
               truncated: false,
-              meta: { tool: call.tool, mode: turnMode, reason: 'repeat_suppressed', repeats: guardCall.repeats, mutating: false },
+              meta: { tool: call.tool, mode: turnMode, reason: 'repeat_suppressed', repeats: guardCall.repeats, mutating: false, ...(guardCall.repeatKind ? { repeat_kind: guardCall.repeatKind } : {}) },
             }
           : await this.#executeTool(call);
       await this.#emit(state.id, turnId, 'TOOL_CALL_FINISHED', { call, result });
@@ -414,11 +417,13 @@ export class AgentLoop {
     return current;
   }
 
-  #guardFor(taskId: string): LoopGuard {
-    let guard = this.#loopGuards.get(taskId);
+  #guardFor(state: TaskState): LoopGuard {
+    let guard = this.#loopGuards.get(state.id);
     if (!guard) {
-      guard = new LoopGuard();
-      this.#loopGuards.set(taskId, guard);
+      // workspaceRoot lets the guard treat ".", the absolute root path, and
+      // depth variants of list_dir as the same exploration of one path.
+      guard = new LoopGuard({ workspaceRoot: state.repo_path });
+      this.#loopGuards.set(state.id, guard);
     }
     return guard;
   }

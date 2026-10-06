@@ -162,5 +162,12 @@ function providerHttpError(status: number, body: OpenAIResponse, retryAfter: str
   }
   if (status === 401 || status === 403) return new LLMAuthError(message);
   if (status === 429) return new LLMRateLimitError(message, { retryAfterMs: retryAfter ? Number(retryAfter) * 1000 : undefined });
+  // Router-wrapped upstream failures arrive as 4xx (often 400) yet mean the
+  // request never reached a healthy model — transient, so a pool fails over
+  // and the loop retries instead of hard-failing the turn. A genuinely
+  // malformed local request has no upstream marker and stays non-transient.
+  if (marker.includes("upstream request failed") || marker.includes("upstream error") || marker.includes("error from provider")) {
+    return new LLMError(message, { code: "transient" });
+  }
   return new LLMError(message, { code: status >= 500 ? "transient" : "provider" });
 }

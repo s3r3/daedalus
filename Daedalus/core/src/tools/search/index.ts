@@ -1,10 +1,12 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import type { ToolDefinition } from '../registry.ts';
-import { confined } from '../filesystem/index.ts';
+import { IGNORED_DIRECTORY_NAMES, confined } from '../filesystem/index.ts';
 
 const MAX_RESULTS = 100;
-const IGNORE = new Set(['node_modules', '.git', 'dist']);
+// Same prune set as list_dir (node_modules, .git, .daedalus, dist): search
+// must never walk the task store or vendor trees either.
+const IGNORE = IGNORED_DIRECTORY_NAMES;
 
 async function walk(root: string, dir = root): Promise<string[]> {
   const entries = await readdir(dir, { withFileTypes: true });
