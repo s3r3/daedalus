@@ -10,7 +10,6 @@ import {
   LLMFormatError,
   ModeController,
   OpenAICompatProvider,
-  OrchestratorRunner,
   ProviderRegistry,
   ProviderRegistryStore,
   SlashCommandRegistry,
@@ -72,17 +71,21 @@ const passingValidator = {
 };
 
 describe('agent modes', () => {
-  test('cycles in Ask → Manual → Auto → Plan → Orchestrator order', () => {
+  test('cycles in Ask → Manual → Auto → Plan order (orchestrator retired)', () => {
     expect(cycleAgentMode('ask')).toBe('manual');
     expect(cycleAgentMode('manual')).toBe('auto');
     expect(cycleAgentMode('auto')).toBe('plan');
-    expect(cycleAgentMode('plan')).toBe('orchestrator');
+    expect(cycleAgentMode('plan')).toBe('ask');
+    // Legacy mode names load as Auto instead of crashing.
     expect(cycleAgentMode('orchestrator')).toBe('ask');
 
     const controller = new ModeController('ask');
     expect(controller.cycle().to).toBe('manual');
-    expect(controller.set('orchestrator').replanRequired).toBe(true);
-    expect(controller.set('auto').replanRequired).toBe(true);
+    // The retired mode normalizes to Auto; crossing the old Orchestrator
+    // boundary no longer forces a replan (there is no boundary left).
+    expect(controller.set('orchestrator').to).toBe('auto');
+    expect(controller.set('orchestrator').replanRequired).toBe(false);
+    expect(controller.set('plan').replanRequired).toBe(false);
     expect(controller.set('manual').replanRequired).toBe(false);
   });
 
@@ -148,7 +151,7 @@ describe('agent modes', () => {
     expect(existsSync(join(root, 'blocked.txt'))).toBe(false);
   });
 
-  test('switching into Orchestrator at a turn boundary emits MODE_CHANGED and replans', async () => {
+  test('switching modes at a turn boundary emits MODE_CHANGED without a replan', async () => {
     const home = temp('daedalus-mode-switch-');
     const store = new TaskStore(home);
     let loop!: AgentLoop;
@@ -158,7 +161,7 @@ describe('agent modes', () => {
       async chat() {
         calls++;
         if (calls === 1) {
-          loop.modeController.set('orchestrator');
+          loop.modeController.set('plan');
           return {
             message: {
               role: 'assistant',
@@ -190,8 +193,10 @@ describe('agent modes', () => {
     const state = await loop.run('Coordinate this\ndone: one\ndone: two');
     const events = store.replay(state.id);
     expect(events.some((event) => event.type === 'MODE_CHANGED')).toBe(true);
-    expect(events.some((event) => event.type === 'REPLAN_CREATED')).toBe(true);
-    expect(state.mode).toBe('orchestrator');
+    // No mode switch forces a replan anymore: the old Orchestrator fan-out
+    // boundary (which replanned) was retired with the mode.
+    expect(events.some((event) => event.type === 'REPLAN_CREATED')).toBe(false);
+    expect(state.mode).toBe('plan');
   });
 });
 
@@ -485,59 +490,30 @@ describe('TaskRunner mode enforcement', () => {
     expect(result.events.some((event) => event.type === 'APPROVAL_REQUESTED')).toBe(true);
   });
 
-  test('Orchestrator mode runs recorded child tasks sequentially and aggregates the result', async () => {
+  test('spawned child tasks run through the tool path and aggregate into the report', async () => {
     const root = temp('daedalus-runner-orch-ws-');
     const home = temp('daedalus-runner-orch-home-');
-    writeFileSync(join(root, 'a.txt'), 'hello');
-    const read = { tool: 'read_file', args: { path: 'a.txt' } };
+    const spawnFirst = { tool: 'spawn_subagent', args: { description: 'first child', goal: 'Write child-1.txt\ndone: first file written' } };
+    const spawnSecond = { tool: 'spawn_subagent', args: { description: 'second child', goal: 'Write child-2.txt\ndone: second file written' } };
     const writeFirst = { tool: 'write_file', args: { path: 'child-1.txt', content: 'first child change' } };
     const writeSecond = { tool: 'write_file', args: { path: 'child-2.txt', content: 'second child change' } };
     const runner = new TaskRunner({
       workspaceRoot: root,
       store: new TaskStore(home),
       bus: new EventBus(),
-      provider: scriptedProvider([read, writeFirst, read, read, writeSecond, read]),
+      provider: scriptedProvider([spawnFirst, writeFirst, spawnSecond, writeSecond]),
       validator: passingValidator,
       approvalPolicy: 'auto',
       maxIterations: 8,
     });
     const result = await runner.run({
       goal: 'Coordinate the work\ndone: first criterion\ndone: second criterion',
-      mode: 'orchestrator',
+      mode: 'auto',
     });
     expect(result.state.status).toBe('done');
     expect(result.report.metrics.child_tasks).toBe(2);
     expect(result.report.metrics.child_tasks_done).toBe(2);
     expect(result.events.filter((event) => event.type === 'CHILD_TASK_STARTED')).toHaveLength(2);
     expect(result.events.filter((event) => event.type === 'CHILD_TASK_FINISHED')).toHaveLength(2);
-  });
-});
-
-describe('OrchestratorRunner', () => {
-  test('stops launching later children after identical no-progress results', async () => {
-    const home = temp('daedalus-orchestrator-home-');
-    const store = new TaskStore(home);
-    const bus = new EventBus();
-    const orchestrator = new OrchestratorRunner({
-      bus,
-      store,
-      executeChild: async () => ({ status: 'done', summary: 'same result', diff: '' }),
-    });
-    const result = await orchestrator.run('parent-1', [{ goal: 'same task' }, { goal: 'same task' }, { goal: 'same task' }]);
-    expect(result.no_progress).toBe(true);
-    expect(result.children.map((child) => child.status)).toEqual(['done', 'done', 'cancelled']);
-    const events = store.replay('parent-1');
-    expect(events.filter((event) => event.type === 'CHILD_TASK_STARTED')).toHaveLength(2);
-    expect(events.filter((event) => event.type === 'CHILD_TASK_FINISHED')).toHaveLength(2);
-  });
-
-  test('cancels later children when the total iteration budget is exhausted', async () => {
-    const orchestrator = new OrchestratorRunner({
-      totalBudget: { max_iterations: 2, max_errors: 5 },
-      executeChild: async (child) => ({ status: 'done', summary: `finished ${child.goal}`, iterations: 1 }),
-    });
-    const result = await orchestrator.run('parent-budget', [{ goal: 'one' }, { goal: 'two' }, { goal: 'three' }]);
-    expect(result.budget_exceeded).toBe(true);
-    expect(result.children.map((child) => child.status)).toEqual(['done', 'done', 'cancelled']);
   });
 });

@@ -1,8 +1,26 @@
 import { AGENT_MODES, type AgentMode, type ToolModePolicy } from '../contracts.ts';
 import type { ModelToolSchema } from '../tools/registry.ts';
 import { ASK_USER_TOOL_NAME } from './questions.ts';
+import { SPAWN_SUBAGENT_TOOL_NAME } from './subagents.ts';
 
-export const AGENT_MODE_ORDER: AgentMode[] = [...AGENT_MODES];
+/**
+ * Modes the user can pick (composer select, Shift+Tab cycle, CLI --mode).
+ * `orchestrator` is deliberately absent: delegation is the model-invoked
+ * `spawn_subagent` tool now, not a mode. Legacy persisted values naming
+ * `orchestrator` still parse (see normalizeAgentMode) and run as Auto.
+ */
+export const AGENT_MODE_ORDER: AgentMode[] = ['ask', 'manual', 'auto', 'plan'];
+
+/**
+ * Normalize any recorded/requested mode value. The retired `orchestrator`
+ * maps to Auto (with spawn_subagent available) so legacy tasks and
+ * settings load and run instead of failing; unknown values fall back to
+ * Auto as before.
+ */
+export function normalizeAgentMode(value: unknown): AgentMode {
+  if (value === 'orchestrator') return 'auto';
+  return AGENT_MODES.includes(value as AgentMode) ? (value as AgentMode) : 'auto';
+}
 
 const READ_TOOLS = new Set(['read_file', 'list_dir', 'grep', 'glob', 'git_diff', 'git_status', 'read_skill', 'lsp_diagnostics']);
 const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'edit_search_replace', 'create_dir']);
@@ -39,6 +57,10 @@ export function classifyToolName(name: string): ToolVisibility {
   // question tool belongs to the read class for policy purposes; its
   // visibility rule (everywhere but Ask mode) lives in isToolVisible.
   if (name === ASK_USER_TOOL_NAME) return 'read';
+  // Delegating to a subagent changes the workspace through the child, so
+  // spawn_subagent takes the mutating class: visible in Auto/Manual, one
+  // approval per delegation in Manual, invisible (and denied) in Ask/Plan.
+  if (name === SPAWN_SUBAGENT_TOOL_NAME) return 'mutating';
   if (READ_TOOLS.has(name)) return 'read';
   if (MUTATING_TOOLS.has(name)) return 'mutating';
   if (EXECUTING_TOOLS.has(name)) return 'executing';
@@ -123,7 +145,7 @@ export const MODE_PERMISSION_MATRIX: Record<AgentMode, { read: 'allow'; mutating
   manual: { read: 'allow', mutating: 'ask', executing: 'ask', summary: 'every edit and command needs approval' },
   auto: { read: 'allow', mutating: 'allow', executing: 'ask', summary: 'edits run freely; commands need approval unless auto-approve is on' },
   plan: { read: 'allow', mutating: 'deny', executing: 'deny', summary: 'read-only exploration; the only sanctioned write is the plan itself under .daedalus/plans/**' },
-  orchestrator: { read: 'allow', mutating: 'allow', executing: 'ask', summary: 'decomposes into child tasks; own commands follow the auto-approve toggle' },
+  orchestrator: { read: 'allow', mutating: 'allow', executing: 'ask', summary: 'retired mode; runs as Auto (delegation via the spawn_subagent tool)' },
 };
 
 /**
@@ -182,9 +204,11 @@ export function modePromptContract(mode: AgentMode): string {
     case 'manual':
       return 'Current mode: Manual. Reads are free, but every file change and every command pauses for the user\'s approval first. Propose one concrete action at a time and let the approval flow gate it; a declined action comes back with the user\'s instructions — follow them instead of retrying the same action. When the goal is ambiguous, ask with ask_user (2-4 options) before proposing actions.';
     case 'auto':
-      return 'Current mode: Auto. Reads and edits proceed directly; commands run without asking while auto-approve is on, otherwise each command pauses for approval. Work the plan to completion and let validation prove the result. When a requirement is ambiguous, ask with ask_user.';
+      return 'Current mode: Auto. Reads/edits proceed directly; commands run freely with auto-approve on, otherwise they pause for approval. Work the plan to completion; validation proves the result. Ask with ask_user when ambiguous; delegate hard/parallel subtasks via spawn_subagent.';
     case 'orchestrator':
-      return 'Current mode: Orchestrator. Your work is decomposed into child tasks that run under policies no looser than yours. Coordinate: keep each child\'s goal self-contained, respect the budgets, and treat a child\'s budget exhaustion as a partial result to report, not a success.';
+      // Retired mode, kept for legacy task records: it runs exactly as
+      // Auto, with delegation available through the spawn_subagent tool.
+      return modePromptContract('auto');
     default:
       return `Current mode: ${mode}.`;
   }
@@ -208,7 +232,7 @@ export class ModeController {
   #autoApprove: boolean;
 
   constructor(initial: AgentMode = 'auto', autoApprove = false) {
-    this.#mode = AGENT_MODES.includes(initial) ? initial : 'auto';
+    this.#mode = normalizeAgentMode(initial);
     this.#autoApprove = autoApprove;
   }
 
@@ -229,13 +253,15 @@ export class ModeController {
   }
 
   describeChange(from: AgentMode, to: AgentMode): ModeChange {
-    const normalizedFrom = AGENT_MODES.includes(from) ? from : 'auto';
-    const normalizedTo = AGENT_MODES.includes(to) ? to : 'auto';
+    const normalizedFrom = normalizeAgentMode(from);
+    const normalizedTo = normalizeAgentMode(to);
     return {
       from: normalizedFrom,
       to: normalizedTo,
       turnBoundary: true,
-      replanRequired: normalizedFrom === 'orchestrator' || normalizedTo === 'orchestrator',
+      // The old Orchestrator boundary (the only re-planning switch) is
+      // retired with the mode; mode changes never re-plan now.
+      replanRequired: false,
     };
   }
 
@@ -276,7 +302,7 @@ export const MODE_DESCRIPTIONS: Record<AgentMode, string> = {
   manual: 'Step-by-step actions with approval for every mutation',
   auto: 'Autonomous plan-act-validate loop',
   plan: 'Read-only exploration and plan drafting',
-  orchestrator: 'Coordinator that decomposes work into child tasks',
+  orchestrator: 'Retired: runs as Auto (spawn_subagent delegation)',
 };
 
 export function modeIntent(mode: AgentMode): string {

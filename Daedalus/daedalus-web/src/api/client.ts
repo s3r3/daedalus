@@ -1,6 +1,5 @@
 import type { AgentMode, Attachment, Event, FinalReport, PermissionKey } from '@daedalus/core'
 import type {
-  ChildTaskInput,
   Conversation,
   FileChange,
   ProviderInput,
@@ -84,7 +83,6 @@ export type CreateTaskInput = {
   models?: string[]
   model_strategy?: 'failover' | 'round-robin'
   attachments?: Attachment[]
-  children?: ChildTaskInput[]
   isolation?: 'worktree'
   /** Follow up on a plan drafted by this earlier task; core injects its steps as a constraint. */
   plan_task_id?: string

@@ -105,11 +105,15 @@ export type ChildTask = {
   id: string;
   parent_task_id: string;
   goal: string;
+  /** Short human label for the delegation (the spawn call's description); UIs show it over the full brief. */
+  label?: string;
   mode?: AgentMode;
   status: 'pending' | 'running' | 'done' | 'failed' | 'cancelled';
   budget?: ChildTaskBudget;
   /** Iterations the child actually consumed from the shared pool (set when it finishes). */
   iterations_used?: number;
+  /** Provider-reported token usage of the child's own run, rolled up for the parent's accounting. Token fields are absent when the provider reported no usage. */
+  usage?: { requests: number; reported: number; input_tokens?: number; output_tokens?: number; total_tokens?: number };
   result_summary?: string;
   error_reason?: ChildTaskErrorReason;
   created_at: string;

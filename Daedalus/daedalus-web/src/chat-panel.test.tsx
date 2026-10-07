@@ -359,3 +359,57 @@ describe('ChatPanel pending cards inside the transcript', () => {
     expect(screen.getByTestId('chat-entries').lastElementChild?.contains(card)).toBe(true)
   })
 })
+
+describe('ChatPanel token usage line', () => {
+  const usage = { prompt_tokens: 12483, completion_tokens: 3102, total_tokens: 15585 }
+
+  test('shows summed provider usage, formatted, from model events', () => {
+    seed([
+      started(),
+      ev('MODEL_REQUEST_FINISHED', { message: { content: 'working' }, usage }),
+      ev('MODEL_REQUEST_FINISHED', { message: { content: 'done' }, usage: { prompt_tokens: 100, completion_tokens: 5, total_tokens: 105 } }),
+    ])
+    render(<ChatPanel />)
+    expect(textOf(screen.getByTestId('chat-token-usage'))).toBe('tokens 12,583 in · 3,107 out · 15,690 total · 2 requests')
+  })
+
+  test('rolls finished subagent usage into the line without double counting its events', () => {
+    const child = {
+      id: 'child-1',
+      parent_task_id: 'task-1',
+      goal: 'do the chore',
+      label: 'chore',
+      status: 'done',
+      created_at: new Date().toISOString(),
+      usage: { requests: 2, reported: 2, input_tokens: 500, output_tokens: 40, total_tokens: 540 },
+    }
+    seed([
+      started(),
+      ev('MODEL_REQUEST_FINISHED', { message: { content: 'delegating' }, usage }),
+      ev('CHILD_TASK_STARTED', { child: { ...child, status: 'running', usage: undefined } }),
+      // The child's own model events (merged feeds) are skipped: its
+      // record already carries the same usage.
+      ev('MODEL_REQUEST_FINISHED', { message: { content: 'child turn' }, usage: { prompt_tokens: 250, completion_tokens: 20, total_tokens: 270 } }, 'child-1'),
+      ev('MODEL_REQUEST_FINISHED', { message: { content: 'child turn 2' }, usage: { prompt_tokens: 250, completion_tokens: 20, total_tokens: 270 } }, 'child-1'),
+      ev('CHILD_TASK_FINISHED', { child }),
+    ])
+    render(<ChatPanel />)
+    expect(textOf(screen.getByTestId('chat-token-usage'))).toBe('tokens 12,983 in · 3,142 out · 16,125 total · 3 requests')
+  })
+
+  test('shows only the request count when the provider reported no usage', () => {
+    seed([
+      started(),
+      ev('MODEL_REQUEST_FINISHED', { message: { content: 'one' } }),
+      ev('MODEL_REQUEST_FINISHED', { message: { content: 'two' } }),
+    ])
+    render(<ChatPanel />)
+    expect(textOf(screen.getByTestId('chat-token-usage'))).toBe('2 model requests · token usage not reported by the provider')
+  })
+
+  test('hides the line entirely before any model request', () => {
+    seed([started()])
+    render(<ChatPanel />)
+    expect(screen.queryByTestId('chat-token-usage')).toBeNull()
+  })
+})

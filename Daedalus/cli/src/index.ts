@@ -183,12 +183,14 @@ export function approvalPreviewLine(payload: {
   return undefined;
 }
 
-const AGENT_MODES: AgentMode[] = ["ask", "manual", "auto", "plan", "orchestrator"];
+const AGENT_MODES: AgentMode[] = ["ask", "manual", "auto", "plan"];
 
 export function parseMode(value: string | undefined): AgentMode | undefined {
   if (value === undefined) return undefined;
   const lowered = value.trim().toLowerCase();
-  const normalized = (lowered === "code" ? "auto" : lowered) as AgentMode;
+  // `code` is the display alias for auto; the retired `orchestrator` mode
+  // maps to auto (delegation is the spawn_subagent tool now).
+  const normalized = (lowered === "code" || lowered === "orchestrator" ? "auto" : lowered) as AgentMode;
   if (!AGENT_MODES.includes(normalized)) {
     throw new Error(`--mode expects one of ${AGENT_MODES.join(", ")}, code, received "${value}"`);
   }
@@ -1250,7 +1252,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
     .option("--model-strategy <strategy>", "model pool strategy: failover or round-robin")
     .option("--provider <name>", "override the provider endpoint (LLM_BASE_URL)")
     .option("--provider-id <id>", "use a saved provider from the provider registry")
-    .option("--mode <mode>", "agent mode: ask, code, plan, orchestrator, or manual")
+    .option("--mode <mode>", "agent mode: ask, code, plan, or manual")
     .option("--no-thinking", "do not emit THOUGHT events for provider reasoning text")
     .option("--ci", "CI mode: implies --json, never prompts, mutating approvals auto-deny unless --yolo", false)
     .option("--isolation <mode>", "run the task in an isolated git worktree (worktree)", undefined)
@@ -1495,7 +1497,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
     .command("chat")
     .description("open the interactive Daedalus CLI")
     .option("--cwd <path>", "target workspace directory", process.cwd())
-    .option("--mode <mode>", "agent mode: ask, code, plan, orchestrator, or manual")
+    .option("--mode <mode>", "agent mode: ask, code, plan, or manual")
     .option("--yolo", "auto-approve mutating tool actions where the mode allows it", false)
     .option("--no-thinking", "hide provider THOUGHT events for this chat session")
     .option("--max-iterations <number>", "max agent loop iterations", "25")

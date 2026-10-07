@@ -1,11 +1,13 @@
 # Modes and approvals
 
-Daedalus has five agent modes. They are not prompt labels: each mode is a row
+Daedalus has four agent modes. They are not prompt labels: each mode is a row
 in one permission matrix in core (`MODE_PERMISSION_MATRIX` in
 `core/src/interaction/modes.ts`), enforced at tool-call time by the execution
 harness, so even a misbehaving model cannot mutate the workspace in a
 read-only mode. The same matrix drives the CLI and the Web because both talk
-to the same `@daedalus/core`.
+to the same `@daedalus/core`. (A fifth mode, Orchestrator, was retired in
+favor of the model-invoked `spawn_subagent` tool — see *Subagents* below;
+records and settings that still name it load and run as Auto.)
 
 ## The mode × permission matrix
 
@@ -19,7 +21,7 @@ diagnostics…), **mutating** (file writes/edits, `create_dir`, MCP tools), and
 | plan          | allow | deny\*   | deny                               |
 | manual        | allow | ask      | ask                                |
 | auto          | allow | allow    | ask → allow while auto-approve on  |
-| orchestrator  | allow | allow    | ask → allow while auto-approve on  |
+| orchestrator  | — retired: loads and runs as **auto** (see *Subagents*) |
 
 \* Plan mode has exactly one sanctioned write: plan documents under
 `.daedalus/plans/**` (see *Plan documents*). Everything else mutating stays
@@ -112,8 +114,8 @@ already-queued pending requests that match the pattern.
 
 ### Child tasks
 
-An orchestrator's children surface their approval requests on the **parent's**
-event log (mirrored events carry the child's identity), so the card in the
+A subagent's approval requests surface on the **parent's** event log
+(mirrored events carry the child's identity), so the card in the
 parent chat names the requesting child task. The CLI's terminal prompt
 (`a` approve / `d` deny / `r` remember, decided through the same core broker)
 shows the same preview text.
@@ -124,7 +126,7 @@ Modeled on Claude Code's AskUserQuestion and Cline's `ask_followup_question`:
 when requirements are genuinely ambiguous — audience, product type, stack —
 the agent asks instead of guessing. The tool `ask_user` takes
 `{ question, options: [{label, description?}] (2–4), allow_free_text? (default
-true) }` and is visible in plan, manual, auto, and orchestrator modes (every
+true) }` and is visible in plan, manual, and auto modes (every
 mode that can produce a plan); it is hidden in ask mode, where the agent
 should simply answer. It is classified `read`, so it never routes through
 the approval gate — its own broker is the pause.
@@ -150,7 +152,7 @@ The mechanism mirrors the approval broker:
 - Every settlement lands as `QUESTION_ANSWERED` (`question_id`, question,
   outcome, answer, `option_index`, `timed_out`, `cancelled`), which the Web
   renders as a collapsed receipt in the chat transcript. A question asked by
-  an orchestrator's child is mirrored onto the parent's event log, exactly
+  a subagent is mirrored onto the parent's event log, exactly
   like child approvals, so the card appears in the parent chat.
 
 Surfaces: the Web shows a **question card** inline in the chat panel —
@@ -264,83 +266,132 @@ task per prompt:
 ## Approve & Execute
 
 When a plan task finishes (done or partial) with plan documents, the Web
-chat shows an **Approve & Execute** bar naming the plan file, with two
-buttons: **Execute with Auto** and **Execute with Orchestrator**. Clicking
-one creates the follow-up task through the existing plan-continuity
+chat shows an **Approve & Execute** bar naming the plan file, with one
+button: **Execute with Auto**. Clicking it
+creates the follow-up task through the existing plan-continuity
 machinery: `plan_task_id` set to the plan task (core injects the plan's
-steps), the chosen mode, and a goal of the form "Execute the approved plan
-in .daedalus/plans/<slug>/plan.md" — and the composer's mode switch follows
-the choice. In the CLI there is no equivalent button yet: run the follow-up
-as a new Auto/Orchestrator goal naming the plan file (Web-only for now; see
+steps), mode Auto, and a goal of the form "Execute the approved plan
+in .daedalus/plans/<slug>/plan.md" — and the composer's mode follows.
+The executing task may itself delegate with `spawn_subagent`. In the CLI
+there is no equivalent button yet: run the follow-up
+as a new Auto goal naming the plan file (Web-only for now; see
 *Honest limits*).
 
-## Orchestrator tightening rule
+## Subagents (`spawn_subagent`)
 
-Modes have a strictness order — `orchestrator` (0) < `auto` (1) < `manual`
-(2) < `plan`/`ask` (3) — and a child's effective mode is the **stricter** of
-what it requested and its parent's mode (`restrictMode`): **children tighten,
-never loosen**. A child asked to run `manual` under an `auto` parent stays
-manual; a child can never end up looser than its parent. Child approval
-policies are inherited through the same rule, and child budgets (max
-iterations/errors) return **typed errors** to the parent —
-`budget_exceeded`, `no_progress`, `child_failed`, `cancelled` — never silent
-success.
+Delegation is a **tool the model invokes**, not a mode the user picks —
+the shape Claude Code's Agent tool takes. The Orchestrator MODE is
+retired: it is no longer offered in the Web composer (or its Shift+Tab
+cycle), the CLI's `--mode` choices, or the server's selectable modes.
+Persisted tasks, settings, and sessions that still name `orchestrator`
+are **mapped to Auto** wherever a mode is read (runtime, server, CLI), so
+old records load and run — with `spawn_subagent` available — instead of
+crashing. Legacy event logs (including `ORCHESTRATION_SKIPPED`) still
+render. *Approve & Execute* offers Auto only; a plan execution may itself
+delegate.
 
-## Orchestrator economics: when it fans out, and what children cost
+### The tool contract
 
-Fan-out is not free: every child rebuilds its context from scratch, so a
-decomposition only pays when the children are genuinely independent work.
-Four rules keep Orchestrator honest about that, learned from a live run
-where "add images + CSS to one page" burned 609s / 35 turns as three
-sequential full agent loops and died on the shared budget:
+`spawn_subagent` takes `{ description, goal, background? }`:
 
-- **Skip rule (single path runs directly).** When decomposition would
-  produce fewer than two children, or exactly the canned sequential
-  pipeline (the default inspect → implement → validate steps over one
-  goal — sequential dependents sharing all context), the parent does NOT
-  fan out: it runs **one agent loop itself** with the parent budget and the
-  user's goal. An `ORCHESTRATION_SKIPPED` event (`reason: single_path`)
-  records the decision, the task's mode stays `orchestrator` on the
-  record, and the runtime's normal post-loop validation still applies.
-  Genuine fan-out — more than one done-criterion, or a caller-provided
-  child list — is never collapsed.
-- **Per-child budget slices, continue on exhaustion.** Each child gets its
-  own iteration slice of the shared pool: a floor of 8 turns, otherwise an
-  even share of what remains, never more than the pool still holds (so the
-  run as a whole can never exceed the task's max iterations). A child that
-  burns its slice ends failed with `error_reason: budget_exceeded` — and
-  the parent **continues with the remaining children** instead of aborting
-  the run. Only when the pool itself is spent do later children cancel
-  (typed `budget_exceeded`). The final outcome reflects the counts: all
-  children done → success; some done, some not → **partial**; none done →
-  failed. The budget math is legible in the final report's evidence
-  (`child budgets: 8/8, 5/12, 0/10 (not run); pool 13/25`).
-- **Distilled child returns.** A child's result carried into the parent
-  context, the findings handoff, and the report is a distilled summary —
-  an outcome line, the changed files with line counts, and at most two
-  evidence lines, hard-capped at 1,500 characters. It is never the raw
-  text of the child's last tool call (previously a child ending on a big
-  file read injected the whole file as its "summary"). The full detail
-  stays in the child's own task log, one click away in the Child Tasks
-  panel. Child goals carry the matching contract: implementation steps
-  must produce a real file change, and every child must finish with a
-  short summary that never pastes file contents.
-- **Findings handoff.** When a child finishes, its distilled summary is
-  handed to the next child's prompt under a `## findings from previous
-  steps` heading, so a later child acts on what earlier siblings found
-  instead of re-reading (and re-paying for) the same files.
-- **Diff visibility.** A child's file changes are mirrored onto the
-  parent's event log (tagged with both task ids), so the parent's
-  Files-changed and Diff panels aggregate all descendants live; the
-  child's own view still reads the child's log, so nothing double-counts.
+- `description` — a short label; it names the child in the Child Tasks
+  panel and in events.
+- `goal` — the **complete, self-contained brief**. The child starts with
+  a fresh context and cannot see the parent's conversation; everything
+  it needs must be in this string.
+- `background` (default `false`) — run the child alongside the parent
+  instead of blocking on it.
 
-**Sequential writers by design.** Children that write run one after
-another, never in parallel: they share one workspace, and two agents
-editing the same tree concurrently is a merge conflict generator, not a
-speedup. Parallel write children land only with per-child worktree
-isolation (the `isolation: 'worktree'` machinery exists per child today);
-until then, Orchestrator's win is bounded context per child and typed
-partial results — not wall-clock parallelism.
+The tool is classified **mutating**: visible and free in Auto; in Manual
+the spawn call itself asks for approval once (the delegation decision),
+and the child's own mutations still ask individually, mirrored to the
+parent exactly as child approvals always have. In Ask and Plan the tool
+is denied outright (read-only modes; the plan-document carve-out is
+unaffected). The Auto prompt carries a one-line pointer; the tool's own
+description teaches the full contract: delegate hard, independent, or
+long work; do small or tightly sequential work yourself, because every
+delegation pays for a fresh context.
+
+### Foreground, parallel, background
+
+- **Foreground** (default): the call blocks until the child finishes and
+  returns exactly one distilled result (below) as the tool result.
+- **Parallel**: several `spawn_subagent` calls in one model response run
+  **concurrently, capped at 3** (further calls in the same response wait
+  their turn). The contract forbids parallel children editing the same
+  files — they share one workspace, and keeping writers apart is the
+  model's responsibility, backed by the usual approval gates.
+- **Background** (`background: true`): the call returns immediately with
+  the child task id. When the child finishes, its result is injected
+  into the parent's next model turn as a `[background subagent finished]`
+  notice (a plain user-role message appended to that turn's request).
+  The parent task **only finishes after its background children have
+  settled** — their results also join the final report's evidence — and
+  Stop cancels running background children with the task. The wait is
+  bounded by the children's own budgets and the approval/question
+  timeouts; a background child never outlives its task.
+
+Children appear in the existing Child Tasks panel with live status
+(`CHILD_TASK_STARTED`/`CHILD_TASK_FINISHED` events, label first) — there
+is no separate subagent UI.
+
+### Budgets: one pool, exact accounting
+
+Parent and children share the task's iteration pool (the task's
+`max_iterations`). The pool is debited by the parent's own model turns
+**and** by each child's actual iterations, reserved up front so parallel
+spawns can never oversubscribe it: each spawn is granted a slice (a
+floor of 8 turns, otherwise an even share of what remains, never more
+than remains), the reservation settles to actual usage when the child
+finishes, and a spawn that finds the pool spent is **refused with an
+explanation** (the model then does the work itself or reports partial
+progress) — never silently queued. A child that burns its slice fails
+with the typed reason `budget_exceeded` and the parent continues;
+exhaustion is a per-child outcome, not a run failure.
+
+### Inheritance and the nesting stop
+
+Modes have a strictness order — `auto` (1) < `manual` (2) < `plan`/`ask`
+(3) — and a child's effective mode is the **stricter** of the parent's
+mode and the delegation default (`restrictMode`): **children tighten,
+never loosen**. A spawned child of a Manual parent still asks before its
+own writes. Child budgets return **typed errors** to the parent —
+`budget_exceeded`, `child_failed`, `cancelled` — never silent success.
+
+Children **cannot delegate further** (depth 1, hard stop): a child run
+is built without the `spawn_subagent` tool at all, so there is nothing
+to gate — a hallucinated call is denied as an unknown tool.
+
+### Distilled returns and diff visibility
+
+What comes back to the parent is a **distilled summary**: an outcome
+line, the changed files with line counts, and at most a few evidence
+lines, hard-capped at 1,500 characters — never the raw text of the
+child's last tool call (a child ending on a big file read once injected
+the whole file as its "summary"). The full detail stays in the child's
+own task log. A child's file changes are mirrored onto the parent's
+event log (tagged with both task ids), so the parent's Files-changed
+and Diff panels aggregate all descendants live; the child's own view
+still reads the child's log, so nothing double-counts. Findings travel
+the way the old fan-out handed them over, but model-mediated now: the
+parent sees each child's distilled result and writes the next brief
+itself.
+
+## Token accounting
+
+Every model response's provider usage (`prompt_tokens` /
+`completion_tokens` / `total_tokens` on OpenAI-compatible APIs) rides
+the `MODEL_REQUEST_FINISHED` event. Core accumulates it over the run's
+whole lineage — the parent's turns **plus** every subagent's, each child
+also carrying its own roll-up on its record — and the final report
+carries `model_requests` (always) plus `tokens_input`, `tokens_output`,
+`tokens_total`, and `token_requests_reported` **only when at least one
+request actually reported usage** (nothing is estimated or fabricated).
+The Web chat panel shows the running totals as one subtle monospace
+line — `tokens 12,483 in · 3,102 out · 15,585 total · 9 requests` —
+updated live from the same events, and the finished report view shows
+the same numbers from the persisted report. Providers that return no
+usage block yield a line with just the honest request count.
 
 ## Honest limits
 
@@ -372,3 +423,15 @@ partial results — not wall-clock parallelism.
   card falls back to the raw arguments rather than blocking the decision.
 - Read-only modes deny `run_command` entirely; read-only discovery is done
   with the read tools (`list_dir`, `read_file`, search), not the shell.
+- Parallel subagents share one workspace: the no-same-file rule for
+  concurrent children is a contract the model is taught, enforced only
+  by approvals and the diff view after the fact — there is no file
+  locking between children. Per-child worktree isolation would lift
+  this; today it exists for whole tasks, not for spawns.
+- A background child's result reaches the parent at the next turn
+  boundary (as a notice in that turn's request), never mid-turn; if the
+  parent finishes first, the task end waits for the child instead of
+  surfacing the result anywhere else.
+- Token totals are only as real as the provider's usage block: routers
+  that strip `usage` produce request counts without token numbers, and
+  the UI says so rather than estimating.

@@ -176,6 +176,58 @@ export function childTasks(events: Event[]): ChildTask[] {
   return [...merged.values()]
 }
 
+export type TaskUsage = {
+  /** Every model request the run made (its own turns + spawned subagents'). */
+  requests: number
+  /** Requests whose provider actually reported a usage block. */
+  reported: number
+  inputTokens: number
+  outputTokens: number
+  totalTokens: number
+}
+
+/**
+ * Token accounting for the visible task, from MODEL_REQUEST_FINISHED events
+ * — the same roll-up the final report carries. Token totals only count
+ * requests whose provider reported usage; nothing is estimated.
+ */
+export function taskUsage(events: Event[]): TaskUsage {
+  // Finished subagents carry their own usage roll-up on the child record;
+  // their MODEL_REQUEST_FINISHED events (present in merged feeds) must not
+  // be counted twice.
+  const childUsage = new Map<string, NonNullable<ChildTask['usage']>>()
+  for (const event of events) {
+    const child = payloadOf(event, 'CHILD_TASK_FINISHED')?.child
+    if (child?.usage) childUsage.set(child.id, child.usage)
+  }
+  let requests = 0
+  let reported = 0
+  let inputTokens = 0
+  let outputTokens = 0
+  let totalTokens = 0
+  for (const event of events) {
+    const payload = payloadOf(event, 'MODEL_REQUEST_FINISHED')
+    if (!payload) continue
+    if (event.task_id && childUsage.has(event.task_id)) continue
+    requests++
+    const usage = payload.usage
+    if (typeof usage?.prompt_tokens === 'number' && typeof usage?.completion_tokens === 'number' && typeof usage?.total_tokens === 'number') {
+      reported++
+      inputTokens += usage.prompt_tokens
+      outputTokens += usage.completion_tokens
+      totalTokens += usage.total_tokens
+    }
+  }
+  for (const usage of childUsage.values()) {
+    requests += usage.requests
+    reported += usage.reported
+    inputTokens += usage.input_tokens ?? 0
+    outputTokens += usage.output_tokens ?? 0
+    totalTokens += usage.total_tokens ?? 0
+  }
+  return { requests, reported, inputTokens, outputTokens, totalTokens }
+}
+
 export function modeChanges(events: Event[]): Array<{ from: string; to: string; replanRequired: boolean }> {
   return events.flatMap((event) => {
     const payload = payloadOf(event, 'MODE_CHANGED')

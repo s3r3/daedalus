@@ -196,34 +196,33 @@ describe('file-defined subagents', () => {
     expect(registry.get('ghost')).toBeUndefined();
   });
 
-  test('an orchestrator child runs its named agent (allowlist enforced, name recorded)', async () => {
+  test('a top-level run executes as its named agent (allowlist enforced, name recorded)', async () => {
     const workspace = temp('daedalus-orch-agent-');
     const home = temp('daedalus-orch-agent-home-');
     writeFileEnsured(join(workspace, '.daedalus/agents/only-reader.md'), '---\nname: only-reader\ndescription: Read-only child\ntools: [read_file]\n---\nOnly read.');
     const runner = new TaskRunner({
       workspaceRoot: workspace,
       store: new TaskStore(home),
-      provider: scriptedProvider([{ tool: 'write_file', args: { path: 'nope.txt', content: 'x' } }]),
+      provider: scriptedProvider([
+        { tool: 'write_file', args: { path: 'nope.txt', content: 'x' } },
+        { tool: 'read_file', args: { path: '.daedalus/agents/only-reader.md' } },
+      ]),
       validator: passingValidator,
       approvalPolicy: 'auto',
       maxIterations: 6,
     });
     const result = await runner.run({
-      goal: 'Coordinate the children',
-      mode: 'orchestrator',
-      children: [{ goal: 'Inspect the workspace', agent: 'only-reader' }],
+      goal: 'Inspect the workspace\ndone: inspection complete',
+      mode: 'auto',
+      agentName: 'only-reader',
     });
-    const started = result.events.find((event) => event.type === 'CHILD_TASK_STARTED');
-    expect((started?.payload as { child?: { agent?: string } }).child?.agent).toBe('only-reader');
-    const childId = (started?.payload as { child?: { id?: string } }).child?.id;
-    const childState = runner.store.loadState<{ agent?: string }>(childId ?? '');
-    expect(childState?.agent).toBe('only-reader');
+    expect(result.state.agent).toBe('only-reader');
     expect(existsSync(join(workspace, 'nope.txt'))).toBe(false);
     const denied = result.events.find((event) => event.type === 'TOOL_CALL_FINISHED' && (event.payload as { result?: { status?: string } }).result?.status === 'denied');
     expect((denied?.payload as { result?: { output?: string } }).result?.output).toContain('not allowed');
   });
 
-  test('an unknown agent name fails the orchestrated run up front', async () => {
+  test('an unknown agent name fails the run up front', async () => {
     const workspace = temp('daedalus-orch-ghost-');
     const home = temp('daedalus-orch-ghost-home-');
     const runner = new TaskRunner({
@@ -235,8 +234,8 @@ describe('file-defined subagents', () => {
     });
     await expect(runner.run({
       goal: 'Coordinate',
-      mode: 'orchestrator',
-      children: [{ goal: 'Boo', agent: 'ghost' }],
+      mode: 'auto',
+      agentName: 'ghost',
     })).rejects.toThrow(/unknown agent "ghost"/);
   });
 });

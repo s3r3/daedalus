@@ -9,7 +9,6 @@ import {
   EventBus,
   ExecutionHarness,
   MODE_PERMISSION_MATRIX,
-  OrchestratorRunner,
   TaskRunner,
   TaskStore,
   createDefaultRegistry,
@@ -432,8 +431,8 @@ describe('ExecutionHarness approval details', () => {
   });
 });
 
-describe('orchestrator inheritance', () => {
-  test('a manual child still asks even when the parent session auto-approves, and the parent log shows the card', async () => {
+describe('subagent inheritance (spawn_subagent)', () => {
+  test('a spawned child of a manual parent still asks, and the parent log shows the card stamped with the child', async () => {
     const root = temp('daedalus-child-approval-ws-');
     const home = temp('daedalus-child-approval-home-');
     const runner = new TaskRunner({
@@ -441,19 +440,17 @@ describe('orchestrator inheritance', () => {
       store: new TaskStore(home),
       bus: new EventBus(),
       provider: scriptedProvider([
+        { tool: 'spawn_subagent', args: { description: 'child writer', goal: 'Write the child file\ndone: child file written' } },
         { tool: 'write_file', args: { path: 'child.txt', content: 'by child' } },
-        { text: 'done: child file written' },
       ]),
       validator: passingValidator,
-      approvalPolicy: 'auto',
-      maxIterations: 6,
+      approvalPolicy: 'ask',
+      maxIterations: 8,
     });
     let parentTaskId = '';
     const result = await runner.run({
       goal: 'Coordinate\ndone: child file written',
-      mode: 'orchestrator',
-      autoApprove: true,
-      children: [{ goal: 'Write the child file\ndone: child file written', mode: 'manual' }],
+      mode: 'manual',
       onEvent: (event) => {
         if (event.type !== 'APPROVAL_REQUESTED') return;
         const info = (event.payload as { approval?: ApprovalRequestInfo }).approval;
@@ -465,9 +462,10 @@ describe('orchestrator inheritance', () => {
     const childStarted = result.events.find((event) => event.type === 'CHILD_TASK_STARTED');
     const childId = (childStarted?.payload as { child?: { id: string } }).child?.id;
     expect(childId).toBeTruthy();
-    // The request is mirrored onto the parent's log, stamped with the child.
+    // The child's request is mirrored onto the parent's log, stamped with the child.
     const mirrored = result.events.find(
-      (event) => event.type === 'APPROVAL_REQUESTED' && event.task_id === parentTaskId,
+      (event) => event.type === 'APPROVAL_REQUESTED' && event.task_id === parentTaskId
+        && (event.payload as { approval?: ApprovalRequestInfo }).approval?.key.tool === 'write_file',
     );
     const info = (mirrored?.payload as { approval?: ApprovalRequestInfo }).approval;
     expect(info?.requestedBy.taskId).toBe(childId);
@@ -476,7 +474,7 @@ describe('orchestrator inheritance', () => {
     expect(result.state.status).toBe('done');
   });
 
-  test('a child asking for orchestrator is clamped to auto (no nesting)', async () => {
+  test('a spawned child inherits the clamped mode on its record (never looser, never a delegator)', async () => {
     const root = temp('daedalus-child-clamp-ws-');
     const home = temp('daedalus-child-clamp-home-');
     writeFileSync(join(root, 'a.txt'), 'hello');
@@ -485,40 +483,23 @@ describe('orchestrator inheritance', () => {
       workspaceRoot: root,
       store,
       bus: new EventBus(),
-      provider: scriptedProvider([{ tool: 'read_file', args: { path: 'a.txt' } }]),
+      provider: scriptedProvider([
+        { tool: 'spawn_subagent', args: { description: 'clamp reader', goal: 'Read the file\ndone: read the file' } },
+        { tool: 'read_file', args: { path: 'a.txt' } },
+      ]),
       validator: passingValidator,
       approvalPolicy: 'auto',
       maxIterations: 6,
     });
     const result = await runner.run({
-      goal: 'Coordinate\ndone: child read the file',
-      mode: 'orchestrator',
-      children: [{ goal: 'Read the file\ndone: child read the file', mode: 'orchestrator', budget: { max_iterations: 3, max_errors: 2 } }],
+      goal: 'Coordinate\ndone: read the file',
+      mode: 'auto',
     });
     const childStarted = result.events.find((event) => event.type === 'CHILD_TASK_STARTED');
-    const childId = (childStarted?.payload as { child?: { id: string } }).child?.id as string;
-    const childState = store.loadState<{ mode?: string }>(childId);
+    const child = (childStarted?.payload as { child?: { id: string; mode?: string } }).child;
+    expect(child?.id).toBeTruthy();
+    expect(child?.mode).toBe('auto');
+    const childState = store.loadState<{ mode?: string }>(child!.id);
     expect(childState?.mode).toBe('auto');
-  });
-
-  test('budget exhaustion cancels remaining children with a typed budget_exceeded reason', async () => {
-    const orchestrator = new OrchestratorRunner({
-      executeChild: async () => ({ status: 'done', summary: 'did some work', iterations: 5, errors: 0 }),
-      totalBudget: { max_iterations: 4, max_errors: 10 },
-    });
-    const result = await orchestrator.run('parent-budget', [{ goal: 'one' }, { goal: 'two' }, { goal: 'three' }]);
-    expect(result.budget_exceeded).toBe(true);
-    expect(result.children.map((child) => child.status)).toEqual(['done', 'cancelled', 'cancelled']);
-    expect(result.children[1]?.error_reason).toBe('budget_exceeded');
-    expect(result.children[2]?.error_reason).toBe('budget_exceeded');
-  });
-
-  test('no-progress cancellation is typed as no_progress, not a generic cancel', async () => {
-    const orchestrator = new OrchestratorRunner({
-      executeChild: async () => ({ status: 'done', summary: 'same result', diff: '' }),
-    });
-    const result = await orchestrator.run('parent-np', [{ goal: 'same' }, { goal: 'same' }, { goal: 'same' }]);
-    expect(result.no_progress).toBe(true);
-    expect(result.children[2]?.error_reason).toBe('no_progress');
   });
 });

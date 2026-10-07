@@ -251,9 +251,12 @@ async function readRawBody(req: IncomingMessage, maxBytes = UPLOAD_LIMITS.maxTot
   return Buffer.concat(chunks);
 }
 
-const AGENT_MODES: AgentMode[] = ["ask", "manual", "auto", "plan", "orchestrator"];
+const AGENT_MODES: AgentMode[] = ["ask", "manual", "auto", "plan"];
 
 function parseMode(value: unknown): AgentMode | undefined {
+  // The retired `orchestrator` mode maps to auto so legacy clients keep
+  // working; anything else unknown is left undefined for the caller.
+  if (value === "orchestrator") return "auto";
   return typeof value === "string" && AGENT_MODES.includes(value as AgentMode) ? (value as AgentMode) : undefined;
 }
 
@@ -584,26 +587,6 @@ function parseAttachments(value: unknown): Attachment[] {
       ...(typeof record.sha256 === "string" ? { sha256: record.sha256 } : {}),
       createdAt: typeof record.createdAt === "string" ? record.createdAt : new Date().toISOString(),
       ...(typeof record.path === "string" ? { path: record.path } : {}),
-    }];
-  });
-}
-
-function parseChildren(value: unknown): Array<{ goal: string; mode?: AgentMode; budget?: { max_iterations: number; max_errors: number }; agent?: string; isolation?: "worktree" }> {
-  if (!Array.isArray(value)) return [];
-  return value.flatMap((item) => {
-    if (typeof item !== "object" || item === null) return [];
-    const record = item as Record<string, unknown>;
-    if (typeof record.goal !== "string" || !record.goal.trim()) return [];
-    const budgetRecord = typeof record.budget === "object" && record.budget !== null ? (record.budget as Record<string, unknown>) : undefined;
-    const budget = budgetRecord && typeof budgetRecord.max_iterations === "number" && typeof budgetRecord.max_errors === "number"
-      ? { max_iterations: budgetRecord.max_iterations, max_errors: budgetRecord.max_errors }
-      : undefined;
-    return [{
-      goal: record.goal,
-      mode: parseMode(record.mode),
-      ...(budget ? { budget } : {}),
-      ...(typeof record.agent === "string" && record.agent.trim() ? { agent: record.agent } : {}),
-      ...(record.isolation === "worktree" ? { isolation: "worktree" as const } : {}),
     }];
   });
 }
@@ -1126,7 +1109,6 @@ export function createApp(ctx: AppContext) {
           const strategyInput = typeof parsed.model_strategy === "string" ? parsed.model_strategy : typeof parsed.modelStrategy === "string" ? parsed.modelStrategy : undefined;
           const modelStrategy: ModelStrategy | undefined = poolModels.length > 1 ? parseModelStrategy(strategyInput, "model_strategy") : undefined;
           const attachments = parseAttachments(parsed.attachments);
-          const children = parseChildren(parsed.children);
           const taskStore = new TaskStore(resolveDaedalusHome(ctx.settings.daedalusHome, repoPath));
 
           // Chat conversation: this submission is one turn of a continuing
@@ -1170,8 +1152,8 @@ export function createApp(ctx: AppContext) {
           // conversation and pure questions go straight to the model and the
           // reply is the result — no manufactured plan, no tool loop, no
           // validation. Modes still govern everything classified as a task;
-          // attachments/children/worktrees always take the task path.
-          const intent = attachments.length || children.length || isolation ? "task" : classifyWebIntent(goal);
+          // attachments/worktrees always take the task path.
+          const intent = attachments.length || isolation ? "task" : classifyWebIntent(goal);
           if (intent !== "task") {
             const task = {
               id: taskId,
@@ -1253,7 +1235,6 @@ export function createApp(ctx: AppContext) {
             ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
             ...(conversationId ? { conversation_id: conversationId } : {}),
             attachments,
-            ...(children.length ? { children } : {}),
             ...(isolation ? { isolation } : {}),
             created_at: new Date().toISOString(),
           };
@@ -1280,7 +1261,6 @@ export function createApp(ctx: AppContext) {
               ...(model ? { model } : {}),
               ...(poolModels.length ? { models: poolModels } : {}),
               ...(modelStrategy ? { modelStrategy } : {}),
-              ...(children.length ? { children } : {}),
               ...(typeof parsed.plan_task_id === "string" && parsed.plan_task_id ? { planTaskId: parsed.plan_task_id } : {}),
               ...(priorContext ? { priorContext } : {}),
               ...(conversationId ? { conversationId } : {}),
