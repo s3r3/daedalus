@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { ImagePlus, Paperclip, Play, Square, UploadCloud, X } from 'lucide-react'
 import type { AgentMode, Attachment } from '@daedalus/core'
+import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core'
 import { AGENT_MODE_ORDER, nextAgentMode } from '@daedalus/core/interaction/modes'
 import { SlashCommandRegistry, slashCommandSuggestions, type SlashCommandContext, type SlashCommandResult } from '@daedalus/core/interaction/slash-commands'
 import { Button } from '../ui/button'
@@ -9,7 +10,7 @@ import { useDaedalusStore } from '../../state/taskStore'
 import { useTaskEvents } from '../../state/hooks'
 import { approvalId, fileChanges, latestPlan, parseModelPool, pendingApprovals, pendingQuestions, taskStatus, validation } from '../../state/selectors'
 import { api } from '../../api/client'
-import type { Conversation, ConversationTurn, WorkspaceFileEntry } from '../../api/types'
+import type { Conversation, ConversationTurn, ExtensionStatus, WorkspaceFileEntry } from '../../api/types'
 import { saveActiveConversationId } from '../../state/prefs'
 import { ModelPicker } from './model-picker'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
@@ -39,6 +40,11 @@ export function Composer() {
 
   const [touched, setTouched] = useState(false)
   const [slashOutput, setSlashOutput] = useState<string | null>(null)
+  // Palette state machine: the menus are derived from the draft, so each
+  // carries the draft text it was dismissed for — Esc and outside clicks
+  // hide the menu WITHOUT touching the draft, and typing (which changes
+  // the draft) may open it again.
+  const [dismissedSlash, setDismissedSlash] = useState<string | null>(null)
   const [activeSuggestion, setActiveSuggestion] = useState(0)
   const [stopping, setStopping] = useState(false)
   // @-mention completion: the caret drives token detection; the workspace
@@ -47,12 +53,20 @@ export function Composer() {
   const [activeMention, setActiveMention] = useState(0)
   const [dismissedMention, setDismissedMention] = useState<string | null>(null)
   const [fileIndex, setFileIndex] = useState<{ root: string; entries: WorkspaceFileEntry[] }>({ root: '', entries: [] })
+  // Explicit skill invocations staged from `/skill <name>` (chips below
+  // the composer): the next submit force-loads those skill bodies.
+  const [invokedSkills, setInvokedSkills] = useState<string[]>([])
+  const [activeSkill, setActiveSkill] = useState(0)
+  const [dismissedSkill, setDismissedSkill] = useState<string | null>(null)
+  const [skillInventory, setSkillInventory] = useState<{ root: string; skills: ExtensionStatus['skills'] }>({ root: '', skills: [] })
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const formRef = useRef<HTMLFormElement>(null)
   const pendingCaret = useRef<number | null>(null)
   const indexRequestedFor = useRef('')
+  const skillIndexRoot = useRef('')
   const registry = useMemo(() => new SlashCommandRegistry(), [])
 
   useEffect(() => {
@@ -115,16 +129,64 @@ export function Composer() {
     if (/^\/\S+\s/.test(goal)) return []
     return slashCommandSuggestions(goal)
   }, [composer.goal])
+  /** The slash palette is open only when it has entries AND wasn't dismissed for this exact draft text. */
+  const slashOpen = suggestions.length > 0 && dismissedSlash !== composer.goal
+
+  // The `/skill <name>` completion menu: while the draft is an invocation
+  // prefix, offer the workspace's enabled skill names (from the same
+  // gateway inventory the Settings panel shows).
+  const skillMatch = useMemo(() => activeSkillInvocation(composer.goal), [composer.goal])
+  const skillCandidates = useMemo(() => {
+    if (!skillMatch || dismissedSkill === composer.goal) return []
+    const entries = skillInventory.root === workspaceRoot ? skillInventory.skills : []
+    const needle = skillMatch.query.toLowerCase()
+    return entries.filter((skill) => !skill.disabled && !skill.shadowedBy && (needle === '' || skill.name.toLowerCase().includes(needle))).slice(0, 12)
+  }, [skillMatch, dismissedSkill, composer.goal, skillInventory, workspaceRoot])
+  const skillOpen = skillCandidates.length > 0
+
+  // Fetch the skill inventory (once per workspace) when an invocation is
+  // being typed, so the menu and the unknown/disabled warnings have data.
+  useEffect(() => {
+    if (!/^\/skill(\s|$)/.test(composer.goal)) return
+    if (!workspaceRoot || skillIndexRoot.current === workspaceRoot) return
+    skillIndexRoot.current = workspaceRoot
+    let cancelled = false
+    void (async () => {
+      try {
+        const status = await api.extensionsStatus(workspaceRoot)
+        if (!cancelled) setSkillInventory({ root: workspaceRoot, skills: status.skills })
+      } catch {
+        if (!cancelled) setSkillInventory({ root: workspaceRoot, skills: [] })
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [composer.goal, workspaceRoot])
+
+  // Clicking outside the composer closes any open menu. The draft text
+  // itself is never touched by dismissal — only the menus close.
+  useEffect(() => {
+    const onPointerDown = (event: PointerEvent): void => {
+      const form = formRef.current
+      if (!form || form.contains(event.target as Node)) return
+      const goal = useDaedalusStore.getState().composer.goal
+      setDismissedSlash(goal)
+      setDismissedSkill(goal)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [])
 
   const mentionToken = useMemo(() => activeMentionToken(composer.goal, caret), [composer.goal, caret])
   const mentionKey = mentionToken ? `${mentionToken.start}:${mentionToken.query}` : null
   const mentionCandidates = useMemo(() => {
     // Only one menu at a time: an open slash palette wins over @ completion.
-    if (!mentionToken || mentionKey === dismissedMention || suggestions.length > 0) return []
+    if (!mentionToken || mentionKey === dismissedMention || suggestions.length > 0 || skillOpen) return []
     const entries = fileIndex.root === workspaceRoot ? fileIndex.entries : []
     const needle = mentionToken.query.toLowerCase()
     return entries.filter((entry) => entry.path.toLowerCase().includes(needle)).slice(0, 12)
-  }, [mentionToken, mentionKey, dismissedMention, suggestions.length, fileIndex, workspaceRoot])
+  }, [mentionToken, mentionKey, dismissedMention, suggestions.length, skillOpen, fileIndex, workspaceRoot])
   const mentionOpen = mentionToken !== null && mentionCandidates.length > 0
 
   const insertMention = (entry: WorkspaceFileEntry): void => {
@@ -278,6 +340,23 @@ export function Composer() {
     return { text: kind === 'image' ? 'Choose an image to attach.' : kind === 'folder' ? 'Choose a folder to upload.' : 'Choose files or a ZIP to upload.', action: 'upload' }
   }
 
+  /**
+   * Why `/skill <name>` cannot be honored right now, or null when it can.
+   * Answered from the fetched inventory; when the inventory has not
+   * loaded yet the server is the backstop (it 400s with the same words).
+   */
+  const skillInvocationProblem = (name: string): string | null => {
+    if (skillInventory.root !== workspaceRoot) return null
+    const winner = skillInventory.skills.find((skill) => skill.name === name && !skill.shadowedBy)
+    if (!winner) {
+      return `Unknown skill "${name}" — no skill with that name was found in this workspace or the global skill directories. It was not invoked.`
+    }
+    if (winner.disabled) {
+      return `Skill "${name}" is disabled for this workspace (.daedalus/skills.json). Re-enable it in Settings → Extensions to invoke it. It was not invoked.`
+    }
+    return null
+  }
+
   const slashContext = (): SlashCommandContext => ({
     getMode: () => useDaedalusStore.getState().composer.mode,
     setMode: changeMode,
@@ -385,9 +464,21 @@ export function Composer() {
     listSkills: async () => {
       try {
         const status = await loadExtensionStatus()
-        return status.skills.length ? status.skills.map((skill) => `${skill.name} — ${skill.description || 'skill'}`).join('\n') : `No skills found under ${status.root}/.daedalus/skills.`
+        return status.skills.length ? status.skills.map((skill) => `${skill.name} — ${skill.description || 'skill'}${skill.disabled ? ' [disabled for this workspace]' : ''}`).join('\n') : `No skills found under ${status.root}/.daedalus/skills.`
       } catch (error) {
         return `Skill listing failed: ${errorMessage(error)}`
+      }
+    },
+    invokeSkill: (name) => {
+      // `/skill <name>` with no task text yet: stage the invocation as a
+      // chip; the next submit force-loads the skill body. (With task text
+      // the submit path submits directly and never routes here.)
+      const problem = skillInvocationProblem(name)
+      if (problem) return { text: problem, action: 'skill' }
+      setInvokedSkills((current) => (current.includes(name) ? current : [...current, name]))
+      return {
+        text: `Skill "${name}" will be force-loaded into the next task — it shows as a chip under the composer. Type the task and send.`,
+        action: 'skill',
       }
     },
     listAgents: async () => {
@@ -432,6 +523,10 @@ export function Composer() {
     const result = await registry.execute(input, slashContext())
     setSlashOutput(result.text)
     if (result.action === 'settings' || result.action === 'providers') setSettingsOpen(true)
+    // Executing a command closes every menu: the draft is cleared and any
+    // dismissal markers reset, so the next `/` opens a fresh palette.
+    setDismissedSlash(null)
+    setDismissedSkill(null)
     setComposer({ goal: '', error: null })
   }
 
@@ -442,6 +537,22 @@ export function Composer() {
 
   const submitGoal = async (): Promise<void> => {
     const goal = composer.goal.trim()
+    // `/skill <name> <task…>`: an explicit invocation with its task text
+    // submits directly, forcing that skill's body into the task context.
+    // Unknown/disabled names warn visibly and never submit silently
+    // un-skilled; the gateway repeats the check as the backstop.
+    const invocation = parseSkillInvocation(goal)
+    if (invocation?.task) {
+      const problem = skillInvocationProblem(invocation.name)
+      if (problem) {
+        setSlashOutput(problem)
+        setComposer({ error: problem })
+        setTouched(true)
+        return
+      }
+      await runTask(invocation.task, [invocation.name, ...invokedSkills.filter((name) => name !== invocation.name)])
+      return
+    }
     if (goal.startsWith('/')) {
       await executeSlash(goal)
       return
@@ -450,11 +561,13 @@ export function Composer() {
       setTouched(true)
       return
     }
-    // Cline pattern: text submitted while an approval is pending answers the
-    // approval itself — declined, with this text delivered to the agent
-    // verbatim as the reason — instead of starting a second task.
+    // Cline pattern: text submitted while an approval is pending answers
+    // the approval itself — declined, with this text delivered to the
+    // agent verbatim as the reason — instead of starting a second task.
+    // Staged skill invocations are explicit task intent and bypass the
+    // decline-note path (the task carries the skills instead).
     const firstPending = pendingApprovals(events)[0]
-    if (firstPending && activeTaskId) {
+    if (firstPending && activeTaskId && invokedSkills.length === 0) {
       try {
         await api.decideApproval(activeTaskId, firstPending.approval?.id ?? approvalId(firstPending.key), 'decline', { note: goal })
         setComposer({ goal: '', error: null })
@@ -464,6 +577,11 @@ export function Composer() {
       }
       return
     }
+    await runTask(goal, invokedSkills)
+  }
+
+  const runTask = async (taskGoal: string, skillNames: string[]): Promise<void> => {
+    const goal = taskGoal
     setComposer({ submitting: true, error: null })
     try {
       const attachmentsForTask = visionWarning ? composer.attachments.filter((attachment) => attachment.kind !== 'image') : composer.attachments
@@ -506,6 +624,7 @@ export function Composer() {
         ...(pool.length > 0 ? { models: pool } : { model: composer.model || undefined }),
         ...(pool.length > 1 ? { model_strategy: composer.modelStrategy } : {}),
         attachments: attachmentsForTask,
+        ...(skillNames.length ? { skills: skillNames } : {}),
         ...(planTaskId ? { plan_task_id: planTaskId } : {}),
         ...(activeConversation ? { conversation_id: activeConversation.id } : {}),
       })
@@ -527,6 +646,7 @@ export function Composer() {
           .catch(() => undefined)
       }
       setComposer({ submitting: false, goal, attachments: [] })
+      setInvokedSkills([])
       if (visionWarning) setSlashOutput(visionWarning)
     } catch (error) {
       setComposer({ submitting: false, error: error instanceof Error ? error.message : String(error) })
@@ -539,7 +659,7 @@ export function Composer() {
       void cycleMode()
       return
     }
-    if (suggestions.length > 0) {
+    if (slashOpen) {
       if (event.key === 'ArrowDown') {
         event.preventDefault()
         setActiveSuggestion((current) => (current + 1) % suggestions.length)
@@ -553,8 +673,32 @@ export function Composer() {
           setComposer({ goal: `/${suggestion.name} ` })
         }
       } else if (event.key === 'Escape') {
+        // Esc closes the palette and keeps the draft — it must never
+        // nuke what the user typed (the old behavior cleared the goal).
+        event.preventDefault()
+        setDismissedSlash(composer.goal)
         setActiveSuggestion(0)
-        setComposer({ goal: '' })
+      }
+      return
+    }
+    if (skillOpen) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        setActiveSkill((current) => (current + 1) % skillCandidates.length)
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        setActiveSkill((current) => (current - 1 + skillCandidates.length) % skillCandidates.length)
+      } else if (event.key === 'Tab' || event.key === 'Enter') {
+        const candidate = skillCandidates[activeSkill] ?? skillCandidates[0]
+        if (candidate) {
+          event.preventDefault()
+          setComposer({ goal: `/skill ${candidate.name} ` })
+          setActiveSkill(0)
+        }
+      } else if (event.key === 'Escape') {
+        event.preventDefault()
+        setDismissedSkill(composer.goal)
+        setActiveSkill(0)
       }
       return
     }
@@ -575,6 +719,13 @@ export function Composer() {
         event.preventDefault()
         setDismissedMention(mentionKey)
       }
+      return
+    }
+    // With no menu open, Esc dismisses the slash output block (the skills
+    // dump and friends) instead of leaving it stuck above the composer.
+    if (event.key === 'Escape' && slashOutput) {
+      event.preventDefault()
+      setSlashOutput(null)
       return
     }
     // Chat convention: Enter sends, Shift+Enter adds a line. With no menu
@@ -604,6 +755,7 @@ export function Composer() {
 
   return (
     <form
+      ref={formRef}
       onSubmit={submit}
       className={`flex flex-col gap-2 border-b border-line bg-surface-base px-3 py-2 ${activeTaskId ? 'motion-composer-collapse' : ''}`}
       data-testid="composer"
@@ -653,6 +805,7 @@ export function Composer() {
           setComposer({ goal: event.target.value })
           setActiveSuggestion(0)
           setActiveMention(0)
+          setActiveSkill(0)
           setCaret(event.target.selectionStart ?? event.target.value.length)
         }}
         onSelect={(event) => setCaret(event.currentTarget.selectionStart ?? 0)}
@@ -683,7 +836,7 @@ export function Composer() {
         </div>
       ) : null}
 
-      {suggestions.length > 0 ? (
+      {slashOpen ? (
         <div className="flex flex-wrap gap-1" data-testid="slash-palette" role="listbox" aria-label="slash commands">
           {suggestions.map((command, index) => (
             <button
@@ -697,6 +850,33 @@ export function Composer() {
               onClick={() => setComposer({ goal: `/${command.name} ` })}
             >
               {command.usage} <span className="text-muted">— {command.description}</span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {skillOpen ? (
+        <div className="flex max-h-48 flex-col gap-0.5 overflow-auto" data-testid="skill-palette" role="listbox" aria-label="skills">
+          {skillCandidates.map((skill, index) => (
+            <button
+              key={skill.name}
+              type="button"
+              role="option"
+              aria-selected={index === activeSkill}
+              data-testid="skill-suggestion"
+              data-skill={skill.name}
+              className={`flex items-center gap-2 rounded border px-1.5 py-0.5 text-left text-[11px] ${index === activeSkill ? 'border-primary text-primary' : 'border-line text-muted'}`}
+              onMouseDown={(event) => event.preventDefault()}
+              onMouseEnter={() => setActiveSkill(index)}
+              onClick={() => {
+                setComposer({ goal: `/skill ${skill.name} ` })
+                setActiveSkill(0)
+                textareaRef.current?.focus()
+              }}
+            >
+              <span className="truncate">{skill.name}</span>
+              {skill.origin ? <span className="shrink-0 text-[10px] text-muted">{formatSkillOrigin(skill.origin as SkillOrigin)}</span> : null}
+              <span className="ml-auto shrink-0 text-[10px] text-muted">force-load on next task</span>
             </button>
           ))}
         </div>
@@ -798,10 +978,44 @@ export function Composer() {
         </ul>
       ) : null}
 
+      {invokedSkills.length > 0 ? (
+        <ul className="flex flex-wrap gap-1" data-testid="invoked-skill-chips">
+          {invokedSkills.map((name) => (
+            <li
+              key={name}
+              className="flex items-center gap-1 rounded border border-primary/50 bg-primary/10 px-1.5 py-0.5 text-[10px] text-foreground"
+              data-testid="invoked-skill-chip"
+              data-skill={name}
+            >
+              <span>skill: {name} · invoked by you</span>
+              <button
+                type="button"
+                aria-label={`remove invoked skill ${name}`}
+                onClick={() => setInvokedSkills((current) => current.filter((entry) => entry !== name))}
+              >
+                <X className="size-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
       {slashOutput ? (
-        <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words rounded border border-line bg-surface px-2 py-1 text-[11px] text-foreground" data-testid="slash-output">
-          {slashOutput}
-        </pre>
+        <div className="relative" data-testid="slash-output-block">
+          <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-words rounded border border-line bg-surface px-2 py-1 pr-6 text-[11px] text-foreground" data-testid="slash-output">
+            {slashOutput}
+          </pre>
+          <button
+            type="button"
+            aria-label="close output"
+            title="Close (Esc)"
+            data-testid="slash-output-close"
+            className="absolute right-1 top-1 rounded border border-line bg-surface px-1 py-0.5 text-[10px] font-semibold text-foreground hover:border-primary"
+            onClick={() => setSlashOutput(null)}
+          >
+            <X className="size-3" />
+          </button>
+        </div>
       ) : null}
       {visionWarning ? (
         <p className="text-[11px] text-warning" data-testid="vision-warning">
@@ -823,6 +1037,27 @@ export function Composer() {
 }
 
 const MENTION_PATH_CHAR = /[A-Za-z0-9._/-]/
+
+/**
+ * A trailing `/skill <partial>` prefix still being typed (no task text
+ * yet): the partial name filters the skill completion menu. `/skills`
+ * does not match — that is the listing command, not an invocation.
+ */
+function activeSkillInvocation(goal: string): { query: string } | null {
+  if (goal.includes('\n')) return null
+  const match = /^\/skill\s+(\S*)$/.exec(goal)
+  return match ? { query: match[1] ?? '' } : null
+}
+
+/**
+ * A complete `/skill <name> [task…]` draft. With task text it submits as
+ * a task (task = the rest); without it, the registry stages the skill.
+ */
+function parseSkillInvocation(goal: string): { name: string; task: string } | null {
+  const match = /^\/skill\s+(\S+)(?:\s+([\s\S]+))?$/.exec(goal.trim())
+  if (!match?.[1]) return null
+  return { name: match[1], task: (match[2] ?? '').trim() }
+}
 
 /**
  * The @-token the caret is currently inside, if any. Mirrors core's

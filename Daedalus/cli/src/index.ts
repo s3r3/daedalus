@@ -52,9 +52,23 @@ import {
   startForegroundServer,
   stopDaemon,
 } from "./launcher.ts";
-import { InteractiveSession } from "./interactive.ts";
+import { InteractiveSession, type InteractiveHandleResult } from "./interactive.ts";
+
+/** Skills a handled interactive line carries into its task (explicit `/skill` invocations), as a run-ready spread. */
+function skillsSpread(handled: InteractiveHandleResult): { skills: string[] } | Record<string, never> {
+  const skills = (handled.data as { skills?: string[] } | undefined)?.skills;
+  return Array.isArray(skills) && skills.length > 0 ? { skills } : {};
+}
+
+/** `--skill a,b` → ['a', 'b'] (trimmed, non-empty). */
+function runSkillNames(value: string | undefined): string[] {
+  return (value ?? "")
+    .split(",")
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0);
+}
 import { TrayManager } from "./tray.ts";
-import { formatSkillsListing, installBundledSkills, listSkills } from "./skills-bundled.ts";
+import { formatSkillsListing, installBundledSkills, listSkills, setSkillDisabledForWorkspace } from "./skills-bundled.ts";
 
 const SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const SPINNER_INTERVAL_MS = 50;
@@ -276,6 +290,11 @@ export function formatEvent(event: Omit<Event, "seq" | "ts">): string {
       const more = outputLines.length > 1 ? ` … (${outputLines.length - 1} more lines)` : "";
       return `  ↳ ${icon} ${dim(`${p.call?.tool ?? ""} -> ${first}${more}`)}\n`;
     }
+    case "SKILL_LOADED": {
+      const p = event.payload as { name?: string; origin?: string; via?: string };
+      const who = p.via === "user" ? "invoked by you" : "loaded by agent";
+      return `${paint(palette.secondary, "✦")} Skill loaded: ${p.name ?? "unknown"} (${p.origin ?? "unknown"} — ${who})\n`;
+    }
     case "VALIDATION_STARTED": {
       return `${paint(palette.info, "◆")} Running validation checks...\n`;
     }
@@ -416,7 +435,13 @@ export function applyExtensionStatus(session: InteractiveSession, status: Extens
     })));
   }
   if (status.skills.length > 0) {
-    session.setSkills(status.skills.map((skill) => ({ name: skill.name, detail: skill.description || "skill" })));
+    // The sidebar lists usable skills (collision winners); shadowed
+    // copies stay out, and the disabled set rides along for /skills and
+    // /skill feedback.
+    session.setSkills(
+      status.skills.filter((skill) => !skill.shadowedBy).map((skill) => ({ name: skill.name, detail: skill.description || "skill" })),
+    );
+    session.setDisabledSkills(status.skills.filter((skill) => skill.disabled).map((skill) => skill.name));
   }
   if (status.agents.length > 0) {
     session.setAgents(status.agents.map((agent) => ({ name: agent.name, detail: agent.description || "subagent" })));
@@ -532,6 +557,7 @@ async function runFullscreenChat(options: {
     try {
       const result = await runner.run({
         goal: handled.text,
+        ...skillsSpread(handled),
         mode: session.mode,
         autoApprove: session.autoApprove,
         thinking: session.thinking,
@@ -1017,6 +1043,7 @@ export async function runInteractiveChat(options: {
       try {
         const result = await runner.run({
           goal: handled.text,
+          ...skillsSpread(handled),
           mode: session.mode,
           autoApprove: session.autoApprove,
           thinking: session.thinking,
@@ -1253,6 +1280,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
     .option("--provider <name>", "override the provider endpoint (LLM_BASE_URL)")
     .option("--provider-id <id>", "use a saved provider from the provider registry")
     .option("--mode <mode>", "agent mode: ask, code, plan, or manual")
+    .option("--skill <names>", "comma-separated skill names to force-load into the task (same as /skill <name> in interactive chat; disabled/unknown names fail the run visibly)")
     .option("--no-thinking", "do not emit THOUGHT events for provider reasoning text")
     .option("--ci", "CI mode: implies --json, never prompts, mutating approvals auto-deny unless --yolo", false)
     .option("--isolation <mode>", "run the task in an isolated git worktree (worktree)", undefined)
@@ -1260,7 +1288,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
     .option("--verbose", "also stream the raw JSON event line for every event", false)
     .action(async (
       task: string,
-      options: { cwd: string; json?: boolean; yolo?: boolean; maxIterations?: string; model?: string; models?: string; modelStrategy?: string; provider?: string; providerId?: string; mode?: string; thinking?: boolean; ci?: boolean; isolation?: string; timeout?: string; verbose?: boolean },
+      options: { cwd: string; json?: boolean; yolo?: boolean; maxIterations?: string; model?: string; models?: string; modelStrategy?: string; provider?: string; providerId?: string; mode?: string; skill?: string; thinking?: boolean; ci?: boolean; isolation?: string; timeout?: string; verbose?: boolean },
     ) => {
       const workspaceRoot = options.cwd;
       const ci = options.ci === true;
@@ -1361,6 +1389,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
       try {
         const result = await runner.run({
           goal: task,
+          ...(runSkillNames(options.skill).length > 0 ? { skills: runSkillNames(options.skill) } : {}),
           mode,
           autoApprove: options.yolo === true,
           ...(isolation ? { isolation } : {}),
@@ -1616,6 +1645,36 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
         for (const name of result.installed) process.stdout.write(`installed ${name} -> ${result.targetDir}\n`);
         for (const skipped of result.skipped) process.stdout.write(`skipped ${skipped.name}: ${skipped.reason}\n`);
         if (result.installed.length === 0 && result.skipped.length > 0) process.exitCode = 1;
+      } catch (error) {
+        process.stderr.write(`${paint(palette.error, `Error: ${String(error)}`)}\n`);
+        process.exitCode = 1;
+      }
+    });
+
+  skillsCommand
+    .command("enable")
+    .description("enable a skill for this workspace (writes .daedalus/skills.json, shared with the Web)")
+    .argument("<name>", "skill name to enable")
+    .option("--cwd <path>", "workspace directory", process.cwd())
+    .action(async (name: string, options: { cwd: string }) => {
+      try {
+        const result = await setSkillDisabledForWorkspace(options.cwd, name, false);
+        process.stdout.write(`skill "${result.name}" enabled for ${options.cwd} (disabled now: ${result.disabledSkills.join(", ") || "none"})\n`);
+      } catch (error) {
+        process.stderr.write(`${paint(palette.error, `Error: ${String(error)}`)}\n`);
+        process.exitCode = 1;
+      }
+    });
+
+  skillsCommand
+    .command("disable")
+    .description("disable a skill for this workspace (writes .daedalus/skills.json, shared with the Web)")
+    .argument("<name>", "skill name to disable")
+    .option("--cwd <path>", "workspace directory", process.cwd())
+    .action(async (name: string, options: { cwd: string }) => {
+      try {
+        const result = await setSkillDisabledForWorkspace(options.cwd, name, true);
+        process.stdout.write(`skill "${result.name}" disabled for ${options.cwd} (disabled now: ${result.disabledSkills.join(", ") || "none"})\n`);
       } catch (error) {
         process.stderr.write(`${paint(palette.error, `Error: ${String(error)}`)}\n`);
         process.exitCode = 1;

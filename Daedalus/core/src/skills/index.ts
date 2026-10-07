@@ -6,14 +6,28 @@ export {
   dedupeSkillsByName,
   formatSkillOrigin,
   globalSkillSearchDirs,
+  loadSkillInventory,
   loadSkills,
   parseSkillMarkdown,
+  renderSkillBody,
   resolveSkillSearchDirs,
   workspaceSkillsDir,
   WORKSPACE_SKILLS_RELATIVE_PATH,
   type Skill,
   type SkillDirOptions,
   type SkillInfo,
+  type SkillInventoryEntry,
+  type SkillLoadedPayload,
   type SkillOrigin,
   type SkillSearchDir,
 } from './loader.ts';
+
+export {
+  SKILLS_CONFIG_RELATIVE_PATH,
+  loadSkillConfig,
+  parseSkillConfig,
+  setSkillDisabled,
+  skillsConfigPath,
+  writeSkillConfig,
+  type SkillConfig,
+} from './config.ts';

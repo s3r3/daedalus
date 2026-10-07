@@ -92,13 +92,14 @@ describe('ContextManager', () => {
     const plan = await createPlan(spec);
     const state: TaskState = { ...spec, plan, steps: plan.steps, status: 'active' };
     // Budget covers the fixed sections plus the bounded workspace overview
-    // the prompt now ships (production default is 16000).
-    const ctx = new DefaultContextManager(700);
+    // the prompt now ships (production default is 16000). Raised from 700
+    // when the skills test files lengthened the tree listing.
+    const ctx = new DefaultContextManager(760);
     const messages = await ctx.buildMessages(state, []);
     const joined = messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
     expect(joined.indexOf('## role')).toBeLessThan(joined.indexOf('## task'));
     expect(joined.indexOf('## task')).toBeLessThan(joined.indexOf('## plan'));
-    expect(ctx.estimate(messages)).toBeLessThanOrEqual(700);
+    expect(ctx.estimate(messages)).toBeLessThanOrEqual(760);
   });
 
   test('truncate marks oversized observations explicitly', () => {

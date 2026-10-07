@@ -34,7 +34,18 @@ import { childTaskFromInput, distillChildSummary, type ChildFileChange } from '.
 import { backgroundFinishedNotice, createSpawnSubagentTool, type SpawnDispatch, type SpawnSubagentInput } from './interaction/subagents.ts';
 import { McpManager, loadMcpConfig, type McpServerConfig, type McpServerStatus } from './mcp/index.ts';
 import { LspManager, loadLspConfig, type LspServerConfig, type LspServerStatus } from './lsp/index.ts';
-import { SkillRegistry, createReadSkillTool, loadSkills, resolveSkillSearchDirs, type SkillInfo, type SkillSearchDir } from './skills/index.ts';
+import {
+  SkillRegistry,
+  createReadSkillTool,
+  loadSkillConfig,
+  loadSkillInventory,
+  loadSkills,
+  renderSkillBody,
+  resolveSkillSearchDirs,
+  type SkillInventoryEntry,
+  type SkillLoadedPayload,
+  type SkillSearchDir,
+} from './skills/index.ts';
 import type { LLMProvider } from './providers/llm/types.ts';
 import { loadSettings, resolveDaedalusHome, type Settings } from './settings.ts';
 
@@ -134,7 +145,13 @@ export type TaskRunnerOptions = {
 export type ExtensionStatus = {
   mcp: McpServerStatus[];
   lsp: LspServerStatus[];
-  skills: SkillInfo[];
+  /**
+   * Full skill inventory (winners + shadowed copies), each flagged
+   * `disabled` from the workspace's `.daedalus/skills.json`. Disabled and
+   * shadowed entries never load; they are listed so UIs can show what
+   * exists and offer to re-enable.
+   */
+  skills: SkillInventoryEntry[];
   agents: AgentDefinition[];
 };
 
@@ -163,6 +180,16 @@ export type RunOptions = {
   priorContext?: string;
   /** Chat conversation id this task belongs to; recorded on the spec/state so task listings can point back at the session. */
   conversationId?: string;
+  /**
+   * Skills explicitly invoked for this task (Web `/skill <name>`, CLI
+   * `/skill`, `run --skill`): each named skill's body is force-loaded into
+   * the task context, marked as user-invoked, with a SKILL_LOADED event.
+   * Unknown or workspace-disabled names are refused visibly (an error
+   * result naming them; the CLI/server surfaces refuse before the run) —
+   * never silently dropped. Children spawned from this run do not inherit
+   * the invocation; it belongs to this task.
+   */
+  skills?: string[];
   /** Name of a file-defined subagent (.daedalus/agents/<name>.md) running this task. */
   agentName?: string;
   /** Subagent definition already resolved by a parent run (worktree re-dispatch); set automatically. */
@@ -364,7 +391,13 @@ export class TaskRunner {
       ...(this.#options.skillDirs ?? []),
       ...searchDirs.slice(1),
     ];
-    const skills = await loadSkills(skillDirs);
+    // Per-workspace skill state (.daedalus/skills.json): disabled names
+    // are excluded by the loader before the prompt index or read_skill
+    // ever see them, freeing index slots for enabled skills. The
+    // inventory (with disabled + shadowed copies) is kept for UIs.
+    const skillConfig = await loadSkillConfig(this.#workspaceRoot);
+    const skills = await loadSkills(skillDirs, { disabledNames: skillConfig.disabled });
+    const skillInventory = await loadSkillInventory(skillDirs, { disabledNames: skillConfig.disabled });
     const agents = await loadAgents([workspaceAgentsDir(this.#workspaceRoot)]);
 
     const tools: ToolDefinition[] = [];
@@ -379,7 +412,7 @@ export class TaskRunner {
     const lsp = new LspManager(lspServers);
     if (lspServers.length > 0) tools.push(lsp.createDiagnosticsTool());
 
-    this.#extensionStatus = { mcp: mcp.status(), lsp: lsp.status(), skills: skills.list(), agents: agents.list() };
+    this.#extensionStatus = { mcp: mcp.status(), lsp: lsp.status(), skills: skillInventory, agents: agents.list() };
 
     return {
       tools,
@@ -388,7 +421,7 @@ export class TaskRunner {
       close: async () => {
         await mcp.closeAll().catch(() => undefined);
         await lsp.closeAll().catch(() => undefined);
-        this.#extensionStatus = { mcp: mcp.status(), lsp: lsp.status(), skills: skills.list(), agents: agents.list() };
+        this.#extensionStatus = { mcp: mcp.status(), lsp: lsp.status(), skills: skillInventory, agents: agents.list() };
       },
     };
   }
@@ -556,6 +589,10 @@ export class TaskRunner {
     }
     if (options.conversationId) spec.conversation_id = options.conversationId;
     const collected: Event[] = [];
+    // User-invoked skill activations resolved later in this run; flushed
+    // as SKILL_LOADED events the moment TASK_STARTED lands so the log
+    // order reads prompt → skill → work (see the resolution below).
+    const pendingInvocations: SkillLoadedPayload[] = [];
     // The subagent pool is debited by the parent's own model turns too:
     // parent turns + child iterations together never exceed the task's
     // max_iterations (see #createSubagentTooling).
@@ -567,6 +604,11 @@ export class TaskRunner {
       // counting the mirror too would double every orchestrated change.
       if ((event.payload as { mirrored?: unknown } | undefined)?.mirrored === true) return;
       if (event.task_id === spec.id && event.type === 'MODEL_REQUEST_FINISHED') parentModelTurns++;
+      if (event.task_id === spec.id && event.type === 'TASK_STARTED') {
+        for (const payload of pendingInvocations.splice(0)) {
+          emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'SKILL_LOADED', payload);
+        }
+      }
       // Only events of this run (itself + spawned descendants) feed its
       // report: with parallel subagents, a sibling's events must not leak
       // into a child's metrics, diff, or validation.
@@ -582,6 +624,32 @@ export class TaskRunner {
 
     const extensions = await this.#prepareExtensions();
     this.#activeLsp = extensions.lsp;
+    // Explicit skill invocations for this task (Web/CLI `/skill <name>`):
+    // resolve each name against the run's registry. A hit force-loads the
+    // body into the context (rendered exactly like a read_skill result)
+    // and is recorded with a SKILL_LOADED event; a miss — unknown name,
+    // or a name the workspace disabled — refuses the run fast with a
+    // visible error, so the task never silently runs without the skill
+    // the user explicitly asked for.
+    const invokedSkills: Array<{ name: string; origin: SkillLoadedPayload['origin']; text: string }> = [];
+    const invocationProblems: string[] = [];
+    for (const name of [...new Set((options.skills ?? []).map((entry) => entry.trim()).filter(Boolean))]) {
+      const skill = extensions.skills.get(name);
+      if (skill) {
+        invokedSkills.push({ name: skill.name, origin: skill.origin, text: renderSkillBody(skill).text });
+        pendingInvocations.push({ name: skill.name, origin: skill.origin, via: 'user', source: skill.source });
+      } else if (extensions.skills.isDisabled(name)) {
+        invocationProblems.push(
+          `skill "${name}" is disabled for this workspace (.daedalus/skills.json) — re-enable it (Web Settings → Extensions, or \`daedalus skills enable ${name}\`) to invoke it`,
+        );
+      } else {
+        invocationProblems.push(`unknown skill "${name}" — no skill with that name was found in this workspace or the global skill directories`);
+      }
+    }
+    if (invocationProblems.length > 0) {
+      await extensions.close().catch(() => undefined);
+      throw new Error(invocationProblems.join('; '));
+    }
     const registry = createDefaultRegistry();
     for (const tool of extensions.tools) {
       try {
@@ -664,6 +732,7 @@ export class TaskRunner {
         workspaceRoot: this.#workspaceRoot,
         visionEnabled: this.#visionEnabledFor(effectiveOptions),
         skills: extensions.skills.list(),
+        ...(invokedSkills.length > 0 ? { invokedSkills } : {}),
         rules: rules.text ? rules.text : undefined,
         rulesFiles: rules.files,
         agentInstructions: agent?.instructions,

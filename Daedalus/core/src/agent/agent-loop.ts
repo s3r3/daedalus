@@ -648,6 +648,18 @@ export class AgentLoop {
       result,
       ...(shaped.truncated ? { output_truncated: true, ...(shaped.spillPath ? { spill_path: shaped.spillPath } : {}) } : {}),
     });
+    // A skill body entering the context is a first-class activation:
+    // recorded once per real load (repeat-suppressed read_skill calls
+    // return early above and never reach this point), so UIs can show
+    // which skill fired, from where, and at whose request.
+    if (call.tool === 'read_skill' && result.status === 'ok' && typeof result.meta?.skill === 'string') {
+      await this.#emit(state.id, turnId, 'SKILL_LOADED', {
+        name: result.meta.skill,
+        origin: typeof result.meta.origin === 'string' ? result.meta.origin : 'workspace',
+        via: 'agent',
+        ...(typeof result.meta.source === 'string' ? { source: result.meta.source } : {}),
+      });
+    }
     return { ...this.#observe.handle({ kind: 'tool_result', result: modelResult }, current), mode: turnMode, last_tool_call_id: call.id, tool_result: modelResult };
   }
 

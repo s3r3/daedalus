@@ -260,7 +260,7 @@ describe('InteractiveSession', () => {
     expect((await session.handleInput('/skills')).text).toContain('greeter: Greets users warmly');
     expect((await session.handleInput('/lsp')).text).toContain('fake-lsp: .ts · running');
     expect(session.suggestions('/mc').map((command) => command.name)).toEqual(['mcp']);
-    expect(session.suggestions('/sk').map((command) => command.name)).toEqual(['skills']);
+    expect(session.suggestions('/sk').map((command) => command.name)).toEqual(['skills', 'skill']);
   });
 
   test('thinking setting is visible, slash-toggleable, and filters THOUGHT transcript entries', async () => {

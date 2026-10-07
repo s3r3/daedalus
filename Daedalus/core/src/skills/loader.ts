@@ -31,6 +31,23 @@ import type { ToolResult } from '../contracts.ts';
 
 export type SkillOrigin = 'workspace' | 'global' | 'claude' | 'codex' | 'opencode' | 'kilo';
 
+/**
+ * Payload of the SKILL_LOADED event: a skill body entered a task's
+ * context. Emitted once per actual load — a `read_skill` tool call that
+ * returned the body (`via: 'agent'`) or a forced user invocation resolved
+ * at run start (`via: 'user'`). Repeat-suppressed `read_skill` calls do
+ * not re-emit: the body never re-entered the context.
+ */
+export type SkillLoadedPayload = {
+  /** Skill name as the loader knows it. */
+  name: string;
+  /** Where the winning copy lives. */
+  origin: SkillOrigin;
+  via: 'agent' | 'user';
+  /** Skills root the winning copy was loaded from. */
+  source?: string;
+};
+
 export type SkillInfo = {
   name: string;
   description: string;
@@ -46,6 +63,22 @@ export type Skill = SkillInfo & { body: string; path: string };
 export type SkillSearchDir = {
   dir: string;
   origin: SkillOrigin;
+};
+
+/**
+ * One skill found on disk, for inventory surfaces (Settings, `skills list`).
+ * Unlike `SkillInfo` this keeps every copy: when several roots provide the
+ * same name, the first (highest precedence) copy wins and later copies are
+ * marked `shadowedBy` the winner's skills root instead of vanishing.
+ */
+export type SkillInventoryEntry = SkillInfo & {
+  /** Absolute path of this copy's SKILL.md. */
+  path: string;
+  /** Skills root of the winning same-name copy, when this copy is shadowed. */
+  /** Set on a shadowed duplicate: the origin of the copy that won. */
+  shadowedBy?: SkillOrigin;
+  /** True when the workspace config disables this name (winners only matter; a disabled name never loads). */
+  disabled: boolean;
 };
 
 /** Inputs for skill-directory resolution; injectable so tests can use a fake HOME. */
@@ -68,11 +101,18 @@ export function formatSkillOrigin(origin: SkillOrigin): string {
 
 export class SkillRegistry {
   readonly #skills = new Map<string, Skill>();
+  /**
+   * Skill names the workspace config disables. They are excluded from the
+   * registry itself; the names ride along so `read_skill` can answer
+   * "disabled for this workspace" instead of "unknown skill".
+   */
+  readonly disabledNames: ReadonlySet<string>;
 
-  constructor(skills: Skill[] = []) {
+  constructor(skills: Skill[] = [], disabledNames: Iterable<string> = []) {
     for (const skill of skills) {
       if (!this.#skills.has(skill.name)) this.#skills.set(skill.name, skill);
     }
+    this.disabledNames = new Set(disabledNames);
   }
 
   list(): SkillInfo[] {
@@ -81,6 +121,11 @@ export class SkillRegistry {
 
   get(name: string): Skill | undefined {
     return this.#skills.get(name);
+  }
+
+  /** True when `name` exists on disk but the workspace config disables it. */
+  isDisabled(name: string): boolean {
+    return this.disabledNames.has(name);
   }
 
   get size(): number {
@@ -143,11 +188,25 @@ function canonicalDirKey(dir: string): string {
   }
 }
 
-/** Scan tagged skill directories (`<dir>/<name>/SKILL.md`); first name wins, missing dirs are fine. */
-async function scanSkillDirs(searchDirs: SkillSearchDir[]): Promise<SkillRegistry> {
+/**
+ * Scan tagged skill directories (`<dir>/<name>/SKILL.md`) once, producing
+ * both the loadable registry and the full inventory. Search order is
+ * precedence order: the first copy of a name wins the registry, later
+ * copies are reported in the inventory as shadowed. Names the workspace
+ * config disables are excluded from the registry (and from `read_skill`)
+ * outright — disabling a name disables the skill, so a shadowed same-name
+ * copy elsewhere never resurrects it; the inventory still shows every copy
+ * with its `disabled` flag so UIs can offer to re-enable.
+ */
+async function scanSkillDirs(
+  searchDirs: SkillSearchDir[],
+  disabledNames: Iterable<string> = [],
+): Promise<{ registry: SkillRegistry; inventory: SkillInventoryEntry[] }> {
+  const disabled = new Set(disabledNames);
   const skills: Skill[] = [];
+  const inventory: SkillInventoryEntry[] = [];
   const seenDirs = new Set<string>();
-  const seenNames = new Set<string>();
+  const winners = new Map<string, Skill>();
   for (const { dir, origin } of searchDirs) {
     const key = canonicalDirKey(dir);
     if (seenDirs.has(key)) continue;
@@ -166,26 +225,61 @@ async function scanSkillDirs(searchDirs: SkillSearchDir[]): Promise<SkillRegistr
         if (!info.isFile()) continue;
         const raw = await readFile(skillPath, 'utf8');
         const parsed = parseSkillMarkdown(raw, entry.name);
-        // First occurrence of a name wins (search order is precedence
-        // order); later same-name copies are never collected at all.
-        if (seenNames.has(parsed.name)) continue;
-        seenNames.add(parsed.name);
-        skills.push({ name: parsed.name, description: parsed.description, source: dir, origin, body: parsed.body, path: skillPath });
+        const winner = winners.get(parsed.name);
+        inventory.push({
+          name: parsed.name,
+          description: parsed.description,
+          source: dir,
+          origin,
+          path: skillPath,
+          disabled: disabled.has(parsed.name),
+          ...(winner ? { shadowedBy: winner.origin } : {}),
+        });
+        if (winner) continue;
+        const skill: Skill = { name: parsed.name, description: parsed.description, source: dir, origin, body: parsed.body, path: skillPath };
+        winners.set(parsed.name, skill);
+        if (!disabled.has(parsed.name)) skills.push(skill);
       } catch {
         continue;
       }
     }
   }
-  return new SkillRegistry(skills);
+  return { registry: new SkillRegistry(skills, disabled), inventory };
 }
 
 /**
  * Load skills from directories scanned in order (first skill with a given
  * name wins). Bare string entries are plain directories tagged `workspace`;
- * pass `SkillSearchDir` entries to tag another origin.
+ * pass `SkillSearchDir` entries to tag another origin. `disabledNames`
+ * (the workspace config's disabled list) are excluded before anything else
+ * sees the registry — the prompt index, `read_skill`, and forced
+ * invocations all read the same filtered registry.
  */
-export async function loadSkills(dirs: Array<string | SkillSearchDir>): Promise<SkillRegistry> {
-  return scanSkillDirs(dirs.map((entry) => (typeof entry === 'string' ? { dir: entry, origin: 'workspace' as SkillOrigin } : entry)));
+export async function loadSkills(
+  dirs: Array<string | SkillSearchDir>,
+  options?: { disabledNames?: Iterable<string> },
+): Promise<SkillRegistry> {
+  const { registry } = await scanSkillDirs(
+    dirs.map((entry) => (typeof entry === 'string' ? { dir: entry, origin: 'workspace' as SkillOrigin } : entry)),
+    options?.disabledNames ?? [],
+  );
+  return registry;
+}
+
+/**
+ * Every skill copy on disk (winners and shadowed duplicates), for
+ * inventory surfaces that must show what exists, what is disabled, and
+ * what is shadowed — none of which the loadable registry retains.
+ */
+export async function loadSkillInventory(
+  dirs: Array<string | SkillSearchDir>,
+  options?: { disabledNames?: Iterable<string> },
+): Promise<SkillInventoryEntry[]> {
+  const { inventory } = await scanSkillDirs(
+    dirs.map((entry) => (typeof entry === 'string' ? { dir: entry, origin: 'workspace' as SkillOrigin } : entry)),
+    options?.disabledNames ?? [],
+  );
+  return inventory;
 }
 
 /** The default per-workspace skills directory for a workspace root. */
@@ -254,6 +348,17 @@ export function resolveSkillSearchDirs(workspaceRoot: string, options?: SkillDir
 
 const MAX_SKILL_OUTPUT = 16_000;
 
+/**
+ * Render a skill's body the way `read_skill` returns it (16K cap, honest
+ * truncation marker). Shared with the runtime's forced-invocation carriage
+ * so a skill the user invokes reads exactly like one the agent loads.
+ */
+export function renderSkillBody(skill: Skill): { text: string; truncated: boolean } {
+  const truncated = skill.body.length > MAX_SKILL_OUTPUT;
+  const body = truncated ? `${skill.body.slice(0, MAX_SKILL_OUTPUT)}\n…[truncated]` : skill.body;
+  return { text: `# Skill: ${skill.name}\n${skill.description ? `${skill.description}\n\n` : ''}${body}`, truncated };
+}
+
 /** Read-only tool letting the agent load a skill's full instructions on demand. */
 export function createReadSkillTool(registry: SkillRegistry): ToolDefinition {
   const listed = dedupeSkillsByName(registry.list());
@@ -280,6 +385,18 @@ export function createReadSkillTool(registry: SkillRegistry): ToolDefinition {
       }
       const skill = registry.get(name);
       if (!skill) {
+        // A name the workspace config disables is not in the registry at
+        // all; say so plainly instead of reporting it as unknown, so the
+        // model (and the user reading the log) knows it exists but is off.
+        if (registry.isDisabled(name)) {
+          return {
+            call_id: '',
+            status: 'error',
+            output: `Skill "${name}" is disabled for this workspace (.daedalus/skills.json). It was not loaded. Re-enable it (Web Settings → Extensions, or \`daedalus skills enable ${name}\`) to use it.`,
+            truncated: false,
+            meta: { skill: name, disabled: true },
+          };
+        }
         const names = dedupeSkillsByName(registry.list()).map((item) => item.name);
         return {
           call_id: '',
@@ -289,12 +406,12 @@ export function createReadSkillTool(registry: SkillRegistry): ToolDefinition {
           meta: {},
         };
       }
-      const body = skill.body.length > MAX_SKILL_OUTPUT ? `${skill.body.slice(0, MAX_SKILL_OUTPUT)}\n…[truncated]` : skill.body;
+      const rendered = renderSkillBody(skill);
       return {
         call_id: '',
         status: 'ok',
-        output: `# Skill: ${skill.name}\n${skill.description ? `${skill.description}\n\n` : ''}${body}`,
-        truncated: skill.body.length > MAX_SKILL_OUTPUT,
+        output: rendered.text,
+        truncated: rendered.truncated,
         meta: { skill: skill.name, source: skill.source, origin: skill.origin },
       };
     },

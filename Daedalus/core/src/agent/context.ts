@@ -4,7 +4,7 @@ import type { ContentBlock, Message, ToolDefinition } from '../providers/llm/typ
 import type { Attachment, PromptFamily, TaskState } from '../contracts.ts';
 import { buildPrompt, estimateTokens, systemMessage, userMessage } from '../providers/index.ts';
 import { modePromptContract } from '../interaction/modes.ts';
-import { MAX_SKILLS_IN_PROMPT, dedupeSkillsByName, formatSkillOrigin, type SkillInfo } from '../skills/index.ts';
+import { MAX_SKILLS_IN_PROMPT, dedupeSkillsByName, formatSkillOrigin, type SkillInfo, type SkillOrigin } from '../skills/index.ts';
 import { walkTreeLines } from '../tools/filesystem/index.ts';
 import { promptFamilyFragment } from './prompt-dialects.ts';
 import { resolveMentionSection } from './mentions.ts';
@@ -18,6 +18,13 @@ export type ContextManagerOptions = {
   maxImages?: number;
   /** Skills found on disk; advertised so the model can load one via read_skill. */
   skills?: SkillInfo[];
+  /**
+   * Skills the user explicitly invoked for this task (`/skill <name>`):
+   * bodies already rendered (the runtime renders them exactly like a
+   * read_skill result) and force-loaded into the prompt, marked as
+   * user-invoked. Absent/empty → no section, prompt unchanged.
+   */
+  invokedSkills?: Array<{ name: string; origin: SkillOrigin; text: string }>;
   /** Project rules text loaded from the workspace (see agent/rules.ts); shown verbatim to the model. */
   rules?: string;
   /** Files the rules text came from, for display in the prompt header. */
@@ -58,6 +65,7 @@ export class DefaultContextManager implements ContextManager {
   readonly #maxImageBytes: number;
   readonly #maxImages: number;
   readonly #skills: SkillInfo[];
+  readonly #invokedSkills: Array<{ name: string; origin: SkillOrigin; text: string }>;
   readonly #rules?: string;
   readonly #rulesFiles: string[];
   readonly #agentInstructions?: string;
@@ -76,6 +84,7 @@ export class DefaultContextManager implements ContextManager {
     // prompt advertises each skill once (the loader already dedupes, this
     // keeps the guarantee for direct/raw feeds too).
     this.#skills = dedupeSkillsByName(resolved.skills ?? []);
+    this.#invokedSkills = resolved.invokedSkills ?? [];
     this.#rules = resolved.rules;
     this.#rulesFiles = resolved.rulesFiles ?? [];
     this.#agentInstructions = resolved.agentInstructions;
@@ -125,6 +134,12 @@ export class DefaultContextManager implements ContextManager {
           ? [{
               id: 'skills',
               content: `Available skills (playbooks stored on disk; call the read_skill tool with the skill name to load its full instructions before following it):\n${this.#skills.slice(0, MAX_SKILLS_IN_PROMPT).map((skill) => `- ${skill.name}: ${skill.description} (${formatSkillOrigin(skill.origin)})`).join('\n')}${this.#skills.length > MAX_SKILLS_IN_PROMPT ? `\n+${this.#skills.length - MAX_SKILLS_IN_PROMPT} more skills available — use read_skill by name` : ''}`,
+            }]
+          : []),
+        ...(this.#invokedSkills.length
+          ? [{
+              id: 'invoked-skills',
+              content: `Skills the user explicitly invoked for this task — their full instructions follow; apply them to this task:\n\n${this.#invokedSkills.map((skill) => skill.text).join('\n\n')}`,
             }]
           : []),
         ...(this.#rules

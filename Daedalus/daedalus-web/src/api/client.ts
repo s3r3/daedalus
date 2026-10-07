@@ -88,6 +88,8 @@ export type CreateTaskInput = {
   plan_task_id?: string
   /** Chat conversation this submit belongs to; the server records the turns and feeds back the history. */
   conversation_id?: string
+  /** Skill names explicitly invoked for this task (composer `/skill <name>`); the server validates them and core force-loads their bodies. */
+  skills?: string[]
 }
 
 export const api = {
@@ -160,6 +162,13 @@ export const api = {
   taskEvents: (taskId: string) => request<{ events: Event[]; count: number; task: TaskSummary }>(`/tasks/${encodeURIComponent(taskId)}/events`),
 
   extensionsStatus: (root: string) => request<ExtensionStatus>(`/extensions/status${query({ root })}`),
+
+  /** Enable/disable one skill for a workspace (writes the shared .daedalus/skills.json). */
+  toggleSkill: (input: { root: string; name: string; disabled: boolean }) =>
+    request<{ root: string; name: string; disabled: boolean; disabledSkills: string[] }>('/extensions/skills/toggle', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
 
   review: (input: { root: string; task_id?: string; model?: string; provider_id?: string }) =>
     request<ReviewResponse>('/review', { method: 'POST', body: JSON.stringify(input) }),

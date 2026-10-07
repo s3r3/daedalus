@@ -20,7 +20,9 @@ import {
   loadProjectRules,
   loadMcpConfig,
   loadSettings,
-  loadSkills,
+  loadSkillConfig,
+  loadSkillInventory,
+  setSkillDisabled,
   parseModelStrategy,
   redactSettings,
   resolveDaedalusHome,
@@ -67,10 +69,21 @@ export type SessionState = {
   workspaceRoot: string;
 };
 
+/** One skill in the inventory payload: the collision winner, or a shadowed copy marked with the winner's origin. */
+export type ExtensionSkill = {
+  name: string;
+  description: string;
+  origin: SkillOrigin;
+  /** Disabled for this workspace via .daedalus/skills.json (same config the CLI writes). */
+  disabled: boolean;
+  /** Origin of the winning copy with the same name, when this copy is shadowed. */
+  shadowedBy?: SkillOrigin;
+};
+
 export type ExtensionStatus = {
   root: string;
   mcp: Array<{ name: string; connected: boolean; toolCount: number; error?: string }>;
-  skills: Array<{ name: string; description: string; origin?: SkillOrigin }>;
+  skills: ExtensionSkill[];
   agents: Array<{ name: string; description: string; model?: string; mode?: string; tools?: string[] }>;
   lsp: Array<{ name: string; extensions: string[]; configured: boolean; running?: boolean; error?: string }>;
   problems: string[];
@@ -813,9 +826,15 @@ async function extensionStatus(ctx: AppContext, rootValue: unknown): Promise<Ext
   const cached = ctx.extensionStatusCache.get(root);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
 
-  const [mcpConfig, skillRegistry, agentRegistry, lspConfig] = await Promise.all([
+  const [mcpConfig, skillInventory, agentRegistry, lspConfig] = await Promise.all([
     loadMcpConfig(root),
-    loadSkills(resolveSkillSearchDirs(root)),
+    (async () => {
+      // The same inventory the loader builds for a task: collision
+      // winners plus shadowed copies, with the workspace's disabled set
+      // (shared .daedalus/skills.json) already applied per entry.
+      const skillConfig = await loadSkillConfig(root);
+      return loadSkillInventory(resolveSkillSearchDirs(root), { disabledNames: skillConfig.disabled });
+    })(),
     loadAgents([workspaceAgentsDir(root)]),
     loadLspConfig(root),
   ]);
@@ -841,7 +860,13 @@ async function extensionStatus(ctx: AppContext, rootValue: unknown): Promise<Ext
   const value: ExtensionStatus = {
     root,
     mcp,
-    skills: skillRegistry.list().map((skill) => ({ name: skill.name, description: skill.description, origin: skill.origin })),
+    skills: skillInventory.map((skill): ExtensionSkill => ({
+      name: skill.name,
+      description: skill.description,
+      origin: skill.origin,
+      disabled: skill.disabled,
+      ...(skill.shadowedBy ? { shadowedBy: skill.shadowedBy } : {}),
+    })),
     agents: agentRegistry.list().map((agent) => ({
       name: agent.name,
       description: agent.description,
@@ -1015,6 +1040,40 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
+    // Per-workspace skill toggle: writes the same .daedalus/skills.json
+    // the core loader and the CLI read, so Web, CLI, and task runs agree
+    // on which skill names this workspace disables. Disabling is
+    // name-based: every origin copy of the name is excluded.
+    if (method === "POST" && url.pathname === "/extensions/skills/toggle") {
+      void (async () => {
+        try {
+          const parsed = await readJson(req);
+          if (!parsed) {
+            sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+            return;
+          }
+          const root = resolveAllowedRoot(ctx, parsed.root ?? ctx.session.workspaceRoot ?? ctx.cwd);
+          const name = typeof parsed.name === "string" ? parsed.name.trim() : "";
+          if (!name) {
+            sendJson(res, 400, { error: "skill_name_required", request_id: requestId });
+            return;
+          }
+          if (typeof parsed.disabled !== "boolean") {
+            sendJson(res, 400, { error: "disabled_boolean_required", request_id: requestId });
+            return;
+          }
+          const config = await setSkillDisabled(root, name, parsed.disabled);
+          // The write changes what /extensions/status reports: drop the
+          // cached snapshot for this root so the next read is fresh.
+          ctx.extensionStatusCache?.delete(root);
+          sendJson(res, 200, { root, name, disabled: parsed.disabled, disabledSkills: config.disabled, request_id: requestId });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
     // Chat conversations: one continuing session per workspace, persisted
     // under its .daedalus home. Tasks and fast-path answers append turns;
     // the Web renders the whole session and prompts carry its memory.
@@ -1148,12 +1207,39 @@ export function createApp(ctx: AppContext) {
             }
           };
 
+          // Explicit skill invocations (composer `/skill <name>`): the
+          // named skills must exist and be enabled for this workspace —
+          // validated here, against the same core config the run reads,
+          // so the composer gets a named 400 instead of a silently
+          // un-skilled task. A valid invocation always takes the task
+          // path (the fast answer paths have no skill context).
+          const skillNames = stringList(parsed.skills).map((name) => name.trim()).filter(Boolean);
+          if (skillNames.length > 0) {
+            const skillConfig = await loadSkillConfig(repoPath);
+            const inventory = await loadSkillInventory(resolveSkillSearchDirs(repoPath), { disabledNames: skillConfig.disabled });
+            const enabled = new Set(inventory.filter((skill) => !skill.shadowedBy && !skill.disabled).map((skill) => skill.name));
+            const problems: string[] = [];
+            for (const name of skillNames) {
+              if (!enabled.has(name)) {
+                problems.push(
+                  skillConfig.disabled.includes(name)
+                    ? `skill "${name}" is disabled for this workspace (.daedalus/skills.json) — re-enable it (Settings → Extensions, or \`daedalus skills enable ${name}\`) to invoke it`
+                    : `unknown skill "${name}" — no skill with that name was found in this workspace or the global skill directories`,
+                );
+              }
+            }
+            if (problems.length > 0) {
+              sendJson(res, 400, { error: problems.join("; "), request_id: requestId });
+              return;
+            }
+          }
+
           // Direct answers (the Crush/Cline message pattern): casual
           // conversation and pure questions go straight to the model and the
           // reply is the result — no manufactured plan, no tool loop, no
           // validation. Modes still govern everything classified as a task;
           // attachments/worktrees always take the task path.
-          const intent = attachments.length || isolation ? "task" : classifyWebIntent(goal);
+          const intent = attachments.length || isolation || skillNames.length ? "task" : classifyWebIntent(goal);
           if (intent !== "task") {
             const task = {
               id: taskId,
@@ -1235,6 +1321,7 @@ export function createApp(ctx: AppContext) {
             ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
             ...(conversationId ? { conversation_id: conversationId } : {}),
             attachments,
+            ...(skillNames.length ? { skills: skillNames } : {}),
             ...(isolation ? { isolation } : {}),
             created_at: new Date().toISOString(),
           };
@@ -1256,6 +1343,7 @@ export function createApp(ctx: AppContext) {
               autoApprove,
               thinking,
               attachments,
+              ...(skillNames.length ? { skills: skillNames } : {}),
               ...(isolation ? { isolation } : {}),
               ...(providerId ? { providerId } : {}),
               ...(model ? { model } : {}),

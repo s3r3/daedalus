@@ -132,6 +132,10 @@ export class InteractiveSession {
   #lsps: ExtensionEntry[] = [];
   #mcps: ExtensionEntry[] = [];
   #skills: ExtensionEntry[] = [];
+  /** Skill names this workspace disabled (.daedalus/skills.json); surfaced for /skills + /skill honesty. */
+  #disabledSkills = new Set<string>();
+  /** Skills staged via `/skill <name>`; force-loaded into the next task. */
+  #invokedSkills: string[] = [];
   #agents: ExtensionEntry[] = [];
   #sidebarVisible = true;
   #thinking = true;
@@ -290,6 +294,16 @@ export class InteractiveSession {
   /** Replace the sidebar's skill entries with the skills found on disk. */
   setSkills(entries: ExtensionEntry[]): void {
     this.#skills = entries.map((entry) => ({ ...entry }));
+  }
+
+  /** Record which skill names this workspace disables (for /skills and /skill feedback). */
+  setDisabledSkills(names: string[]): void {
+    this.#disabledSkills = new Set(names);
+  }
+
+  /** Skill names staged for force-load into the next task (via /skill). */
+  get invokedSkills(): string[] {
+    return [...this.#invokedSkills];
   }
 
   /** Replace the sidebar's subagent entries with the agents defined on disk. */
@@ -1060,6 +1074,23 @@ export class InteractiveSession {
         this.addUserLine(trimmed);
         return { kind: 'slash', text: '', action: 'models', data: { picker: true, count: items.length } };
       }
+      // `/skill <name> <task…>` is a task with a forced skill load, not a
+      // registry command: validate the name first (unknown/disabled warn
+      // visibly and submit nothing), then hand the host a task carrying
+      // the skill names alongside any staged invocations.
+      if (parsed?.name === 'skill' && parsed.args.length >= 2) {
+        const name = parsed.args[0]!;
+        const problem = this.#skillProblem(name);
+        this.closeCommandPalette();
+        this.addUserLine(trimmed);
+        if (problem) {
+          this.addSystemLine(problem);
+          return { kind: 'slash', text: problem, action: 'skill' };
+        }
+        const skills = [name, ...this.#invokedSkills.filter((entry) => entry !== name)];
+        this.#invokedSkills = [];
+        return { kind: 'task', text: parsed.args.slice(1).join(' '), data: { skills } };
+      }
       const result = await this.commands.execute(trimmed, this.#slashContext());
       this.closeCommandPalette();
       this.addUserLine(trimmed);
@@ -1085,7 +1116,21 @@ export class InteractiveSession {
       this.#status = 'idle';
       return { kind: intent === 'question' ? 'question' : 'chat', text: reply };
     }
-    return { kind: 'task', text: trimmed };
+    // A plain task inherits any staged `/skill` invocations (then clears them).
+    const staged = [...this.#invokedSkills];
+    this.#invokedSkills = [];
+    return { kind: 'task', text: trimmed, ...(staged.length > 0 ? { data: { skills: staged } } : {}) };
+  }
+
+  /** Why `/skill <name>` cannot be honored here, or null when it can. Unknown to the loaded list, or disabled for this workspace. */
+  #skillProblem(name: string): string | null {
+    if (this.#skills.length > 0 && !this.#skills.some((entry) => entry.name === name)) {
+      return `Unknown skill "${name}" — no skill with that name is available here. Run /skills to see names. It was not invoked.`;
+    }
+    if (this.#disabledSkills.has(name)) {
+      return `Skill "${name}" is disabled for this workspace (.daedalus/skills.json). Re-enable it with \`daedalus skills enable ${name}\` to invoke it. It was not invoked.`;
+    }
+    return null;
   }
 
   /** Recent casual-chat history (oldest first), for hosts and tests. */
@@ -1228,8 +1273,19 @@ export class InteractiveSession {
         ? this.#mcps.map((entry) => `${entry.name}: ${entry.detail}`).join('\n')
         : 'No MCP servers configured. Add servers to .daedalus/mcp.json in the workspace.',
       listSkills: async () => this.#skills.length
-        ? this.#skills.map((entry) => `${entry.name}: ${entry.detail}`).join('\n')
+        ? this.#skills.map((entry) => `${entry.name}: ${entry.detail}${this.#disabledSkills.has(entry.name) ? ' [disabled for this workspace]' : ''}`).join('\n')
         : 'No skills found. Add skill folders with a SKILL.md under .daedalus/skills/ in the workspace.',
+      invokeSkill: async (name: string) => {
+        // `/skill <name>` with no task text: stage it; the next task in
+        // this session force-loads its body into its prompt.
+        const problem = this.#skillProblem(name);
+        if (problem) return { text: problem, action: 'skill' };
+        if (!this.#invokedSkills.includes(name)) this.#invokedSkills.push(name);
+        return {
+          text: `Skill "${name}" will be force-loaded into the next task. Type the task, or /skill <name> <task> to run one directly.`,
+          action: 'skill',
+        };
+      },
       listAgents: async () => {
         if (this.#callbacks.listAgents) return this.#callbacks.listAgents();
         return this.#agents.length

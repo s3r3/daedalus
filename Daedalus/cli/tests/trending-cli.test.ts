@@ -70,9 +70,9 @@ describe('global skills (CLI surface)', () => {
 
     const listing = await listSkills({ workspaceRoot: workspace, env: {}, homeDir: home });
     expect(listing.detected).toEqual([
-      { name: 'claude-skill', description: 'Borrowed from Claude Code', origin: 'claude', dir: join(home, '.claude', 'skills') },
-      { name: 'global-skill', description: 'In every workspace', origin: 'global', dir: join(home, '.daedalus', 'skills') },
-      { name: 'local-skill', description: 'Only in this workspace', origin: 'workspace', dir: join(workspace, '.daedalus', 'skills') },
+      { name: 'claude-skill', description: 'Borrowed from Claude Code', origin: 'claude', dir: join(home, '.claude', 'skills'), disabled: false },
+      { name: 'global-skill', description: 'In every workspace', origin: 'global', dir: join(home, '.daedalus', 'skills'), disabled: false },
+      { name: 'local-skill', description: 'Only in this workspace', origin: 'workspace', dir: join(workspace, '.daedalus', 'skills'), disabled: false },
     ]);
     expect(listing.installed.map((skill) => skill.name)).toEqual(['local-skill']);
     expect(listing.globalDir).toBe(join(home, '.daedalus', 'skills'));
