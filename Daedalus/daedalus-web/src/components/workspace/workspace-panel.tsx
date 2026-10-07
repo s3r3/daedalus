@@ -171,7 +171,7 @@ export function WorkspacePanel() {
     await runMutation(async () => {
       const created = await api.createWorkspace({ root: root || undefined, name })
       setRoots((current) => (current.some((entry) => entry.path === created.path) ? current : [...current, { path: created.path, name: created.name }]))
-      setWorkspace({ root: created.path, content: '', path: '' })
+      setWorkspace({ root: created.path, content: '', path: '', kind: 'text', imageSrc: null, mediaType: null })
       setWorkspaceName('')
       return `Workspace ready: ${created.path}`
     })
@@ -276,7 +276,7 @@ export function WorkspacePanel() {
     setOpenFile(entry.path)
     try {
       const file = await api.file(root, entry.path)
-      setWorkspace({ content: file.content, size: file.size, loading: false })
+      setWorkspace({ content: file.content ?? '', size: file.size, loading: false, kind: file.kind ?? 'text', imageSrc: file.src ?? null, mediaType: file.mediaType ?? null })
     } catch (error) {
       setWorkspace({ loading: false, error: error instanceof Error ? error.message : String(error) })
     }
@@ -306,7 +306,7 @@ export function WorkspacePanel() {
           value={workspace.root}
           onChange={(event) => {
             const nextRoot = event.target.value
-            setWorkspace({ root: nextRoot, content: '', path: '' })
+            setWorkspace({ root: nextRoot, content: '', path: '', kind: 'text', imageSrc: null, mediaType: null })
             setOpenFile(null)
             void api
               .updateSession({ workspaceRoot: nextRoot })

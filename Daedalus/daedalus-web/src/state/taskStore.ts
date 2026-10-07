@@ -17,6 +17,9 @@ export type WorkspaceState = {
   loading: boolean
   error: string | null
   size: number
+  kind: 'text' | 'image'
+  imageSrc: string | null
+  mediaType: string | null
 }
 
 export type ComposerState = {
@@ -96,7 +99,7 @@ export type DaedalusState = {
   reset: () => void
 }
 
-const initialWorkspace: WorkspaceState = { root: '', path: '', content: '', loading: false, error: null, size: 0 }
+const initialWorkspace: WorkspaceState = { root: '', path: '', content: '', loading: false, error: null, size: 0, kind: 'text', imageSrc: null, mediaType: null }
 const initialComposer: ComposerState = {
   goal: '',
   mode: 'auto',

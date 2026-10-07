@@ -139,6 +139,13 @@ from the shared workspace into Monaco. The editor is editable:
   are unsaved edits, the editor shows a "changed on disk" banner and keeps the
   user's draft until they choose **reload disk version** or **keep mine**.
 
+Image files (`.png`, `.jpg`/`.jpeg`, `.gif`, `.webp`, `.svg`, `.avif`, `.ico`)
+never open in the text editor: the gateway returns them as a base64 data URL and
+the pane shows a read-only picture preview with the file name, byte size, and —
+once loaded — pixel dimensions. There is no Save button for images, so binary
+content cannot be corrupted by a text round-trip. Image reads allow up to 10 MB
+(the text cap stays 512 KB).
+
 ## Limitations
 
 - Cross-process monitoring is polling-based (about two seconds for the

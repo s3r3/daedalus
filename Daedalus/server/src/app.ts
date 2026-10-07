@@ -42,7 +42,7 @@ import {
   type Settings,
   type SkillOrigin,
 } from "@daedalus/core";
-import { collectRoots, listDirectory, listFilesFlat, buildTree, resolveInside, MAX_FILE_BYTES } from "./workspace.ts";
+import { collectRoots, listDirectory, listFilesFlat, buildTree, resolveInside, MAX_FILE_BYTES, IMAGE_MEDIA_TYPES, MAX_IMAGE_FILE_BYTES } from "./workspace.ts";
 import { classifyWebIntent, executeFastPath } from "./fast-path.ts";
 import {
   ConversationStore,
@@ -1816,11 +1816,23 @@ export function createApp(ctx: AppContext) {
           sendJson(res, 400, { error: "path_is_directory" });
           return;
         }
-        if (stat.size > MAX_FILE_BYTES) {
-          sendJson(res, 413, { error: "file_too_large", size: stat.size, limit: MAX_FILE_BYTES });
+        const mediaType = IMAGE_MEDIA_TYPES[extname(absolute).toLowerCase()];
+        const limit = mediaType ? MAX_IMAGE_FILE_BYTES : MAX_FILE_BYTES;
+        if (stat.size > limit) {
+          sendJson(res, 413, { error: "file_too_large", size: stat.size, limit });
           return;
         }
-        sendJson(res, 200, { path: targetRel, content: readFileSync(absolute, "utf8"), size: stat.size });
+        if (mediaType) {
+          sendJson(res, 200, {
+            path: targetRel,
+            size: stat.size,
+            kind: "image",
+            mediaType,
+            src: `data:${mediaType};base64,${readFileSync(absolute).toString("base64")}`,
+          });
+          return;
+        }
+        sendJson(res, 200, { path: targetRel, kind: "text", content: readFileSync(absolute, "utf8"), size: stat.size });
       } catch (error) {
         sendJson(res, errorMessage(error).includes("escapes workspace") ? 404 : errorStatus(error), { error: errorMessage(error) });
       }
