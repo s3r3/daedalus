@@ -22,9 +22,9 @@ export function normalizeAgentMode(value: unknown): AgentMode {
   return AGENT_MODES.includes(value as AgentMode) ? (value as AgentMode) : 'auto';
 }
 
-const READ_TOOLS = new Set(['read_file', 'list_dir', 'grep', 'glob', 'git_diff', 'git_status', 'read_skill', 'lsp_diagnostics']);
-const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'edit_search_replace', 'create_dir']);
-const EXECUTING_TOOLS = new Set(['run_command']);
+const READ_TOOLS = new Set(['read_file', 'list_dir', 'grep', 'glob', 'git_diff', 'git_status', 'read_skill', 'lsp_diagnostics', 'fetch_url', 'view_image', 'search_images', 'command_status']);
+const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'edit_search_replace', 'create_dir', 'download_file']);
+const EXECUTING_TOOLS = new Set(['run_command', 'command_kill']);
 
 /**
  * The Plan mode carve-out: plan documents are the ONE sanctioned write in
@@ -137,8 +137,11 @@ export function isToolCallDenied(mode: AgentMode, toolName: string, targetPath?:
 /**
  * The mode × capability matrix, as data (OpenCode-style: modes are configs
  * over one permission engine, not prompt labels). `mutating` covers file
- * writes/edits and MCP tools; `executing` is `run_command`. Reads are free
- * in every mode — prompting on reads only trains blind approval.
+ * writes/edits and MCP tools; `executing` is `run_command` (foreground or
+ * background — the start is approved once, at dispatch) plus
+ * `command_kill` on the task's own background jobs; `command_status` is a
+ * read. Reads are free in every mode — prompting on reads only trains
+ * blind approval.
  */
 export const MODE_PERMISSION_MATRIX: Record<AgentMode, { read: 'allow'; mutating: 'allow' | 'ask' | 'deny'; executing: 'allow' | 'ask' | 'deny'; summary: string }> = {
   ask: { read: 'allow', mutating: 'deny', executing: 'deny', summary: 'read-only answers; no edits, no commands' },

@@ -6,6 +6,7 @@ import type { EventBus } from '../events.ts';
 import { emitEvent } from '../events.ts';
 import type { TaskStore } from '../persistence.ts';
 import type { ToolDefinition, ToolExecutionContext } from '../tools/registry.ts';
+import { clampCallTimeoutMs } from '../tools/registry.ts';
 import { diffLines, renderPatch } from '../tools/filesystem/diff.ts';
 import { applySearchReplace } from '../tools/filesystem/search-replace.ts';
 
@@ -384,7 +385,11 @@ export class ExecutionHarness {
     if (this.#usage.diskWrites >= this.#config.maxDiskWrites) { const result = denied(call.id, 'disk write cap exceeded'); this.#record('resource_limit_exceeded', context.taskId, tool.name); return result; }
     const controller = new AbortController(); this.#controllers.set(context.taskId, controller); this.#usage.activeProcesses++;
     if (this.#cancelled.has(context.taskId)) controller.abort();
-    const timeoutMs = context.timeoutMs ?? tool.timeoutMs ?? this.#config.defaultTimeoutMs;
+    // Per-call budget: an explicit host context wins, then the call's own
+    // `timeout_ms` argument (clamped to the 600s tool-call cap — this is
+    // how generators/installs ask for a long foreground budget), then the
+    // tool default, then the harness default.
+    const timeoutMs = context.timeoutMs ?? clampCallTimeoutMs((call.args as { timeout_ms?: unknown } | null | undefined)?.timeout_ms) ?? tool.timeoutMs ?? this.#config.defaultTimeoutMs;
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const result = await tool.execute(effectiveCall.args, { ...context, signal: controller.signal, sandbox: this.#config.sandboxEnabled });

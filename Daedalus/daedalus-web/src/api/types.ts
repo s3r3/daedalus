@@ -217,8 +217,12 @@ export type FileChange = {
 export type OrchestrationSkipped = { reason: 'single_path' | string; mode?: string; decomposed_children?: number; note?: string }
 
 export type CommandStarted = { call_id: string; command: string; tool: string; cwd: string }
-export type CommandOutput = { call_id: string; chunk: string }
+/** `job_id` is set when the chunk streams from a background job (call_id then carries the job id). */
+export type CommandOutput = { call_id: string; chunk: string; job_id?: string }
 export type CommandFinished = { call_id: string; status: string; exit_code: number | null; killed: boolean; truncated: boolean }
+export type JobState = 'running' | 'exited' | 'failed' | 'killed'
+export type JobStarted = { job_id: string; call_id: string; command: string; cwd: string; background?: boolean }
+export type JobFinished = { job_id: string; command: string; cwd: string; state: JobState; exit_code: number | null; killed: boolean }
 export type RecoveryStarted = { reason: string; strategy: 'retry' | 'fix' | 'replan' | 'abort' | string; attempt: number }
 export type ApprovalRequested = { key: PermissionKey; policy: string; approval?: ApprovalRequestInfo }
 export type ApprovalDecided = {
@@ -281,6 +285,8 @@ export type EventPayloads = {
   COMMAND_STARTED: CommandStarted
   COMMAND_OUTPUT: CommandOutput
   COMMAND_FINISHED: CommandFinished
+  JOB_STARTED: JobStarted
+  JOB_FINISHED: JobFinished
   FILE_CHANGED: FileChange
   MODEL_REQUEST_STARTED: { provider: string; messages: number; tools: number; phase?: string; context_estimate_tokens?: number; context_limit_tokens?: number; context_percent?: number }
   MODEL_REQUEST_FINISHED: { message?: { content?: string }; usage?: Record<string, number>; finish_reason?: string; model?: string; tier?: string; phase?: string; context_estimate_tokens?: number; context_limit_tokens?: number; context_percent?: number }

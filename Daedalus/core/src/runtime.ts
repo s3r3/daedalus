@@ -13,7 +13,9 @@ import { createTaskWorktree, worktreeChangedFiles } from './worktree.ts';
 import { createDefaultRegistry, editSearchReplaceTool } from './tools/index.ts';
 import { pathInWorkspace } from './tools/filesystem/index.ts';
 import type { ToolDefinition } from './tools/registry.ts';
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { changedLineCounts, diffLines, renderPatch } from './tools/filesystem/diff.ts';
 import { ApprovalBroker, ExecutionHarness, resolveApprovalTimeoutMs, type ApprovalDecision, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
@@ -22,6 +24,20 @@ import { createProviderFromSettings } from './providers/index.ts';
 import { OpenAICompatProvider } from './providers/llm/openai-compat.ts';
 import { ModelPoolProvider, asModelController, normalizeModelList } from './providers/llm/model-pool.ts';
 import { resolvePromptFamily } from './agent/prompt-dialects.ts';
+import {
+  BOOTSTRAP_PROBE_TOOLS,
+  creationCompletionRefusal,
+  detectCreationGoal,
+  detectScaffoldRequest,
+  detectUnsupportedFramework,
+  probeToolchains,
+  renderScaffoldPlaybook,
+  renderUnsupportedPlaybook,
+  scaffoldMarkerPresent,
+  type ToolchainProbe,
+} from './agent/scaffold.ts';
+import { BackgroundJobManager } from './tools/terminal/jobs.ts';
+import { run as runToolchainProbe } from './tools/terminal/index.ts';
 import { reviewDiff } from './agent/review.ts';
 import { loadPins } from './pins.ts';
 import type { EditFormat, ModelTier, PromptFamily, PromptFamilySetting, ReviewGateReport } from './contracts.ts';
@@ -318,6 +334,8 @@ export class TaskRunner {
   readonly #taskParents = new Map<string, string>();
   /** Parent task id → its live subagent tooling, so cancel() can stop background children. */
   readonly #spawners = new Map<string, SubagentTooling>();
+  /** Task id → its background job manager, so cancel() can stop running jobs with the task. */
+  readonly #jobManagers = new Map<string, BackgroundJobManager>();
   #extensionStatus: ExtensionStatus = { mcp: [], lsp: [], skills: [], agents: [] };
   /** Language servers of the in-flight run, used by the edit guard. */
   #activeLsp: LspManager | undefined;
@@ -440,6 +458,37 @@ export class TaskRunner {
     return this.#options.editGuard ?? (this.#settings.editGuard !== false);
   }
 
+  /**
+   * One scaffold-preflight probe (`<tool> --version`, 5s cap): the first
+   * output line as the version string, or MISSING. Never throws — a probe
+   * failure only informs the playbook, it never blocks the task.
+   */
+  async #probeToolchain(tool: string): Promise<ToolchainProbe> {
+    try {
+      // nvm is a shell function, not a binary: presence is the ~/.nvm
+      // install on disk, probed directly instead of spawned.
+      if (tool === 'nvm' && existsSync(join(homedir(), '.nvm', 'nvm.sh'))) {
+        return { tool, ok: true, version: 'nvm (shell function)' };
+      }
+      const result = await runToolchainProbe(tool, ['--version'], this.#workspaceRoot, { timeoutMs: 5_000 });
+      const version = result.output
+        .split('\n')
+        .map((line) => line.trim())
+        .find((line) => line.length > 0)
+        ?.slice(0, 80);
+      return result.status === 'ok' && version ? { tool, ok: true, version } : { tool, ok: false };
+    } catch {
+      return { tool, ok: false };
+    }
+  }
+
+  /** `uid:gid` of this process for the scaffold container route (--user). */
+  #hostUidGid(): string {
+    const uid = process.getuid?.();
+    const gid = process.getgid?.();
+    return typeof uid === 'number' && typeof gid === 'number' ? `${uid}:${gid}` : '1000:1000';
+  }
+
   /** Plain-language model failure for the final report, when the run died on provider errors. */
   #modelFailureEvidence(events: Event[], state: TaskState): string | undefined {
     for (let i = events.length - 1; i >= 0; i--) {
@@ -450,6 +499,9 @@ export class TaskRunner {
     }
     if (state.status === 'failed' && state.last_error && /^(auth|content_policy|fatal_provider_error):/.test(state.last_error)) {
       return state.last_error;
+    }
+    if (state.status === 'failed' && state.last_error === 'provider_timeout') {
+      return 'provider_timeout: the model provider timed out on two consecutive requests, so the run stopped instead of resending the same request again — try a smaller task, a shorter prompt, or another model';
     }
     return undefined;
   }
@@ -498,6 +550,9 @@ export class TaskRunner {
 
   cancel(taskId: string): void {
     this.harness.cancelTask(taskId);
+    // Background jobs belong to the task: a stopped run leaves no
+    // install or server process running behind it.
+    this.#jobManagers.get(taskId)?.killAll(taskId);
     // Background subagents belong to the task: refuse new spawns and stop
     // the running children with it (their loops are in #activeLoops too,
     // but a child between turns settles through its run, not the loop).
@@ -588,6 +643,27 @@ export class TaskRunner {
       spec.constraints = [...spec.constraints, options.priorContext];
     }
     if (options.conversationId) spec.conversation_id = options.conversationId;
+    // Scaffold playbook (agent/scaffold.ts): a goal that asks to create a
+    // NEW project of a recipe-backed framework gets the official-generator
+    // recipe plus a one-time toolchain preflight injected into the prompt,
+    // so the model runs the generator instead of exploring in circles and
+    // claiming success over an empty folder. The preflight also probes
+    // the bootstrap routes (docker, mise/fnm/nvm): a missing toolchain is
+    // no longer a dead end — the playbook offers the official container
+    // image or a user-level version manager before the honest STOP.
+    // Named-but-unsupported technologies (Kotlin/Android and embedded
+    // SQLite) get the honesty playbook instead — no recipe, no fake
+    // skeleton. Never fatal: the preflight only informs the prompt.
+    const scaffoldMatch = detectScaffoldRequest([spec.goal, ...spec.done_criteria].join('\n'));
+    const unsupportedFramework = scaffoldMatch ? undefined : detectUnsupportedFramework(spec.goal);
+    const scaffoldProbes: ToolchainProbe[] = scaffoldMatch
+      ? await probeToolchains([...scaffoldMatch.recipe.toolchains, ...BOOTSTRAP_PROBE_TOOLS], (tool) => this.#probeToolchain(tool))
+      : [];
+    const scaffoldPlaybook = scaffoldMatch
+      ? renderScaffoldPlaybook(scaffoldMatch, scaffoldProbes, { workspaceRoot: this.#workspaceRoot, uidGid: this.#hostUidGid() })
+      : unsupportedFramework
+        ? renderUnsupportedPlaybook(unsupportedFramework)
+        : undefined;
     const collected: Event[] = [];
     // User-invoked skill activations resolved later in this run; flushed
     // as SKILL_LOADED events the moment TASK_STARTED lands so the log
@@ -723,6 +799,11 @@ export class TaskRunner {
     const hooksConfig = hooksEnabled
       ? this.#options.hooksConfig ?? (await loadHooksConfig(this.#workspaceRoot)).hooks
       : undefined;
+    // Vision capability of the selected model(s), resolved once: the
+    // context manager uses it to hold back image attachments, and the
+    // tool context uses it so view_image can refuse honestly on a
+    // text-only model instead of silently dropping the picture.
+    const visionEnabled = this.#visionEnabledFor(effectiveOptions);
     const provider = this.#options.provider ?? this.#providerFor(effectiveOptions, spec.id);
     const loop = new AgentLoop({
       provider,
@@ -730,7 +811,7 @@ export class TaskRunner {
       store: this.store,
       context: new DefaultContextManager({
         workspaceRoot: this.#workspaceRoot,
-        visionEnabled: this.#visionEnabledFor(effectiveOptions),
+        visionEnabled,
         skills: extensions.skills.list(),
         ...(invokedSkills.length > 0 ? { invokedSkills } : {}),
         rules: rules.text ? rules.text : undefined,
@@ -739,6 +820,7 @@ export class TaskRunner {
         agentName: agent?.name,
         promptFamily,
         pins,
+        ...(scaffoldPlaybook ? { scaffoldPlaybook } : {}),
       }),
       validator: this.validator,
       tools: toolSchemas,
@@ -779,9 +861,31 @@ export class TaskRunner {
             meta: { tool: call.tool, reason: 'unknown_tool' },
           };
         }
-        return this.#executeWithObservability(call, tool, spec.id, call.turn_id || undefined, hooksConfig);
+        return this.#executeWithObservability(call, tool, spec.id, call.turn_id || undefined, hooksConfig, visionEnabled);
       },
     });
+
+    // Background jobs of this run: one manager, owned by the task. The
+    // tools reach it through the tool context (see #executeWithObservability);
+    // its output mirrors into COMMAND_OUTPUT tagged with the job id, and
+    // each job's end lands as JOB_FINISHED. Task end (finally below) and
+    // cancel() kill whatever is still running.
+    const jobManager = new BackgroundJobManager({
+      onOutput: (job, chunk) => {
+        emitEvent({ bus: this.bus, store: this.store }, job.taskId, undefined, 'COMMAND_OUTPUT', { call_id: job.id, job_id: job.id, chunk });
+      },
+      onFinish: (job) => {
+        emitEvent({ bus: this.bus, store: this.store }, job.taskId, undefined, 'JOB_FINISHED', {
+          job_id: job.id,
+          command: [job.command, ...job.args].join(' '),
+          cwd: job.cwd,
+          state: job.state,
+          exit_code: job.exitCode,
+          killed: job.state === 'killed',
+        });
+      },
+    });
+    this.#jobManagers.set(spec.id, jobManager);
 
     let state: TaskState;
     this.#activeLoops.set(spec.id, loop);
@@ -789,6 +893,9 @@ export class TaskRunner {
       state = await loop.run(spec);
     } finally {
       this.#activeLoops.delete(spec.id);
+      // The task is over: its background jobs die with it.
+      jobManager.killAll(spec.id);
+      this.#jobManagers.delete(spec.id);
       this.#activeLsp = undefined;
       await extensions.close();
       this.bus.on('*', listener); // no-op keeps handler identity stable for GC
@@ -858,6 +965,54 @@ export class TaskRunner {
     const review = await this.#reviewGate(effectiveOptions, spec, state, provider, collected, rules.text ? rules.text : undefined);
     let outcome = this.#outcome(state, validation);
     if (review?.blocking && outcome === 'success') outcome = 'partial';
+    // Creation completion gate, lineage level (the loop gates its own
+    // ledger before finishing; this layer exists because a delegating
+    // parent's own ledger is empty by design — only here do the
+    // children's events count): a creation-shaped run with zero creation
+    // evidence may not report success. When the loop already refused
+    // (last_error no_files_created), this only adds the evidence line.
+    const creationGateEvidence: string[] = [];
+    const loopRefusedCreation = state.status === 'failed' && state.last_error === 'no_files_created';
+    if (outcome === 'success' || loopRefusedCreation) {
+      const creationGoal = detectCreationGoal(spec.goal, spec.done_criteria);
+      if (creationGoal.creation) {
+        // The change ledger, mirrored from the loop's own bookkeeping so
+        // the two layers agree by construction: file-tool diffs PLUS
+        // mutating tool results carrying a path (a created folder emits
+        // no FILE_CHANGED — directories have no content to diff — but it
+        // IS a change), plus successful commands. Children's events are
+        // in `collected`, so delegated work counts here.
+        const changedPaths = new Set<string>();
+        let commandsSucceeded = 0;
+        for (const event of collected) {
+          if (event.type === 'FILE_CHANGED') {
+            const path = (event.payload as { path?: unknown }).path;
+            if (typeof path === 'string') changedPaths.add(path);
+          } else if (event.type === 'TOOL_CALL_FINISHED') {
+            const payload = event.payload as {
+              call?: { args?: { path?: unknown } };
+              result?: { meta?: { mutating?: unknown } };
+            };
+            const path = payload.call?.args?.path;
+            if (payload.result?.meta?.mutating === true && typeof path === 'string') changedPaths.add(path);
+          } else if (event.type === 'COMMAND_FINISHED' && (event.payload as { exit_code?: unknown }).exit_code === 0) {
+            commandsSucceeded++;
+          }
+        }
+        const markerPresent = creationGoal.scaffold ? scaffoldMarkerPresent(this.#workspaceRoot, creationGoal.scaffold) : false;
+        const refusal = creationCompletionRefusal(
+          creationGoal,
+          { filesChanged: changedPaths.size, commandsSucceeded, delegated: collected.some((event) => event.type === 'CHILD_TASK_STARTED') },
+          markerPresent,
+        );
+        if (refusal) {
+          if (outcome === 'success') outcome = 'partial';
+          creationGateEvidence.push(
+            `no files were created: ${refusal.detail}; the run ended after ${state.turns ?? 0} turn(s), ${collected.filter((event) => event.type === 'TOOL_CALL_FINISHED').length} tool call(s), ${commandsSucceeded} successful command(s) and ${changedPaths.size} file change(s) — a creation-shaped goal must produce files on disk before it can report success`,
+          );
+        }
+      }
+    }
     const modelFailureEvidence = this.#modelFailureEvidence(collected, state);
     // Token accounting: provider-reported usage over this run's lineage
     // (own turns + spawned children). Token fields appear only when at
@@ -869,6 +1024,7 @@ export class TaskRunner {
       diff: this.#aggregateDiff(collected),
       evidence: [
         ...(modelFailureEvidence ? [`model failure: ${modelFailureEvidence}`] : []),
+        ...creationGateEvidence,
         ...this.#validationEvidence(validation),
         ...(assembledPlanDocument
           ? [`plan document assembled by the harness (${assembledPlanDocument}): the model finished plan mode without writing a plan file, so the harness wrote it from the plan steps and the recorded Q&A decisions — review it before executing`]
@@ -1373,16 +1529,22 @@ export class TaskRunner {
     taskId: string,
     turnId: string | undefined,
     hooksConfig?: HooksConfig,
+    visionEnabled?: boolean,
   ): Promise<ToolResult> {
     const target = { bus: this.bus, store: this.store };
     const isCommand = COMMAND_TOOLS.has(tool.name);
     const args = (call.args ?? {}) as Record<string, unknown>;
+    // A background start is not a foreground command lifecycle: no
+    // COMMAND_STARTED/COMMAND_FINISHED brackets — JOB_STARTED after the
+    // dispatch (job id known) and JOB_FINISHED from the job manager own
+    // its story, with output still flowing through COMMAND_OUTPUT.
+    const backgroundStart = tool.name === 'run_command' && args.background === true;
     const commandLine = isCommand
       ? `${typeof args.command === 'string' ? args.command : tool.name} ${Array.isArray(args.args) ? (args.args as string[]).join(' ') : ''}`.trim()
       : undefined;
     const before = FILE_TOOLS.has(tool.name) && typeof args.path === 'string' ? await this.#readIfPresent(args.path) : null;
 
-    if (isCommand) {
+    if (isCommand && !backgroundStart) {
       emitEvent(target, taskId, turnId, 'COMMAND_STARTED', { call_id: call.id, command: commandLine, tool: tool.name, cwd: typeof args.cwd === 'string' ? args.cwd : this.#workspaceRoot });
     }
 
@@ -1409,12 +1571,26 @@ export class TaskRunner {
     const result = await this.harness.execute(call, tool, {
       workspaceRoot: this.#workspaceRoot,
       taskId,
+      ...(visionEnabled !== undefined ? { visionEnabled } : {}),
+      ...(this.#jobManagers.get(taskId) ? { jobs: this.#jobManagers.get(taskId) } : {}),
       onOutput: (chunk: string) => {
         emitEvent(target, taskId, turnId, 'COMMAND_OUTPUT', { call_id: call.id, chunk });
       },
     });
 
-    if (isCommand) {
+    if (backgroundStart) {
+      // A refused start (denied/unavailable) has no job: the tool result
+      // itself carries the refusal, and no job lifecycle is opened.
+      if (typeof result.meta.job_id === 'string') {
+        emitEvent(target, taskId, turnId, 'JOB_STARTED', {
+          job_id: result.meta.job_id,
+          call_id: call.id,
+          command: commandLine,
+          cwd: typeof args.cwd === 'string' ? args.cwd : this.#workspaceRoot,
+          background: true,
+        });
+      }
+    } else if (isCommand) {
       emitEvent(target, taskId, turnId, 'COMMAND_FINISHED', {
         call_id: call.id,
         status: result.status,
@@ -1430,14 +1606,17 @@ export class TaskRunner {
     }
 
     let output = result.output;
-    if (result.status === 'ok' && (tool.name === 'write_file' || tool.name === 'edit_file' || tool.name === 'edit_search_replace') && typeof args.path === 'string') {
+    if (result.status === 'ok' && (tool.name === 'write_file' || tool.name === 'edit_file' || tool.name === 'edit_search_replace' || tool.name === 'create_dir') && typeof args.path === 'string') {
       const effectivePath = typeof result.meta?.path === 'string' ? result.meta.path : args.path;
       // Checkpoint: persist the pre-mutation content captured before
       // execution (`before`); TaskStore keeps the first record per path, so a
       // later restore rewinds to the state before this task touched the file.
       // Skipped when the tool resolved the edit to a different file than the
       // one whose "before" was read, so a backup can never hold wrong content.
-      if (effectivePath === args.path) {
+      // create_dir has no file content to checkpoint — it only joins the
+      // edit guard below (a directory has no diagnostics, so the guard
+      // stays silent; the coverage keeps all four file tools on one path).
+      if (tool.name !== 'create_dir' && effectivePath === args.path) {
         const relativePath = isAbsolute(effectivePath) ? relative(resolve(this.#workspaceRoot), effectivePath) : effectivePath;
         if (relativePath && !relativePath.startsWith('..') && !isAbsolute(relativePath)) {
           try {

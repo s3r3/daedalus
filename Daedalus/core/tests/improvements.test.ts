@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   AgentLoop,
   EventBus,
@@ -36,6 +37,8 @@ function tempDir(prefix: string): string {
   cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
   return dir;
 }
+
+const FAKE_LSP_SERVER = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'fake-lsp-server.mjs');
 
 function toolReply(id: string, tool: string, args: unknown) {
   return {
@@ -348,6 +351,103 @@ describe('feature 2: edit guard', () => {
     await runnerOff.run({ goal: 'create app.mjs again', onEvent: (event) => eventsOff.push(event) });
     const finishedOff = eventsOff.find((event) => event.type === 'TOOL_CALL_FINISHED' && (event.payload as { call?: { tool?: string } }).call?.tool === 'write_file');
     expect((finishedOff?.payload as { result?: { output?: string } }).result?.output ?? '').not.toContain('EDIT_GUARD');
+  });
+
+  test('appends fresh LSP diagnostics to the edit result, capped at 20 lines with a +N more rollup', async () => {
+    const workspace = tempDir('daedalus-guard-lsp-unit-');
+    writeFileSync(join(workspace, 'main.ts'), 'const value: string = 42;\n', 'utf8');
+    const lspStub = (lines: string[]) => ({
+      serverFor: () => ({}),
+      diagnostics: async () => ({ server: 'fake-lsp', lines }),
+    });
+
+    const few = await guardEditedFile({ workspaceRoot: workspace, enabled: true, lsp: lspStub(['main.ts:1:7 error: Type number is not assignable to type string (fake-lsp)']) }, 'main.ts');
+    expect(few.ok).toBe(false);
+    expect(few.note).toContain('EDIT_GUARD: fake-lsp diagnostics for main.ts:');
+    expect(few.note).toContain('main.ts:1:7 error: Type number is not assignable');
+
+    const many = Array.from({ length: 25 }, (_, i) => `main.ts:1:${i + 1} error: problem ${i + 1} (fake-lsp)`);
+    const capped = await guardEditedFile({ workspaceRoot: workspace, enabled: true, lsp: lspStub(many) }, 'main.ts');
+    expect(capped.note).toContain('problem 20');
+    expect(capped.note).toContain('+5 more diagnostics');
+    expect(capped.note).not.toContain('problem 21');
+
+    // A clean file appends NOTHING for a .ts (no syntax check applies).
+    const clean = await guardEditedFile({ workspaceRoot: workspace, enabled: true, lsp: lspStub([]) }, 'main.ts');
+    expect(clean.ok).toBe(true);
+    expect(clean.note).toBeUndefined();
+
+    // No server for the file type: diagnostics are never even requested.
+    let requested = false;
+    const uncovered = await guardEditedFile({
+      workspaceRoot: workspace,
+      enabled: true,
+      lsp: { serverFor: () => undefined, diagnostics: async () => { requested = true; return { server: 'x', lines: ['boom'] }; } },
+    }, 'main.ts');
+    expect(uncovered.note).toBeUndefined();
+    expect(requested).toBe(false);
+
+    // A directory (create_dir's target) has nothing to diagnose: silent.
+    mkdirSync(join(workspace, 'src'));
+    const dir = await guardEditedFile({ workspaceRoot: workspace, enabled: true, lsp: lspStub(['boom']) }, 'src');
+    expect(dir.note).toBeUndefined();
+  });
+
+  test('a slow or broken language server never fails or hangs the edit guard', async () => {
+    const workspace = tempDir('daedalus-guard-lsp-slow-');
+    writeFileSync(join(workspace, 'main.ts'), 'export const x = 1;\n', 'utf8');
+
+    const slow = { serverFor: () => ({}), diagnostics: () => new Promise<{ server: string; lines: string[] }>(() => { /* never settles */ }) };
+    const started = Date.now();
+    const hung = await guardEditedFile({ workspaceRoot: workspace, enabled: true, lsp: slow, lspTimeoutMs: 25 }, 'main.ts');
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(hung.ok).toBe(true);
+    expect(hung.note).toBeUndefined();
+
+    const broken = {
+      serverFor: () => ({}),
+      diagnostics: async (): Promise<{ server: string; lines: string[] }> => { throw new Error('server exploded'); },
+    };
+    const failed = await guardEditedFile({ workspaceRoot: workspace, enabled: true, lsp: broken }, 'main.ts');
+    expect(failed.ok).toBe(true);
+    expect(failed.note).toBeUndefined();
+  });
+
+  test('a write_file surfaces fresh LSP diagnostics in the tool result; no servers configured stays silent', async () => {
+    const workspace = tempDir('daedalus-guard-lsp-run-ws-');
+    const home = tempDir('daedalus-guard-lsp-run-home-');
+    const script = [
+      { tool: 'create_dir', args: { path: 'src' } },
+      { tool: 'write_file', args: { path: 'main.ts', content: 'const unused: number = "oops";\n' } },
+    ];
+
+    const runner = new TaskRunner({
+      workspaceRoot: workspace,
+      store: new TaskStore(home),
+      provider: scriptedProvider(script),
+      approvalPolicy: 'auto',
+      maxIterations: 6,
+      lspServers: [{ name: 'fake-lsp', command: process.execPath, args: [FAKE_LSP_SERVER], extensions: ['.ts'] }],
+    });
+    const events: Event[] = [];
+    await runner.run({ goal: 'create main.ts', onEvent: (event) => events.push(event) });
+    const finished = events.filter((event) => event.type === 'TOOL_CALL_FINISHED');
+    const outputFor = (tool: string): string => {
+      const match = finished.find((event) => (event.payload as { call?: { tool?: string } }).call?.tool === tool);
+      return (match?.payload as { result?: { output?: string } }).result?.output ?? '';
+    };
+    expect(outputFor('write_file')).toContain('EDIT_GUARD: fake-lsp diagnostics for main.ts:');
+    expect(outputFor('write_file')).toContain('fake diagnostic: unused variable');
+    // create_dir joins the guard path but a directory has no diagnostics.
+    expect(outputFor('create_dir')).toBe('created directory src');
+
+    const runnerOff = new TaskRunner({ workspaceRoot: workspace, store: new TaskStore(home), provider: scriptedProvider(script), approvalPolicy: 'auto', maxIterations: 6 });
+    const eventsOff: Event[] = [];
+    await runnerOff.run({ goal: 'create main.ts again', onEvent: (event) => eventsOff.push(event) });
+    const finishedOff = eventsOff.find((event) => event.type === 'TOOL_CALL_FINISHED' && (event.payload as { call?: { tool?: string } }).call?.tool === 'write_file');
+    const silentOutput = (finishedOff?.payload as { result?: { output?: string } }).result?.output ?? '';
+    expect(silentOutput).toBe('wrote main.ts');
+    expect(silentOutput).not.toContain('fake diagnostic');
   });
 });
 

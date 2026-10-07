@@ -147,6 +147,54 @@ describe('CLI', () => {
     })
   })
 
+  describe('tool result rendering', () => {
+    test('TOOL_CALL_FINISHED renders the view_image placeholder line, never base64', () => {
+      // The loop strips the image bytes before emitting, so the event —
+      // and therefore this transcript line — only ever carries the
+      // one-line placeholder text.
+      const out = formatEvent({
+        type: 'TOOL_CALL_FINISHED',
+        task_id: 't',
+        payload: {
+          call: { tool: 'view_image' },
+          result: {
+            status: 'ok',
+            output: 'viewed image pic.png (image/png, 1234 bytes) — the image itself is attached to this conversation; you see it with this result.',
+            meta: { image_attached: true },
+          },
+        },
+      })
+      expect(out).toContain('view_image -> viewed image pic.png (image/png, 1234 bytes)')
+      expect(out).not.toContain('base64')
+      expect(out).not.toContain('data:image')
+    })
+
+    test('TOOL_CALL_FINISHED renders a fetch_url result as its fetched header line', () => {
+      const out = formatEvent({
+        type: 'TOOL_CALL_FINISHED',
+        task_id: 't',
+        payload: {
+          call: { tool: 'fetch_url' },
+          result: { status: 'ok', output: 'Fetched https://docs.example.com/start (HTTP 200, text/html):\n\nGetting started docs body' },
+        },
+      })
+      expect(out).toContain('fetch_url -> Fetched https://docs.example.com/start')
+      expect(out).toContain('(1 more lines)')
+    })
+  })
+
+  describe('background job rendering', () => {
+    test('JOB_STARTED names the job and the command it runs', () => {
+      const out = formatEvent({ type: 'JOB_STARTED', task_id: 't', payload: { job_id: 'job-1', command: 'npm install', cwd: 'app', background: true } })
+      expect(out).toContain('background job job-1 started: npm install')
+    })
+
+    test('JOB_FINISHED shows the terminal state and exit code', () => {
+      expect(formatEvent({ type: 'JOB_FINISHED', task_id: 't', payload: { job_id: 'job-1', state: 'exited', exit_code: 0 } })).toContain('background job job-1 exited (exit 0)')
+      expect(formatEvent({ type: 'JOB_FINISHED', task_id: 't', payload: { job_id: 'job-2', state: 'killed', exit_code: null } })).toContain('background job job-2 killed')
+    })
+  })
+
   describe('orchestration rendering', () => {
     test('ORCHESTRATION_SKIPPED explains the single-path run', () => {
       const out = formatEvent({ type: 'ORCHESTRATION_SKIPPED', task_id: 't', payload: { reason: 'single_path', decomposed_children: 3 } })
