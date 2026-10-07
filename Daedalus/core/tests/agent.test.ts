@@ -8,6 +8,7 @@ import {
   DefaultContextManager,
   EventBus,
   LLMAuthError,
+  LLMRateLimitError,
   LLMTimeoutError,
   TaskStore,
   evaluateStopConditions,
@@ -209,7 +210,11 @@ describe('AgentLoop (fake provider + fake tool)', () => {
       name: 'flaky',
       async chat() {
         calls++;
-        if ([1, 2, 4, 5].includes(calls)) throw new LLMTimeoutError('LLM request timed out after 180000ms');
+        // Rate limits stand in for generic transient failures here:
+        // timeouts specifically are capped harder (2 consecutive →
+        // provider_timeout, see scaffold/timeout tests), while the
+        // generic budget this test specifies still tolerates them.
+        if ([1, 2, 4, 5].includes(calls)) throw new LLMRateLimitError('provider rate limited');
         return {
           message: {
             role: 'assistant',

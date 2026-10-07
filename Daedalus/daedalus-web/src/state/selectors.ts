@@ -124,7 +124,9 @@ export function commands(events: Event[]): CommandView[] {
     }
     const chunk = payloadOf(event, 'COMMAND_OUTPUT')
     if (chunk) {
-      const view = views.get(chunk.call_id)
+      // Background-job chunks carry the job id (also as call_id); a chunk
+      // can land before JOB_STARTED if the process printed immediately.
+      const view = views.get(chunk.call_id) ?? (chunk.job_id ? views.get(chunk.job_id) : undefined)
       if (view) view.output += chunk.chunk
       continue
     }
@@ -136,6 +138,29 @@ export function commands(events: Event[]): CommandView[] {
       view.exitCode = finished.exit_code
       view.finishedAt = event.ts
       if (finished.killed && view.output.length === 0) view.output += '[process killed]'
+      continue
+    }
+    const jobStarted = payloadOf(event, 'JOB_STARTED')
+    if (jobStarted) {
+      views.set(jobStarted.job_id, {
+        callId: jobStarted.job_id,
+        command: `${jobStarted.command} [background ${jobStarted.job_id}]`,
+        cwd: jobStarted.cwd,
+        status: 'running',
+        exitCode: null,
+        output: '',
+        startedAt: event.ts,
+      })
+      continue
+    }
+    const jobFinished = payloadOf(event, 'JOB_FINISHED')
+    if (jobFinished) {
+      const view = views.get(jobFinished.job_id)
+      if (!view) continue
+      view.status = jobFinished.state === 'exited' ? 'ok' : 'error'
+      view.exitCode = jobFinished.exit_code
+      view.finishedAt = event.ts
+      if (jobFinished.killed && view.output.length === 0) view.output += '[job killed]'
     }
   }
   return [...views.values()]
@@ -457,6 +482,21 @@ export function activity(events: Event[], thinking = true): ActivityEntry[] {
       case 'COMMAND_FINISHED':
         push({ kind: 'observation', title: 'command finished', detail: `exit ${payloadOf(event, 'COMMAND_FINISHED')?.exit_code ?? 'n/a'}`, status: 'ok' })
         break
+      case 'JOB_STARTED': {
+        const started = payloadOf(event, 'JOB_STARTED')
+        push({ kind: 'action', title: `background job ${started?.job_id ?? ''} started`, detail: started?.command, status: 'running' })
+        break
+      }
+      case 'JOB_FINISHED': {
+        const finishedJob = payloadOf(event, 'JOB_FINISHED')
+        push({
+          kind: 'observation',
+          title: `background job ${finishedJob?.job_id ?? ''} ${finishedJob?.state ?? 'finished'}`,
+          detail: finishedJob?.exit_code !== null && finishedJob?.exit_code !== undefined ? `exit ${finishedJob.exit_code}` : undefined,
+          status: finishedJob?.state === 'exited' ? 'ok' : 'error',
+        })
+        break
+      }
       case 'FILE_CHANGED':
         push({ kind: 'file', title: `file ${payloadOf(event, 'FILE_CHANGED')?.operation ?? 'changed'}`, detail: payloadOf(event, 'FILE_CHANGED')?.path, status: 'info' })
         break

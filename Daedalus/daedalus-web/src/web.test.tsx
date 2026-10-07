@@ -10,7 +10,7 @@ import { Spinner } from './components/common/spinner'
 import { SPINNER_FRAMES } from './theme/motion-tokens'
 import { Panel, EmptyState, ErrorState } from './components/common/panel'
 import { STATUS_TONE, RESULT_TONE, KIND_TONE, toneForResult } from './components/agent/status-tone'
-import { activity, chatTranscript, fileChanges, filterTaskEvents, planSteps, pendingApprovals, toolCalls } from './state/selectors'
+import { activity, chatTranscript, commands, fileChanges, filterTaskEvents, planSteps, pendingApprovals, toolCalls } from './state/selectors'
 import { useDaedalusStore } from './state/taskStore'
 
 const SRC = join(process.cwd(), 'src')
@@ -190,6 +190,23 @@ describe('selectors derive state from the event log', () => {
 
     const decided = [...requested, ev(2, 'APPROVAL_DECIDED', { key, decision: 'grant', remember: false })]
     expect(pendingApprovals(decided)).toHaveLength(0)
+  })
+
+  test('background jobs derive a command view and activity lines', () => {
+    const events = [
+      ev(1, 'JOB_STARTED', { job_id: 'job-1', call_id: 'c1', command: 'npm install', cwd: '/ws/app', background: true }),
+      ev(2, 'COMMAND_OUTPUT', { call_id: 'job-1', job_id: 'job-1', chunk: 'added 3 packages\n' }),
+      ev(3, 'JOB_FINISHED', { job_id: 'job-1', command: 'npm install', cwd: '/ws/app', state: 'exited', exit_code: 0, killed: false }),
+    ]
+    const views = commands(events)
+    expect(views).toHaveLength(1)
+    expect(views[0].command).toContain('npm install')
+    expect(views[0].command).toContain('[background job-1]')
+    expect(views[0].output).toContain('added 3 packages')
+    expect(views[0].status).toBe('ok')
+    expect(views[0].exitCode).toBe(0)
+    expect(activity(events).some((entry) => entry.title === 'background job job-1 started')).toBe(true)
+    expect(activity(events).some((entry) => entry.title === 'background job job-1 exited')).toBe(true)
   })
 
   test('an empty log yields empty derivations', () => {

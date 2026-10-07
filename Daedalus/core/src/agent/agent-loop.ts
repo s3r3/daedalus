@@ -2,7 +2,7 @@ import { join } from 'node:path';
 import type { EventBus } from '../events.ts';
 import { emitEvent } from '../events.ts';
 import type { TaskStore } from '../persistence.ts';
-import type { LLMProvider, Message, ModelPhase } from '../providers/llm/types.ts';
+import type { ContentBlock, LLMProvider, Message, ModelPhase } from '../providers/llm/types.ts';
 import { classifyLLMError, LLMAuthError, LLMContentPolicyError, type LLMErrorKind } from '../providers/llm/errors.ts';
 import { asModelController, modelPoolFailureReason } from '../providers/llm/model-pool.ts';
 import type { AgentMode, Event, ModelTier, Plan, PlanStep, TaskSpec, TaskState, ToolCall, ToolResult } from '../contracts.ts';
@@ -19,6 +19,7 @@ import { evaluateStopConditions, noProgressCondition } from './stop.ts';
 import { ModeController, isToolCallDenied, isToolVisible, modeDenialMessage } from '../interaction/modes.ts';
 import { isPlanDocumentChange, planDecisionsFromEvents, planDocumentRepairDirective } from '../interaction/plans.ts';
 import { SPAWN_SUBAGENT_TOOL_NAME } from '../interaction/subagents.ts';
+import { creationCompletionRefusal, detectCreationGoal, scaffoldMarkerPresent, type CreationGoal } from './scaffold.ts';
 
 export type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor };
 export { interpretTask };
@@ -26,6 +27,16 @@ export { createPlan, replan };
 export { DefaultContextManager };
 export { handleObservation };
 export { evaluateStopConditions };
+
+/**
+ * Consecutive provider timeouts tolerated before the turn fails with the
+ * typed reason `provider_timeout`. A timeout means the (possibly
+ * oversized) request never returned; resending the identical request a
+ * third time only burns another full timeout window, so the cap sits
+ * below the generic error budget (max_errors counts ALL consecutive
+ * failures — timeouts get their own, stricter budget).
+ */
+export const MAX_CONSECUTIVE_TIMEOUTS = 2;
 
 export type AgentLoopOptions = {
   provider: LLMProvider;
@@ -118,8 +129,27 @@ export class AgentLoop {
   readonly #taskMutated = new Set<string>();
   /** Tasks whose model was already escalated once (escalation cap). */
   readonly #escalatedTasks = new Set<string>();
+  /**
+   * Images a `view_image` call attached for the task's NEXT model request
+   * (drained in `step`, like notices: exactly once, as a user-role image
+   * message). The bytes never travel inside a ToolResult past
+   * `#recordToolResult`, so the event log, persisted state, and CLI
+   * transcript only ever see the tool's one-line placeholder output.
+   */
+  readonly #pendingImages = new Map<string, Array<{ path: string; mime: string; dataUrl: string }>>();
   /** File paths each task has mutated (validation check scoping). */
   readonly #changedFiles = new Map<string, Set<string>>();
+  /**
+   * Completion-gate evidence per task: successful run_command executions
+   * (shell-created files never appear as per-file changes) and whether the
+   * task delegated (children's ledgers belong to the runtime layer).
+   */
+  readonly #commandsSucceeded = new Map<string, number>();
+  readonly #delegatedTasks = new Set<string>();
+  /** Creation-shaped tasks that already spent their one create-the-files repair turn. */
+  readonly #creationRepairs = new Set<string>();
+  /** Consecutive provider timeouts per task; the 2nd in a row fails the turn (provider_timeout). */
+  readonly #consecutiveTimeouts = new Map<string, number>();
   /**
    * Last validation failure per task (anti-thrash): when the identical
    * failure repeats with no mutation in between, the recovery budget is
@@ -173,6 +203,7 @@ export class AgentLoop {
     } finally {
       this.#loopGuards.delete(spec.id);
       this.#pendingGuidance.delete(spec.id);
+      this.#pendingImages.delete(spec.id);
       this.#modelFailures.delete(spec.id);
       this.#spillCounters.delete(spec.id);
       this.#taskMutated.delete(spec.id);
@@ -180,6 +211,10 @@ export class AgentLoop {
       this.#changedFiles.delete(spec.id);
       this.#validationStalls.delete(spec.id);
       this.#planRepairs.delete(spec.id);
+      this.#commandsSucceeded.delete(spec.id);
+      this.#delegatedTasks.delete(spec.id);
+      this.#creationRepairs.delete(spec.id);
+      this.#consecutiveTimeouts.delete(spec.id);
     }
   }
 
@@ -297,6 +332,39 @@ export class AgentLoop {
             }
           }
         }
+        // Completion gate for creation-shaped goals (agent/scaffold.ts):
+        // a task that asked to create something may not finish "done"
+        // with zero creation evidence — the incident failure where a
+        // Next.js project was reported "Selesai" while nothing existed on
+        // disk. First refusal buys exactly one repair turn (the same
+        // pattern as the plan-document guarantee); a second empty finish
+        // fails the task with reason no_files_created. Non-creation goals
+        // (questions run as tasks, investigations, no-change refactors)
+        // never reach here.
+        if (completed) {
+          const refusal = this.#creationRefusal(state);
+          if (refusal && !this.#creationRepairs.has(state.id)) {
+            this.#creationRepairs.add(state.id);
+            await this.#emit(state.id, undefined, 'RECOVERY_STARTED', { reason: refusal.reason, strategy: 'create_files', attempt: 1 });
+            const steps = reopenLastCompletedStep(state.steps);
+            state = {
+              ...state,
+              status: 'active',
+              steps,
+              plan: { ...state.plan, steps, status: 'active' },
+              last_error: undefined,
+              last_observation: `You marked the task done, but ${refusal.detail}. The goal asks to create something, so finishing now would report success over work that does not exist. Create the files now (for a scaffolded project: run the generator from the scaffold playbook first, then build the requested content into it), then finish the reopened step.`,
+            };
+            this.#store.saveState(state.id, state);
+            continue;
+          }
+          if (refusal) {
+            state = { ...state, status: 'failed', last_error: refusal.reason };
+            await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: refusal.reason });
+            this.#store.saveState(state.id, state);
+            return state;
+          }
+        }
         state = { ...state, status: completed ? 'done' : 'active' };
         await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: completed ? 'success' : 'partial', reason: completed ? 'completed' : 'validation_failed' });
         this.#store.saveState(state.id, state);
@@ -366,6 +434,21 @@ export class AgentLoop {
     if (notices.length > 0) {
       messages = [...messages, ...notices.map((content) => ({ role: 'user' as const, content }))];
     }
+    // Images the model asked to see (view_image): attached as an image_url
+    // block on a user message, the same carriage user uploads take in the
+    // context manager. Drained exactly once; the matching tool result in
+    // the history stays its one-line placeholder text.
+    const pendingImages = this.#pendingImages.get(state.id);
+    if (pendingImages && pendingImages.length > 0) {
+      this.#pendingImages.delete(state.id);
+      for (const image of pendingImages) {
+        const content: ContentBlock[] = [
+          { type: 'text', text: `Image attached from view_image (${image.path}, ${image.mime}):` },
+          { type: 'image_url', image_url: { url: image.dataUrl } },
+        ];
+        messages = [...messages, { role: 'user' as const, content }];
+      }
+    }
     const meter = contextMeter(messages, this.#contextLimitTokens);
     // Phase hint (tailor suite): the pool spends strong models on edit and
     // repair turns and fast/balanced ones on exploration. Stamped onto the
@@ -378,6 +461,7 @@ export class AgentLoop {
       await this.#emit(state.id, turnId, 'MODEL_REQUEST_FINISHED', { message: response.message, usage: response.usage, finish_reason: response.finish_reason, phase, ...this.#servedModelFields(state), ...meter });
       await this.#emitThought(state.id, turnId, response.message);
       this.#modelFailures.delete(state.id);
+      this.#consecutiveTimeouts.delete(state.id);
     } catch (error) {
       const errorText = formatError(error);
       const kind = classifyLLMError(error);
@@ -428,6 +512,28 @@ export class AgentLoop {
         consecutive: (this.#modelFailures.get(state.id)?.consecutive ?? 0) + 1,
       };
       this.#modelFailures.set(state.id, failure);
+      // Consecutive-timeout discipline (documented budget interaction):
+      // the generic error budget counts ALL consecutive failures and
+      // resets on success, but a timeout is not a cheap failure — the
+      // identical oversized request goes out again and burns another
+      // full timeout window. So timeouts carry a stricter streak cap:
+      // the 2nd consecutive timeout fails the turn with the typed
+      // provider_timeout reason and no third identical send happens.
+      // One exception: when this same failure also exhausts the generic
+      // budget, that budget's own path fires (top of the run loop) with
+      // its richer summary — the two caps end the run at the same call.
+      const timeouts = reason === 'timeout' ? (this.#consecutiveTimeouts.get(state.id) ?? 0) + 1 : 0;
+      if (timeouts > 0) this.#consecutiveTimeouts.set(state.id, timeouts);
+      else this.#consecutiveTimeouts.delete(state.id);
+      if (timeouts >= MAX_CONSECUTIVE_TIMEOUTS && failure.consecutive < this.#stopPolicy.max_errors) {
+        return {
+          ...state,
+          mode: turnMode,
+          turns: (state.turns ?? 0) + 1,
+          status: 'failed',
+          last_error: 'provider_timeout',
+        };
+      }
       return { ...state, mode: turnMode, turns: (state.turns ?? 0) + 1, last_error: errorText };
     }
     const successfulState: TaskState = { ...state, mode: turnMode, last_error: undefined };
@@ -446,6 +552,23 @@ export class AgentLoop {
     }
     if (action.kind === 'complete') {
       this.#invalidActions.delete(state.id);
+      // Creation gate at the claim point: an explicit "done:" over zero
+      // creation evidence is exactly the fake-Selesai shape, and it can
+      // arrive while plan steps are still open (so the steps-done gate
+      // below would never see it). One repair directive, then refusal.
+      const refusal = this.#creationRefusal({ ...successfulState, mode: turnMode });
+      if (refusal && !this.#creationRepairs.has(state.id)) {
+        this.#creationRepairs.add(state.id);
+        await this.#emit(state.id, turnId, 'RECOVERY_STARTED', { reason: refusal.reason, strategy: 'create_files', attempt: 1 });
+        return {
+          ...successfulState,
+          turns: (state.turns ?? 0) + 1,
+          last_observation: `You said done, but ${refusal.detail}. The goal asks to create something, so finishing now would report success over work that does not exist. Create the files now (for a scaffolded project: run the generator from the scaffold playbook first, then build the requested content into it), then say done again.`,
+        };
+      }
+      if (refusal) {
+        return { ...successfulState, turns: (state.turns ?? 0) + 1, status: 'failed', last_error: refusal.reason };
+      }
       return { ...successfulState, turns: (state.turns ?? 0) + 1, last_observation: action.summary };
     }
     if (action.kind === 'stop') {
@@ -599,6 +722,13 @@ export class AgentLoop {
     // Phase routing bookkeeping: once a task has actually mutated the
     // workspace, its later turns are edit turns and earn strong models.
     if (result.meta?.mutating === true) this.#taskMutated.add(state.id);
+    // Completion-gate evidence (see #creationRefusal): a successful
+    // run_command is the only trace shell-driven creation leaves, and a
+    // delegated task's real ledger lives with its children.
+    if (call.tool === 'run_command' && result.status === 'ok') {
+      this.#commandsSucceeded.set(state.id, (this.#commandsSucceeded.get(state.id) ?? 0) + 1);
+    }
+    if (call.tool === SPAWN_SUBAGENT_TOOL_NAME) this.#delegatedTasks.add(state.id);
     if (result.meta?.mutating === true) {
       // Validation bookkeeping: remember which files the task changed
       // (checks are scoped to their packages) and that this failure is
@@ -615,6 +745,25 @@ export class AgentLoop {
         files.add(changedPath);
       }
     }
+    // view_image carriage: lift the image payload out of the result before
+    // it is shaped, emitted, or persisted. The bytes queue for the next
+    // model request (see `step`); from here on the result is only the
+    // tool's placeholder text, so the event log, the saved task state, and
+    // every transcript render the placeholder — never a base64 dump.
+    let safeResult = result;
+    if (call.tool === 'view_image' && result.status === 'ok' && typeof result.meta?.image_data_url === 'string') {
+      const pending = this.#pendingImages.get(state.id) ?? [];
+      pending.push({
+        path: typeof result.meta.image_path === 'string' ? result.meta.image_path : 'image',
+        mime: typeof result.meta.image_mime === 'string' ? result.meta.image_mime : 'image/*',
+        dataUrl: result.meta.image_data_url,
+      });
+      while (pending.length > MAX_PENDING_VIEWED_IMAGES) pending.shift();
+      this.#pendingImages.set(state.id, pending);
+      const meta: Record<string, unknown> = { ...result.meta, image_attached: true };
+      delete meta.image_data_url;
+      safeResult = { ...result, meta };
+    }
     // Shape the result before it enters the model context (the single
     // choke point every tool's output passes through): over-cap output is
     // kept head+tail with the full text spilled to the task store, so a
@@ -623,18 +772,18 @@ export class AgentLoop {
     // keeps the executor's untouched result — only the model-facing copy
     // is shortened — and the event gains additive truncation flags so the
     // Web can show that shaping happened.
-    const shaped = await shapeToolOutput(result.output, {
+    const shaped = await shapeToolOutput(safeResult.output, {
       tool: call.tool,
       limits: this.#toolOutputLimits,
       spillPathFor: (tool) => this.#spillPathFor(state.id, tool),
     });
     const modelResult: ToolResult = shaped.truncated
       ? {
-          ...result,
+          ...safeResult,
           output: shaped.output,
           truncated: true,
           meta: {
-            ...result.meta,
+            ...safeResult.meta,
             output_truncated: true,
             ...(shaped.spillPath ? { spill_path: shaped.spillPath } : {}),
             output_original_chars: shaped.totalChars,
@@ -642,10 +791,10 @@ export class AgentLoop {
             output_shown_lines: shaped.shownLines,
           },
         }
-      : result;
+      : safeResult;
     await this.#emit(state.id, turnId, 'TOOL_CALL_FINISHED', {
       call,
-      result,
+      result: safeResult,
       ...(shaped.truncated ? { output_truncated: true, ...(shaped.spillPath ? { spill_path: shaped.spillPath } : {}) } : {}),
     });
     // A skill body entering the context is a first-class activation:
@@ -811,12 +960,42 @@ export class AgentLoop {
     await this.#bus.drain();
   }
 
+  /**
+   * Creation-completion gate verdict from THIS task's own ledger. The
+   * runtime re-checks at the lineage level (children included) after the
+   * loop returns; here the per-task view is: file-tool changes, successful
+   * run_command executions (shell creation leaves no per-file trace), the
+   * scaffold marker on disk, and whether the task delegated.
+   */
+  #creationRefusal(state: TaskState): { reason: string; detail: string } | undefined {
+    const mode = state.mode ?? this.#modeController.mode;
+    // Ask answers questions and Plan's deliverable is the plan document
+    // (covered by the plan-document guarantee above): neither may be
+    // forced to "create files" by this gate.
+    if (mode === 'ask' || mode === 'plan') return undefined;
+    const goal: CreationGoal = detectCreationGoal(state.goal, state.done_criteria);
+    if (!goal.creation) return undefined;
+    const markerPresent = goal.scaffold ? scaffoldMarkerPresent(state.repo_path, goal.scaffold) : false;
+    return creationCompletionRefusal(
+      goal,
+      {
+        filesChanged: this.#changedFiles.get(state.id)?.size ?? 0,
+        commandsSucceeded: this.#commandsSucceeded.get(state.id) ?? 0,
+        delegated: this.#delegatedTasks.has(state.id),
+      },
+      markerPresent,
+      { deferWhenDelegated: true },
+    );
+  }
+
   #done(state: TaskState): boolean {
     return state.steps.length > 0 && state.steps.every((s) => s.status === 'done' || s.status === 'skipped');
   }
 }
 
 const MAX_THOUGHT_CHARS = 4_000;
+/** view_image attachments awaiting one request, mirroring the context manager's per-request image cap. */
+const MAX_PENDING_VIEWED_IMAGES = 4;
 
 function formatError(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);

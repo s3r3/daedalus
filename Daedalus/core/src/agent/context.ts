@@ -40,7 +40,23 @@ export type ContextManagerOptions = {
   promptFamily?: PromptFamily;
   /** Workspace-relative paths the user pinned (tailor suite); shown in the workspace overview section. */
   pins?: string[];
+  /**
+   * Scaffold playbook for this task (agent/scaffold.ts), rendered by the
+   * runtime only when the goal asks to create a new framework project.
+   * Absent → no section, prompt unchanged.
+   */
+  scaffoldPlaybook?: string;
 };
+
+/**
+ * Skill-index clamps (request-size discipline): one long description must
+ * not flood every fresh prompt, and the whole index stays under a total
+ * character budget. Skills past the character budget are still listed by
+ * NAME (origin kept) so the model can load them via read_skill; skills
+ * past the count cap keep the existing "+N more" honesty line.
+ */
+export const MAX_SKILL_DESCRIPTION_CHARS = 160;
+export const MAX_SKILL_INDEX_CHARS = 6_000;
 
 const DEFAULT_MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_MAX_IMAGES = 4;
@@ -72,6 +88,7 @@ export class DefaultContextManager implements ContextManager {
   readonly #agentName?: string;
   readonly #promptFamily: PromptFamily;
   readonly #pins: string[];
+  readonly #scaffoldPlaybook?: string;
 
   constructor(options: number | ContextManagerOptions = 16_000) {
     const resolved = typeof options === 'number' ? { budget: options } : options;
@@ -91,6 +108,7 @@ export class DefaultContextManager implements ContextManager {
     this.#agentName = resolved.agentName;
     this.#promptFamily = resolved.promptFamily ?? 'generic';
     this.#pins = resolved.pins ?? [];
+    this.#scaffoldPlaybook = resolved.scaffoldPlaybook;
   }
 
   async buildMessages(state: TaskState, observations: Observation[], tools?: ToolDefinition[]): Promise<Message[]> {
@@ -130,10 +148,16 @@ export class DefaultContextManager implements ContextManager {
         ...(promptFamilyFragment(this.#promptFamily)
           ? [{ id: 'dialect', content: promptFamilyFragment(this.#promptFamily)! }]
           : []),
+        ...(this.#scaffoldPlaybook
+          ? [{
+              id: 'scaffold playbook',
+              content: this.#scaffoldPlaybook,
+            }]
+          : []),
         ...(this.#skills.length
           ? [{
               id: 'skills',
-              content: `Available skills (playbooks stored on disk; call the read_skill tool with the skill name to load its full instructions before following it):\n${this.#skills.slice(0, MAX_SKILLS_IN_PROMPT).map((skill) => `- ${skill.name}: ${skill.description} (${formatSkillOrigin(skill.origin)})`).join('\n')}${this.#skills.length > MAX_SKILLS_IN_PROMPT ? `\n+${this.#skills.length - MAX_SKILLS_IN_PROMPT} more skills available — use read_skill by name` : ''}`,
+              content: `Available skills (playbooks stored on disk; call the read_skill tool with the skill name to load its full instructions before following it):\n${this.#skillIndexLines()}${this.#skills.length > MAX_SKILLS_IN_PROMPT ? `\n+${this.#skills.length - MAX_SKILLS_IN_PROMPT} more skills available — use read_skill by name` : ''}`,
             }]
           : []),
         ...(this.#invokedSkills.length
@@ -170,6 +194,31 @@ export class DefaultContextManager implements ContextManager {
       messages.push(userMessage(`Available tools: ${tools.map((t) => t.function.name).join(', ')}`));
     }
     return this.compact(messages, this.#budget);
+  }
+
+  /**
+   * The skill index body: at most MAX_SKILLS_IN_PROMPT entries, each
+   * description hard-clamped, with a TOTAL character budget for the
+   * described lines. Entries past the budget keep their name + origin
+   * (the model can still read_skill them); the "+N more" line is added
+   * by the caller for skills past the count cap.
+   */
+  #skillIndexLines(): string {
+    const lines: string[] = [];
+    let used = 0;
+    for (const skill of this.#skills.slice(0, MAX_SKILLS_IN_PROMPT)) {
+      const description = skill.description.length > MAX_SKILL_DESCRIPTION_CHARS
+        ? `${skill.description.slice(0, MAX_SKILL_DESCRIPTION_CHARS - 1)}…`
+        : skill.description;
+      const full = `- ${skill.name}: ${description} (${formatSkillOrigin(skill.origin)})`;
+      if (used + full.length + 1 <= MAX_SKILL_INDEX_CHARS) {
+        lines.push(full);
+        used += full.length + 1;
+      } else {
+        lines.push(`- ${skill.name} (${formatSkillOrigin(skill.origin)})`);
+      }
+    }
+    return lines.join('\n');
   }
 
   /**

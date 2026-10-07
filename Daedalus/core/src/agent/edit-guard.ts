@@ -36,6 +36,8 @@ export type EditGuardOutcome = {
 const JS_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 const DEFAULT_SYNTAX_TIMEOUT_MS = 5_000;
 const DEFAULT_LSP_TIMEOUT_MS = 2_000;
+/** Diagnostics lines shown in an edit result before the "+N more" rollup. */
+export const MAX_EDIT_DIAGNOSTIC_LINES = 20;
 
 export async function guardEditedFile(options: EditGuardOptions, relativePath: string): Promise<EditGuardOutcome> {
   if (!options.enabled) return { ok: true, issues: [] };
@@ -90,7 +92,11 @@ async function inspect(options: EditGuardOptions, relativePath: string): Promise
     );
     if (found && found.lines.length > 0) {
       checked = true;
-      issues.push(`${found.server} diagnostics for ${relativePath}:\n${found.lines.slice(0, 10).join('\n')}`);
+      const shown = found.lines.slice(0, MAX_EDIT_DIAGNOSTIC_LINES);
+      const more = found.lines.length - shown.length;
+      issues.push(
+        `${found.server} diagnostics for ${relativePath}:\n${shown.join('\n')}${more > 0 ? `\n+${more} more diagnostic${more === 1 ? '' : 's'}` : ''}`,
+      );
     }
   }
 

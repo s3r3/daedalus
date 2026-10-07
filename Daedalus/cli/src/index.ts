@@ -378,6 +378,15 @@ export function formatEvent(event: Omit<Event, "seq" | "ts">): string {
       const p = event.payload as { status?: string; exit_code?: number | null };
       return `  ${p.status === "ok" ? paint(palette.success, "✔") : paint(palette.error, "✖")} command ${p.status ?? ""} (exit ${p.exit_code ?? "?"})\n`;
     }
+    case "JOB_STARTED": {
+      const p = event.payload as { job_id?: string; command?: string };
+      return `  ${paint(palette.info, "⧗")} background job ${p.job_id ?? "job"} started: ${p.command ?? ""}\n`;
+    }
+    case "JOB_FINISHED": {
+      const p = event.payload as { job_id?: string; state?: string; exit_code?: number | null };
+      const ok = p.state === "exited";
+      return `  ${ok ? paint(palette.success, "✔") : paint(palette.error, "✖")} background job ${p.job_id ?? "job"} ${p.state ?? "finished"}${p.exit_code !== null && p.exit_code !== undefined ? ` (exit ${p.exit_code})` : ""}\n`;
+    }
     case "TASK_COMPLETED": {
       const p = event.payload as { outcome?: string; reason?: string };
       const icon = p.outcome === "success"

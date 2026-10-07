@@ -108,6 +108,17 @@ export function explorationKey(tool: string, args: unknown, workspaceRoot?: stri
 }
 
 /**
+ * Tools designed to be polled with identical arguments while their
+ * result changes underneath: a background job's status is the whole
+ * point of calling `command_status` again. Polls are counted (they still
+ * occupy the window) but never warned on or suppressed — a cached
+ * "same call" answer would lie about a job that has since finished.
+ * Busy-polling stays bounded by the no-progress backstop and the
+ * iteration budget, not by this guard.
+ */
+const POLLING_TOOLS: ReadonlySet<string> = new Set(['command_status']);
+
+/**
  * Per-task repeat tracker. Keeps only the last {@link LOOP_WINDOW_SIZE} call
  * signatures; a call "repeats" when its signature is already in that window.
  * Exploration keys are tracked in a parallel window with the same thresholds.
@@ -142,6 +153,10 @@ export class LoopGuard {
     this.#window.push(signature);
     if (this.#window.length > this.#windowSize) this.#window.splice(0, this.#window.length - this.#windowSize);
     const repeats = prior + 1;
+
+    // Polling a background job must always execute: its answer changes
+    // while the arguments stay identical.
+    if (POLLING_TOOLS.has(tool)) return { decision: 'execute', repeats, signature };
 
     const key = explorationKey(tool, args, this.#workspaceRoot);
 

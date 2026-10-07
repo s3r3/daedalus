@@ -1,5 +1,38 @@
-export { AgentLoop, parseAction, thoughtFromMessage, type AgentLoopOptions } from './agent-loop.ts';
+export { AgentLoop, MAX_CONSECUTIVE_TIMEOUTS, parseAction, thoughtFromMessage, type AgentLoopOptions } from './agent-loop.ts';
 export { interpretTask } from './interpreter.ts';
+export {
+  BOOTSTRAP_PROBE_TOOLS,
+  DEFAULT_SCAFFOLD_HOST,
+  MISE_PACKAGE_BY_TOOL,
+  SCAFFOLD_RECIPES,
+  UNSUPPORTED_FRAMEWORK_MENTIONS,
+  creationCompletionRefusal,
+  detectCreationGoal,
+  detectScaffoldRequest,
+  detectUnsupportedFramework,
+  djangoProjectName,
+  extractTargetDir,
+  flutterProjectName,
+  formatToolchainSummary,
+  missingToolchains,
+  probeToolchains,
+  renderDatabasePlaybook,
+  renderDockerGeneratorLine,
+  renderScaffoldPlaybook,
+  renderToolchainAcquisition,
+  renderUnsupportedPlaybook,
+  scaffoldMarkerPresent,
+  type CreationCompletionEvidence,
+  type CreationGoal,
+  type CreationRefusal,
+  type ScaffoldHostInfo,
+  type ScaffoldMatch,
+  type ScaffoldRecipe,
+  type ScaffoldRecipeCategory,
+  type ScaffoldRecipeId,
+  type ToolchainProbe,
+  type ToolchainProbeFn,
+} from './scaffold.ts';
 export { DEFAULT_PLAN_STEPS, createPlan, isDefaultPipeline, replan } from './planner.ts';
 export {
   DefaultContextManager,
@@ -7,6 +40,8 @@ export {
   MAX_PINNED_FILES_IN_PROMPT,
   MAX_PINNED_LINES_PER_FILE,
   MAX_PINNED_TOTAL_CHARS,
+  MAX_SKILL_DESCRIPTION_CHARS,
+  MAX_SKILL_INDEX_CHARS,
   condenseToolOutputs,
   contextMeter,
   estimateMessageTokens,
