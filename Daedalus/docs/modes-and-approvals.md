@@ -76,9 +76,16 @@ Decisions arrive through `POST /tasks/:id/approvals/:approvalId`:
   tool result, so the user can redirect it ("run the server package only").
   Text typed into the Web composer while an approval is pending and submitted
   does exactly this — it declines with that text instead of starting a task.
-- **Timeout = decline, never allow.** A request nobody answers within
-  `DAEDALUS_APPROVAL_TIMEOUT_MS` (default 600 000 ms / 10 min) is denied with
-  the distinct message "approval timed out — treated as declined".
+- **No answer is not a decline.** An approval nobody has answered yet stays
+  pending for the task's whole lifetime — there is no default expiry. It
+  settles when the user answers, or when the task is stopped/cancelled
+  (Stop settles it as *denied*, flagged `cancelled`). This replaced the old
+  10-minute auto-decline, which silently "timed out" an unanswered
+  `npm install` approval mid-scaffold and left the agent to improvise.
+  An opt-in cap still exists: set `DAEDALUS_APPROVAL_TIMEOUT_MS` (or the
+  `approvalTimeoutMs` runner option) to a positive value and an
+  unanswered request is denied after that long with the distinct message
+  "approval timed out — treated as declined" (`timed_out` on the event).
 
 Every outcome lands back on the event log as `APPROVAL_DECIDED` (decision,
 approval id, note, `edited`, `timed_out`, `cancelled`), and the Web renders it
@@ -111,6 +118,30 @@ Remembered grants are **session-scoped and in-memory**: the server keeps one
 map shared by all its task runners, and restarting the server forgets every
 grant. The card says so. Granting a remember also immediately settles any
 already-queued pending requests that match the pattern.
+
+### Scaffold-chain approvals
+
+When a task runs a scaffold playbook (a recipe in `core/src/agent/scaffold.ts`),
+the recipe declares its command chain — generator → install → build/validate
+(database recipes: `docker compose up -d` → `docker compose ps`). In an
+ask-first mode, **one approval covers the whole chain for that task**:
+approving the generator means the install and the build do not prompt again.
+The card says so ("scaffold chain … approving this covers the rest of the
+recipe chain for this task"); the grant is remembered in the same approval
+memory, keyed by task + recipe, and dies with the task. It is deliberately
+narrow:
+
+- only the recipe's declared command lines match (leading-token match) —
+  `npm run dev`, `npm test`, and everything else keep the per-class behavior;
+- only the task that owns the playbook holds the chain (children don't);
+- a mode/policy **deny** (Ask/Plan) still beats a chain grant;
+- a **decline never chains**: it declines that call only, so a later chain
+  step asks on its own merits — and the playbook's contract tells the model
+  to ask the user or report partial instead of substituting another command.
+
+Paired with the playbook's step lock (install → write the requested content →
+build to verify; never a dev server as an agent step), one prompt now carries
+a scaffold run from generator to verified build on a single approval.
 
 ### Child tasks
 

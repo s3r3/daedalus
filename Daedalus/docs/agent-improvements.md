@@ -140,6 +140,96 @@ When the variable is unset, the helper errors, or it times out, `title`
 stays undefined and every UI falls back to the goal text exactly as before.
 Child (orchestrator sub-) tasks are not titled.
 
+## 8. Command-output compression
+
+Caps alone keep the head and tail of a noisy command log; the signal (a
+failure three screens in, the final verdict) is what the model actually
+needs. So foreground `run_command` results pass through semantic
+per-family filters (`core/src/agent/output-compression.ts`, an original
+RTK-style implementation — concept provenance in `docs/THIRD_PARTY.md`)
+before the caps+spill shaping:
+
+- Families: `git` (status/diff/log, plus a `+A -R` diff census), `test`
+  (runner summaries kept, passing noise folded), `build` (tsc/eslint/
+  bundler verdicts + warnings), `install` (package changes + audit),
+  `listing`, and a `generic` head/tail filter. Command families without a
+  filter get `generic`; file reads and other tools are never compressed.
+- Failure/error lines are kept verbatim in every family, repeated lines
+  fold with `(×N)` counts, and the compression note appended for the
+  model carries the raw→compressed char counts and the exit code.
+- Nothing is destroyed: the raw output is written to the task store
+  (`tool-output/` spill files) and the note names the path; read it back
+  with `read_file` offset/limit. Compression only engages above 2,000
+  chars or 40 lines, never returns text longer than the input, and the
+  event log keeps the executor's untouched result either way.
+- Savings are audited on the final report: `compressed_outputs`,
+  `output_chars_before_compression`, `output_chars_after_compression`.
+
+Default on. Disable with `DAEDALUS_OUTPUT_COMPRESSION=off`, the Web
+Settings → "output compression" toggle, or `settings.outputCompression
+= false`; with it off, command output reaches shaping byte-identical.
+
+## 9. Read pagination + unchanged-read stub
+
+`read_file` paginates by whole lines inside a 2,000-line / 50,000-char
+budget (aligned with the tool-output caps, so a normal ~200-line file
+can never truncate). Every result states its range in a header
+(`[read_file <path> — lines X–Y of Z]`); a partial view ends with a
+`…[truncated] PARTIAL view` notice stating the total, the shown range,
+how many lines were received, and the exact continuation call
+(`read_file(path="…", offset=<Y+1>, limit=<N>)`). A single line longer
+than the budget is cut mid-line with a notice that it is not pageable
+(use `run_command` byte tools). Before this, the file tools sliced at
+16k chars with no continuation path — re-reading was rational, and the
+model did it 8×.
+
+A repeat `read_file`/`list_dir` whose content matches what the task was
+already served (compared against the freshly executed result, so any
+edit invalidates it by content, not by clock) is answered with a short
+stub — "unchanged since your earlier read … already in your context" —
+instead of re-emitting the file into history. The stub is only claimed
+for ranges actually received in full: a shaped (truncated) serve records
+nothing, and if context condensing has dropped older results since the
+serve, the record is forgotten and the file is served fresh. The event
+log keeps the raw result and flags the stub additively
+(`unchanged_stub`).
+
+## 10. Loop breaker, stall backstop, input-token budget
+
+Identical calls (tool + canonicalized args) are counted across the
+whole task, not just a sliding window: **warn at 3** (with a specific
+directive), **suppress at 4**, and at the **5th** the task hard-pauses —
+the user is asked via a question card (continue a different way / stop
+the task); continue re-arms the breaker with the directive injected
+into the next turn, stop (or no answer path) ends the task. Suppressed
+calls never execute.
+
+Independently, the loop tracks *stalls*: a tool result is progress only
+if it is a file change, a successful command, a download, or a NEW
+observation (a result this task has not already seen). Anything else —
+re-reads, repeated searches, stubs, errors — accrues, so alternating
+read/search cycles stall out exactly like one repeated call (the old
+identical-observation backstop reset on every alternation and let a
+live run reach 14 requests / 264k input tokens). At 3 stalls the tailor
+early-trigger fires (above); at 6 the task ends as **partial** with
+honest evidence (`stuck: … no file change, no successful command, no
+download, no new information`). The same partial treatment applies to
+hard-pause stops and to the per-task **input-token budget**
+(`DAEDALUS_INPUT_TOKEN_BUDGET`, default 100,000 provider-reported or
+harness-estimated input tokens), which stops a runaway task with the
+spend stated instead of letting it burn unbounded turns.
+
+Parsed tool-call arguments are validated against the tool's schema
+before dispatch (and before they can enter history): a malformed call —
+e.g. the router-corrupted `start_line: "3,10"` string — is never
+executed and never silently substituted; it returns a typed
+`tool_call parse error` observation naming the field, the expected
+type, and the schema, and counts on the same mistake ladder. The text
+tool-call protocol also accepts the Anthropic `<invoke>`/`<parameter>`
+dialect and turns orphan fragments (a leaked `</invoke>`) into a
+malformed→repair exchange naming the exact accepted format instead of
+silence.
+
 ## Settings summary
 
 | Variable | Default | Effect |
@@ -148,3 +238,6 @@ Child (orchestrator sub-) tasks are not titled.
 | `DAEDALUS_CONTEXT_LIMIT` | `128000` | Token budget for the context meter + condense threshold |
 | `DAEDALUS_CONDENSE` | on | `off` disables condensing old tool outputs |
 | `DAEDALUS_HELPER_MODEL` | unset | Cheap model used only to title tasks |
+| `DAEDALUS_OUTPUT_COMPRESSION` | on | `off` disables semantic filtering of `run_command` output (caps+spill still apply) |
+| `DAEDALUS_TAILOR_EARLY_ESCALATION` | on | `off` disables pinning a looping task to the strongest pool model (directive + fail-fast remain) |
+| `DAEDALUS_INPUT_TOKEN_BUDGET` | `100000` | Per-task input-token budget; crossing it stops the task as partial with the spend stated |

@@ -273,6 +273,16 @@ export function mergeImageResults(
   return merged.slice(0, options.count);
 }
 
+/** Lowercase URL-safe slug from a free-text image title. */
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48)
+    .replace(/-+$/g, '');
+}
+
 function renderSearchResults(query: string, results: ImageSearchResult[], notes: string[]): string {
   const lines: string[] = [];
   if (results.length === 0) {
@@ -300,6 +310,17 @@ function renderSearchResults(query: string, results: ImageSearchResult[], notes:
   for (const note of notes) lines.push('', note);
   lines.push('');
   lines.push('Next: download the chosen image with download_file (pass license, author, and source_url from the result above so the attribution sidecar is written), then view_image the downloaded file to CONFIRM it shows what the user asked for before wiring it into a page. NEVER hotlink these URLs into a page — download first.');
+  // Concrete first-result template: models stall after search when the
+  // next call has to be invented; spelling it out with the actual first
+  // result's data turns "found images" into an executable next step.
+  const first = results[0]!;
+  const slug = slugify(first.title) || 'image';
+  const dest = `public/${slug}.jpg`;
+  lines.push('');
+  lines.push('Suggested sequence (using result 1 above; pick another result by copying its values instead):');
+  lines.push(`1. download_file { url: "${first.imageUrl}", dest: "${dest}"${first.pageUrl ? `, source_url: "${first.pageUrl}"` : ''}${first.author ? `, author: "${first.author}"` : ''}${first.license ? `, license: "${first.license}"` : ''} }`);
+  lines.push(`2. view_image { path: "${dest}" } — confirm it actually shows the subject.`);
+  lines.push(`3. Reference ${dest} from the page (e.g. an <img> or import). Download first, never hotlink.`);
   return lines.join('\n');
 }
 

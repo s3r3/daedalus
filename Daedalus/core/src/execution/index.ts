@@ -43,6 +43,12 @@ export type ApprovalRequestInfo = {
   tool: string;
   preview: ApprovalPreview;
   rememberPattern?: ApprovalRememberPattern;
+  /**
+   * Set when this call belongs to a scaffold recipe's declared command
+   * chain: approving it covers the rest of the chain for this task, so
+   * the card can say so instead of asking three times for one project.
+   */
+  chain?: { id: string; step: string; covers: string[] };
   /** Mode the requesting task runs under, when the harness knows it. */
   mode?: AgentMode;
   /** Who asked: the (child) task, plus its orchestrator parent when any. */
@@ -61,6 +67,8 @@ export type ApprovalResult = {
   outcome?: 'decided' | 'timeout' | 'cancelled';
   /** Set when a remembered pattern answered instead of a fresh prompt. */
   viaRemember?: boolean;
+  /** Set when a scaffold-chain grant answered instead of a fresh prompt. */
+  viaChain?: boolean;
 };
 
 export type ApprovalDecisionInput = {
@@ -97,15 +105,33 @@ export type HarnessConfig = {
   parentTaskIdFor?: (taskId: string) => string | undefined;
   /** Extra task logs approval events are mirrored to (the orchestrator parent's). */
   approvalTaskIds?: (key: PermissionKey) => string[];
+  /**
+   * Scaffold-chain lookup: when a task runs a scaffold playbook, the
+   * host reports which declared chain step (if any) a call belongs to.
+   * One human grant on any chain step then covers the rest of the chain
+   * for that task (stored in the same approval memory, keyed by task +
+   * recipe). A decline never chains: it declines that call only.
+   */
+  scaffoldChainFor?: (key: PermissionKey, call: ToolCall) => { chainId: string; step: string; covers: string[] } | undefined;
 };
 
-/** Default wait for a human decision before an approval counts as declined. */
-export const DEFAULT_APPROVAL_TIMEOUT_MS = 600_000;
+/**
+ * Default approval wait: 0 = NO automatic decline. An approval the user
+ * simply has not answered yet stays pending for the task's whole
+ * lifetime — it settles when the user answers, or when the task is
+ * stopped/cancelled (which declines it, visibly, via `cancelTasks`).
+ * The old 10-minute auto-decline silently killed Farid's live scaffold
+ * run: `npm install`'s unanswered approval "timed out" into a decline
+ * and the agent wandered off to a dev server instead.
+ */
+export const DEFAULT_APPROVAL_TIMEOUT_MS = 0;
 
 /**
- * Approval wait budget: an explicit value wins, then
- * `DAEDALUS_APPROVAL_TIMEOUT_MS`, then the 10-minute default. A timeout is
- * always a decline, never an allow (fail closed).
+ * Approval wait budget: an explicit positive value wins, then a
+ * positive `DAEDALUS_APPROVAL_TIMEOUT_MS`, then the default (0 = wait
+ * for the task's lifetime). A configured timeout is an opt-in cap and
+ * still fails closed (a decline, flagged `timed_out` on the event) —
+ * but nobody gets one by default anymore.
  */
 export function resolveApprovalTimeoutMs(explicit?: number): number {
   if (typeof explicit === 'number' && Number.isFinite(explicit) && explicit > 0) return Math.floor(explicit);
@@ -124,6 +150,11 @@ export function approvalPatternKey(pattern: ApprovalRememberPattern): string {
     case 'tool-path': return `path:${pattern.tool}:${pattern.path}`;
     case 'tool': return `tool:${pattern.tool}`;
   }
+}
+
+/** Memory key under which a task's scaffold-chain grant is remembered. */
+export function scaffoldChainMemoryKey(taskId: string, chainId: string): string {
+  return `scaffold-chain:${taskId}:${chainId}`;
 }
 
 /** `"npm run test"`-style rendering of a run_command call's arguments. */
@@ -211,11 +242,13 @@ type PendingApproval = {
 
 /**
  * Approval broker: bridges the Approval Gate (core) and the decision flow over
- * the API/WS (server). A `request` blocks until the matching decision arrives,
- * the wait times out (a decline — approvals fail closed), or the task is
- * cancelled (also a decline). Pending requests are keyed by their approval
- * id; the composite `PermissionKey` form remains for the CLI's key-based
- * prompt and the legacy endpoint.
+ * the API/WS (server). A `request` blocks until the matching decision arrives
+ * or the task is cancelled (a decline — approvals fail closed). There is NO
+ * default expiry: an unanswered approval stays pending for the task's whole
+ * lifetime, visible on the card/chip the whole time. An opt-in timeout
+ * (`timeoutMs > 0`, off by default) still declines when it fires. Pending
+ * requests are keyed by their approval id; the composite `PermissionKey`
+ * form remains for the CLI's key-based prompt and the legacy endpoint.
  */
 export class ApprovalBroker {
   #pending = new Map<string, PendingApproval>();
@@ -417,8 +450,20 @@ export class ExecutionHarness {
       const remembered = this.#remembered.get(patternKey);
       if (remembered) return { decision: remembered, viaRemember: true };
     }
-    if (policy === 'auto') return { decision: 'grant' };
+    // Scaffold chain: when the host says this call is one of the recipe's
+    // declared chain steps for this task, one human grant covers the
+    // whole chain (generator → install → build), so a scaffold run asks
+    // once instead of dying on an unanswered second prompt. A mode/policy
+    // deny still beats the chain (Ask/Plan stay read-only), and a chain
+    // DECLINE is never remembered — it declines that call only, so the
+    // next chain step asks on its own merits.
+    const chain = this.#config.scaffoldChainFor?.(key, call);
+    const chainKey = chain ? scaffoldChainMemoryKey(key.taskId, chain.chainId) : undefined;
     if (policy === 'deny') return { decision: 'deny' };
+    if (chainKey && this.#remembered.get(chainKey) === 'grant') {
+      return { decision: 'grant', viaRemember: true, viaChain: true };
+    }
+    if (policy === 'auto') return { decision: 'grant' };
     const info: ApprovalRequestInfo = {
       id: randomUUID(),
       key,
@@ -426,6 +471,7 @@ export class ExecutionHarness {
       tool: tool.name,
       preview: await buildApprovalPreview(call, context),
       ...(pattern ? { rememberPattern: pattern } : {}),
+      ...(chain ? { chain: { id: chain.chainId, step: chain.step, covers: chain.covers } } : {}),
       ...(this.#config.modeFor?.(key) ? { mode: this.#config.modeFor(key) } : {}),
       requestedBy: {
         taskId: key.taskId,
@@ -437,12 +483,16 @@ export class ExecutionHarness {
     this.#publishApproval('APPROVAL_REQUESTED', key, { key, policy, approval: info });
     const response = this.#approval ? await this.#approval(info) : { decision: 'deny' as const };
     if (response.remember && patternKey) this.#remembered.set(patternKey, response.decision);
+    // Any human grant on a chain step covers the rest of the chain for
+    // this task — with or without "remember" (the chain IS the memory).
+    if (chainKey && response.decision === 'grant') this.#remembered.set(chainKey, 'grant');
     if (response.decision === 'grant') this.#record('approval_granted', key.taskId, key.tool, key.path); else this.#record('approval_denied', key.taskId, key.tool, key.path);
     this.#publishApproval('APPROVAL_DECIDED', key, {
       key,
       decision: response.decision,
       remember: response.remember ?? false,
       approval_id: info.id,
+      ...(chain ? { scaffold_chain: chain.chainId, chain_step: chain.step } : {}),
       ...(response.note ? { note: response.note } : {}),
       ...(response.editedArgs ? { edited: true } : {}),
       ...(response.outcome === 'timeout' ? { timed_out: true } : {}),

@@ -1,4 +1,5 @@
-export { AgentLoop, MAX_CONSECUTIVE_TIMEOUTS, parseAction, thoughtFromMessage, type AgentLoopOptions } from './agent-loop.ts';
+export { AgentLoop, LOOP_HARD_PAUSE_AT, MAX_CONSECUTIVE_TIMEOUTS, STALL_ESCALATE_AT, STALL_LIMIT, commandLineForCall, parseAction, thoughtFromMessage, type AgentLoopOptions } from './agent-loop.ts';
+export { schemaSummary, toolCallParseErrorOutput, validateToolCallArguments, type ToolCallValidation } from './tool-call-validation.ts';
 export { interpretTask } from './interpreter.ts';
 export {
   BOOTSTRAP_PROBE_TOOLS,
@@ -6,6 +7,7 @@ export {
   MISE_PACKAGE_BY_TOOL,
   SCAFFOLD_RECIPES,
   UNSUPPORTED_FRAMEWORK_MENTIONS,
+  commandLineTokens,
   creationCompletionRefusal,
   detectCreationGoal,
   detectScaffoldRequest,
@@ -21,10 +23,13 @@ export {
   renderScaffoldPlaybook,
   renderToolchainAcquisition,
   renderUnsupportedPlaybook,
+  scaffoldApprovalChain,
+  scaffoldChainStepFor,
   scaffoldMarkerPresent,
   type CreationCompletionEvidence,
   type CreationGoal,
   type CreationRefusal,
+  type ScaffoldChainStep,
   type ScaffoldHostInfo,
   type ScaffoldMatch,
   type ScaffoldRecipe,
@@ -33,7 +38,7 @@ export {
   type ToolchainProbe,
   type ToolchainProbeFn,
 } from './scaffold.ts';
-export { DEFAULT_PLAN_STEPS, createPlan, isDefaultPipeline, replan } from './planner.ts';
+export { DEFAULT_PLAN_STEPS, createPlan, isDefaultPipeline, replan, scaffoldPlanSteps } from './planner.ts';
 export {
   DefaultContextManager,
   CONDENSED_TOOL_OUTPUT,
@@ -118,10 +123,20 @@ export {
   resolveToolOutputLimits,
   shapeToolOutput,
   truncateHeadTail,
+  writeSpillFile,
   type ShapeToolOutputOptions,
   type ShapedToolOutput,
   type ToolOutputLimits,
 } from './tool-output.ts';
+export {
+  OUTPUT_COMPRESSION_MIN_CHARS,
+  OUTPUT_COMPRESSION_MIN_LINES,
+  compressCommandOutput,
+  detectCommandOutputFamily,
+  type CommandOutputCompression,
+  type CommandOutputCompressionInput,
+  type CommandOutputFamily,
+} from './output-compression.ts';
 export { evaluateStopConditions, noProgressCondition } from './stop.ts';
 export {
   PROMPT_FAMILIES,

@@ -28,6 +28,9 @@ const METRIC_LABELS: Record<string, string> = {
   token_requests_reported: 'requests reporting usage',
   checks_passed: 'checks passed',
   checks_failed: 'checks failed',
+  compressed_outputs: 'outputs compressed',
+  output_chars_before_compression: 'output chars before compression',
+  output_chars_after_compression: 'output chars after compression',
   duration_ms: 'duration (ms)',
 }
 

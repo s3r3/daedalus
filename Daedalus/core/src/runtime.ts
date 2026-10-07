@@ -18,7 +18,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { changedLineCounts, diffLines, renderPatch } from './tools/filesystem/diff.ts';
-import { ApprovalBroker, ExecutionHarness, resolveApprovalTimeoutMs, type ApprovalDecision, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
+import { ApprovalBroker, ExecutionHarness, commandLineOf, resolveApprovalTimeoutMs, type ApprovalDecision, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
 import { CommandValidator, type ValidationCommand, type Validator } from './validation/index.ts';
 import { createProviderFromSettings } from './providers/index.ts';
 import { OpenAICompatProvider } from './providers/llm/openai-compat.ts';
@@ -33,7 +33,10 @@ import {
   probeToolchains,
   renderScaffoldPlaybook,
   renderUnsupportedPlaybook,
+  scaffoldApprovalChain,
+  scaffoldChainStepFor,
   scaffoldMarkerPresent,
+  type ScaffoldChainStep,
   type ToolchainProbe,
 } from './agent/scaffold.ts';
 import { BackgroundJobManager } from './tools/terminal/jobs.ts';
@@ -43,7 +46,7 @@ import { loadPins } from './pins.ts';
 import type { EditFormat, ModelTier, PromptFamily, PromptFamilySetting, ReviewGateReport } from './contracts.ts';
 import { TextProtocolProvider, type ProtocolSwitchInfo } from './providers/llm/text-protocol.ts';
 import { ModeController, isPlanDocumentPath, normalizeAgentMode, restrictMode } from './interaction/modes.ts';
-import { QuestionBroker, createAskUserTool, resolveQuestionTimeoutMs } from './interaction/questions.ts';
+import { QuestionBroker, createAskUserTool, resolveQuestionTimeoutMs, type UserQuestionInfo } from './interaction/questions.ts';
 import { assembledPlanPath, planDecisionsFromEvents, renderAssembledPlan } from './interaction/plans.ts';
 import { ProviderRegistry } from './interaction/providers.ts';
 import { childTaskFromInput, distillChildSummary, type ChildFileChange } from './interaction/orchestrator.ts';
@@ -103,7 +106,13 @@ export type TaskRunnerOptions = {
   questionBroker?: QuestionBroker;
   /** How long a user question (ask_user) may wait for an answer before the agent proceeds on stated assumptions. Defaults to DAEDALUS_QUESTION_TIMEOUT_MS / 15 minutes. */
   questionTimeoutMs?: number;
-  /** How long an approval may wait for a human before it counts as declined. Defaults to DAEDALUS_APPROVAL_TIMEOUT_MS / 10 minutes. */
+  /**
+   * Opt-in approval wait cap. By default there is NONE: an approval the
+   * user has not answered stays pending until answered or the task is
+   * stopped (stopping settles it as a decline). Set a positive value (or
+   * DAEDALUS_APPROVAL_TIMEOUT_MS) only if you want an unanswered
+   * approval to auto-decline after that long.
+   */
   approvalTimeoutMs?: number;
   /**
    * Shared remembered-approval store (pattern key → decision). Inject one
@@ -137,6 +146,8 @@ export type TaskRunnerOptions = {
   condense?: boolean;
   /** Tool-output caps + spill (head+tail in model context, full text in the task store). Defaults to settings.toolOutput. */
   toolOutput?: ToolOutputLimits;
+  /** RTK-style compression of run_command output for the model context. Defaults to settings.outputCompression (on). */
+  outputCompression?: boolean;
   /** Cheap helper model used only to title tasks (DAEDALUS_HELPER_MODEL). */
   helperModel?: string;
   /** Injected helper provider (tests); production builds one from settings. */
@@ -147,6 +158,12 @@ export type TaskRunnerOptions = {
   modelRouting?: boolean;
   /** Quality escalation on/off (tailor suite). Defaults to settings.tailor.qualityEscalation (on). */
   qualityEscalation?: boolean;
+  /** Tailor early-trigger on loop warning/stall. Defaults to settings.tailor.earlyEscalation (on). */
+  earlyEscalation?: boolean;
+  /** Per-task input-token budget; 0 disables. Defaults to settings.context.inputTokenBudget (100k). */
+  inputTokenBudget?: number;
+  /** Hard-pause decision seam (tests); production asks the user via the question broker. */
+  onLoopHardPause?: (info: { taskId: string; tool: string; repeats: number; signature: string }) => Promise<'continue' | 'stop'>;
   /** Strong-model review gate (tailor suite). Defaults to settings.tailor.reviewGate (off). */
   reviewGate?: boolean;
   /** Reviewer factory for the gate (tests); production binds the strongest model on the run's endpoint. */
@@ -336,6 +353,13 @@ export class TaskRunner {
   readonly #spawners = new Map<string, SubagentTooling>();
   /** Task id → its background job manager, so cancel() can stop running jobs with the task. */
   readonly #jobManagers = new Map<string, BackgroundJobManager>();
+  /**
+   * Declared scaffold command chains per in-flight task (recipe id +
+   * steps), registered by run() while the task owns a scaffold playbook
+   * and read by the harness' scaffoldChainFor. Task-scoped by
+   * construction: the entry dies with the run.
+   */
+  readonly #scaffoldChains = new Map<string, { chainId: string; steps: ScaffoldChainStep[] }>();
   #extensionStatus: ExtensionStatus = { mcp: [], lsp: [], skills: [], agents: [] };
   /** Language servers of the in-flight run, used by the edit guard. */
   #activeLsp: LspManager | undefined;
@@ -373,6 +397,18 @@ export class TaskRunner {
           if (options.approvalPolicy === 'deny') return 'deny';
           if (userPolicyFor) return userPolicyFor(key, tool);
           return modePolicy.approval;
+        },
+        scaffoldChainFor: (key, call) => {
+          // One approval covers a scaffold recipe's declared chain for
+          // the task that owns the playbook (registered in run()).
+          // Children and non-scaffold tasks have no chain.
+          if (call.tool !== 'run_command') return undefined;
+          const entry = this.#scaffoldChains.get(key.taskId);
+          if (!entry) return undefined;
+          const line = commandLineOf((call.args ?? {}) as Record<string, unknown>);
+          if (!line) return undefined;
+          const step = scaffoldChainStepFor(entry.steps, line);
+          return step ? { chainId: entry.chainId, step: step.step, covers: entry.steps.map((s) => s.label) } : undefined;
         },
       },
       { bus: this.bus, store: this.store },
@@ -773,6 +809,32 @@ export class TaskRunner {
     const selection = this.#providerSelection(effectiveOptions);
     const tiers = this.#tiersFor(effectiveOptions);
     const qualityEscalation = this.#options.qualityEscalation ?? (this.#settings.tailor?.qualityEscalation !== false);
+    const earlyEscalation = this.#options.earlyEscalation ?? (this.#settings.tailor?.earlyEscalation !== false);
+    const inputTokenBudget = this.#options.inputTokenBudget ?? this.#settings.context?.inputTokenBudget ?? 100_000;
+    // Loop-breaker hard pause: ask the user (question card) whether the
+    // stuck task should continue differently or stop. Any non-answer
+    // (timeout, cancel, other option) means stop — a stuck task that
+    // nobody is watching should end as partial, not burn more turns.
+    const onLoopHardPause = this.#options.onLoopHardPause ?? (async (info: { taskId: string; tool: string; repeats: number }): Promise<'continue' | 'stop'> => {
+      const question: UserQuestionInfo = {
+        id: `loop-pause-${info.taskId}-${Date.now()}`,
+        taskId: info.taskId,
+        question: `The agent looks stuck: ${info.tool} was repeated ${info.repeats} times without progress. Continue with a different approach, or stop the task?`,
+        options: [
+          { label: 'Continue a different way', description: 'The repeated call is re-armed; the agent must change approach.' },
+          { label: 'Stop the task' },
+        ],
+        allowFreeText: false,
+        createdAt: new Date().toISOString(),
+      };
+      try {
+        emitEvent({ bus: this.bus, store: this.store }, info.taskId, undefined, 'QUESTION_REQUESTED', { question });
+        const answer = await this.questions.ask(question);
+        return answer.outcome === 'answered' && /continue/i.test(answer.answer ?? '') ? 'continue' : 'stop';
+      } catch {
+        return 'stop';
+      }
+    });
     const editFormat: EditFormat = this.#options.editFormat ?? selection?.config.editFormat ?? this.#settings.llm.editFormat ?? 'native';
     const promptFamily: PromptFamily = resolvePromptFamily(
       this.#options.promptFamily ?? selection?.config.promptFamily ?? this.#settings.llm.promptFamily,
@@ -831,8 +893,12 @@ export class TaskRunner {
       contextLimitTokens: this.#options.contextLimitTokens ?? this.#settings.context?.limitTokens,
       condense: this.#options.condense ?? (this.#settings.context?.condense !== false),
       toolOutput: this.#options.toolOutput ?? this.#settings.toolOutput,
+      outputCompression: this.#options.outputCompression ?? this.#settings.outputCompression,
       modelTiers: tiers,
       qualityEscalation,
+      earlyEscalation,
+      inputTokenBudget,
+      onLoopHardPause,
       ...(subagentTooling
         ? { noticesFor: (taskId: string) => (taskId === spec.id ? subagentTooling.drainNotices() : []) }
         : {}),
@@ -887,12 +953,23 @@ export class TaskRunner {
     });
     this.#jobManagers.set(spec.id, jobManager);
 
+    // The task owns a scaffold playbook: register its declared command
+    // chain so one approval covers generator → install → build for this
+    // task (see ExecutionHarness). Removed when the run ends, below.
+    if (scaffoldMatch) {
+      this.#scaffoldChains.set(spec.id, {
+        chainId: scaffoldMatch.recipe.id,
+        steps: scaffoldApprovalChain(scaffoldMatch, { workspaceRoot: this.#workspaceRoot, uidGid: this.#hostUidGid() }),
+      });
+    }
+
     let state: TaskState;
     this.#activeLoops.set(spec.id, loop);
     try {
       state = await loop.run(spec);
     } finally {
       this.#activeLoops.delete(spec.id);
+      this.#scaffoldChains.delete(spec.id);
       // The task is over: its background jobs die with it.
       jobManager.killAll(spec.id);
       this.#jobManagers.delete(spec.id);
@@ -1018,6 +1095,17 @@ export class TaskRunner {
     // (own turns + spawned children). Token fields appear only when at
     // least one request actually reported usage — never fabricated.
     const usageTotals = accumulateUsage(collected);
+    // Output-compression accounting: TOOL_CALL_FINISHED events carry the
+    // additive compression flags (raw → compressed chars), so the final
+    // report can state exactly what the filters saved this run.
+    const compressedOutputs = collected.filter(
+      (e) => e.type === 'TOOL_CALL_FINISHED' && (e.payload as { output_compressed?: unknown }).output_compressed === true,
+    );
+    const sumEventChars = (key: 'output_raw_chars' | 'output_compressed_chars'): number =>
+      compressedOutputs.reduce((sum, e) => {
+        const value = (e.payload as Record<string, unknown>)[key];
+        return sum + (typeof value === 'number' && Number.isFinite(value) ? value : 0);
+      }, 0);
     const report: FinalReport = {
       task_id: spec.id,
       outcome: outcome === 'success' ? 'success' : outcome === 'partial' ? 'partial' : 'failed',
@@ -1025,6 +1113,15 @@ export class TaskRunner {
       evidence: [
         ...(modelFailureEvidence ? [`model failure: ${modelFailureEvidence}`] : []),
         ...creationGateEvidence,
+        ...collected
+          .filter((e) => e.type === 'TAILOR_ESCALATED' && e.task_id === spec.id)
+          .map((e) => {
+            const payload = e.payload as { reason?: string; from_model?: string; to_model?: string };
+            return `tailor early escalation: ${payload.reason ?? 'loop'} — pinned to strong model ${payload.to_model ?? 'unknown'} for the rest of the task${payload.from_model ? ` (from ${payload.from_model})` : ''}`;
+          }),
+        ...(outcome === 'partial' && ['no_progress', 'loop_hard_pause', 'input_token_budget'].includes(state.last_error ?? '') && state.last_observation
+          ? [state.last_observation]
+          : []),
         ...this.#validationEvidence(validation),
         ...(assembledPlanDocument
           ? [`plan document assembled by the harness (${assembledPlanDocument}): the model finished plan mode without writing a plan file, so the harness wrote it from the plan steps and the recorded Q&A decisions — review it before executing`]
@@ -1067,6 +1164,13 @@ export class TaskRunner {
           : {}),
         review_findings: review?.findings.length ?? 0,
         review_blocking: review?.blocking ? 1 : 0,
+        ...(compressedOutputs.length > 0
+          ? {
+              compressed_outputs: compressedOutputs.length,
+              output_chars_before_compression: sumEventChars('output_raw_chars'),
+              output_chars_after_compression: sumEventChars('output_compressed_chars'),
+            }
+          : {}),
         duration_ms: Date.now() - startedAt,
       },
     };
@@ -1195,9 +1299,13 @@ export class TaskRunner {
       contextLimitTokens: this.#options.contextLimitTokens,
       condense: this.#options.condense,
       toolOutput: this.#options.toolOutput,
+      outputCompression: this.#options.outputCompression,
       modelTiers: this.#options.modelTiers,
       modelRouting: this.#options.modelRouting,
       qualityEscalation: this.#options.qualityEscalation,
+      earlyEscalation: this.#options.earlyEscalation,
+      inputTokenBudget: this.#options.inputTokenBudget,
+      onLoopHardPause: this.#options.onLoopHardPause,
       reviewGate: this.#options.reviewGate,
       reviewProviderFor: this.#options.reviewProviderFor,
       editFormat: this.#options.editFormat,
@@ -1730,6 +1838,10 @@ export class TaskRunner {
   #outcome(state: TaskState, validation: ValidationResult | undefined): RunOutcome {
     if (state.status === 'done') return 'success';
     if (state.status === 'failed') {
+      // Harness hard stops (stall backstop, hard-pause stop, input-token
+      // budget): the task stopped before burning more turns — partial
+      // with the stop detail as evidence, never a plain failure.
+      if (['no_progress', 'loop_hard_pause', 'input_token_budget'].includes(state.last_error ?? '')) return 'partial';
       return state.last_error !== undefined && STOP_REASONS.has(state.last_error) ? 'stopped' : 'failed';
     }
     return validation !== undefined ? 'partial' : 'stopped';

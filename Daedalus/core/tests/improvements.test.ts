@@ -160,7 +160,10 @@ describe('feature 1: anti-loop guard', () => {
     expect(suppressedResult).toBeDefined();
   });
 
-  test('an unreformable looper still dies on the no_progress backstop', async () => {
+  // Retitled: identical repeats now end via the loop breaker's hard
+  // pause (5th identical call, default stop) before the 6-identical-
+  // observation backstop; 'no_progress' covers alternating stalls.
+  test('an unreformable looper dies on the breaker hard pause', async () => {
     const home = tempDir('daedalus-loop2-home-');
     const workspace = tempDir('daedalus-loop2-ws-');
     const store = new TaskStore(home);
@@ -195,7 +198,7 @@ describe('feature 1: anti-loop guard', () => {
       status: 'draft',
     });
     expect(state.status).toBe('failed');
-    expect(state.last_error).toBe('no_progress');
+    expect(state.last_error).toBe('loop_hard_pause');
   });
 
   test('LoopGuard counts same-path list_dir with different depth as repeats and suppresses with a mutation nudge', () => {

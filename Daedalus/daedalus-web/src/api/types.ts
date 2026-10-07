@@ -9,6 +9,7 @@ import type {
   Plan,
   ProviderConfigPublic,
   SkillLoadedPayload,
+  TailorEscalatedPayload,
   ToolCall,
   ToolResult,
   UserQuestionInfo,
@@ -282,6 +283,7 @@ export type EventPayloads = {
   TOOL_CALL_STARTED: { call: ToolCall }
   TOOL_CALL_FINISHED: { call: ToolCall; result: ToolResult; output_truncated?: boolean; spill_path?: string }
   SKILL_LOADED: SkillLoadedPayload
+  TAILOR_ESCALATED: TailorEscalatedPayload
   COMMAND_STARTED: CommandStarted
   COMMAND_OUTPUT: CommandOutput
   COMMAND_FINISHED: CommandFinished

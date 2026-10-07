@@ -733,6 +733,17 @@ export type ChatEntry = {
  */
 export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
   const views = new Map(toolCalls(events).map((view) => [view.call.id, view]))
+  // The loop emits a turn's prose twice by design: once as a THOUGHT
+  // (source assistant_tool_call_content, when the turn also calls tools)
+  // and once in MODEL_REQUEST_FINISHED's message.content. Rendering
+  // both doubles every <plan>/<notes> block in the transcript — the
+  // chat shows the thought entry and skips the duplicate reply entry.
+  const thoughtByTurn = new Map<string, { text: string; source?: string }>()
+  for (const event of events) {
+    if (event.type !== 'THOUGHT' || !event.turn_id) continue
+    const thought = payloadOf(event, 'THOUGHT')
+    if (thought?.text) thoughtByTurn.set(event.turn_id, { text: thought.text.trim(), source: thought.source })
+  }
   const entries: ChatEntry[] = []
   for (const event of events) {
     const base = { seq: event.seq, ts: event.ts }
@@ -757,7 +768,12 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
       }
       case 'MODEL_REQUEST_FINISHED': {
         const content = payloadOf(event, 'MODEL_REQUEST_FINISHED')?.message?.content?.trim()
-        if (content) entries.push({ ...base, role: 'assistant', text: truncateChat(content, 8000) })
+        if (!content) break
+        // Duplicate of the same-turn tool-call thought (see the
+        // pre-scan above): the thought entry already carries this prose.
+        const thought = thinking && event.turn_id ? thoughtByTurn.get(event.turn_id) : undefined
+        if (thought?.source === 'assistant_tool_call_content' && (thought.text === content || content.startsWith(thought.text))) break
+        entries.push({ ...base, role: 'assistant', text: truncateChat(content, 8000) })
         break
       }
       case 'TOOL_CALL_STARTED': {

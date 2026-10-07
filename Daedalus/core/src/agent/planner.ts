@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Plan, PlanStep, TaskSpec } from '../contracts.ts';
+import { detectCreationGoal, scaffoldApprovalChain, type ScaffoldMatch } from './scaffold.ts';
 import type { Observation } from './types.ts';
 
 /** The canned sequential pipeline used when a goal carries no done-criteria. */
@@ -10,6 +11,34 @@ export const DEFAULT_PLAN_STEPS = [
 ];
 
 const DEFAULT_STEPS = DEFAULT_PLAN_STEPS;
+
+/**
+ * Plan steps for a scaffold goal, derived from the recipe's declared
+ * chain so the narration matches the actual next step. The canned
+ * pipeline announced "Run the project validation checks" right after a
+ * generator finished — while the install had not even run (Farid's live
+ * run) — because three generic phases know nothing of the recipe's
+ * generate → install → write → build sequence. One loop runs these
+ * phases too; only the labels change.
+ */
+export function scaffoldPlanSteps(match: ScaffoldMatch): string[] {
+  const { recipe, targetDir } = match;
+  if (recipe.category === 'database') {
+    return [
+      `Write the ${recipe.framework} Compose stack into ${targetDir}/`,
+      'Start the stack (docker compose up -d)',
+      'Verify the stack is running (docker compose ps)',
+    ];
+  }
+  const chain = scaffoldApprovalChain(match);
+  const steps = [`Run the official ${recipe.framework} generator into ${targetDir}/`];
+  const install = chain.find((step) => step.step === 'install');
+  if (install) steps.push(`Install dependencies (${install.display} in ${targetDir}/)`);
+  steps.push('Write the requested content into the generated project');
+  const build = chain.find((step) => step.step === 'build');
+  if (build) steps.push(`Build to verify (${build.display} in ${targetDir}/)`);
+  return steps;
+}
 
 /**
  * True when every step intent comes from the canned default pipeline. Such a
@@ -24,9 +53,15 @@ export function isDefaultPipeline(intents: string[]): boolean {
 
 /** Planner: TaskSpec -> ordered, amendable checklist (PLAN.md §3.1). */
 export async function createPlan(spec: TaskSpec): Promise<Plan> {
+  // A scaffold goal with no explicit criteria narrates the recipe's own
+  // sequence (generate → install → write → build) instead of the canned
+  // pipeline — see scaffoldPlanSteps. Explicit done-criteria always win.
+  const scaffold = spec.done_criteria.length === 0 ? detectCreationGoal(spec.goal, spec.done_criteria).scaffold : undefined;
   const intents = spec.done_criteria.length > 0
     ? spec.done_criteria.map((c) => `Satisfy: ${c}`)
-    : DEFAULT_STEPS;
+    : scaffold
+      ? scaffoldPlanSteps(scaffold)
+      : DEFAULT_STEPS;
   const steps: PlanStep[] = intents.map((intent, index) => ({
     id: `${spec.id}-step-${index + 1}`,
     intent,

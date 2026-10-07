@@ -238,7 +238,8 @@ describe('feature 1: pool tier routing', () => {
     expect(settings.llm.modelTiers).toEqual({ a: 'strong', b: 'fast' });
     expect(settings.llm.promptFamily).toBe('qwen');
     expect(settings.llm.editFormat).toBe('search_replace');
-    expect(settings.tailor).toEqual({ modelRouting: false, qualityEscalation: false, reviewGate: true });
+    // earlyEscalation joined the tailor shape (DAEDALUS_TAILOR_EARLY_ESCALATION, default on).
+    expect(settings.tailor).toEqual({ modelRouting: false, qualityEscalation: false, reviewGate: true, earlyEscalation: true });
     expect(() => loadSettings({ LLM_MODEL_TIERS: 'a:huge' })).toThrow(/LLM_MODEL_TIERS/);
     expect(() => loadSettings({ LLM_EDIT_FORMAT: 'weird' })).toThrow(/LLM_EDIT_FORMAT/);
     expect(() => loadSettings({ LLM_PROMPT_FAMILY: 'weird' })).toThrow(/LLM_PROMPT_FAMILY/);

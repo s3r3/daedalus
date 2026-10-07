@@ -220,6 +220,13 @@ export function ApprovalCard() {
         </p>
       ) : null}
 
+      {approval?.chain ? (
+        <p className="mt-1 text-[10px] text-muted" data-testid="approval-chain-note">
+          scaffold chain ({approval.chain.id}): approving this covers the rest of the recipe chain for this task (
+          {approval.chain.covers.join(' → ')}). Declining still declines only this call.
+        </p>
+      ) : null}
+
       {failure ? <p className="mt-1 text-[10px] text-error">{failure}</p> : null}
     </section>
   )

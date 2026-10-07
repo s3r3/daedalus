@@ -29,6 +29,24 @@ into Daedalus code. Farid cites them as design references in the thesis.
 | OpenHands (MIT) | Event-sourced agent state where every meaningful step lands in one ordered log that UIs replay | Daedalus already had this via its append-only event log; the new `LOOP_WARNING` event type and the context-meter fields on `MODEL_REQUEST_*` events follow the same pattern |
 | DeepSeek Harness (MIT) | Workspace/session-centred local harness with durable per-task state on disk | Task checkpoints live beside the existing task store under `<daedalusHome>/tasks/<taskId>/backups/`, keeping the CLI, chat `/rewind`, and future Web rewinds on one source of truth |
 
+## Token-efficiency features (2026-10-07)
+
+Two features were inspired by community token-saving tools. Both are
+Daedalus's own TypeScript/prose; neither copies source code, and no
+external binary is bundled or required.
+
+| Source | Licence | Concept studied | Daedalus's own implementation |
+|---|---|---|---|
+| rtk-ai/rtk ("Rust Token Killer") | Apache-2.0 | A CLI proxy that filters/compresses command output (git, test runners, builds, installs) before an AI agent reads it, claiming large token savings on noisy commands | `core/src/agent/output-compression.ts`: original per-family filters (git/test/build/install/listing/generic) applied to `run_command` results in the agent loop, in front of the existing caps+spill layer. Failure lines + exit code stay verbatim, raw text is spilled to the task store, savings land on the final report (`compressed_outputs`, `output_chars_before/after_compression`). Default on; `DAEDALUS_OUTPUT_COMPRESSION=off` or the Web Settings toggle disables it. No Rust binary is shipped or invoked. |
+| DietrichGebert/ponytail | MIT | A "lazy senior dev" skill: a decision ladder (need exists? already in codebase? stdlib? native feature? installed dependency? one-liner? minimum code) that biases the agent against over-building | `skills/ponytail/SKILL.md`: the ladder and its "lazy about the solution, never about reading" guard, rewritten in Daedalus's own words, shipped as a bundled starter skill. It is **not** installed or loaded by default — users install it with `daedalus skills install ponytail` and enable it per workspace like any other skill. |
+
+Prose-compression skills in the caveman family were deliberately **not**
+bundled: Daedalus's observed token problem is on the input side (tool
+output flooding the context), not in the agent's reply length, and terse
+fragment styles degrade the chat reports users rely on. Nothing stops a
+user from dropping any such `SKILL.md` into a skills directory — see
+`docs/skills.md`.
+
 ## Rules applied
 
 - Reference clones remain the pinned origins listed in `PLAN.md` §2.0.

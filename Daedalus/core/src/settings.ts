@@ -16,13 +16,13 @@ export type Settings = {
    * above their weight. Routing/escalation default on (they are no-ops
    * without a tiered multi-model pool); the review gate defaults off.
    */
-  tailor: { modelRouting: boolean; qualityEscalation: boolean; reviewGate: boolean };
+  tailor: { modelRouting: boolean; qualityEscalation: boolean; reviewGate: boolean; earlyEscalation: boolean };
   /** Run the post-edit syntax/LSP guard on files the agent writes (DAEDALUS_EDIT_GUARD). */
   editGuard: boolean;
   /** Run project hooks from .daedalus/hooks.json around tool calls (DAEDALUS_HOOKS). */
   hooks?: boolean;
   /** Context-window budgeting: token limit estimate + automatic condensing (DAEDALUS_CONTEXT_LIMIT / DAEDALUS_CONDENSE). */
-  context: { limitTokens: number; condense: boolean };
+  context: { limitTokens: number; condense: boolean; inputTokenBudget: number };
   /**
    * Hard tool-output caps + spill files: over-cap results enter the model
    * context head+tail with the full text saved under the task store
@@ -30,6 +30,15 @@ export type Settings = {
    * DAEDALUS_TOOL_SPILL=off disables the spill file; caps still apply).
    */
   toolOutput: ToolOutputLimits;
+  /**
+   * RTK-style semantic compression of `run_command` output before it
+   * enters the model context (agent/output-compression.ts): per-family
+   * filters keep failures + the exit signal verbatim and summarize the
+   * rest, raw text spilled to the task store. Default on;
+   * DAEDALUS_OUTPUT_COMPRESSION=off disables (the hard caps + spill in
+   * `toolOutput` still apply either way).
+   */
+  outputCompression: boolean;
   daedalusHome: string;
 };
 
@@ -64,6 +73,7 @@ export function loadSettings(env: Env = process.env): Settings {
       modelRouting: parseBoolean(env.DAEDALUS_MODEL_ROUTING, true, "DAEDALUS_MODEL_ROUTING"),
       qualityEscalation: parseBoolean(env.DAEDALUS_QUALITY_ESCALATION, true, "DAEDALUS_QUALITY_ESCALATION"),
       reviewGate: parseBoolean(env.DAEDALUS_REVIEW_GATE, false, "DAEDALUS_REVIEW_GATE"),
+      earlyEscalation: parseBoolean(env.DAEDALUS_TAILOR_EARLY_ESCALATION, true, "DAEDALUS_TAILOR_EARLY_ESCALATION"),
     },
     server: {
       host: env.DAEDALUS_HOST ?? "127.0.0.1",
@@ -77,12 +87,14 @@ export function loadSettings(env: Env = process.env): Settings {
     context: {
       limitTokens: positiveTokenLimit(env.DAEDALUS_CONTEXT_LIMIT),
       condense: parseBoolean(env.DAEDALUS_CONDENSE, true, "DAEDALUS_CONDENSE"),
+      inputTokenBudget: positiveIntOrDefault(env.DAEDALUS_INPUT_TOKEN_BUDGET, 100_000, "DAEDALUS_INPUT_TOKEN_BUDGET"),
     },
     toolOutput: {
       maxChars: positiveIntOrDefault(env.DAEDALUS_TOOL_OUTPUT_MAX_CHARS, TOOL_OUTPUT_MAX_CHARS, "DAEDALUS_TOOL_OUTPUT_MAX_CHARS"),
       maxLines: positiveIntOrDefault(env.DAEDALUS_TOOL_OUTPUT_MAX_LINES, TOOL_OUTPUT_MAX_LINES, "DAEDALUS_TOOL_OUTPUT_MAX_LINES"),
       spill: parseBoolean(env.DAEDALUS_TOOL_SPILL, true, "DAEDALUS_TOOL_SPILL"),
     },
+    outputCompression: parseBoolean(env.DAEDALUS_OUTPUT_COMPRESSION, true, "DAEDALUS_OUTPUT_COMPRESSION"),
     daedalusHome: env.DAEDALUS_HOME ?? ".daedalus",
   };
 }

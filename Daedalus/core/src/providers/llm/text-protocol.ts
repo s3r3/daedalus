@@ -386,7 +386,122 @@ export function parseTextToolCalls(text: string, tools: ToolDefinition[]): TextP
   }
 
   if (firstOpen >= 0) textBefore = text.slice(0, firstOpen).trim();
+  if (calls.length > 0) return { textBefore, calls, malformed: null };
+
+  // No canonical <tool_call> block. Two repairable dialect shapes remain:
+  // the Anthropic-style <invoke> block some models emit from training,
+  // and dangling fragments of either dialect (an orphan </invoke> leaked
+  // into a live transcript exactly this way). Silence here is what breeds
+  // retries — the loop treated the fragment as a plain-text answer and
+  // the model, told nothing, sent it again. Both shapes become a typed
+  // malformed result so the repair instruction can teach the format.
+  const invoke = parseInvokeDialect(text, byName, tools);
+  if (invoke) return invoke;
+  const fragment = toolCallFragment(text);
+  if (fragment) {
+    return {
+      textBefore: text.trim(),
+      calls: [],
+      malformed: {
+        reason: `found a tool-call fragment (${fragment}) without a complete opening block — emit the whole call as one <tool_call name="...">...</tool_call> block`,
+        snippet: snippet(text),
+      },
+    };
+  }
   return { textBefore: calls.length ? textBefore : text, calls, malformed: null };
+}
+
+const INVOKE_OPEN_TAG = /<invoke\b[^>]*>/gi;
+const INVOKE_CLOSE_TAG = /<\/invoke\s*>/i;
+const PARAMETER_OPEN_TAG = /<parameter\b[^>]*>/gi;
+
+/**
+ * The Anthropic invoke dialect: <invoke name="tool"><parameter
+ * name="k">v</parameter>…</invoke>. Accepted only when a block is
+ * complete (open with a name, every parameter closed, closing tag
+ * present) — a half-parsed call is never executed; it becomes a typed
+ * malformed result instead, like every other parse failure here.
+ */
+function parseInvokeDialect(
+  text: string,
+  byName: Map<string, ToolDefinition>,
+  tools: ToolDefinition[],
+): TextParseResult | undefined {
+  const opens = [...text.matchAll(INVOKE_OPEN_TAG)];
+  if (opens.length === 0) return undefined;
+  const calls: ParsedTextCall[] = [];
+  let firstOpen = -1;
+  for (const match of opens) {
+    const openIndex = match.index ?? 0;
+    if (firstOpen < 0) firstOpen = openIndex;
+    const openTag = match[0];
+    const rest = text.slice(openIndex + openTag.length);
+    const closeMatch = INVOKE_CLOSE_TAG.exec(rest);
+    if (!closeMatch) {
+      return { textBefore: text.slice(0, firstOpen).trim(), calls: [], malformed: { reason: "unterminated <invoke> block (missing </invoke>)", snippet: snippet(text.slice(openIndex)) } };
+    }
+    const body = rest.slice(0, closeMatch.index);
+    const nameMatch = /\bname\s*=\s*(?:"([^"]+)"|'([^']+)')/i.exec(openTag);
+    const name = (nameMatch?.[1] ?? nameMatch?.[2] ?? "").trim();
+    if (!name) {
+      return { textBefore: text.slice(0, firstOpen).trim(), calls: [], malformed: { reason: "<invoke> without a name attribute", snippet: snippet(openTag + body) } };
+    }
+    const tool = byName.get(name.toLowerCase());
+    if (!tool) {
+      return {
+        textBefore: text.slice(0, firstOpen).trim(),
+        calls: [],
+        malformed: { reason: `unknown tool "${name}" (valid tools: ${tools.map((t) => t.function.name).join(", ")})`, snippet: snippet(openTag + body) },
+      };
+    }
+    const properties = schemaProperties(tool);
+    const args: Record<string, unknown> = {};
+    let malformed: string | undefined;
+    for (const paramMatch of body.matchAll(PARAMETER_OPEN_TAG)) {
+      const paramTag = paramMatch[0];
+      const paramNameMatch = /\bname\s*=\s*(?:"([^"]+)"|'([^']+)')/i.exec(paramTag);
+      const paramName = (paramNameMatch?.[1] ?? paramNameMatch?.[2] ?? "").trim();
+      if (!paramName) {
+        malformed = `<parameter> without a name attribute in the <invoke name="${name}"> block`;
+        break;
+      }
+      const valueStart = (paramMatch.index ?? 0) + paramTag.length;
+      const after = body.slice(valueStart);
+      const cdata = /^(\s*)<!\[CDATA\[([\s\S]*?)\]\]>/.exec(after);
+      let raw: string;
+      if (cdata) {
+        raw = cdata[2]!;
+      } else {
+        const paramClose = /<\/parameter\s*>/i.exec(after);
+        if (!paramClose) {
+          malformed = `unterminated <parameter name="${paramName}"> in the <invoke name="${name}"> block`;
+          break;
+        }
+        raw = after.slice(0, paramClose.index);
+      }
+      const schemaName = Object.keys(properties).find((key) => key.toLowerCase() === paramName.toLowerCase()) ?? paramName;
+      const coerced = coerceValue(raw, properties[schemaName], schemaName, tool.function.name);
+      if (coerced.malformed) {
+        malformed = coerced.malformed;
+        break;
+      }
+      args[schemaName] = coerced.value;
+    }
+    if (malformed) {
+      return { textBefore: text.slice(0, firstOpen).trim(), calls: [], malformed: { reason: malformed, snippet: snippet(body) } };
+    }
+    calls.push({ name: tool.function.name, args });
+  }
+  return { textBefore: text.slice(0, firstOpen).trim(), calls, malformed: null };
+}
+
+/** Dangling dialect fragments that betray an attempted (broken) call. */
+function toolCallFragment(text: string): string | undefined {
+  const fragments = ['</invoke>', '</tool_call>', '<invoke', '<parameter'];
+  for (const fragment of fragments) {
+    if (text.toLowerCase().includes(fragment)) return fragment;
+  }
+  return undefined;
 }
 
 function parseParams(body: string, tool: ToolDefinition): { args: Record<string, unknown>; malformed?: string } {
