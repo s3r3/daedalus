@@ -230,8 +230,11 @@ export function App() {
             error={workspace.error}
             size={workspace.size}
             root={workspace.root}
+            kind={workspace.kind}
+            imageSrc={workspace.imageSrc}
+            mediaType={workspace.mediaType}
             onSaved={(path, content) => {
-              setWorkspace({ path, content, size: new TextEncoder().encode(content).length, loading: false, error: null })
+              setWorkspace({ path, content, size: new TextEncoder().encode(content).length, loading: false, error: null, kind: 'text', imageSrc: null, mediaType: null })
               bumpWorkspaceRevision()
             }}
           />

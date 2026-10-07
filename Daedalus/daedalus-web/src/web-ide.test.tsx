@@ -94,7 +94,7 @@ describe('Web IDE editing', () => {
       type: 'FILE_CHANGED',
       payload: { path: 'src/main.ts', operation: 'modified', added: 2, removed: 1 },
     } as Event
-    useDaedalusStore.setState({ taskId: 'task-1', events: [event], workspace: { root: '/workspace', path: '', content: '', loading: false, error: null, size: 0 } })
+    useDaedalusStore.setState({ taskId: 'task-1', events: [event], workspace: { root: '/workspace', path: '', content: '', loading: false, error: null, size: 0, kind: 'text', imageSrc: null, mediaType: null } })
     render(<FilesChangedPanel />)
     await userEvent.click(screen.getByRole('button', { name: 'open changed file src/main.ts' }))
     expect(file).toHaveBeenCalledWith('/workspace', 'src/main.ts')

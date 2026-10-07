@@ -87,7 +87,15 @@ export type TerminalSession = {
 }
 export type WorkspaceEntry = { name: string; path: string; isDirectory: boolean; size?: number }
 export type WorkspaceTreeNode = WorkspaceEntry & { children?: WorkspaceTreeNode[] }
-export type WorkspaceFile = { path: string; content: string; size: number }
+export type WorkspaceFile = {
+  path: string
+  content?: string
+  size: number
+  /** 'image' responses carry no text content; they carry a data-URL `src` instead. */
+  kind?: 'text' | 'image'
+  mediaType?: string
+  src?: string
+}
 
 export type SessionState = {
   mode: AgentMode

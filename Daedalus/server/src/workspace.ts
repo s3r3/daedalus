@@ -24,6 +24,21 @@ export const IGNORED_DIRECTORIES = new Set([
 
 export const MAX_FILE_BYTES = 512 * 1024;
 
+/** Images the Web file viewer previews as pictures (extension → media type). */
+export const IMAGE_MEDIA_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".avif": "image/avif",
+  ".ico": "image/x-icon",
+};
+
+/** Images read larger than text files: a preview is display-only, never editor text. */
+export const MAX_IMAGE_FILE_BYTES = 10 * 1024 * 1024;
+
 export type WorkspaceEntry = {
   name: string;
   path: string;

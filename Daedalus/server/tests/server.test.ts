@@ -148,6 +148,31 @@ describe('server', () => {
     expect(body.content).toContain('export const a = 1')
   })
 
+  test('GET /workspace/file serves image files as a base64 data URL, not decoded text', async () => {
+    const { base } = await listen()
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8x8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64')
+    writeFileSync(join(workspace as string, 'src', 'pixel.png'), png)
+    const res = await fetch(new URL('/workspace/file?root=' + encodeURIComponent(workspace as string) + '&path=src/pixel.png', base))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { kind?: string; mediaType?: string; src?: string; size?: number; content?: string }
+    expect(body.kind).toBe('image')
+    expect(body.mediaType).toBe('image/png')
+    expect(body.content).toBeUndefined()
+    expect(body.size).toBe(png.length)
+    expect(body.src?.startsWith('data:image/png;base64,')).toBe(true)
+    expect(Buffer.from((body.src as string).split(',')[1] as string, 'base64').equals(png)).toBe(true)
+  })
+
+  test('GET /workspace/file stays 200 on text paths holding non-UTF8 bytes', async () => {
+    const { base } = await listen()
+    writeFileSync(join(workspace as string, 'bin.txt'), Buffer.from([0xff, 0xfe, 0x00, 0x61]))
+    const res = await fetch(new URL('/workspace/file?root=' + encodeURIComponent(workspace as string) + '&path=bin.txt', base))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { kind?: string; content?: unknown }
+    expect(body.kind).toBe('text')
+    expect(typeof body.content).toBe('string')
+  })
+
   test('GET /tasks/{id}/changes lists FILE_CHANGED payloads', async () => {
     const { base, ctx } = await listen()
     ctx.store.saveState('t2', { status: 'active' })

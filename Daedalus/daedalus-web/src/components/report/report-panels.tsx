@@ -132,7 +132,7 @@ export function FilesChangedPanel() {
     setOpenFile(path)
     try {
       const file = await api.file(root, path)
-      setWorkspace({ content: file.content, size: file.size, loading: false })
+      setWorkspace({ content: file.content ?? '', size: file.size, loading: false, kind: file.kind ?? 'text', imageSrc: file.src ?? null, mediaType: file.mediaType ?? null })
     } catch (error) {
       setWorkspace({ loading: false, error: error instanceof Error ? error.message : String(error) })
     }

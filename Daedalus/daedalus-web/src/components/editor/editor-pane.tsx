@@ -6,6 +6,7 @@ import { EmptyState, ErrorState, LoadingState } from '../common/panel'
 import { PanelErrorBoundary } from '../common/error-boundary'
 import { api } from '../../api/client'
 import { languageForPath } from './language'
+import { ImagePreview } from './image-preview'
 
 /** Monaco is lazy-loaded: the editor chunk is fetched only when a file opens. */
 const MonacoEditor = lazy(async () => import('./monaco-editor'))
@@ -22,6 +23,9 @@ export function EditorPane({
   error,
   size,
   root,
+  kind = 'text',
+  imageSrc = null,
+  mediaType = null,
   onRetry,
   onSaved,
 }: {
@@ -31,6 +35,9 @@ export function EditorPane({
   error: string | null
   size: number
   root?: string
+  kind?: 'text' | 'image'
+  imageSrc?: string | null
+  mediaType?: string | null
   onRetry?: () => void
   onSaved?: (path: string, content: string) => void
 }) {
@@ -77,6 +84,12 @@ export function EditorPane({
     )
   }
   if (loading) return <LoadingState label={`opening ${path}`} />
+  // Images render as pictures: never through Monaco/textarea (binary would
+  // show as gibberish, and Save would happily corrupt it back to disk).
+  if (kind === 'image') {
+    if (!imageSrc) return <ErrorState title="cannot open image" message="The server returned no image data for this file." onRetry={onRetry} />
+    return <ImagePreview path={path} src={imageSrc} size={size} mediaType={mediaType} />
+  }
 
   const dirty = draft !== savedContent
   const language = languageForPath(path)
