@@ -207,3 +207,35 @@ export function saveColumnWidths(widths: ColumnWidths, storage: Storage | undefi
     /* unavailable storage just keeps the widths session-local */
   }
 }
+
+/**
+ * Plan chips above the composer: the plans a workspace's Plan mode has
+ * already written (.daedalus/plans/<slug>/) stay visible across tasks and
+ * reloads via the server listing; only the dismissals are remembered here,
+ * per workspace root. Dismissing is a VIEW choice — the files on disk are
+ * never touched, so clearing this key (or a fresh browser) shows them all.
+ */
+export const PLAN_DISMISSED_KEY_PREFIX = 'daedalus.web.plan-dismissed.'
+
+export function loadDismissedPlans(root: string, storage: Storage | undefined = defaultStorage()): string[] {
+  if (!storage || !root) return []
+  try {
+    const raw = storage.getItem(PLAN_DISMISSED_KEY_PREFIX + root)
+    if (!raw) return []
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    return [...new Set(parsed.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0))]
+  } catch {
+    return []
+  }
+}
+
+export function saveDismissedPlans(root: string, slugs: string[], storage: Storage | undefined = defaultStorage()): void {
+  if (!storage || !root) return
+  try {
+    if (slugs.length > 0) storage.setItem(PLAN_DISMISSED_KEY_PREFIX + root, JSON.stringify([...new Set(slugs)]))
+    else storage.removeItem(PLAN_DISMISSED_KEY_PREFIX + root)
+  } catch {
+    /* dismissed plans simply stay visible again on the next visit */
+  }
+}

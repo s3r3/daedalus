@@ -9,6 +9,7 @@ import { DiffViewer } from './components/editor/diff-viewer'
 import { PlanPanel } from './components/agent/plan-panel'
 import { ActivityTimeline } from './components/agent/activity-timeline'
 import { ChatPanel } from './components/agent/chat-panel'
+import { PlanChipsBar } from './components/agent/plan-chips-bar'
 import { TerminalPane } from './components/terminal/terminal-pane'
 import { ValidationPanel } from './components/validation/validation-panel'
 import { ErrorPanel, RecoveryPanel } from './components/recovery/recovery-panel'
@@ -167,6 +168,7 @@ export function App() {
     <div className="flex h-full flex-col bg-surface-base text-foreground" data-testid="app-shell" data-theme={theme}>
       <TopBar />
       <Composer />
+      <PlanChipsBar />
 
       <main
         className="relative grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-auto p-2 lg:grid-cols-[var(--daedalus-col-left)_minmax(0,1fr)_var(--daedalus-col-right)] lg:overflow-hidden"

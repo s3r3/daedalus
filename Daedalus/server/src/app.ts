@@ -42,7 +42,7 @@ import {
   type Settings,
   type SkillOrigin,
 } from "@daedalus/core";
-import { collectRoots, listDirectory, listFilesFlat, buildTree, resolveInside, MAX_FILE_BYTES, IMAGE_MEDIA_TYPES, MAX_IMAGE_FILE_BYTES } from "./workspace.ts";
+import { collectRoots, listDirectory, listFilesFlat, listPlanDocuments, buildTree, resolveInside, MAX_FILE_BYTES, IMAGE_MEDIA_TYPES, MAX_IMAGE_FILE_BYTES } from "./workspace.ts";
 import { classifyWebIntent, executeFastPath } from "./fast-path.ts";
 import {
   ConversationStore,
@@ -1765,6 +1765,16 @@ export function createApp(ctx: AppContext) {
 
     if (method === "GET" && url.pathname === "/workspace/roots") {
       sendJson(res, 200, { roots: collectRoots(ctx.cwd, [...recordedRoots(ctx), ...ctx.workspaces]), cwd: ctx.cwd, session: publicSession(ctx) });
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/workspace/plans") {
+      try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+        sendJson(res, 200, { root, plans: listPlanDocuments(root) });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error) });
+      }
       return;
     }
 

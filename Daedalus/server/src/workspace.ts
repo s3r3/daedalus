@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 /** Directories never worth listing in the workspace explorer. */
@@ -143,6 +143,83 @@ export function listFilesFlat(root: string, maxEntries = MAX_FLAT_FILE_ENTRIES):
   walk(absoluteRoot);
   files.sort((a, b) => a.path.localeCompare(b.path));
   return { files, truncated };
+}
+
+/** One plan produced by Plan mode: a folder under `.daedalus/plans/`. */
+export type PlanDocumentGroup = {
+  slug: string;
+  /** Workspace-relative paths of the documents, plan.md first when present. */
+  documents: string[];
+  /** First markdown heading in plan.md/the first doc, when cheap to read. */
+  title: string | null;
+  /** Newest document mtime, ISO; null when unreadable. */
+  updatedAt: string | null;
+};
+
+export const MAX_PLAN_DOCUMENTS = 50;
+
+/**
+ * Plan-mode output for one workspace: every slug folder under
+ * `.daedalus/plans/`, newest first. Surfaced to the Web as persistent plan
+ * chips above the composer, since `@`-mention completion prunes `.daedalus`
+ * (hidden entries) and never sees them. A missing plans folder is a plain
+ * empty list. Nothing outside `.daedalus/plans/` is read.
+ */
+export function listPlanDocuments(root: string): PlanDocumentGroup[] {
+  const absoluteRoot = resolve(root);
+  const plansDir = join(absoluteRoot, ".daedalus", "plans");
+  let entries;
+  try {
+    entries = readdirSync(plansDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const groups: PlanDocumentGroup[] = [];
+  for (const entry of entries) {
+    if (groups.length >= MAX_PLAN_DOCUMENTS) break;
+    if (!entry.isDirectory()) continue;
+    const slug = entry.name;
+    const dir = join(plansDir, slug);
+    let files;
+    try {
+      files = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    const markdown = files.filter((file) => file.isFile() && file.name.toLowerCase().endsWith(".md"));
+    if (markdown.length === 0) continue;
+    const names = markdown.map((file) => file.name).sort((a, b) => a.localeCompare(b));
+    const ordered = [...names.filter((name) => name.toLowerCase() === "plan.md"), ...names.filter((name) => name.toLowerCase() !== "plan.md")];
+    let updatedAtMs = 0;
+    let title: string | null = null;
+    for (const name of names) {
+      try {
+        updatedAtMs = Math.max(updatedAtMs, statSync(join(dir, name)).mtimeMs);
+      } catch {
+        /* an unreadable stat degrades to no timestamp, never a failed list */
+      }
+    }
+    const titleSource = ordered[0];
+    if (titleSource) {
+      try {
+        const heading = readFileSync(join(dir, titleSource), "utf8")
+          .split(/\r?\n/)
+          .map((line) => line.trim())
+          .find((line) => line.startsWith("#"));
+        title = heading ? heading.replace(/^#+\s*/, "").trim() || null : null;
+      } catch {
+        title = null;
+      }
+    }
+    groups.push({
+      slug,
+      documents: ordered.map((name) => `.daedalus/plans/${slug}/${name}`),
+      title,
+      updatedAt: updatedAtMs > 0 ? new Date(updatedAtMs).toISOString() : null,
+    });
+  }
+  groups.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "") || a.slug.localeCompare(b.slug));
+  return groups;
 }
 
 function baseName(root: string, target?: string): string {
