@@ -11,8 +11,12 @@ import { useDaedalusStore } from '../../state/taskStore'
 /**
  * Workspace surface: pick the target repository, then browse it. Directories
  * load their children on demand so a large tree never blocks first paint.
+ *
+ * `className` lets the app shell size the panel inside the left column: the
+ * shell gives it a flexible share (App.tsx) so the panel can never grow to
+ * its full content height and starve the scroll region below it.
  */
-export function WorkspacePanel() {
+export function WorkspacePanel({ className }: { className?: string } = {}) {
   const workspace = useDaedalusStore((state) => state.workspace)
   const setWorkspace = useDaedalusStore((state) => state.setWorkspace)
   const setSession = useDaedalusStore((state) => state.setSession)
@@ -288,6 +292,7 @@ export function WorkspacePanel() {
     <Panel
       title="workspace"
       data-testid="workspace-panel"
+      className={className}
       action={
         root.length > 0 ? (
           <Badge tone="primary" className="max-w-[150px] truncate">

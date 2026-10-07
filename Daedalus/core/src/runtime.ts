@@ -30,12 +30,14 @@ import {
   detectCreationGoal,
   detectScaffoldRequest,
   detectUnsupportedFramework,
+  pathInsideTarget,
   probeToolchains,
   renderScaffoldPlaybook,
   renderUnsupportedPlaybook,
   scaffoldApprovalChain,
   scaffoldChainStepFor,
   scaffoldMarkerPresent,
+  workspaceRelativePath,
   type ScaffoldChainStep,
   type ToolchainProbe,
 } from './agent/scaffold.ts';
@@ -313,6 +315,24 @@ function accumulateUsage(events: Event[]): { requests: number; reported: number;
     }
   }
   return { requests, reported, input_tokens: input, output_tokens: output, total_tokens: total };
+}
+
+/**
+ * Split a lineage change ledger into changes inside vs outside the
+ * task's declared target directory (completion gate v2). Paths are
+ * normalized against the run's workspace root; a path that cannot be
+ * normalized (escapes the root) counts as outside.
+ */
+function splitTargetChanges(workspaceRoot: string, changedPaths: Set<string>, targetDir: string): { inside: number; outside: string[] } {
+  let inside = 0;
+  const outside: string[] = [];
+  for (const path of changedPaths) {
+    const rel = workspaceRelativePath(workspaceRoot, path);
+    if (rel === undefined) outside.push(path);
+    else if (pathInsideTarget(rel, targetDir)) inside++;
+    else outside.push(rel);
+  }
+  return { inside, outside };
 }
 
 /** Tools whose execution is a process → COMMAND_* events for the terminal surface. */
@@ -1088,6 +1108,24 @@ export class TaskRunner {
             `no files were created: ${refusal.detail}; the run ended after ${state.turns ?? 0} turn(s), ${collected.filter((event) => event.type === 'TOOL_CALL_FINISHED').length} tool call(s), ${commandsSucceeded} successful command(s) and ${changedPaths.size} file change(s) — a creation-shaped goal must produce files on disk before it can report success`,
           );
         }
+        // Completion gate v2, lineage level: an anchored creation run
+        // may not report success on outside-only changes — the incident
+        // shape, where the requested page landed in an unrelated file
+        // and validation's "outside the project's packages" skip turned
+        // it into TASK SUCCESS. The loop gates its own ledger; this is
+        // the same rule over the whole lineage (children included).
+        // When the loop already refused, this only adds the explicit
+        // evidence line. Unanchored runs keep PR #21 semantics exactly.
+        const targetDir = state.target_dir ?? creationGoal.scaffold?.targetDir;
+        if (targetDir && changedPaths.size > 0) {
+          const split = splitTargetChanges(this.#workspaceRoot, changedPaths, targetDir);
+          if (split.inside === 0) {
+            if (outcome === 'success') outcome = 'partial';
+            creationGateEvidence.push(
+              `no files were created inside the task target "${targetDir}/": every changed file (${split.outside.slice(0, 5).join(', ')}${split.outside.length > 5 ? ', …' : ''}) is outside it — a creation task anchored to ${targetDir}/ reports success only when at least one changed file is inside the target`,
+            );
+          }
+        }
       }
     }
     const modelFailureEvidence = this.#modelFailureEvidence(collected, state);
@@ -1112,6 +1150,8 @@ export class TaskRunner {
       diff: this.#aggregateDiff(collected),
       evidence: [
         ...(modelFailureEvidence ? [`model failure: ${modelFailureEvidence}`] : []),
+        ...(state.target_dir ? [`target_dir: ${state.target_dir}`] : []),
+        ...(state.target_exceptions?.length ? state.target_exceptions.map((path) => `target exception: ${path} (approved via ask_user)`) : []),
         ...creationGateEvidence,
         ...collected
           .filter((e) => e.type === 'TAILOR_ESCALATED' && e.task_id === spec.id)
@@ -1139,6 +1179,7 @@ export class TaskRunner {
       ...(spec.title ? { title: spec.title } : {}),
       ...(spec.rules_files?.length ? { rules_files: spec.rules_files } : {}),
       ...(validation?.source ? { validation_source: validation.source } : {}),
+      ...(state.target_dir ? { target_dir: state.target_dir } : {}),
       metrics: {
         turns: collected.filter((e) => e.type === 'TOOL_CALL_FINISHED').length,
         tool_calls: collected.filter((e) => e.type === 'TOOL_CALL_STARTED').length,
