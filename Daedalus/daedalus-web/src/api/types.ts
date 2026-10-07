@@ -167,6 +167,18 @@ export type ProviderInput = {
 
 export type WorkspacePins = { root: string; pins: string[] }
 
+export type WorkspacePlan = {
+  /** Folder name under `.daedalus/plans/`. */
+  slug: string
+  /** Workspace-relative document paths, plan.md first when present. */
+  documents: string[]
+  /** First markdown heading from the leading document, when readable. */
+  title: string | null
+  /** Newest document mtime (ISO), or null when unreadable. */
+  updatedAt: string | null
+}
+export type WorkspacePlans = { root: string; plans: WorkspacePlan[] }
+
 export type WorkspaceFileEntry = { path: string; type: 'file' | 'dir' }
 export type WorkspaceFiles = { root: string; files: WorkspaceFileEntry[]; truncated: boolean }
 

@@ -86,6 +86,29 @@ workspace `.daedalus` extension configuration. Events stream into the Web
 timeline for server-run tasks; the final state and report are persisted next
 to CLI tasks.
 
+## Plan chips above the composer
+
+Finished plans outlive the task that drafted them. Plan mode writes its
+documents under `.daedalus/plans/<slug>/`; the server exposes them at
+`GET /workspace/plans` (slug, documents, first-heading title, newest mtime,
+sorted newest first), and the Web renders one chip per plan in a row directly
+below the composer (visible only when the workspace has plans). Clicking a
+chip marks it ACTIVE — exactly one at a time; clicking it again releases it.
+The **Execute plan** button on the active chip launches the follow-up Auto
+task through the same launch behind Approve & Execute
+(`execute-plan.ts`/`executePlanDocument`): the goal names the document
+(`Execute the approved plan in .daedalus/plans/<slug>/plan.md`), the active
+chat conversation continues when one exists, and when the plan-producing
+task is the one on screen it also carries `plan_task_id` so core injects its
+steps. A plan drafted in an earlier session launches from its document path
+alone — no producing task is known. The trash icon dismisses a chip from
+the bar; dismissal is remembered per workspace in localStorage and never
+deletes the files on disk — clearing it (or a fresh browser profile) shows
+every plan again. The Approve & Execute bar inside a finished Plan task's
+chat remains as before. The `@`-mention picker still never surfaces plan
+files (`.daedalus` is pruned as a hidden folder); the chips are the surface
+for them.
+
 ## MCP, Skills, and LSP in the Web
 
 The gateway exposes the workspace extension status:
