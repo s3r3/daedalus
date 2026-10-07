@@ -1,4 +1,4 @@
-export type TaskSpec = { id: string; goal: string; repo_path: string; constraints: string[]; done_criteria: string[]; created_at: string; mode?: AgentMode; parent_task_id?: string; attachments?: Attachment[]; provider_id?: string; model?: string; models?: string[]; model_strategy?: ModelStrategy; thinking?: boolean; title?: string; rules_files?: string[]; agent?: string; /** Chat conversation this task belongs to (Web chat sessions); turns are recorded server-side. */ conversation_id?: string };
+export type TaskSpec = { id: string; goal: string; repo_path: string; constraints: string[]; done_criteria: string[]; created_at: string; mode?: AgentMode; parent_task_id?: string; attachments?: Attachment[]; provider_id?: string; model?: string; models?: string[]; model_strategy?: ModelStrategy; thinking?: boolean; title?: string; rules_files?: string[]; agent?: string; /** Declared target directory (workspace-relative) of an anchored creation task — see deriveTaskTargetDir in agent/scaffold.ts; stamped by the agent loop, never guessed. */ target_dir?: string; /** Chat conversation this task belongs to (Web chat sessions); turns are recorded server-side. */ conversation_id?: string };
 export type PlanStepStatus = 'pending' | 'active' | 'done' | 'skipped';
 export type PlanStep = { id: string; intent: string; status: PlanStepStatus; evidence: string[] };
 export type Plan = { id: string; task_id: string; steps: PlanStep[]; version: number; status: 'draft' | 'active' | 'complete' };
@@ -8,7 +8,7 @@ export type ToolResult = { call_id: string; status: ToolResultStatus; output: st
 export type ValidationCheck = { name: string; cmd: string; status: 'pass' | 'fail' | 'error' | 'skipped'; exit_code: number | null; summary: string; diagnostics: Array<{ file?: string; line?: number; message: string }>; source?: 'profile' | 'default'; required?: boolean };
 export type ValidationResult = { checks: ValidationCheck[]; source?: 'profile' | 'default'; warning?: string; note?: string };
 export type RecoveryAction = { reason: string; strategy: 'retry' | 'fix' | 'replan' | 'abort'; attempt: number; limits: Record<string, number> };
-export type FinalReport = { task_id: string; outcome: 'success' | 'partial' | 'failed'; diff: string; evidence: string[]; metrics: Record<string, number>; title?: string; rules_files?: string[]; validation_source?: 'profile' | 'default'; worktree?: WorktreeReport; review?: ReviewGateReport };
+export type FinalReport = { task_id: string; outcome: 'success' | 'partial' | 'failed'; diff: string; evidence: string[]; metrics: Record<string, number>; title?: string; rules_files?: string[]; validation_source?: 'profile' | 'default'; /** Declared target directory the task was anchored to (workspace-relative), when it had one. */ target_dir?: string; worktree?: WorktreeReport; review?: ReviewGateReport };
 /** Strong-model review gate verdict recorded on the final report (tailor suite). */
 export type ReviewGateReport = {
   model: string;
@@ -16,7 +16,7 @@ export type ReviewGateReport = {
   blocking: boolean;
   findings: Array<{ severity: 'high' | 'medium' | 'low'; file: string; line?: number; message: string }>;
 };
-export type TaskState = TaskSpec & { plan: Plan; steps: PlanStep[]; status: 'pending' | 'active' | 'done' | 'failed'; current_step_id?: string; last_observation?: string; last_error?: string; last_tool_call_id?: string; tool_result?: ToolResult; mode?: AgentMode; turns?: number };
+export type TaskState = TaskSpec & { plan: Plan; steps: PlanStep[]; status: 'pending' | 'active' | 'done' | 'failed'; current_step_id?: string; last_observation?: string; last_error?: string; last_tool_call_id?: string; tool_result?: ToolResult; mode?: AgentMode; turns?: number; /** Outside-target paths the user approved via ask_user for this anchored task (see the loop's target confinement). */ target_exceptions?: string[] };
 export const EVENT_TYPES = ['TASK_STARTED','PLAN_CREATED','THOUGHT','LOOP_WARNING','TOOL_CALL_STARTED','TOOL_CALL_FINISHED','FILE_CHANGED','COMMAND_STARTED','COMMAND_OUTPUT','COMMAND_FINISHED','JOB_STARTED','JOB_FINISHED','VALIDATION_STARTED','VALIDATION_FAILED','VALIDATION_PASSED','RECOVERY_STARTED','REPLAN_CREATED','TASK_COMPLETED','MODEL_REQUEST_STARTED','MODEL_REQUEST_FINISHED','MODEL_REQUEST_FAILED','APPROVAL_REQUESTED','APPROVAL_DECIDED','QUESTION_REQUESTED','QUESTION_ANSWERED','MODE_CHANGED','SLASH_COMMAND_EXECUTED','PROVIDER_CHANGED','REVIEW_COMPLETED','ATTACHMENT_ADDED','CHILD_TASK_STARTED','CHILD_TASK_FINISHED','ORCHESTRATION_SKIPPED','HOOK_EXECUTED','SKILL_LOADED','TAILOR_ESCALATED'] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 export type Event = { seq: number; task_id: string; turn_id?: string; type: EventType; payload: unknown; ts: string };
