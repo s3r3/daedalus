@@ -198,17 +198,44 @@ Stop) settles it. In non-interactive contexts (CI, `--json`), the CLI does
 not prompt; the question settles on its timeout.
 
 The plan prompt contract is: explore the workspace read-only first, then ask
-at most three questions where the workspace itself cannot disambiguate, then
-write the plan files. Questions are for choices the user owns; facts come
-from the tools.
+at most four questions (covering the spec slots an implementer cannot invent —
+main entities, storage, roles/auth, look/scope) where the workspace itself
+cannot disambiguate, then write the plan files. Questions are for choices the
+user owns; facts come from the tools.
+
+### The pre-build question gate
+
+In Auto and Manual mode, a **creation-shaped, underspecified** brief is not
+allowed to start by building. When the goal brings something into being
+(buat/bikin/create/build/scaffold/…) yet names fewer than two of {target
+folder, stack, concrete features}, the harness denies the first
+mutating/executing tool call (`meta.reason: question_gate`) and requires one
+completed `ask_user` round first — at most four short questions (entities,
+storage, who uses it, look), always with a **"Langsung buat saja"** escape
+option. An answered round *or* a timeout unlocks the build (an unattended run
+proceeds on the model's stated assumptions instead of deadlocking); a
+cancelled question does not. Answers are pinned into the task's constraints
+as user decisions and appear in the final report's evidence as
+`clarifying answer: <question> → <answer>`. Non-creation goals,
+question-shaped prompts, tiny edits, and follow-ups of an approved plan are
+never gated. Disable it with `DAEDALUS_QUESTION_GATE=off` (or
+`settings.questionGate: false`).
 
 ## Plan documents
 
-A finalized plan is files, written by the agent into the workspace:
+A finalized plan is a **five-document set**, written by the agent into
+`.daedalus/plans/<task-slug>/`:
 
-- `.daedalus/plans/<task-slug>/plan.md` — always.
-- `.daedalus/plans/<task-slug>/PRD.md` — additionally, when the task is
-  product-oriented (a user-facing product or feature).
+- `plan.md` — the approval summary the user approves (kept: the Web's
+  Approve & Execute keys off it).
+- `PRD.md` — what & why: users/roles, features with acceptance lines,
+  scope/non-goals, core entities, decisions.
+- `architecture.md` — how, technically: stack, components, data model, the
+  storage decision, routes, the concrete target files execution creates.
+- `design.md` — how it looks: screens, layout, visual style,
+  interaction/empty/loading states.
+- `tasks.md` — the execution contract: one checkbox per concrete unit (a
+  route, a screen, an entity) with target files and verification.
 
 Plan mode's matrix denies mutations, so these writes are the **one explicit
 carve-out**: the harness policy is call-aware (`toolCallPolicy` in
@@ -221,8 +248,10 @@ explaining the carve-out to the model. Tests prove both halves: a write to
 `.daedalus/plans/**` succeeds in plan mode and a write anywhere else (or a
 command) is refused.
 
-The document contract (prompt-driven, from the template in the plan mode
-prompt — not a runtime generator):
+The document contracts are prompt-driven, from the templates in the plan
+mode prompt — not runtime generators: `plan.md` keeps the shape below, and
+`PRD.md` / `architecture.md` / `design.md` / `tasks.md` each follow their own
+template in the same prompt.
 
 ```markdown
 # <Title>
@@ -234,10 +263,16 @@ prompt — not a runtime generator):
 ## Acceptance criteria
 ```
 
-PRD.md follows the same shape with the product goal up front. When a plan
-run finishes, core scans the task's own file-change events for plan.md /
-PRD.md under `.daedalus/plans/**` and the closing `PLAN_CREATED` carries
-them as `documents: string[]`, so any surface can link or open the files.
+When a plan run finishes, core scans the task's own file-change events for
+members of the document set under `.daedalus/plans/**` and the closing
+`PLAN_CREATED` carries them as `documents: string[]` (plan.md first), so any
+surface can link or open the files. Execution of an approved plan pins
+`PRD.md` + `tasks.md` (falling back to `plan.md`) verbatim into the
+follow-up's context, and `tasks.md` becomes its step-lock: the executor's
+checklist *is* the document's items, worked in order. One deliberate limit:
+an unaddressed `tasks.md` item does **not** yet force a partial report —
+step evidence is mechanical, not a coverage check (a coverage gate is
+proposed, not implemented).
 
 ### The plan-document guarantee
 
@@ -246,20 +281,23 @@ harness failure, not a model success — so core enforces that a document
 exists before the task may complete:
 
 1. **One repair turn.** When a plan task is about to finish and no
-   `FILE_CHANGED` under `.daedalus/plans/**` named `plan.md`/`PRD.md`
-   exists, the loop first spends exactly one harness repair turn
+   `FILE_CHANGED` under `.daedalus/plans/**` named `plan.md` exists, the
+   loop first spends exactly one harness repair turn
    (`RECOVERY_STARTED` with `reason: plan_document_missing`): the model is
-   told to write the plan file now, with the template and the recorded
-   Q&A decisions inlined. Never more than one such repair per task.
+   told to write the plan document set now, with the templates and the
+   recorded Q&A decisions inlined. Never more than one such repair per task.
 2. **Deterministic assembly.** If the repair turn still produced no
-   document, the runtime assembles
-   `.daedalus/plans/<task-slug>/plan.md` from the structured plan steps
+   `plan.md`, the runtime assembles the full document set
+   (`plan.md`, `PRD.md`, `architecture.md`, `design.md`, `tasks.md`) from
+   the structured plan steps
    plus the recorded `QUESTION_ANSWERED` pairs (a `## Decisions` section;
-   unanswered questions stay visible as assumptions), writes it through
+   unanswered questions stay visible as assumptions), writing only the
+   members the model did not write — into the folder the model used, or
+   `.daedalus/plans/<task-slug>/` when it wrote nothing — through
    the normal file-change path (`FILE_CHANGED` +
    `PLAN_CREATED.documents`), and says so in the final report's evidence:
-   the document is labeled *harness-assembled because the model did not
-   write one* — never disguised as model output.
+   the documents are labeled *harness-assembled because the model did not
+   write them* — never disguised as model output.
 3. **Never overwritten.** A plan file the model wrote itself is left
    byte-for-byte alone; the guarantee only fills the gap. Non-plan modes
    are untouched.
@@ -303,7 +341,12 @@ creates the follow-up task through the existing plan-continuity
 machinery: `plan_task_id` set to the plan task (core injects the plan's
 steps), mode Auto, and a goal of the form "Execute the approved plan
 in .daedalus/plans/<slug>/plan.md" — and the composer's mode follows.
-The executing task may itself delegate with `spawn_subagent`. In the CLI
+The follow-up also carries the approved documents themselves: `PRD.md`
+and `tasks.md` are pinned verbatim into its context (never re-derived
+from the chat), `tasks.md` becomes the executor's step-lock (see *Plan
+documents*), and plan follow-ups are exempt from the pre-build question
+gate — the interview already happened. The executing task may itself
+delegate with `spawn_subagent`. In the CLI
 there is no equivalent button yet: run the follow-up
 as a new Auto goal naming the plan file (Web-only for now; see
 *Honest limits*).

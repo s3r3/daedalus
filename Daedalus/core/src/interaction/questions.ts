@@ -229,7 +229,7 @@ export function createAskUserTool(deps: AskUserToolDeps): ToolDefinition {
   return {
     name: ASK_USER_TOOL_NAME,
     description:
-      'Ask the user ONE multiple-choice question and wait for their answer before continuing. Use it when a requirement is genuinely ambiguous (the kind of site/app, audience, stack) and the answer changes what you will do. Give 2-4 concrete options; the user can always type their own answer unless allow_free_text is false. Do not ask questions you can answer from the workspace, and do not ask more than 3 questions for one plan.',
+      'Ask the user ONE multiple-choice question and wait for their answer before continuing. Use it when a requirement is genuinely ambiguous (the kind of site/app, audience, stack) and the answer changes what you will do. Give 2-4 concrete options; the user can always type their own answer unless allow_free_text is false. Do not ask questions you can answer from the workspace, and do not ask more than 4 questions for one task or plan.',
     mutating: false,
     // The harness must never kill the wait before the question itself
     // times out: the tool's budget is the question budget plus margin.

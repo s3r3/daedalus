@@ -4,6 +4,10 @@ export {
   MODE_PERMISSION_MATRIX,
   PLAN_DOCUMENTS_ROOT,
   PLAN_DOCUMENT_TEMPLATE,
+  PRD_DOCUMENT_TEMPLATE,
+  ARCHITECTURE_DOCUMENT_TEMPLATE,
+  DESIGN_DOCUMENT_TEMPLATE,
+  TASKS_DOCUMENT_TEMPLATE,
   ModeController,
   classifyToolName,
   cycleAgentMode,
@@ -39,12 +43,17 @@ export {
 
 export {
   assembledPlanPath,
+  hasPlanDocument,
   isPlanDocumentChange,
+  parseTasksDocument,
   planDecisionsFromEvents,
   planDocumentRepairDirective,
   planSlugFromGoal,
   renderAssembledPlan,
+  renderAssembledPlanDocuments,
   renderDecisionLines,
+  PLAN_DOCUMENT_FILES,
+  PLAN_DOCUMENT_TEMPLATES,
   type PlanDecision,
 } from './plans.ts';
 

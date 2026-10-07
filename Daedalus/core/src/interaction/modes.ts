@@ -163,11 +163,13 @@ export function restrictMode(parentCeiling: AgentMode, requested: AgentMode): Ag
 }
 
 /**
- * The plan document skeleton the Plan mode writes into
- * `.daedalus/plans/<slug>/plan.md`. It is part of the prompt contract (the
- * model fills it in), not a runtime generator — prompt-driven on purpose.
- * `PRD.md` (same folder) follows the same template when the task is a
- * product, with the product's users and journeys in the Goal/Scope sections.
+ * The plan document skeletons Plan mode writes into
+ * `.daedalus/plans/<slug>/`: plan.md is the approval summary (the
+ * document the user approves; execution keys off it), and PRD.md,
+ * architecture.md, design.md, tasks.md are its companions — what &
+ * why, how (technically), how it looks, and the execution contract.
+ * They are part of the prompt contract (the model fills them in), not
+ * runtime generators — prompt-driven on purpose.
  */
 export const PLAN_DOCUMENT_TEMPLATE = [
   '# <Title>',
@@ -189,6 +191,84 @@ export const PLAN_DOCUMENT_TEMPLATE = [
   '- <observable condition that proves the work is done>',
 ].join('\n');
 
+/** PRD.md: the WHAT & WHY of a product-shaped plan (Kiro requirements shape, BMAD PRD slot). */
+export const PRD_DOCUMENT_TEMPLATE = [
+  '# PRD: <Title>',
+  '',
+  '## Goal',
+  '<What is being built and why, in one short paragraph.>',
+  '',
+  '## Users & roles',
+  '- <role: who they are and what they do with this>',
+  '',
+  '## Features',
+  '- F1: <feature>',
+  '  - WHEN <event/condition> THE SYSTEM SHALL <observable behavior>',
+  '',
+  '## Scope / Non-goals',
+  '- In scope: <what v1 covers>',
+  '- Non-goals: <what is deliberately left out>',
+  '',
+  '## Core entities',
+  '- <Entity>: <key fields>',
+  '',
+  '## Constraints & assumptions',
+  '- <chosen stack, storage, hard limits; "(assumed)" marks choices made when a question went unanswered>',
+  '',
+  '## Decisions',
+  '- <question asked> → <the answer the user gave> (an "(assumed)" suffix marks a choice you made when a question went unanswered)',
+].join('\n');
+
+/** architecture.md: the HOW — stack, modules, data, and the target file list execution anchors to. */
+export const ARCHITECTURE_DOCUMENT_TEMPLATE = [
+  '# Architecture: <Title>',
+  '',
+  '## Stack',
+  '- <framework/language/styling, one line each with the reason>',
+  '',
+  '## Components / modules',
+  '- <page or module>: <responsibility>',
+  '',
+  '## Data model',
+  '- <Entity> (<fields>) — <relations>',
+  '',
+  '## Storage & state',
+  '<localStorage / static data / API / database — the decision from the interview, stated explicitly>',
+  '',
+  '## Routes / pages',
+  '- <route>: <what renders there>',
+  '',
+  '## Target files',
+  '- <folder or file execution must create, relative to the target directory>',
+].join('\n');
+
+/** design.md: how it looks and feels — screens, layout, visual style, states. */
+export const DESIGN_DOCUMENT_TEMPLATE = [
+  '# Design: <Title>',
+  '',
+  '## Screens',
+  '- <screen>: <layout, main components, data shown>',
+  '',
+  '## Visual style',
+  '- Palette: <colors>',
+  '- Typography: <fonts/scale>',
+  '- Density: <compact / comfortable>',
+  '',
+  '## Interactions & states',
+  '- <empty/loading/error states and key interactions>',
+  '',
+  '## Responsive notes',
+  '- <how screens adapt to small widths>',
+].join('\n');
+
+/** tasks.md: the execution contract — one checkbox unit per concrete deliverable. */
+export const TASKS_DOCUMENT_TEMPLATE = [
+  '# Tasks: <Title>',
+  '',
+  '- [ ] <one logical unit: one route, one screen, one entity> (files: <target paths>; verifies: <observable check>; PRD: F<n>)',
+  '- [ ] Run the project validation and confirm every check passes',
+].join('\n');
+
 /** The behavioural contract each mode states to the model, verbatim in the prompt. */
 export function modePromptContract(mode: AgentMode): string {
   switch (mode) {
@@ -198,11 +278,16 @@ export function modePromptContract(mode: AgentMode): string {
       return [
         'Current mode: Plan (read-only apart from the plan itself). Your deliverable is a plan the user can approve and hand to Auto or Orchestrator for execution. Work in this order:',
         '1. Explore the workspace with read tools first, so your questions and plan are grounded in what is actually there. Edits and commands are denied by the harness, and every path outside .daedalus/plans/ stays read-only.',
-        `2. When a requirement is genuinely ambiguous — the kind of website or app, the audience, the stack — ask the user with the ${ASK_USER_TOOL_NAME} tool instead of guessing: 2-4 concrete options per question, at most 3 questions, and only questions whose answer changes the plan. Never ask what the workspace already tells you.`,
-        '3. Write the finished plan as a file: .daedalus/plans/<task-slug>/plan.md, where <task-slug> is a short kebab-case name from the goal (the one write plan mode allows; create the folder with create_dir). Record every question you asked and its answer under Decisions; if a question timed out unanswered, record the assumption you chose, marked "(assumed)". When the task is a product (something people will use, not a one-off script or refactor), also write PRD.md in the same folder with the same structure and the product\'s users and journeys in the Goal/Scope sections.',
-        'The plan file follows this template exactly:',
+        `2. Interview before you write anything: when a requirement is genuinely ambiguous, ask the user with the ${ASK_USER_TOOL_NAME} tool instead of guessing — at most 4 questions, 2-4 concrete options each, and cover the spec slots an implementer cannot invent: the main entities, where data is stored, who uses it (roles, and whether login exists), and the look/scope (style, pages). Never ask what the workspace already tells you.`,
+        '3. Write the finished plan as a DOCUMENT SET in .daedalus/plans/<task-slug>/, where <task-slug> is a short kebab-case name from the goal (the one write plan mode allows; create the folder with create_dir), generated from the goal and the interview answers:',
+        '   - PRD.md — what & why: users/roles, features with WHEN … THE SYSTEM SHALL acceptance lines, scope/non-goals, core entities, decisions.',
+        '   - architecture.md — how, technically: stack, components, data model, the storage decision, routes, and the concrete target files execution will create.',
+        '   - design.md — how it looks: screens, layout, visual style, interaction/empty/loading states.',
+        '   - plan.md — the approval summary the user approves (template below); record every question you asked and its answer under Decisions, marking "(assumed)" for choices you made when a question went unanswered.',
+        '   - tasks.md — the execution contract: one checkbox per concrete unit (a route, a screen, an entity), each naming its target files, its verification, and the PRD feature it serves. Execution runs against tasks.md — granularity "one route/screen", never "the whole app".',
+        '   The plan file follows this template exactly:',
         PLAN_DOCUMENT_TEMPLATE,
-        'Finish with a brief reply that names the plan file and restates the numbered plan; every step names the concrete file(s) it touches, and the reply ends with risks/unknowns and how completion will be verified. Do not start implementing — execution begins only when the user approves the plan.',
+        'Finish with a brief reply that names the plan folder and restates the numbered plan; every step names the concrete file(s) it touches, and the reply ends with risks/unknowns and how completion will be verified. Do not start implementing — execution begins only when the user approves the plan.',
       ].join('\n');
     case 'manual':
       return 'Current mode: Manual. Reads are free, but every file change and every command pauses for the user\'s approval first. Propose one concrete action at a time and let the approval flow gate it; a declined action comes back with the user\'s instructions — follow them instead of retrying the same action. When the goal is ambiguous, ask with ask_user (2-4 options) before proposing actions.';
@@ -223,7 +308,7 @@ export function modeDenialMessage(mode: AgentMode, toolName: string): string {
     return `tool ${toolName} is not available in ask mode (read-only). Answer the question with what you can read; if the user wants this change made, explain it and ask them to switch to Manual or Auto mode (Shift+Tab) — do not keep trying mutating tools.`;
   }
   if (mode === 'plan') {
-    return `tool ${toolName} is not available in plan mode outside the plan documents. Keep exploring with read tools; the only sanctioned write in plan mode is your plan under .daedalus/plans/<task-slug>/ (plan.md, plus PRD.md for product work), and every other action belongs in the plan as a step naming the file it touches.`;
+    return `tool ${toolName} is not available in plan mode outside the plan documents. Keep exploring with read tools; the only sanctioned write in plan mode is your plan document set under .daedalus/plans/<task-slug>/ (PRD.md, architecture.md, design.md, plan.md, tasks.md), and every other action belongs in the plan as a step naming the file it touches.`;
   }
   return `tool ${toolName} is not available in ${mode} mode`;
 }

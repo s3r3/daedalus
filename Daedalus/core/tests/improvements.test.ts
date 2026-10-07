@@ -339,7 +339,9 @@ describe('feature 2: edit guard', () => {
     const home = tempDir('daedalus-guard-home-');
     const script = [{ tool: 'write_file', args: { path: 'app.mjs', content: 'export const answer = (\n' } }];
 
-    const runner = new TaskRunner({ workspaceRoot: workspace, store: new TaskStore(home), provider: scriptedProvider(script), approvalPolicy: 'auto', maxIterations: 6 });
+    // The creation question gate is orthogonal to the edit guard — off here
+    // so the scripted write lands on the first turn.
+    const runner = new TaskRunner({ workspaceRoot: workspace, store: new TaskStore(home), provider: scriptedProvider(script), approvalPolicy: 'auto', maxIterations: 6, questionGate: false });
     const events: Event[] = [];
     const result = await runner.run({ goal: 'create app.mjs', onEvent: (event) => events.push(event) });
 
@@ -349,7 +351,7 @@ describe('feature 2: edit guard', () => {
     expect(result.report.outcome).toBeDefined();
 
     // ...and with the guard disabled the same write stays silent.
-    const runnerOff = new TaskRunner({ workspaceRoot: workspace, store: new TaskStore(home), provider: scriptedProvider(script), approvalPolicy: 'auto', maxIterations: 6, editGuard: false });
+    const runnerOff = new TaskRunner({ workspaceRoot: workspace, store: new TaskStore(home), provider: scriptedProvider(script), approvalPolicy: 'auto', maxIterations: 6, editGuard: false, questionGate: false });
     const eventsOff: Event[] = [];
     await runnerOff.run({ goal: 'create app.mjs again', onEvent: (event) => eventsOff.push(event) });
     const finishedOff = eventsOff.find((event) => event.type === 'TOOL_CALL_FINISHED' && (event.payload as { call?: { tool?: string } }).call?.tool === 'write_file');

@@ -34,6 +34,7 @@ function listen(workspace: string, home: string): Promise<{ base: string; ctx: R
     llm: { baseUrl: 'http://127.0.0.1:1/v1', apiKey: '', model: '', models: [], modelStrategy: 'failover', timeoutMs: null },
     server: { host: '127.0.0.1', port: 3080 },
     daedalusHome: home,
+    questionGate: false, // this suite pins conversation memory; the creation question gate is orthogonal
   };
   const ctx = createContext({ settings, store: new TaskStore(join(home, 'state')), bus: new EventBus(), cwd: workspace });
   app = createApp(ctx);

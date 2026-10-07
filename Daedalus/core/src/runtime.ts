@@ -49,7 +49,10 @@ import type { EditFormat, ModelTier, PromptFamily, PromptFamilySetting, ReviewGa
 import { TextProtocolProvider, type ProtocolSwitchInfo } from './providers/llm/text-protocol.ts';
 import { ModeController, isPlanDocumentPath, normalizeAgentMode, restrictMode } from './interaction/modes.ts';
 import { QuestionBroker, createAskUserTool, resolveQuestionTimeoutMs, type UserQuestionInfo } from './interaction/questions.ts';
-import { assembledPlanPath, planDecisionsFromEvents, renderAssembledPlan } from './interaction/plans.ts';
+import { hasPlanDocument, parseTasksDocument, planDecisionsFromEvents, planSlugFromGoal, renderAssembledPlanDocuments, PLAN_DOCUMENT_FILES } from './interaction/plans.ts';
+import { replan as defaultReplan } from './agent/planner.ts';
+import type { Planner } from './agent/types.ts';
+import { randomUUID } from 'node:crypto';
 import { ProviderRegistry } from './interaction/providers.ts';
 import { childTaskFromInput, distillChildSummary, type ChildFileChange } from './interaction/orchestrator.ts';
 import { backgroundFinishedNotice, createSpawnSubagentTool, type SpawnDispatch, type SpawnSubagentInput } from './interaction/subagents.ts';
@@ -150,6 +153,8 @@ export type TaskRunnerOptions = {
   toolOutput?: ToolOutputLimits;
   /** RTK-style compression of run_command output for the model context. Defaults to settings.outputCompression (on). */
   outputCompression?: boolean;
+  /** Pre-build question gate for creation-shaped underspecified briefs. Defaults to settings.questionGate (on). */
+  questionGate?: boolean;
   /** Cheap helper model used only to title tasks (DAEDALUS_HELPER_MODEL). */
   helperModel?: string;
   /** Injected helper provider (tests); production builds one from settings. */
@@ -253,9 +258,11 @@ const STOP_REASONS = new Set(['aborted', 'max_iterations', 'max_errors', 'no_pro
 
 /**
  * Plan documents a run actually wrote, from its FILE_CHANGED evidence:
- * normalized `.daedalus/plans/**` paths to a plan.md / PRD.md, deduplicated,
- * plan.md first. Paths are reported as the model wrote them (workspace
- * relative), which is what the Web links and the follow-up goal quotes.
+ * normalized `.daedalus/plans/**` paths to a member of the plan document
+ * set (plan.md, PRD.md, architecture.md, design.md, tasks.md),
+ * deduplicated, in set order (plan.md first). Paths are reported as the
+ * model wrote them (workspace relative), which is what the Web links and
+ * the follow-up goal quotes.
  */
 export function planDocumentsFromEvents(events: Event[]): string[] {
   const seen = new Set<string>();
@@ -266,9 +273,41 @@ export function planDocumentsFromEvents(events: Event[]): string[] {
     const segments = path.replace(/\\/g, '/').split('/').filter((segment) => segment.length > 0 && segment !== '.');
     const clean = segments.join('/');
     const name = segments[segments.length - 1];
-    if (name === 'plan.md' || name === 'PRD.md') seen.add(clean);
+    if (name !== undefined && (PLAN_DOCUMENT_FILES as readonly string[]).includes(name)) seen.add(clean);
   }
-  return [...seen].sort((a, b) => Number(a.endsWith('PRD.md')) - Number(b.endsWith('PRD.md')));
+  const rank = (path: string): number => PLAN_DOCUMENT_FILES.indexOf(path.split('/').at(-1) as typeof PLAN_DOCUMENT_FILES[number]);
+  return [...seen].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+const PLAN_DOCUMENT_PIN_CAP_CHARS = 6_000;
+
+function capPlanDocument(text: string): string {
+  return text.length > PLAN_DOCUMENT_PIN_CAP_CHARS
+    ? `${text.slice(0, PLAN_DOCUMENT_PIN_CAP_CHARS)}\n[…document truncated for context]`
+    : text;
+}
+
+/**
+ * Planner whose steps ARE the approved tasks.md checklist (the
+ * execute-the-plan step-lock): the follow-up executor works the
+ * document's items in order instead of deriving a fresh checklist.
+ */
+function tasksDocumentPlanner(taskSteps: string[]): Planner {
+  return {
+    createPlan: async (spec) => ({
+      id: randomUUID(),
+      task_id: spec.id,
+      version: 1,
+      status: 'active',
+      steps: taskSteps.map((intent, index) => ({
+        id: `${spec.id}-step-${index + 1}`,
+        intent,
+        status: index === 0 ? ('active' as const) : ('pending' as const),
+        evidence: [],
+      })),
+    }),
+    replan: defaultReplan,
+  };
 }
 
 /**
@@ -681,16 +720,26 @@ export class TaskRunner {
     // Plan continuity (Cline-style: context carries across the mode switch,
     // unlike Cursor's fresh context per mode): "execute the plan" loads the
     // steps an earlier plan-mode task recorded and hands them to this task
-    // as a constraint, verbatim.
+    // as a constraint, verbatim. The approved plan DOCUMENTS ride along
+    // too (see #readPlanDocuments): PRD.md + tasks.md are pinned into the
+    // context verbatim and tasks.md becomes the executor's step-lock, so
+    // the follow-up builds against what the user approved instead of
+    // re-deriving requirements from the chat.
+    let pinnedPlanDocuments: { pin: string; taskSteps: string[] } | undefined;
     if (options.planTaskId && options.planTaskId !== spec.id) {
+      spec.plan_task_id = options.planTaskId;
       const prior = this.store.loadState<TaskState>(options.planTaskId);
       const steps = prior?.plan?.steps ?? prior?.steps ?? [];
-      if (steps.length > 0) {
+      pinnedPlanDocuments = await this.#readPlanDocuments(options.planTaskId);
+      if (!pinnedPlanDocuments && steps.length > 0) {
         const listing = steps.map((step, index) => `${index + 1}. ${step.intent}`).join('\n');
         spec.constraints = [
           ...spec.constraints,
           `Execute the plan drafted earlier in plan mode (task ${options.planTaskId}); follow these steps:\n${listing}`,
         ];
+      }
+      if (pinnedPlanDocuments) {
+        spec.constraints = [...spec.constraints, pinnedPlanDocuments.pin];
       }
     }
     // Prior conversation (chat sessions): the recent turns ride into the
@@ -831,6 +880,7 @@ export class TaskRunner {
     const qualityEscalation = this.#options.qualityEscalation ?? (this.#settings.tailor?.qualityEscalation !== false);
     const earlyEscalation = this.#options.earlyEscalation ?? (this.#settings.tailor?.earlyEscalation !== false);
     const inputTokenBudget = this.#options.inputTokenBudget ?? this.#settings.context?.inputTokenBudget ?? 100_000;
+    const questionGate = this.#options.questionGate ?? (this.#settings.questionGate !== false);
     // Loop-breaker hard pause: ask the user (question card) whether the
     // stuck task should continue differently or stop. Any non-answer
     // (timeout, cancel, other option) means stop — a stuck task that
@@ -918,6 +968,12 @@ export class TaskRunner {
       qualityEscalation,
       earlyEscalation,
       inputTokenBudget,
+      questionGate,
+      // Execute-the-plan step-lock: with an approved tasks.md pinned,
+      // the executor's checklist IS the document's items, in order.
+      ...(pinnedPlanDocuments && pinnedPlanDocuments.taskSteps.length > 0
+        ? { planner: tasksDocumentPlanner(pinnedPlanDocuments.taskSteps) }
+        : {}),
       onLoopHardPause,
       ...(subagentTooling
         ? { noticesFor: (taskId: string) => (taskId === spec.id ? subagentTooling.drainNotices() : []) }
@@ -1013,40 +1069,55 @@ export class TaskRunner {
     let assembledPlanDocument: string | undefined;
     if (spec.mode === 'plan') {
       let documents = planDocumentsFromEvents(collected);
-      if (documents.length === 0) {
+      if (!hasPlanDocument(documents, 'plan.md')) {
         // Plan-document guarantee, second half: the loop already spent its
-        // one repair turn and the model STILL wrote no plan file (Farid's
-        // live weak-model run: questions answered, task "success", no
-        // plan.md anywhere). Assemble the document deterministically from
-        // the structured steps + recorded Q&A and write it through the
-        // normal file-change path — honestly labeled in the report below,
-        // never disguised as the model's own writing. A model-written
-        // document is never overwritten (this only runs when none exists).
-        const relativePath = assembledPlanPath(spec.goal);
-        const content = renderAssembledPlan({
+        // one repair turn and the model STILL wrote no approval document
+        // (Farid's live weak-model run: questions answered, task
+        // "success", no plan.md anywhere). Assemble the document SET
+        // deterministically from the structured steps + recorded Q&A and
+        // write the missing members through the normal file-change path
+        // — honestly labeled in the report below, never disguised as the
+        // model's own writing. A model-written document is never
+        // overwritten (only missing members are written).
+        // Missing members land NEXT TO the documents the model did
+        // write — the set must live in one folder, never scattered
+        // between the model's folder and the goal-slug folder. The slug
+        // folder is only the home when the model wrote nothing at all.
+        const folder = documents.length > 0
+          ? documents[0]!.split('/').slice(0, -1).join('/')
+          : `.daedalus/plans/${planSlugFromGoal(spec.goal)}`;
+        const present = new Set(documents.map((path) => path.split('/').at(-1)));
+        let wroteAny = false;
+        for (const doc of renderAssembledPlanDocuments({
           goal: spec.goal,
           plan: state.plan,
           decisions: planDecisionsFromEvents(collected),
-        });
-        const absolutePath = join(this.#workspaceRoot, ...relativePath.split('/'));
-        await mkdir(dirname(absolutePath), { recursive: true });
-        await writeFile(absolutePath, content, 'utf8');
-        const contentLines = content.split('\n');
-        const planPayload = {
-          call_id: `harness-plan-document-${spec.id}`,
-          path: relativePath,
-          tool: 'write_file',
-          operation: 'created',
-          added: contentLines.length,
-          removed: 0,
-          lines: contentLines.map((text) => ({ kind: 'add', text })),
-          meta: { harness_assembled_plan: true },
-        };
-        emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'FILE_CHANGED', planPayload);
-        this.#mirrorFileChanged(spec.id, undefined, planPayload);
-        await this.bus.drain();
-        documents = [relativePath];
-        assembledPlanDocument = relativePath;
+        })) {
+          if (present.has(doc.name)) continue;
+          const relativePath = `${folder}/${doc.name}`;
+          const absolutePath = join(this.#workspaceRoot, ...relativePath.split('/'));
+          await mkdir(dirname(absolutePath), { recursive: true });
+          await writeFile(absolutePath, doc.content, 'utf8');
+          const contentLines = doc.content.split('\n');
+          const planPayload = {
+            call_id: `harness-plan-document-${spec.id}-${doc.name}`,
+            path: relativePath,
+            tool: 'write_file',
+            operation: 'created',
+            added: contentLines.length,
+            removed: 0,
+            lines: contentLines.map((text) => ({ kind: 'add', text })),
+            meta: { harness_assembled_plan: true },
+          };
+          emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'FILE_CHANGED', planPayload);
+          this.#mirrorFileChanged(spec.id, undefined, planPayload);
+          if (doc.name === 'plan.md') assembledPlanDocument = relativePath;
+          wroteAny = true;
+        }
+        if (wroteAny) {
+          await this.bus.drain();
+          documents = planDocumentsFromEvents(collected);
+        }
       }
       if (documents.length > 0) {
         emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'PLAN_CREATED', { plan: state.plan, mode: 'plan', documents });
@@ -1152,6 +1223,9 @@ export class TaskRunner {
         ...(modelFailureEvidence ? [`model failure: ${modelFailureEvidence}`] : []),
         ...(state.target_dir ? [`target_dir: ${state.target_dir}`] : []),
         ...(state.target_exceptions?.length ? state.target_exceptions.map((path) => `target exception: ${path} (approved via ask_user)`) : []),
+        ...(state.clarifying_answers?.length
+          ? state.clarifying_answers.map((qa) => `clarifying answer: ${qa.question} → ${qa.answer}`)
+          : []),
         ...creationGateEvidence,
         ...collected
           .filter((e) => e.type === 'TAILOR_ESCALATED' && e.task_id === spec.id)
@@ -1228,6 +1302,41 @@ export class TaskRunner {
    * Repair loops are quality escalation's job — the gate never re-runs
    * the agent. Entirely fail-open: any problem skips the gate silently.
    */
+  /**
+   * Read the approved plan documents an earlier plan-mode task wrote,
+   * for pinning into an execute-the-plan follow-up: PRD.md + tasks.md,
+   * falling back to plan.md alone (older plans predate the document
+   * set). Returns the pin text plus the parsed tasks.md steps (the
+   * executor's step-lock). Undefined when the plan task wrote nothing
+   * readable — the caller then falls back to the recorded plan steps.
+   */
+  async #readPlanDocuments(planTaskId: string): Promise<{ pin: string; taskSteps: string[] } | undefined> {
+    const documents = planDocumentsFromEvents(this.store.replay(planTaskId));
+    if (documents.length === 0) return undefined;
+    const folder = documents[0]!.split('/').slice(0, -1).join('/');
+    const read = async (name: string): Promise<string | undefined> => {
+      try {
+        return await readFile(await pathInWorkspace(this.#workspaceRoot, `${folder}/${name}`), 'utf8');
+      } catch {
+        return undefined;
+      }
+    };
+    const prd = await read('PRD.md');
+    const tasks = await read('tasks.md');
+    const sections: string[] = [];
+    if (prd) sections.push(`--- PRD.md ---\n${capPlanDocument(prd)}`);
+    if (tasks) sections.push(`--- tasks.md ---\n${capPlanDocument(tasks)}`);
+    if (sections.length === 0) {
+      const plan = await read('plan.md');
+      if (plan) sections.push(`--- plan.md ---\n${capPlanDocument(plan)}`);
+    }
+    if (sections.length === 0) return undefined;
+    return {
+      pin: `Approved plan documents from plan task ${planTaskId} — the user reviewed and approved these; build against them, do not re-derive the requirements, and work tasks.md in order:\n\n${sections.join('\n\n')}`,
+      taskSteps: tasks ? parseTasksDocument(tasks) : [],
+    };
+  }
+
   async #reviewGate(
     options: RunOptions,
     spec: TaskSpec,
@@ -1341,6 +1450,7 @@ export class TaskRunner {
       condense: this.#options.condense,
       toolOutput: this.#options.toolOutput,
       outputCompression: this.#options.outputCompression,
+      questionGate: this.#options.questionGate,
       modelTiers: this.#options.modelTiers,
       modelRouting: this.#options.modelRouting,
       qualityEscalation: this.#options.qualityEscalation,

@@ -114,7 +114,15 @@ describe('plan-document guarantee', () => {
     expect(result.report?.evidence.some((line) => line.includes('assembled by the harness'))).toBe(true);
     expect(result.report?.evidence.some((line) => line.includes(assembledRel))).toBe(true);
     const closing = [...result.events].reverse().find((event) => event.type === 'PLAN_CREATED');
-    expect((closing?.payload as { documents?: string[] }).documents).toEqual([assembledRel]);
+    // The assembled set is the full plan-document set now, plan.md first.
+    const slugDir = assembledRel.split('/').slice(0, -1).join('/');
+    expect((closing?.payload as { documents?: string[] }).documents).toEqual([
+      assembledRel,
+      `${slugDir}/PRD.md`,
+      `${slugDir}/architecture.md`,
+      `${slugDir}/design.md`,
+      `${slugDir}/tasks.md`,
+    ]);
     // And the write shows up as a real file change.
     expect(result.events.some((event) => event.type === 'FILE_CHANGED' && (event.payload as { path?: string }).path?.endsWith('plan.md'))).toBe(true);
   });
@@ -192,6 +200,9 @@ describe('plan-document guarantee', () => {
       workspaceRoot: root,
       store: new TaskStore(home),
       bus: new EventBus(),
+      // This test pins only the plan-document guarantee; the creation
+      // question gate is orthogonal here, so it is switched off.
+      questionGate: false,
       provider: scriptedProvider([
         { tool: 'write_file', args: { path: 'hello.txt', content: 'halo' } },
         { text: 'done: file written' },

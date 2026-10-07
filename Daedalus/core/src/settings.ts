@@ -39,6 +39,14 @@ export type Settings = {
    * `toolOutput` still apply either way).
    */
   outputCompression: boolean;
+  /**
+   * Pre-build question gate (DAEDALUS_QUESTION_GATE): a creation-shaped,
+   * underspecified brief in Auto/Manual mode owes the user one ask_user
+   * round before the first workspace change — enforced by the agent
+   * loop, so the model cannot spend a whole run building its own guess.
+   * Default on; off restores pre-gate behavior exactly.
+   */
+  questionGate: boolean;
   daedalusHome: string;
 };
 
@@ -95,6 +103,7 @@ export function loadSettings(env: Env = process.env): Settings {
       spill: parseBoolean(env.DAEDALUS_TOOL_SPILL, true, "DAEDALUS_TOOL_SPILL"),
     },
     outputCompression: parseBoolean(env.DAEDALUS_OUTPUT_COMPRESSION, true, "DAEDALUS_OUTPUT_COMPRESSION"),
+    questionGate: parseBoolean(env.DAEDALUS_QUESTION_GATE, true, "DAEDALUS_QUESTION_GATE"),
     daedalusHome: env.DAEDALUS_HOME ?? ".daedalus",
   };
 }
