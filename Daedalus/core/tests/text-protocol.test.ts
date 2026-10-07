@@ -358,6 +358,7 @@ describe('text protocol end-to-end through the real agent loop', () => {
       validator,
       registry: createDefaultRegistry(),
       approvalPolicy: 'auto',
+      questionGate: false,
       maxValidationAttempts: 1,
     });
     const result = await runner.run({ goal: 'Create a site folder with an index.html landing page' });

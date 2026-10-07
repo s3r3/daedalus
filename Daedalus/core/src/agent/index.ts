@@ -1,4 +1,4 @@
-export { AgentLoop, LOOP_HARD_PAUSE_AT, MAX_CONSECUTIVE_TIMEOUTS, STALL_ESCALATE_AT, STALL_LIMIT, commandLineForCall, parseAction, thoughtFromMessage, type AgentLoopOptions } from './agent-loop.ts';
+export { AgentLoop, LOOP_HARD_PAUSE_AT, MAX_CONSECUTIVE_TIMEOUTS, QUESTION_GATE_DIRECTIVE, STALL_ESCALATE_AT, STALL_LIMIT, commandLineForCall, parseAction, thoughtFromMessage, type AgentLoopOptions } from './agent-loop.ts';
 export { schemaSummary, toolCallParseErrorOutput, validateToolCallArguments, type ToolCallValidation } from './tool-call-validation.ts';
 export { interpretTask } from './interpreter.ts';
 export {
@@ -9,6 +9,7 @@ export {
   UNSUPPORTED_FRAMEWORK_MENTIONS,
   commandLineTokens,
   creationCompletionRefusal,
+  creationSpecificity,
   deriveTaskTargetDir,
   detectCreationGoal,
   detectScaffoldRequest,
@@ -21,6 +22,7 @@ export {
   missingToolchains,
   pathInsideTarget,
   probeToolchains,
+  questionGateAppliesToGoal,
   renderDatabasePlaybook,
   renderDockerGeneratorLine,
   renderScaffoldPlaybook,
@@ -33,6 +35,7 @@ export {
   type CreationCompletionEvidence,
   type CreationGoal,
   type CreationRefusal,
+  type CreationSpecificity,
   type ScaffoldChainStep,
   type ScaffoldHostInfo,
   type ScaffoldMatch,

@@ -19,10 +19,10 @@ import { resolveToolOutputLimits, shapeToolOutput, writeSpillFile, type ToolOutp
 import { compressCommandOutput, type CommandOutputCompression } from './output-compression.ts';
 import { evaluateStopConditions, noProgressCondition } from './stop.ts';
 import { ModeController, classifyToolName, isToolCallDenied, isToolVisible, modeDenialMessage } from '../interaction/modes.ts';
-import { isPlanDocumentChange, planDecisionsFromEvents, planDocumentRepairDirective } from '../interaction/plans.ts';
+import { hasPlanDocument, planDecisionsFromEvents, planDocumentRepairDirective } from '../interaction/plans.ts';
 import { ASK_USER_TOOL_NAME } from '../interaction/questions.ts';
 import { SPAWN_SUBAGENT_TOOL_NAME } from '../interaction/subagents.ts';
-import { creationCompletionRefusal, deriveTaskTargetDir, detectCreationGoal, pathInsideTarget, scaffoldMarkerPresent, workspaceRelativePath, type CreationGoal } from './scaffold.ts';
+import { creationCompletionRefusal, deriveTaskTargetDir, detectCreationGoal, pathInsideTarget, questionGateAppliesToGoal, scaffoldMarkerPresent, workspaceRelativePath, type CreationGoal } from './scaffold.ts';
 
 export type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor };
 export { interpretTask };
@@ -47,6 +47,19 @@ export const LOOP_HARD_PAUSE_AT = 5;
 export const STALL_LIMIT = 6;
 /** Stall count at which the tailor early-trigger fires (before the hard stop). */
 export const STALL_ESCALATE_AT = 3;
+
+/**
+ * Refusal text of the pre-build question gate (see #questionGateBlock):
+ * the model is told the build waits for one short clarifying round, what
+ * that round looks like, and that the answers return as decisions pinned
+ * to the task. The "Langsung buat saja" option is the user's escape
+ * hatch — the ROUND is non-optional, skipping the spec is one click.
+ */
+export const QUESTION_GATE_DIRECTIVE = [
+  'Build paused: this creation request is underspecified, so one short clarifying round comes before any change to the workspace.',
+  'Call ask_user now (at most 4 questions, one call per question) before any write_file/edit_file/create_dir/download_file/run_command/spawn_subagent. Ask only what changes the result: for an app or website, which entities/features, where data is stored, who uses it (roles, login or not), and how it should look (style, layout). Always include one option labelled exactly "Langsung buat saja" so the user can skip the round and have you build immediately.',
+  'The answers return as the user\'s decisions and ride into this task\'s constraints — build to them. Reads stay available meanwhile; explore the workspace first if a question can be answered from it instead of asking.',
+].join('\n');
 
 /** Flatten a run_command call into the executed command line, for output-compression family detection. Defensive: odd arg shapes yield just the command name. */
 export function commandLineForCall(call: ToolCall): string {
@@ -127,6 +140,16 @@ export type AgentLoopOptions = {
    */
   inputTokenBudget?: number;
   /**
+   * Pre-build question gate: a creation-shaped, underspecified brief
+   * (agent/scaffold.ts questionGateAppliesToGoal) in Auto/Manual mode
+   * may not mutate anything until one ask_user round has completed —
+   * enforced here, not merely suggested in the prompt, so a strong
+   * model can no longer spend a whole run building its own guess of
+   * what the user wanted. Default off at this layer; the runtime wires
+   * it from settings.questionGate (on by default).
+   */
+  questionGate?: boolean;
+  /**
    * Hard-pause seam (loop breaker): after the same call has been
    * repeated 5 times despite warning + suppression, the loop asks the
    * host whether to continue (re-arms the breaker) or stop (the task
@@ -179,6 +202,7 @@ export class AgentLoop {
   readonly #qualityEscalation: boolean;
   readonly #earlyEscalation: boolean;
   readonly #inputTokenBudget: number;
+  readonly #questionGate: boolean;
   readonly #onLoopHardPause?: AgentLoopOptions['onLoopHardPause'];
   readonly #noticesFor?: (taskId: string) => string[];
   readonly #spillCounters = new Map<string, number>();
@@ -210,6 +234,10 @@ export class AgentLoop {
   readonly #blockedOutside = new Map<string, Set<string>>();
   /** Outside-target paths the user approved via ask_user per task (confinement exceptions). */
   readonly #targetExceptions = new Map<string, Set<string>>();
+  /** Tasks owing a question-gate round (evaluated once, like the target anchor). */
+  readonly #questionGates = new Map<string, boolean>();
+  /** Tasks whose question-gate round has completed (the latch outstanding mutations wait on). */
+  readonly #questionRoundsDone = new Set<string>();
   /**
    * Completion-gate evidence per task: successful run_command executions
    * (shell-created files never appear as per-file changes) and whether the
@@ -285,6 +313,7 @@ export class AgentLoop {
     this.#qualityEscalation = options.qualityEscalation !== false;
     this.#earlyEscalation = options.earlyEscalation === true;
     this.#inputTokenBudget = typeof options.inputTokenBudget === 'number' && options.inputTokenBudget > 0 ? Math.floor(options.inputTokenBudget) : 0;
+    this.#questionGate = options.questionGate === true;
     this.#onLoopHardPause = options.onLoopHardPause;
     this.#noticesFor = options.noticesFor;
   }
@@ -313,6 +342,8 @@ export class AgentLoop {
       this.#targets.delete(spec.id);
       this.#blockedOutside.delete(spec.id);
       this.#targetExceptions.delete(spec.id);
+      this.#questionGates.delete(spec.id);
+      this.#questionRoundsDone.delete(spec.id);
       this.#validationStalls.delete(spec.id);
       this.#planRepairs.delete(spec.id);
       this.#commandsSucceeded.delete(spec.id);
@@ -392,7 +423,7 @@ export class AgentLoop {
         if (
           state.mode === 'plan'
           && !this.#planRepairs.has(state.id)
-          && ![...(this.#changedFiles.get(state.id) ?? [])].some((path) => isPlanDocumentChange(path))
+          && !hasPlanDocument(this.#changedFiles.get(state.id) ?? [], 'plan.md')
         ) {
           this.#planRepairs.add(state.id);
           await this.#emit(state.id, undefined, 'RECOVERY_STARTED', { reason: 'plan_document_missing', strategy: 'write_plan_document', attempt: 1 });
@@ -956,6 +987,17 @@ export class AgentLoop {
         };
       }
     }
+    // Pre-build question gate: a creation-shaped, underspecified brief
+    // in Auto/Manual mode owes the user one ask_user round BEFORE the
+    // first call that changes anything (write tools, commands, subagent
+    // delegation). Non-optional by design — the incident this answers is
+    // a strong model building its own guess end-to-end and the user
+    // paying for the corrections. Checked after schema validation (the
+    // call is known well-formed) and before target confinement: the
+    // requirements conversation precedes every other refusal. Reads and
+    // ask_user itself flow freely (explore-first stays possible).
+    const gateBlock = this.#questionGateBlock(state, call, turnMode);
+    if (gateBlock) return { result: gateBlock };
     // Task-target confinement: an anchored creation task writes inside
     // its declared target only (see #outsideTargetBlock). Checked after
     // schema validation (the path argument is known well-formed) and
@@ -1013,6 +1055,20 @@ export class AgentLoop {
     // is threaded onto the returned state below so the final report can
     // name the excepted paths.
     const grantedExceptions = call.tool === ASK_USER_TOOL_NAME ? this.#grantTargetExceptions(state, call, result) : undefined;
+    // Question-gate bookkeeping on the same event: a COMPLETED ask_user
+    // round (answered, or timed out into proceed-on-assumptions — the
+    // question was offered and waited, which is what the gate demands)
+    // releases the mutation gate for the rest of the task, and an
+    // answered question's answer is pinned onto the state: appended to
+    // constraints it rides into every later request, and as
+    // clarifying_answers it lands in the final report's evidence.
+    if (call.tool === ASK_USER_TOOL_NAME && result.status === 'ok'
+      && (result.meta?.outcome === 'answered' || result.meta?.outcome === 'timeout')) {
+      this.#questionRoundsDone.add(state.id);
+    }
+    const clarification = call.tool === ASK_USER_TOOL_NAME && result.meta?.outcome === 'answered'
+      ? this.#clarificationFor(state, call, result)
+      : undefined;
     if (result.meta?.mutating === true) {
       // Validation bookkeeping: remember which files the task changed
       // (checks are scoped to their packages) and that this failure is
@@ -1200,9 +1256,45 @@ export class AgentLoop {
       }
     }
     const observed = { ...this.#observe.handle({ kind: 'tool_result', result: finalResult }, current), mode: turnMode, last_tool_call_id: call.id, tool_result: finalResult };
-    return grantedExceptions
-      ? { ...observed, target_exceptions: [...new Set([...(current.target_exceptions ?? []), ...grantedExceptions])] }
-      : observed;
+    let recorded = observed;
+    if (grantedExceptions) {
+      recorded = { ...recorded, target_exceptions: [...new Set([...(current.target_exceptions ?? []), ...grantedExceptions])] };
+    }
+    if (clarification) {
+      recorded = {
+        ...recorded,
+        constraints: [
+          ...recorded.constraints,
+          `Clarifying answer (the user's decision for this task — build to it, do not re-derive): "${clarification.question}" → "${clarification.answer}"`,
+        ],
+        clarifying_answers: [...(current.clarifying_answers ?? []), clarification],
+      };
+    }
+    return recorded;
+  }
+
+  /**
+   * Extract the recorded {question, answer} pair from an answered
+   * ask_user result, when this task runs under the question gate (only
+   * gated tasks stamp constraints — an ordinary mid-task clarification
+   * stays conversation, not a binding pin). The answer is the chosen
+   * option's label, or the user's free text verbatim.
+   */
+  #clarificationFor(state: TaskState, call: ToolCall, result: ToolResult): { question: string; answer: string } | undefined {
+    if (!this.#questionGateFor(state)) return undefined;
+    const args = (call.args ?? {}) as { question?: unknown; options?: unknown };
+    const question = typeof args.question === 'string' ? args.question.trim() : '';
+    if (!question) return undefined;
+    const optionIndex = typeof result.meta?.option_index === 'number' ? result.meta.option_index : undefined;
+    let answer: string | undefined;
+    if (optionIndex !== undefined && Array.isArray(args.options)) {
+      const option = args.options[optionIndex] as { label?: unknown } | string | undefined;
+      if (typeof option === 'string') answer = option;
+      else if (option && typeof option.label === 'string') answer = option.label;
+    }
+    answer ??= freeTextAnswer(result.output);
+    if (!answer) return undefined;
+    return { question, answer };
   }
 
   /** Execute a single tool call end to end (the sequential path). */
@@ -1527,6 +1619,50 @@ export class AgentLoop {
   }
 
   /**
+   * Evaluate the pre-build question gate once per task and cache it, so
+   * its answer never shifts mid-run. Run-shape conditions live here
+   * (the goal-text classification is agent/scaffold.ts):
+   *
+   * - the gate is wired for this run (settings.questionGate, on by default);
+   * - the task runs in Auto or Manual (Ask answers, Plan interviews itself);
+   * - it is a top-level task — a spawned subagent executes a brief its
+   *   parent already scoped, so it is never sent back to the user;
+   * - it is not an execute-the-plan follow-up (the plan interview
+   *   already happened; re-gating would interrogate an approved spec);
+   * - the goal is creation-shaped and underspecified per
+   *   questionGateAppliesToGoal (raw one-line briefs naming at most one
+   *   of {folder, stack, criteria}).
+   */
+  #questionGateFor(state: TaskState): boolean {
+    const cached = this.#questionGates.get(state.id);
+    if (cached !== undefined) return cached;
+    let applies = false;
+    if (this.#questionGate) {
+      const mode = state.mode ?? this.#modeController.mode;
+      applies = (mode === 'auto' || mode === 'manual')
+        && !state.parent_task_id
+        && !state.plan_task_id
+        && questionGateAppliesToGoal(state.goal, state.done_criteria);
+    }
+    this.#questionGates.set(state.id, applies);
+    return applies;
+  }
+
+  /** The gate block for one mutating/executing call, or undefined when it may proceed. */
+  #questionGateBlock(state: TaskState, call: ToolCall, turnMode: AgentMode): ToolResult | undefined {
+    if (this.#questionRoundsDone.has(state.id)) return undefined;
+    if (classifyToolName(call.tool) !== 'mutating' && classifyToolName(call.tool) !== 'executing') return undefined;
+    if (!this.#questionGateFor(state)) return undefined;
+    return {
+      call_id: call.id,
+      status: 'denied',
+      output: QUESTION_GATE_DIRECTIVE,
+      truncated: false,
+      meta: { tool: call.tool, mode: turnMode, reason: 'question_gate', mutating: false },
+    };
+  }
+
+  /**
    * Write confinement for anchored tasks. The loop layer is the seam on
    * purpose: #prepareToolCall is the one choke point sequential calls
    * AND parallel spawn bursts share, it runs before the call can reach
@@ -1837,6 +1973,7 @@ function toSpec(state: TaskState): TaskSpec {
     created_at: state.created_at,
     mode: state.mode,
     parent_task_id: state.parent_task_id,
+    plan_task_id: state.plan_task_id,
     attachments: state.attachments,
     provider_id: state.provider_id,
     model: state.model,

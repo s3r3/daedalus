@@ -337,6 +337,7 @@ describe('task target guard — incident regressions', () => {
   test('(d) an unanchored task keeps the old behavior: no folder named → no confinement, no target gate', async () => {
     const root = temp('daedalus-target-free-ws-');
     const home = temp('daedalus-target-home-');
+    // The creation question gate is orthogonal to target confinement here.
     const runner = new TaskRunner({
       workspaceRoot: root,
       store: new TaskStore(home),
@@ -345,6 +346,7 @@ describe('task target guard — incident regressions', () => {
         { tool: 'write_file', args: { path: 'ayid/index.html', content: PUTIN_HTML } },
       ]),
       approvalPolicy: 'auto',
+      questionGate: false,
       maxIterations: 10,
     });
 

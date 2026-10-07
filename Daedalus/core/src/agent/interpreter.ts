@@ -27,6 +27,7 @@ export async function interpretTask(input: string, options: Partial<Omit<TaskSpe
     created_at: options.created_at ?? new Date().toISOString(),
     mode: options.mode,
     parent_task_id: options.parent_task_id,
+    plan_task_id: options.plan_task_id,
     attachments: options.attachments,
     provider_id: options.provider_id,
     model: options.model,

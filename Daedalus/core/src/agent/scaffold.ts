@@ -563,6 +563,61 @@ export function detectCreationGoal(goal: string, doneCriteria: string[] = []): C
   return { creation: true };
 }
 
+/**
+ * Bring-into-being verbs: the goal wishes a NEW artifact into existence
+ * ("buat project…", "create a page…"), as opposed to the add/improve
+ * verbs in CREATION_VERB ("tambahkan pemilih tanggal di halaman") that
+ * operate on an existing artifact. The clarification gate below only
+ * owes a requirements round to the first kind: a tiny edit to existing
+ * work never has to interrogate the user first.
+ */
+const BRING_INTO_BEING =
+  /\b(buat|buatkan|buatin|bikin|bikinin|membuat|create|make|build|generate|scaffold|new|baru)\b/i;
+
+/**
+ * How much of the build brief the goal itself already names, over the
+ * three cheap deterministic signals available without a model call:
+ * an explicit target folder, a chosen stack/framework (a scaffold
+ * recipe match), and concrete done-criteria. This is the
+ * "underspecified" test the pre-build question gate hangs on: a raw
+ * one-line prompt naming only a stack ("buat project vite tentang
+ * kehadiran mahasiswa") scores 1 and gets asked; a brief that already
+ * pins a folder AND a stack — or stack + criteria — is specified
+ * enough to build from directly.
+ */
+export type CreationSpecificity = { folder: boolean; stack: boolean; criteria: boolean; named: number };
+
+export function creationSpecificity(goal: string, doneCriteria: string[] = []): CreationSpecificity {
+  const joined = [goal, ...doneCriteria].join('\n');
+  const folder = explicitTargetFolder(joined) !== undefined;
+  const stack = detectScaffoldRequest(joined) !== undefined || detectUnsupportedFramework(goal) !== undefined;
+  const criteria = doneCriteria.some((criterion) => criterion.trim().length > 0);
+  return { folder, stack, criteria, named: Number(folder) + Number(stack) + Number(criteria) };
+}
+
+/**
+ * Would this goal owe the user one clarifying question round before
+ * anything in the workspace changes? The gate's full rule (the agent
+ * loop adds the run-shape conditions: Auto/Manual mode, top-level task,
+ * not an execute-the-plan follow-up, gate enabled):
+ *
+ * - creation-shaped per detectCreationGoal (questions and fix-shaped
+ *   goals never classify, so they never gate);
+ * - bring-into-being or scaffold-shaped — edits to existing artifacts
+ *   ("tambahkan X di halaman") never gate, however underspecified;
+ * - underspecified: fewer than two of {folder, stack, criteria} named.
+ *
+ * Whether asking was WORTH it is a quality question the harness does
+ * not adjudicate — it enforces only that a round happens before the
+ * first mutation on a raw creation brief.
+ */
+export function questionGateAppliesToGoal(goal: string, doneCriteria: string[] = []): boolean {
+  const creation = detectCreationGoal(goal, doneCriteria);
+  if (!creation.creation) return false;
+  if (!creation.scaffold && !BRING_INTO_BEING.test(goal)) return false;
+  return creationSpecificity(goal, doneCriteria).named < 2;
+}
+
 export type ToolchainProbe = { tool: string; ok: boolean; version?: string };
 
 export type ToolchainProbeFn = (tool: string) => Promise<ToolchainProbe>;

@@ -178,6 +178,7 @@ describe('shared local core, Web prompts, extensions, and shared workspace', () 
       provider: cliScriptedProvider(),
       validator: passValidator,
       approvalPolicy: 'auto',
+      questionGate: false, // this test pins CLI/Web shared state, not the creation question gate
       settings: loadSettings({ DAEDALUS_HOME: '.daedalus' }),
       thinking: true,
     });
