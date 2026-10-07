@@ -1,25 +1,24 @@
 import { useState } from 'react'
 import { ListChecks, Play } from 'lucide-react'
 import { Button } from '../ui/button'
-import { api } from '../../api/client'
 import { useActiveTaskId, useTaskEvents } from '../../state/hooks'
 import { useDaedalusStore } from '../../state/taskStore'
 import { pendingApprovals, pendingQuestions, planDocuments, taskStatus } from '../../state/selectors'
+import { executePlanDocument } from './execute-plan'
 
 /**
  * Approve & Execute: when a Plan task finishes with plan documents
  * written (.daedalus/plans/<slug>/plan.md, named in its closing
  * PLAN_CREATED), the chat offers to run the plan for real. The follow-up
  * task carries plan_task_id, so the plan's steps ride into the executor's
- * prompt, and its goal names the plan file itself.
+ * prompt, and its goal names the plan file itself. The launch itself lives
+ * in execute-plan.ts so the persistent plan chips above the composer run
+ * the identical creation.
  */
 export function ExecutePlanBar() {
   const events = useTaskEvents()
   const taskId = useActiveTaskId()
   const workspaceRoot = useDaedalusStore((state) => state.workspace.root)
-  const composer = useDaedalusStore((state) => state.composer)
-  const setTask = useDaedalusStore((state) => state.setTask)
-  const setComposer = useDaedalusStore((state) => state.setComposer)
   const [busy, setBusy] = useState<'auto' | null>(null)
   const [failure, setFailure] = useState<string | null>(null)
 
@@ -33,34 +32,7 @@ export function ExecutePlanBar() {
     setBusy(mode)
     setFailure(null)
     try {
-      const goal = `Execute the approved plan in ${planDoc}`
-      // Executing the plan is the next turn of the same chat conversation
-      // when one is active, so the follow-up keeps the session's memory.
-      const store = useDaedalusStore.getState()
-      const activeConversation =
-        store.conversation && store.conversation.root === workspaceRoot ? store.conversation : null
-      const created = await api.createTask({
-        goal,
-        repo_path: workspaceRoot,
-        mode,
-        plan_task_id: taskId,
-        auto_approve: composer.autoApprove,
-        provider_id: composer.providerId || undefined,
-        model: composer.model || undefined,
-        thinking: composer.thinking,
-        ...(activeConversation ? { conversation_id: activeConversation.id } : {}),
-      })
-      setTask(created.id, goal)
-      if (activeConversation) {
-        store.setConversation({
-          ...activeConversation,
-          turns: [
-            ...activeConversation.turns,
-            { role: 'user', text: goal, task_id: created.id, mode, ts: new Date().toISOString() },
-          ],
-        })
-      }
-      setComposer({ mode, goal: '' })
+      await executePlanDocument({ workspaceRoot, planDoc, planTaskId: taskId })
     } catch (error) {
       setFailure(error instanceof Error ? error.message : String(error))
     } finally {

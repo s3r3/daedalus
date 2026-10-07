@@ -19,6 +19,7 @@ import type {
   WorkspaceFile,
   WorkspaceFiles,
   WorkspacePins,
+  WorkspacePlans,
   WorkspaceRoot,
   WorkspaceTreeNode,
   TerminalSession,
@@ -223,6 +224,9 @@ export const api = {
   list: (root: string, path = '.') => request<{ path: string; items: WorkspaceEntry[] }>(`/workspace/list${query({ root, path })}`),
 
   file: (root: string, path: string) => request<WorkspaceFile>(`/workspace/file${query({ root, path })}`),
+
+  /** Plan documents the Plan-mode flow wrote under .daedalus/plans (chips above the composer). */
+  plans: (root: string) => request<WorkspacePlans>(`/workspace/plans${query({ root })}`),
 
   files: (root: string) => request<WorkspaceFiles>(`/workspace/files${query({ root })}`),
 
