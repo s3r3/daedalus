@@ -21,10 +21,13 @@ function temp(prefix: string): string {
   return dir;
 }
 
-const EXPECTED_BUNDLED = ['code-review', 'git-workflow', 'spec-driven-development', 'systematic-debugging', 'test-driven-development'];
+// The bundled catalog gains `ponytail` (docs/THIRD_PARTY.md): a starter
+// skill like the other five — listed and installable, never loaded by
+// default. The list grows with the catalog; that is the point of pinning it.
+const EXPECTED_BUNDLED = ['code-review', 'git-workflow', 'ponytail', 'spec-driven-development', 'systematic-debugging', 'test-driven-development'];
 
 describe('bundled starter skills', () => {
-  test('lists the five bundled skills with provenance', async () => {
+  test('lists the six bundled skills with provenance', async () => {
     const workspace = temp('daedalus-skills-list-');
     const listing = await listSkills({ workspaceRoot: workspace });
     expect(listing.bundled.map((skill) => skill.name)).toEqual(EXPECTED_BUNDLED);

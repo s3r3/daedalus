@@ -74,6 +74,23 @@ export function resolveToolOutputLimits(partial?: Partial<ToolOutputLimits>): To
 }
 
 /**
+ * Write one spill file (with parent directories), returning the path on
+ * success and `undefined` on any failure. Spilling is always fail-open: a
+ * spill problem degrades markers, never a tool call. Shared by the shaping
+ * below and the agent loop's output compression, which spills the raw
+ * command output before the model sees the compressed form.
+ */
+export async function writeSpillFile(path: string, text: string): Promise<string | undefined> {
+  try {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, text, "utf8");
+    return path;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Shape one tool result for the model. Under either cap the text passes
  * through untouched and nothing is spilled; over a cap it is truncated
  * head+tail and (when enabled and a sink is given) the full text is spilled.
@@ -88,15 +105,7 @@ export async function shapeToolOutput(output: string, options: ShapeToolOutputOp
   const { text, shownLines } = truncateHeadTail(output, limits.maxChars, limits.maxLines);
   let spillPath: string | undefined;
   if (limits.spill && options.spillPathFor) {
-    try {
-      const candidate = options.spillPathFor(options.tool);
-      await mkdir(dirname(candidate), { recursive: true });
-      await writeFile(candidate, output, "utf8");
-      spillPath = candidate;
-    } catch {
-      // Fail-open: a spill failure degrades the marker, never the tool call.
-      spillPath = undefined;
-    }
+    spillPath = await writeSpillFile(options.spillPathFor(options.tool), output);
   }
   const marker = spillPath
     ? `[output truncated: showed ${shownLines} of ${totalLines} lines / ${totalChars} chars — full output saved to ${spillPath}; read it with read_file using offset/limit if you need the middle]`

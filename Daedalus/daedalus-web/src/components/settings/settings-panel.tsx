@@ -66,6 +66,8 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [reviewGate, setReviewGate] = useState(false)
+  const [earlyEscalation, setEarlyEscalation] = useState(true)
+  const [outputCompression, setOutputCompression] = useState(true)
 
   const loadAll = useCallback(async (): Promise<void> => {
     setError(null)
@@ -73,8 +75,11 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
     if (settingsResult.status === 'fulfilled') {
       setSession(settingsResult.value.session)
       if (settingsResult.value.providers) setProviders(settingsResult.value.providers)
-      const tailor = (settingsResult.value.settings as { tailor?: { reviewGate?: boolean } }).tailor
+      const tailor = (settingsResult.value.settings as { tailor?: { reviewGate?: boolean; earlyEscalation?: boolean } }).tailor
       if (typeof tailor?.reviewGate === 'boolean') setReviewGate(tailor.reviewGate)
+      if (typeof tailor?.earlyEscalation === 'boolean') setEarlyEscalation(tailor.earlyEscalation)
+      const compression = (settingsResult.value.settings as { outputCompression?: boolean }).outputCompression
+      if (typeof compression === 'boolean') setOutputCompression(compression)
     }
     if (providersResult.status === 'fulfilled') setProviders(providersResult.value.providers, providersResult.value.presets)
     if (modelsResult.status === 'fulfilled') setModels(modelsResult.value.models)
@@ -143,6 +148,26 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
     try {
       await api.updateSettings({ tailor: { reviewGate: enabled } })
       setStatus(enabled ? 'Review gate on: the strongest pool model reviews weaker models\' changes before completion.' : 'Review gate off.')
+    } catch (caught) {
+      setError(errorMessage(caught))
+    }
+  }
+
+  const changeEarlyEscalation = async (enabled: boolean): Promise<void> => {
+    setEarlyEscalation(enabled)
+    try {
+      await api.updateSettings({ tailor: { earlyEscalation: enabled } })
+      setStatus(enabled ? 'Early escalation on: a looping task is pinned to the strongest pool model once.' : 'Early escalation off: loop warnings only advise the current model.')
+    } catch (caught) {
+      setError(errorMessage(caught))
+    }
+  }
+
+  const changeOutputCompression = async (enabled: boolean): Promise<void> => {
+    setOutputCompression(enabled)
+    try {
+      await api.updateSettings({ outputCompression: enabled })
+      setStatus(enabled ? 'Output compression on: noisy command output is filtered before the model reads it.' : 'Output compression off: command output reaches the model raw (caps still apply).')
     } catch (caught) {
       setError(errorMessage(caught))
     }
@@ -415,6 +440,42 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
           <p className="text-[10px] text-muted">
             Off by default. When on and a pool with 2+ models is in play, the strongest model reviews a weaker model's file changes
             before completion; blocking findings demote the result to partial. Report-only — it never re-runs the task.
+          </p>
+        </div>
+        <div className="flex flex-col gap-1" data-testid="early-escalation-settings">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+            <input
+              type="checkbox"
+              className="size-3 accent-primary"
+              checked={earlyEscalation}
+              onChange={(event) => void changeEarlyEscalation(event.target.checked)}
+              data-testid="settings-early-escalation"
+              aria-label="early escalation"
+            />
+            early escalation — pin looping tasks to the strongest model
+          </label>
+          <p className="text-[10px] text-muted">
+            On by default. When the loop breaker or the stall counter fires and a pool with 2+ models is in play, the task is
+            pinned to the strongest model once (recorded as TAILOR_ESCALATED). Without a pool nothing is spent — the directive
+            and fail-fast behaviors still apply.
+          </p>
+        </div>
+        <div className="flex flex-col gap-1" data-testid="output-compression-settings">
+          <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+            <input
+              type="checkbox"
+              className="size-3 accent-primary"
+              checked={outputCompression}
+              onChange={(event) => void changeOutputCompression(event.target.checked)}
+              data-testid="settings-output-compression"
+              aria-label="output compression"
+            />
+            output compression — shrink noisy command output before the model reads it
+          </label>
+          <p className="text-[10px] text-muted">
+            On by default. Install logs, test runs, and git output are semantically filtered before entering the model's context;
+            failures and exit codes stay verbatim and the complete text is kept in the task store. Turn off to feed the model raw
+            output (the size caps still apply).
           </p>
         </div>
         <p className="text-[10px] text-muted">

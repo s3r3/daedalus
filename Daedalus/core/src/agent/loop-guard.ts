@@ -68,6 +68,20 @@ export function loopGuidanceNote(tool: string, repeats: number): string {
   ].join(' ');
 }
 
+/**
+ * The escalation after repeated suppressions: not another copy of the
+ * cached result, but a directive that names the only acceptable next
+ * moves. The incident transcripts show a bare "(repeat suppressed)"
+ * line being ignored turn after turn — the model's information never
+ * changed, so its behavior didn't either.
+ */
+export function loopDirectiveNote(tool: string, repeats: number): string {
+  return [
+    `Loop directive: ${tool} with these arguments has now been repeated ${repeats} times and the result will not change — you already have it in your context.`,
+    'Your next call must change something: the mutating tool for your goal (write_file/edit_file/download_file/run_command with a different command), ask_user if you are blocked on a decision, or finish by replying "done: <summary>" / reporting plainly what is missing. Repeating this call again will be refused and the task will pause.',
+  ].join(' ');
+}
+
 /** Suppressed list_dir answer: point at the listing already given and push toward the actual change. */
 export function explorationSuppressedNote(path: string): string {
   return `(repeat suppressed: you already listed "${path}" above and it has not changed since. Do not list it again — proceed to the actual change now: create_dir/write_file/edit_file for the target, or reply "done: <summary>" if nothing remains.)`;
@@ -195,6 +209,24 @@ export class LoopGuard {
     if (explorationDecision === 'warn') return { decision: 'warn', repeats: Math.max(repeats, explorationRepeats), signature, repeatKind: 'same_path' };
     if (exactDecision === 'warn') return { decision: 'warn', repeats, signature };
     return { decision: 'execute', repeats, signature };
+  }
+
+  /**
+   * Re-arm after a user-approved continue (the hard-pause seam): forget
+   * this call's repeat history so counting restarts from zero instead
+   * of instantly re-pausing on the next identical call.
+   */
+  resetCall(tool: string, args: unknown): void {
+    const signature = toolCallSignature(tool, args);
+    for (let i = this.#window.length - 1; i >= 0; i--) {
+      if (this.#window[i] === signature) this.#window.splice(i, 1);
+    }
+    const key = explorationKey(tool, args, this.#workspaceRoot);
+    if (key) {
+      for (let i = this.#explorationWindow.length - 1; i >= 0; i--) {
+        if (this.#explorationWindow[i] === key) this.#explorationWindow.splice(i, 1);
+      }
+    }
   }
 
   /** Drop exploration counters for a mutated path and every ancestor the model might re-list. */

@@ -326,7 +326,11 @@ describe('AgentLoop (fake provider + fake tool)', () => {
     const state = await loop.run('Loop forever task with one step\ndone: never really satisfied');
     cleanup();
     expect(state.status).toBe('failed');
-    expect(state.last_error).toBe('no_progress');
+    // Breaker supersedes the old identical-observation stop for this
+    // shape: five identical calls hard-pause (default: stop) before the
+    // 6-observation backstop could fire; 'no_progress' now covers
+    // alternating stalls (see read-loop-stalls.test.ts).
+    expect(state.last_error).toBe('loop_hard_pause');
   });
 
   test('replays deterministically from the persisted event log', async () => {

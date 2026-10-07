@@ -389,7 +389,13 @@ function applySettingsUpdate(ctx: AppContext, parsed: Record<string, unknown>): 
     if (typeof tailor.review_gate === "boolean") ctx.settings.tailor.reviewGate = tailor.review_gate;
     if (typeof tailor.modelRouting === "boolean") ctx.settings.tailor.modelRouting = tailor.modelRouting;
     if (typeof tailor.qualityEscalation === "boolean") ctx.settings.tailor.qualityEscalation = tailor.qualityEscalation;
+    if (typeof tailor.earlyEscalation === "boolean") ctx.settings.tailor.earlyEscalation = tailor.earlyEscalation;
+    if (typeof tailor.early_escalation === "boolean") ctx.settings.tailor.earlyEscalation = tailor.early_escalation;
   }
+  // Command-output compression (core RTK-style filters): process-local
+  // like the tailor toggles; DAEDALUS_OUTPUT_COMPRESSION sets the default.
+  if (typeof parsed.outputCompression === "boolean") ctx.settings.outputCompression = parsed.outputCompression;
+  if (typeof parsed.output_compression === "boolean") ctx.settings.outputCompression = parsed.output_compression;
   const llm = typeof parsed.llm === "object" && parsed.llm !== null ? (parsed.llm as Record<string, unknown>) : undefined;
   if (llm) {
     if (typeof llm.baseUrl === "string") ctx.settings.llm.baseUrl = llm.baseUrl;

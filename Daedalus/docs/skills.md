@@ -80,6 +80,36 @@ recorded and rendered:
 Chips never block, and a suppressed repeat `read_skill` does not
 double-report.
 
+## Bundled starter skills
+
+Daedalus ships a small catalog of starter skills in `Daedalus/skills/`.
+They are a *catalog*, not an install: `daedalus skills list` shows them,
+`daedalus skills install <name>` (or `--all`) copies one into the
+workspace skills directory, and only then does the loader see it. Nothing
+bundled is loaded, indexed, or active by default.
+
+The catalog: `code-review`, `git-workflow`, `spec-driven-development`,
+`systematic-debugging`, `test-driven-development`, and `ponytail`.
+
+**`ponytail`** is the lazy-senior-dev discipline: before writing code,
+climb the ladder — does it need to exist, is it already in this codebase,
+can the standard library / a native platform feature / an installed
+dependency do it, can it be one line — then write the minimum that works,
+with a "lazy about the solution, never about reading" guard and
+`ponytail:` comments marking deliberate shortcuts. It is adapted from the
+MIT-licensed Ponytail skill concept (provenance in
+`docs/THIRD_PARTY.md`), ships **default-off**, and is enabled per
+workspace exactly like any other skill: install it, then leave it enabled,
+disable it in `.daedalus/skills.json`, or force-load it with
+`/skill ponytail` for one task.
+
+Prose-compression skills (caveman-style terse output) are deliberately
+not bundled — Daedalus's token problem is tool output on the input side,
+which the output compressor (`DAEDALUS_OUTPUT_COMPRESSION`) addresses. If
+you want one anyway, drop any `SKILL.md` into a skills directory (for
+example `<workspace>/.daedalus/skills/caveman/SKILL.md` or
+`~/.claude/skills/`) and the loader picks it up like any other skill.
+
 ## Honest limits
 
 - Matching quality still depends on each skill's `description` — the

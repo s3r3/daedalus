@@ -11,10 +11,12 @@ import type { Validator } from '../validation/index.ts';
 import { completionGate, normalizeError, validationFailed, validationFailureSignature } from '../validation/index.ts';
 import { interpretTask } from './interpreter.ts';
 import { createPlan, replan } from './planner.ts';
-import { DefaultContextManager, condenseToolOutputs, contextMeter } from './context.ts';
-import { LoopGuard, REPEAT_SUPPRESSED_OUTPUT, loopGuidanceNote } from './loop-guard.ts';
+import { DefaultContextManager, CONDENSED_TOOL_OUTPUT, condenseToolOutputs, contextMeter } from './context.ts';
+import { LoopGuard, REPEAT_SUPPRESSED_OUTPUT, loopDirectiveNote, loopGuidanceNote, toolCallSignature } from './loop-guard.ts';
+import { toolCallParseErrorOutput, validateToolCallArguments } from './tool-call-validation.ts';
 import { handleObservation } from './observation.ts';
-import { resolveToolOutputLimits, shapeToolOutput, type ToolOutputLimits } from './tool-output.ts';
+import { resolveToolOutputLimits, shapeToolOutput, writeSpillFile, type ToolOutputLimits } from './tool-output.ts';
+import { compressCommandOutput, type CommandOutputCompression } from './output-compression.ts';
 import { evaluateStopConditions, noProgressCondition } from './stop.ts';
 import { ModeController, isToolCallDenied, isToolVisible, modeDenialMessage } from '../interaction/modes.ts';
 import { isPlanDocumentChange, planDecisionsFromEvents, planDocumentRepairDirective } from '../interaction/plans.ts';
@@ -37,6 +39,24 @@ export { evaluateStopConditions };
  * failures — timeouts get their own, stricter budget).
  */
 export const MAX_CONSECUTIVE_TIMEOUTS = 2;
+
+/** Identical-call total at which the loop breaker hard-pauses (Cline converges at 5). */
+export const LOOP_HARD_PAUSE_AT = 5;
+/** Consecutive non-progress tool results that end a task as partial (the stall backstop). */
+export const STALL_LIMIT = 6;
+/** Stall count at which the tailor early-trigger fires (before the hard stop). */
+export const STALL_ESCALATE_AT = 3;
+
+/** Flatten a run_command call into the executed command line, for output-compression family detection. Defensive: odd arg shapes yield just the command name. */
+export function commandLineForCall(call: ToolCall): string {
+  const args = (call.args ?? {}) as { command?: unknown; args?: unknown };
+  const parts: string[] = [];
+  if (typeof args.command === 'string') parts.push(args.command);
+  if (Array.isArray(args.args)) {
+    for (const arg of args.args) if (typeof arg === 'string') parts.push(arg);
+  }
+  return parts.join(' ');
+}
 
 export type AgentLoopOptions = {
   provider: LLMProvider;
@@ -68,6 +88,14 @@ export type AgentLoopOptions = {
    */
   toolOutput?: Partial<ToolOutputLimits>;
   /**
+   * RTK-style semantic compression of `run_command` output before shaping
+   * (agent/output-compression.ts): noisy command dumps are filtered per
+   * command family, failures + the exit code stay verbatim, and the raw
+   * text is spilled to the task store. Default: on. When off, command
+   * output reaches shaping byte-identical.
+   */
+  outputCompression?: boolean;
+  /**
    * Capability tiers per model (tailor suite): stamped onto request events
    * (`tier`) and used for phase routing inside a model pool.
    */
@@ -79,6 +107,33 @@ export type AgentLoopOptions = {
    * disables. No-op without a multi-model pool.
    */
   qualityEscalation?: boolean;
+  /**
+   * Tailor early-trigger (optional insurance): when the anti-loop guard
+   * warns or the stall counter crosses its threshold, pin the rest of
+   * the task to the pool's strongest model ONCE (TAILOR_ESCALATED)
+   * instead of waiting for a validation failure. Default off at this
+   * layer; the runtime wires it from settings.tailor.earlyEscalation.
+   * No-op without a multi-model pool with a stronger model available —
+   * never spends on a model the user did not configure.
+   */
+  earlyEscalation?: boolean;
+  /**
+   * Per-task cumulative INPUT-token budget (provider-reported usage;
+   * context estimates when the provider reports none). At the budget
+   * the task stops as partial with the spend stated, instead of
+   * burning on — the incident run reached 264,722 input tokens over 14
+   * requests before a human stopped it. 0/undefined disables.
+   */
+  inputTokenBudget?: number;
+  /**
+   * Hard-pause seam (loop breaker): after the same call has been
+   * repeated 5 times despite warning + suppression, the loop asks the
+   * host whether to continue (re-arms the breaker) or stop (the task
+   * ends partial). Unwired = stop, so an unattended loop fails fast
+   * instead of burning turns. Time spent waiting on the answer is not
+   * model time and consumes no budget.
+   */
+  onLoopHardPause?: (info: { taskId: string; tool: string; repeats: number; signature: string }) => Promise<'continue' | 'stop'>;
   /**
    * Drain pending system notices for a task (background-subagent results
    * the runtime queued since the last turn). Drained once per step and
@@ -118,8 +173,12 @@ export class AgentLoop {
   readonly #contextLimitTokens: number;
   readonly #condense: boolean;
   readonly #toolOutputLimits: ToolOutputLimits;
+  readonly #outputCompression: boolean;
   readonly #modelTiers: Record<string, ModelTier>;
   readonly #qualityEscalation: boolean;
+  readonly #earlyEscalation: boolean;
+  readonly #inputTokenBudget: number;
+  readonly #onLoopHardPause?: AgentLoopOptions['onLoopHardPause'];
   readonly #noticesFor?: (taskId: string) => string[];
   readonly #spillCounters = new Map<string, number>();
   readonly #loopGuards = new Map<string, LoopGuard>();
@@ -158,6 +217,32 @@ export class AgentLoop {
   readonly #validationStalls = new Map<string, { signature: string; changedSince: boolean }>();
   /** Plan tasks that already spent their one write-the-plan repair turn. */
   readonly #planRepairs = new Set<string>();
+  /**
+   * Ranges each task has already been SERVED in full by read_file /
+   * list_dir (path → line-numbered lines), with the condensed-message
+   * count at serve time. A re-read whose lines are all recorded with
+   * identical content — and no new condensing has dropped them from
+   * context since — is answered with a short stub instead of re-emitting
+   * the whole file into history (the incident's 8 identical reads).
+   * Recording happens only when the model actually received the full
+   * text: a shaped/truncated serve records nothing, so a range the
+   * model only partially received is never stubbed.
+   */
+  readonly #servedReads = new Map<string, Map<string, { lines: Map<number, string>; totalLines: number; condensedAtServe: number; listingText?: string }>>();
+  /** Condensed-tool-message count in each task's latest built request. */
+  readonly #condensedCounts = new Map<string, number>();
+  /** Per-signature call counts across the whole task (the breaker ladder). */
+  readonly #callCounts = new Map<string, Map<string, number>>();
+  /** Per-signature suppression counts (directive at 2, hard-pause at 5 total). */
+  readonly #suppressCounts = new Map<string, Map<string, number>>();
+  /** Consecutive non-progress tool results per task (the stall backstop). */
+  readonly #stalls = new Map<string, number>();
+  /** Observation fingerprints each task has already seen (progress = a NEW one). */
+  readonly #seenObservations = new Map<string, Set<string>>();
+  /** Cumulative input tokens per task (usage-reported or estimated). */
+  readonly #inputTokens = new Map<string, number>();
+  /** Tasks with a pending hard-stop (stall / pause-stop / token budget). */
+  readonly #hardStops = new Map<string, { reason: string; detail: string }>();
   #cancelled = new Set<string>();
   readonly #invalidActions = new Map<string, number>();
 
@@ -183,8 +268,12 @@ export class AgentLoop {
     this.#contextLimitTokens = options.contextLimitTokens && options.contextLimitTokens > 0 ? options.contextLimitTokens : 128_000;
     this.#condense = options.condense !== false;
     this.#toolOutputLimits = resolveToolOutputLimits(options.toolOutput);
+    this.#outputCompression = options.outputCompression !== false;
     this.#modelTiers = options.modelTiers ?? {};
     this.#qualityEscalation = options.qualityEscalation !== false;
+    this.#earlyEscalation = options.earlyEscalation === true;
+    this.#inputTokenBudget = typeof options.inputTokenBudget === 'number' && options.inputTokenBudget > 0 ? Math.floor(options.inputTokenBudget) : 0;
+    this.#onLoopHardPause = options.onLoopHardPause;
     this.#noticesFor = options.noticesFor;
   }
 
@@ -215,6 +304,14 @@ export class AgentLoop {
       this.#delegatedTasks.delete(spec.id);
       this.#creationRepairs.delete(spec.id);
       this.#consecutiveTimeouts.delete(spec.id);
+      this.#servedReads.delete(spec.id);
+      this.#condensedCounts.delete(spec.id);
+      this.#callCounts.delete(spec.id);
+      this.#suppressCounts.delete(spec.id);
+      this.#stalls.delete(spec.id);
+      this.#seenObservations.delete(spec.id);
+      this.#inputTokens.delete(spec.id);
+      this.#hardStops.delete(spec.id);
     }
   }
 
@@ -235,6 +332,17 @@ export class AgentLoop {
     const validationRecoveryLimit = Math.max(1, Math.min(3, this.#stopPolicy.max_errors));
     for (;;) {
       if (this.#cancelled.has(state.id) || this.#store.isCancelRequested(state.id)) { state = { ...state, status: 'failed', last_error: 'aborted' }; await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: 'aborted' }); this.#store.saveState(state.id, state); return state; }
+      // Hard stops (stall backstop, hard-pause stop, input-token
+      // budget): the task ends as failed-with-reason here; the runtime
+      // reports these as partial with the detail as evidence — stopping
+      // fast and honestly beats burning more turns.
+      const hardStop = this.#hardStops.get(state.id);
+      if (hardStop) {
+        state = { ...state, status: 'failed', last_error: hardStop.reason, last_observation: hardStop.detail };
+        await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: hardStop.reason, detail: hardStop.detail });
+        this.#store.saveState(state.id, state);
+        return state;
+      }
       const stop = evaluateStopConditions({ ...state, }, iteration, { ...this.#stopPolicy, max_errors: this.#stopPolicy.max_errors });
       if (errors >= this.#stopPolicy.max_errors) {
         const failure = this.#modelFailures.get(state.id);
@@ -421,6 +529,10 @@ export class AgentLoop {
     const visibleTools = this.#tools?.filter((tool) => isToolVisible(turnMode, tool.function.name));
     const built = await this.#context.buildMessages({ ...state, mode: turnMode }, [], visibleTools);
     let messages = this.#condense ? condenseToolOutputs(built, { limitTokens: this.#contextLimitTokens }) : built;
+    // Track how many tool results condensing has dropped from context:
+    // the unchanged-read stub may only claim "already in your context"
+    // for serves no new condensing has since overtaken.
+    this.#condensedCounts.set(state.id, messages.filter((message) => message.content === CONDENSED_TOOL_OUTPUT).length);
     // Anti-loop guidance queued by a previous turn rides along as an extra
     // user note so the model sees the warning in its very next request.
     const guidance = this.#pendingGuidance.get(state.id);
@@ -462,6 +574,33 @@ export class AgentLoop {
       await this.#emitThought(state.id, turnId, response.message);
       this.#modelFailures.delete(state.id);
       this.#consecutiveTimeouts.delete(state.id);
+      // Per-task input-token budget: provider-reported usage when the
+      // provider reports it, the harness's own context estimate when it
+      // does not. At the budget the task stops as partial with the
+      // spend stated — a stall must never again reach 264k input
+      // tokens over 14 requests before a human intervenes.
+      if (this.#inputTokenBudget > 0) {
+        const usage = response.usage as { prompt_tokens?: unknown } | undefined;
+        const spent = typeof usage?.prompt_tokens === 'number' && Number.isFinite(usage.prompt_tokens)
+          ? usage.prompt_tokens
+          : meter.context_estimate_tokens;
+        const totalInput = (this.#inputTokens.get(state.id) ?? 0) + spent;
+        this.#inputTokens.set(state.id, totalInput);
+        if (totalInput >= this.#inputTokenBudget && !this.#hardStops.has(state.id)) {
+          await this.#emit(state.id, turnId, 'LOOP_WARNING', {
+            tool: '',
+            repeats: 0,
+            suppressed: false,
+            kind: 'token_budget',
+            input_tokens: totalInput,
+            budget: this.#inputTokenBudget,
+          });
+          this.#hardStops.set(state.id, {
+            reason: 'input_token_budget',
+            detail: `input token budget reached: ${totalInput} input tokens spent on this task (budget ${this.#inputTokenBudget}); stopped before burning more`,
+          });
+        }
+      }
     } catch (error) {
       const errorText = formatError(error);
       const kind = classifyLLMError(error);
@@ -666,7 +805,15 @@ export class AgentLoop {
     // suppressed with a cached-repeat result instead of being executed
     // again. Repeat read_skill calls are suppressed immediately with an
     // "already loaded" note so the full skill text is not re-served.
-    const guardCall = this.#guardFor(state).observe(call.tool, call.args);
+    const guard = this.#guardFor(state);
+    const guardCall = guard.observe(call.tool, call.args);
+    // Cross-turn per-signature totals (the guard's window slides; the
+    // breaker ladder must not forget a call just because other calls
+    // interleaved — the incident alternated reads with searches).
+    const signature = guardCall.signature;
+    const callCounts = this.#countsFor(this.#callCounts, state.id);
+    const totalRepeats = (callCounts.get(signature) ?? 0) + 1;
+    callCounts.set(signature, totalRepeats);
     if (guardCall.decision !== 'execute') {
       await this.#emit(state.id, turnId, 'LOOP_WARNING', {
         tool: call.tool,
@@ -675,6 +822,9 @@ export class AgentLoop {
         ...(guardCall.repeatKind ? { repeat_kind: guardCall.repeatKind } : {}),
       });
       this.#pendingGuidance.set(state.id, loopGuidanceNote(call.tool, guardCall.repeats));
+      // Tailor early-trigger: a looping task is exactly when a stronger
+      // model earns its cost (config-gated, once per task).
+      await this.#maybeEscalateEarly(state, 'loop_warning');
     }
     if (isToolCallDenied(turnMode, call.tool, toolCallTargetPath(call.args))) {
       return {
@@ -687,22 +837,105 @@ export class AgentLoop {
         },
       };
     }
+    // Breaker hard-pause: the same call a 5th time despite warn +
+    // suppress means the model is not recovering on its own. Ask the
+    // host (user, via the runtime) whether to continue; a continue
+    // re-arms the breaker, a stop — or no host wired — ends the task
+    // as partial instead of burning more turns.
+    if (guardCall.decision === 'suppress' && totalRepeats >= LOOP_HARD_PAUSE_AT) {
+      await this.#emit(state.id, turnId, 'LOOP_WARNING', {
+        tool: call.tool,
+        repeats: totalRepeats,
+        suppressed: true,
+        kind: 'hard_pause',
+      });
+      const decision = this.#onLoopHardPause
+        ? await this.#onLoopHardPause({ taskId: state.id, tool: call.tool, repeats: totalRepeats, signature })
+        : 'stop';
+      if (decision === 'continue') {
+        guard.resetCall(call.tool, call.args);
+        callCounts.delete(signature);
+        this.#countsFor(this.#suppressCounts, state.id).delete(signature);
+        this.#stalls.set(state.id, 0);
+        this.#pendingGuidance.set(
+          state.id,
+          `You were paused: ${call.tool} with the same arguments was repeated ${totalRepeats} times with no progress. The user chose to continue. Do NOT repeat that call — take a different action now: the mutating tool for your goal, a different path/command, ask_user, or finish with a plain summary of what is missing.`,
+        );
+        return { execute: true };
+      }
+      this.#hardStops.set(state.id, {
+        reason: 'loop_hard_pause',
+        detail: `stuck: ${call.tool} was repeated ${totalRepeats} times with no progress (same arguments, same result); the task was paused and not resumed`,
+      });
+      return {
+        result: {
+          call_id: call.id,
+          status: 'denied' as const,
+          output: `${loopDirectiveNote(call.tool, totalRepeats)}\nThe task is being paused here rather than burning more turns on the same call.`,
+          truncated: false,
+          meta: { tool: call.tool, mode: turnMode, reason: 'loop_hard_pause', repeats: totalRepeats, mutating: false },
+        },
+      };
+    }
     if (guardCall.decision === 'suppress') {
+      const suppressCounts = this.#countsFor(this.#suppressCounts, state.id);
+      const suppressions = (suppressCounts.get(signature) ?? 0) + 1;
+      suppressCounts.set(signature, suppressions);
       return {
         result: {
           call_id: call.id,
           // Not an error: the call was answered from the repeat cache.
           // `mutating: false` keeps the observation handler from treating
           // it as implementation progress, and the unchanged observation
-          // lets the no_progress backstop remain the final safety.
+          // lets the no_progress backstop remain the final safety. After
+          // two suppressions the answer stops being a cached repeat and
+          // becomes a directive (a bare stub kept being ignored).
           status: 'ok' as const,
-          output: guardCall.suppressedOutput ?? REPEAT_SUPPRESSED_OUTPUT,
+          output: suppressions >= 2
+            ? loopDirectiveNote(call.tool, totalRepeats)
+            : guardCall.suppressedOutput ?? REPEAT_SUPPRESSED_OUTPUT,
           truncated: false,
           meta: { tool: call.tool, mode: turnMode, reason: 'repeat_suppressed', repeats: guardCall.repeats, mutating: false, ...(guardCall.repeatKind ? { repeat_kind: guardCall.repeatKind } : {}) },
         },
       };
     }
+    // Schema validation before dispatch (and before the call can enter
+    // history): a router-mangled argument (start_line arriving as the
+    // string "3,10") is a typed parse error here — never executed,
+    // never silently substituted, counted by the guard above like any
+    // other repeat/mistake signal.
+    const schema = this.#schemaFor(call.tool);
+    if (schema !== undefined) {
+      const validation = validateToolCallArguments(call.tool, schema, call.args);
+      if (!validation.ok) {
+        return {
+          result: {
+            call_id: call.id,
+            status: 'error' as const,
+            output: toolCallParseErrorOutput(call.tool, validation, schema),
+            truncated: false,
+            meta: { tool: call.tool, mode: turnMode, reason: 'tool_call_parse_error', ...(validation.field ? { field: validation.field } : {}), mutating: false },
+          },
+        };
+      }
+    }
     return { execute: true };
+  }
+
+  /** Per-task counter map helper (call/suppression ladders). */
+  #countsFor(store: Map<string, Map<string, number>>, taskId: string): Map<string, number> {
+    let counts = store.get(taskId);
+    if (!counts) {
+      counts = new Map<string, number>();
+      store.set(taskId, counts);
+    }
+    return counts;
+  }
+
+  /** The declared input schema for a tool, when the loop knows it. */
+  #schemaFor(toolName: string): unknown {
+    const tool = (this.#tools ?? []).find((entry) => entry.function.name === toolName);
+    return tool?.function.parameters;
   }
 
   /**
@@ -764,6 +997,37 @@ export class AgentLoop {
       delete meta.image_data_url;
       safeResult = { ...result, meta };
     }
+    // Output compression (RTK-style filters, agent/output-compression.ts)
+    // runs before shaping, on foreground run_command results only: noisy
+    // command dumps (install logs, test suites, git spew) are filtered
+    // per command family so the model spends its context on signal.
+    // Failure lines and the exit code stay verbatim in the note that
+    // follows the compressed text, and the raw output is spilled to the
+    // task store — like shaping, compression never destroys text, it
+    // only moves where the full text lives. Background-job starts are
+    // one-liners and command_status tails are already bounded, so both
+    // stay uncompressed.
+    let compression: (CommandOutputCompression & { spillPath?: string }) | undefined;
+    let modelFacingOutput = safeResult.output;
+    if (this.#outputCompression && call.tool === 'run_command' && safeResult.meta?.background !== true) {
+      const attempt = compressCommandOutput({
+        commandLine: commandLineForCall(call),
+        output: safeResult.output,
+        status: safeResult.status,
+        exitCode: typeof safeResult.meta?.exit_code === 'number' ? safeResult.meta.exit_code : null,
+      });
+      if (attempt.compressed) {
+        const spillPath = await writeSpillFile(this.#spillPathFor(state.id, call.tool), safeResult.output);
+        const exitCode = typeof safeResult.meta?.exit_code === 'number' ? safeResult.meta.exit_code : null;
+        const note = `[run_command output compressed for context: ${attempt.rawChars} chars → ${attempt.compressedChars} chars (${attempt.family} filter; failures kept verbatim${exitCode !== null ? `; exit code ${exitCode}` : ''}); ${
+          spillPath
+            ? `complete text saved to ${spillPath} — read it with read_file using offset/limit if you need what was summarized`
+            : 'complete text not saved (spill unavailable)'
+        }]`;
+        modelFacingOutput = `${attempt.text}\n${note}`;
+        compression = { ...attempt, ...(spillPath ? { spillPath } : {}) };
+      }
+    }
     // Shape the result before it enters the model context (the single
     // choke point every tool's output passes through): over-cap output is
     // kept head+tail with the full text spilled to the task store, so a
@@ -772,30 +1036,67 @@ export class AgentLoop {
     // keeps the executor's untouched result — only the model-facing copy
     // is shortened — and the event gains additive truncation flags so the
     // Web can show that shaping happened.
-    const shaped = await shapeToolOutput(safeResult.output, {
+    const shaped = await shapeToolOutput(modelFacingOutput, {
       tool: call.tool,
       limits: this.#toolOutputLimits,
       spillPathFor: (tool) => this.#spillPathFor(state.id, tool),
     });
-    const modelResult: ToolResult = shaped.truncated
+    const modelResult: ToolResult = shaped.truncated || compression
       ? {
           ...safeResult,
           output: shaped.output,
-          truncated: true,
+          truncated: shaped.truncated,
           meta: {
             ...safeResult.meta,
-            output_truncated: true,
-            ...(shaped.spillPath ? { spill_path: shaped.spillPath } : {}),
-            output_original_chars: shaped.totalChars,
-            output_original_lines: shaped.totalLines,
-            output_shown_lines: shaped.shownLines,
+            ...(compression
+              ? {
+                  output_compressed: true,
+                  output_compression_family: compression.family,
+                  output_raw_chars: compression.rawChars,
+                  output_compressed_chars: compression.compressedChars,
+                  ...(compression.spillPath ? { output_compression_spill_path: compression.spillPath } : {}),
+                }
+              : {}),
+            ...(shaped.truncated
+              ? {
+                  output_truncated: true,
+                  ...(shaped.spillPath ? { spill_path: shaped.spillPath } : {}),
+                  output_original_chars: shaped.totalChars,
+                  output_original_lines: shaped.totalLines,
+                  output_shown_lines: shaped.shownLines,
+                }
+              : {}),
           },
         }
       : safeResult;
+    // Unchanged-read stub: a read_file/list_dir whose content the model
+    // was already served in full (and which condensing has not since
+    // dropped from context) is answered with a short stub instead of
+    // re-emitting the whole file into history. Only when the model-facing
+    // text is the executor's full text — a shaped serve records nothing,
+    // so a partially-received range is never claimed as "in context".
+    let finalResult = modelResult;
+    let stubbed = false;
+    if ((call.tool === 'read_file' || call.tool === 'list_dir') && safeResult.status === 'ok' && modelResult.output === safeResult.output) {
+      const stub = this.#readStubFor(state.id, call, safeResult);
+      if (stub) {
+        stubbed = true;
+        finalResult = { ...safeResult, output: stub, truncated: false, meta: { ...safeResult.meta, unchanged_stub: true } };
+      }
+    }
     await this.#emit(state.id, turnId, 'TOOL_CALL_FINISHED', {
       call,
       result: safeResult,
       ...(shaped.truncated ? { output_truncated: true, ...(shaped.spillPath ? { spill_path: shaped.spillPath } : {}) } : {}),
+      ...(stubbed ? { unchanged_stub: true } : {}),
+      ...(compression
+        ? {
+            output_compressed: true,
+            output_compression_family: compression.family,
+            output_raw_chars: compression.rawChars,
+            output_compressed_chars: compression.compressedChars,
+          }
+        : {}),
     });
     // A skill body entering the context is a first-class activation:
     // recorded once per real load (repeat-suppressed read_skill calls
@@ -809,7 +1110,45 @@ export class AgentLoop {
         ...(typeof result.meta.source === 'string' ? { source: result.meta.source } : {}),
       });
     }
-    return { ...this.#observe.handle({ kind: 'tool_result', result: modelResult }, current), mode: turnMode, last_tool_call_id: call.id, tool_result: modelResult };
+    // Stall bookkeeping: progress is a file change, a successful
+    // command, a download, or a NEW observation (a result this task has
+    // not already seen). Anything else — re-reads, repeated searches,
+    // suppressed repeats, errors — accrues. Alternating read/search
+    // cycles therefore stall out exactly like a single repeated call,
+    // which the old identical-observation backstop could not see.
+    const isStub = finalResult.meta?.unchanged_stub === true;
+    const isSuppressed = finalResult.meta?.reason === 'repeat_suppressed';
+    let progress = false;
+    if (finalResult.status === 'ok' && !isStub && !isSuppressed) {
+      if (finalResult.meta?.mutating === true || call.tool === 'run_command') {
+        progress = true;
+      } else {
+        const fingerprint = `${toolCallSignature(call.tool, call.args)}::${observationHash(finalResult.output)}`;
+        let seen = this.#seenObservations.get(state.id);
+        if (!seen) {
+          seen = new Set<string>();
+          this.#seenObservations.set(state.id, seen);
+        }
+        if (!seen.has(fingerprint)) {
+          seen.add(fingerprint);
+          progress = true;
+        }
+      }
+    }
+    if (progress) {
+      this.#stalls.set(state.id, 0);
+    } else {
+      const stalls = (this.#stalls.get(state.id) ?? 0) + 1;
+      this.#stalls.set(state.id, stalls);
+      if (stalls === STALL_ESCALATE_AT) await this.#maybeEscalateEarly(state, 'stall');
+      if (stalls >= STALL_LIMIT && !this.#hardStops.has(state.id)) {
+        this.#hardStops.set(state.id, {
+          reason: 'no_progress',
+          detail: `stuck: ${stalls} consecutive tool calls made no progress (no file change, no successful command, no download, no new information); the last was ${call.tool} — stopped instead of burning more turns`,
+        });
+      }
+    }
+    return { ...this.#observe.handle({ kind: 'tool_result', result: finalResult }, current), mode: turnMode, last_tool_call_id: call.id, tool_result: finalResult };
   }
 
   /** Execute a single tool call end to end (the sequential path). */
@@ -915,25 +1254,128 @@ export class AgentLoop {
    */
   async #maybeEscalateQuality(state: TaskState, attempt: number): Promise<void> {
     if (!this.#qualityEscalation || this.#escalatedTasks.has(state.id)) return;
+    const pinned = await this.#pinStrongest(state);
+    if (!pinned) return;
+    await this.#emit(state.id, undefined, 'PROVIDER_CHANGED', {
+      reason: 'quality_escalation',
+      from_model: pinned.from,
+      to_model: pinned.to,
+      model: pinned.to,
+      attempt,
+    });
+  }
+
+  /**
+   * Tailor early-trigger (optional insurance): the anti-loop guard or
+   * the stall counter says this task is circling — spend the pool's
+   * strongest model NOW instead of after a validation failure. Shares
+   * the once-per-task cap with quality escalation (one escalation per
+   * task, whichever fires first), and emits TAILOR_ESCALATED so the
+   * final report can state that it happened and why.
+   */
+  async #maybeEscalateEarly(state: TaskState, reason: 'loop_warning' | 'stall'): Promise<void> {
+    if (!this.#earlyEscalation || this.#escalatedTasks.has(state.id)) return;
+    const pinned = await this.#pinStrongest(state);
+    if (!pinned) return;
+    await this.#emit(state.id, undefined, 'TAILOR_ESCALATED', {
+      reason,
+      from_model: pinned.from,
+      to_model: pinned.to,
+      model: pinned.to,
+    });
+    await this.#emit(state.id, undefined, 'PROVIDER_CHANGED', {
+      reason: 'tailor_early_escalation',
+      from_model: pinned.from,
+      to_model: pinned.to,
+      model: pinned.to,
+    });
+  }
+
+  /** Pin the task to the pool's strongest model (once per task). Fail-open. */
+  async #pinStrongest(state: TaskState): Promise<{ from?: string; to: string } | undefined> {
+    if (this.#escalatedTasks.has(state.id)) return undefined;
     try {
       const controller = asModelController(this.#provider);
-      if (!controller || controller.poolModels.length < 2) return;
+      if (!controller || controller.poolModels.length < 2) return undefined;
       const strongest = controller.strongestModel();
-      if (!strongest) return;
+      if (!strongest) return undefined;
       const current = controller.currentModel();
-      if (current === strongest) return;
-      if (!controller.pinModel(strongest)) return;
+      if (current === strongest) return undefined;
+      if (!controller.pinModel(strongest)) return undefined;
       this.#escalatedTasks.add(state.id);
-      await this.#emit(state.id, undefined, 'PROVIDER_CHANGED', {
-        reason: 'quality_escalation',
-        from_model: current,
-        to_model: strongest,
-        model: strongest,
-        attempt,
-      });
+      return { from: current, to: strongest };
     } catch {
       // Escalation is an optimization, never a failure mode.
+      return undefined;
     }
+  }
+
+  /**
+   * The unchanged-read stub. Returns the stub text when this read's
+   * lines were all served before with identical content and no new
+   * condensing has dropped them from context since; otherwise records
+   * what was just served and returns undefined (full text flows). The
+   * comparison runs against the freshly executed result, so an external
+   * edit (or a command that rewrote the file) invalidates the record by
+   * content, not by clock — the stale-stub failure mode (Claude Code
+   * #60684) cannot occur.
+   */
+  #readStubFor(taskId: string, call: ToolCall, result: ToolResult): string | undefined {
+    const args = (call.args ?? {}) as { path?: unknown };
+    const condensedNow = this.#condensedCounts.get(taskId) ?? 0;
+    let perTask = this.#servedReads.get(taskId);
+    if (!perTask) {
+      perTask = new Map();
+      this.#servedReads.set(taskId, perTask);
+    }
+    if (call.tool === 'list_dir') {
+      const path = typeof args.path === 'string' && args.path ? args.path : '.';
+      const existing = perTask.get(path);
+      if (existing?.listingText === result.output && existing.condensedAtServe === condensedNow) {
+        return `[unchanged since your earlier listing: ${path} — the same entries, already in your context. Do not list it again; proceed to the actual change (write_file/edit_file/run_command), or finish.]`;
+      }
+      perTask.set(path, { lines: new Map(), totalLines: 0, condensedAtServe: condensedNow, listingText: result.output });
+      return undefined;
+    }
+    // read_file
+    const path = typeof result.meta?.resolved_path === 'string'
+      ? result.meta.resolved_path
+      : typeof args.path === 'string'
+        ? args.path
+        : undefined;
+    const start = result.meta?.start_line;
+    const end = result.meta?.end_line;
+    const total = result.meta?.total_lines;
+    if (!path || typeof start !== 'number' || typeof end !== 'number' || typeof total !== 'number' || end < start) return undefined;
+    const servedLines = parseNumberedLines(result.output);
+    if (!servedLines) return undefined;
+    let record = perTask.get(path);
+    if (record && condensedNow > record.condensedAtServe) {
+      // Condensing dropped older tool results since the record was
+      // written; those lines may no longer be in context. Forget them.
+      record = { lines: new Map(), totalLines: total, condensedAtServe: condensedNow };
+      perTask.set(path, record);
+    }
+    if (record && record.condensedAtServe === condensedNow) {
+      let allSame = true;
+      for (let line = start; line <= end; line++) {
+        if (record.lines.get(line) !== servedLines.get(line)) {
+          allSame = false;
+          break;
+        }
+      }
+      if (allSame) {
+        return `[unchanged since your earlier read: ${path} lines ${start}–${end} of ${total} — the file has not changed and those lines are already in your context. Do not read them again; proceed with the change (edit_file/write_file/download_file), ask_user if blocked, or finish. For lines you have not seen, read a new range with offset/limit.]`;
+      }
+    }
+    if (!record) {
+      record = { lines: new Map(), totalLines: total, condensedAtServe: condensedNow };
+      perTask.set(path, record);
+    }
+    for (const [line, text] of servedLines) record.lines.set(line, text);
+    record.totalLines = total;
+    record.condensedAtServe = condensedNow;
+    return undefined;
   }
 
   /**
@@ -994,6 +1436,30 @@ export class AgentLoop {
 }
 
 const MAX_THOUGHT_CHARS = 4_000;
+
+/** Cheap content fingerprint for the stall tracker's "new observation" test. */
+function observationHash(text: string): string {
+  let hash = 5381;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) + hash + text.charCodeAt(i)) | 0;
+  }
+  return `${text.length}:${hash}`;
+}
+
+/**
+ * Parse a read_file result's numbered body lines ("12: text") into a
+ * line-number → text map. Header/footer lines never match the pattern.
+ * Returns undefined when the output carries no numbered lines at all
+ * (an error or an unexpected shape: nothing safe to record).
+ */
+function parseNumberedLines(output: string): Map<number, string> | undefined {
+  const lines = new Map<number, string>();
+  for (const raw of output.split('\n')) {
+    const match = /^(\d+): ?(.*)$/.exec(raw);
+    if (match) lines.set(Number(match[1]), match[2]!);
+  }
+  return lines.size > 0 ? lines : undefined;
+}
 /** view_image attachments awaiting one request, mirroring the context manager's per-request image cap. */
 const MAX_PENDING_VIEWED_IMAGES = 4;
 

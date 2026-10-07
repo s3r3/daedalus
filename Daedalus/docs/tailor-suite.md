@@ -56,6 +56,26 @@ the strongest pool model for the remainder of the task. The Web Chat shows
 model is kept (no flapping back). Requires a 2+ model pool.
 `DAEDALUS_QUALITY_ESCALATION=off` disables.
 
+## 3b. Early escalation (loop-triggered, default on)
+
+Quality escalation waits for a validation failure. A task that is
+*looping* may never get there — the incident shape is repeated reads and
+searches with no first mutation. When the anti-loop guard fires
+(`LOOP_WARNING`) or the stall counter reaches 3 (below), and the driving
+provider is a 2+ model pool whose current model is not its strongest,
+the task is pinned to the strongest model immediately, once per task
+(shared cap with quality escalation — whichever fires first). The pin is
+announced with a `TAILOR_ESCALATED` event (`reason: loop_warning` or
+`stall`) plus a `PROVIDER_CHANGED` with `reason: tailor_early_escalation`,
+and the final report carries a `tailor early escalation: …` evidence
+line. With no pool (or no stronger model) nothing is spent and nothing
+is emitted: the loop directive and the fail-fast hard stop are the
+whole behavior. This is insurance, not the primary fix — the loop fixes
+(read pagination, the unchanged-read stub, the breaker) live in
+`docs/agent-improvements.md`. Disable with
+`DAEDALUS_TAILOR_EARLY_ESCALATION=off` or Web Settings → "early
+escalation".
+
 ## 4. Structured edit format (SEARCH/REPLACE)
 
 Opt-in per provider (`editFormat`, Web Settings → provider form;

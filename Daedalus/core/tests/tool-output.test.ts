@@ -221,6 +221,13 @@ describe('AgentLoop tool-output shaping (end to end)', () => {
       store,
       stopPolicy: { max_iterations: 6, max_errors: 3 },
       toolOutput: { maxChars: 1_200, maxLines: 40 },
+      // This test pins the SHAPING layer (caps + spill) hermetically.
+      // Since output compression landed (default on), a noisy `npm test`
+      // dump is semantically compressed before shaping and never reaches
+      // these caps — so the fixture opts out to keep specifying shaping
+      // exactly as before. The interplay (compressed text, then caps) is
+      // covered in tests/output-compression.test.ts.
+      outputCompression: false,
       executeTool: async (call: ToolCall): Promise<ToolResult> => ({
         call_id: call.id,
         status: 'ok',

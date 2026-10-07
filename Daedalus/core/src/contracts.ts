@@ -17,9 +17,18 @@ export type ReviewGateReport = {
   findings: Array<{ severity: 'high' | 'medium' | 'low'; file: string; line?: number; message: string }>;
 };
 export type TaskState = TaskSpec & { plan: Plan; steps: PlanStep[]; status: 'pending' | 'active' | 'done' | 'failed'; current_step_id?: string; last_observation?: string; last_error?: string; last_tool_call_id?: string; tool_result?: ToolResult; mode?: AgentMode; turns?: number };
-export const EVENT_TYPES = ['TASK_STARTED','PLAN_CREATED','THOUGHT','LOOP_WARNING','TOOL_CALL_STARTED','TOOL_CALL_FINISHED','FILE_CHANGED','COMMAND_STARTED','COMMAND_OUTPUT','COMMAND_FINISHED','JOB_STARTED','JOB_FINISHED','VALIDATION_STARTED','VALIDATION_FAILED','VALIDATION_PASSED','RECOVERY_STARTED','REPLAN_CREATED','TASK_COMPLETED','MODEL_REQUEST_STARTED','MODEL_REQUEST_FINISHED','MODEL_REQUEST_FAILED','APPROVAL_REQUESTED','APPROVAL_DECIDED','QUESTION_REQUESTED','QUESTION_ANSWERED','MODE_CHANGED','SLASH_COMMAND_EXECUTED','PROVIDER_CHANGED','REVIEW_COMPLETED','ATTACHMENT_ADDED','CHILD_TASK_STARTED','CHILD_TASK_FINISHED','ORCHESTRATION_SKIPPED','HOOK_EXECUTED','SKILL_LOADED'] as const;
+export const EVENT_TYPES = ['TASK_STARTED','PLAN_CREATED','THOUGHT','LOOP_WARNING','TOOL_CALL_STARTED','TOOL_CALL_FINISHED','FILE_CHANGED','COMMAND_STARTED','COMMAND_OUTPUT','COMMAND_FINISHED','JOB_STARTED','JOB_FINISHED','VALIDATION_STARTED','VALIDATION_FAILED','VALIDATION_PASSED','RECOVERY_STARTED','REPLAN_CREATED','TASK_COMPLETED','MODEL_REQUEST_STARTED','MODEL_REQUEST_FINISHED','MODEL_REQUEST_FAILED','APPROVAL_REQUESTED','APPROVAL_DECIDED','QUESTION_REQUESTED','QUESTION_ANSWERED','MODE_CHANGED','SLASH_COMMAND_EXECUTED','PROVIDER_CHANGED','REVIEW_COMPLETED','ATTACHMENT_ADDED','CHILD_TASK_STARTED','CHILD_TASK_FINISHED','ORCHESTRATION_SKIPPED','HOOK_EXECUTED','SKILL_LOADED','TAILOR_ESCALATED'] as const;
 export type EventType = (typeof EVENT_TYPES)[number];
 export type Event = { seq: number; task_id: string; turn_id?: string; type: EventType; payload: unknown; ts: string };
+
+/** Tailor early-trigger: the loop breaker escalated the task to the pool's strongest model. */
+export type TailorEscalatedPayload = {
+  /** 'loop_warning' | 'stall' — what fired the early trigger. */
+  reason: string;
+  from_model?: string;
+  to_model?: string;
+  model?: string;
+};
 
 export type AgentMode = 'ask' | 'manual' | 'auto' | 'plan' | 'orchestrator';
 export type ModelStrategy = 'failover' | 'round-robin';

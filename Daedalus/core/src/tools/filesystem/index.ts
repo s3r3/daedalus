@@ -153,6 +153,19 @@ async function findUniqueOldString(root: string, oldString: string): Promise<str
   }
 }
 
+/**
+ * read_file's own serving budget, aligned with the loop's tool-output
+ * shaping caps (50k chars / 2000 lines) so the two layers agree on what
+ * "fits". The old shared `output()` helper sliced at 16k chars with a
+ * bare "…[truncated]" — a normal ~200-line source file exceeded that
+ * and the model never saw its tail, which is how a read loop starts
+ * (the model re-reads, gets the same first page, re-reads…). read_file
+ * now paginates by whole lines inside the budget and states exactly
+ * what was shown and how to continue.
+ */
+export const READ_FILE_MAX_LINES = 2_000;
+export const READ_FILE_MAX_CHARS = 50_000;
+
 export const readFileTool: ToolDefinition = {
   name: 'read_file', description: 'Read a UTF-8 text file by 1-based line range: start_line/end_line, or offset (first line) + limit (max lines). Use offset/limit to page through a spilled tool-output file or any long file instead of re-running the tool that produced it.', mutating: false,
   inputSchema: { type: 'object', required: ['path'], properties: { path: { type: 'string' }, start_line: { type: 'integer', minimum: 1 }, end_line: { type: 'integer', minimum: 1 }, offset: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1 } }, additionalProperties: false },
@@ -163,13 +176,65 @@ export const readFileTool: ToolDefinition = {
       const resolved = await resolveExistingPath(context.workspaceRoot, a.path);
       const data = await readFile(resolved.target, 'utf8');
       const lines = data.split('\n');
+      const total = lines.length;
       // offset is the 1-based first line (same anchor as start_line; offset wins).
       const startInput = typeof a.offset === 'number' ? a.offset : a.start_line;
       const start = typeof startInput === 'number' ? Math.max(1, Math.floor(startInput)) : 1;
-      let end = typeof a.end_line === 'number' ? Math.min(lines.length, Math.floor(a.end_line)) : lines.length;
+      const shownPath = resolved.resolvedPath ?? a.path;
+      if (total === 0 || (total === 1 && lines[0] === '')) {
+        return output('', `[read_file ${shownPath} — empty file (0 lines)]`, { start_line: 1, end_line: 0, total_lines: 0, ...(resolved.resolvedPath ? { resolved_path: resolved.resolvedPath, requested_path: a.path } : {}) });
+      }
+      if (start > total) {
+        return output('', `[read_file ${shownPath} — past end of file: the file has ${total} line${total === 1 ? '' : 's'}; offset ${start} is beyond it. Read with offset 1 to start from the top.]`, { start_line: start, end_line: total, total_lines: total, ...(resolved.resolvedPath ? { resolved_path: resolved.resolvedPath, requested_path: a.path } : {}) });
+      }
+      let end = typeof a.end_line === 'number' ? Math.min(total, Math.floor(a.end_line)) : total;
       if (typeof a.limit === 'number') end = Math.min(end, start + Math.max(1, Math.floor(a.limit)) - 1);
-      const text = lines.slice(start - 1, end).map((line, i) => `${start + i}: ${line}`).join('\n');
-      return output('', text, { start_line: start, end_line: end, total_lines: lines.length, ...(resolved.resolvedPath ? { resolved_path: resolved.resolvedPath, requested_path: a.path } : {}) });
+      end = Math.max(start, end);
+      // Serve whole lines within the line + char budgets; narrow the
+      // page instead of slicing a line in half (a mid-line cut is what
+      // made re-reads rational — the model never saw the file's tail).
+      let servedEnd = start - 1;
+      let chars = 0;
+      let charCut = false;
+      for (let line = start; line <= end && servedEnd - start + 1 < READ_FILE_MAX_LINES; line++) {
+        const rendered = `${line}: ${lines[line - 1] ?? ''}`;
+        if (chars + rendered.length + 1 > READ_FILE_MAX_CHARS) {
+          if (servedEnd < start) {
+            // Even the first line exceeds the char budget (a minified
+            // or generated single-line file): serve a bounded slice.
+            servedEnd = line;
+            charCut = true;
+          }
+          break;
+        }
+        chars += rendered.length + 1;
+        servedEnd = line;
+      }
+      const header = `[read_file ${shownPath} — lines ${start}–${servedEnd} of ${total}]`;
+      const body = charCut
+        ? `${start}: ${(lines[start - 1] ?? '').slice(0, READ_FILE_MAX_CHARS)}`
+        : lines.slice(start - 1, servedEnd).map((line, i) => `${start + i}: ${line}`).join('\n');
+      const partial = servedEnd < total || charCut;
+      const footer = !partial
+        ? undefined
+        : charCut
+          ? `…[truncated] PARTIAL view — line ${start} alone exceeds the ${READ_FILE_MAX_CHARS}-char read budget and was cut mid-line; the rest of that line is not pageable with read_file (use run_command with head/cut for byte ranges, or read another range with offset/limit).`
+          : `…[truncated] PARTIAL view — shown lines ${start}–${servedEnd} of ${total} total (${servedEnd - start + 1} lines received). Continue with read_file(path="${shownPath}", offset=${servedEnd + 1}, limit=${Math.max(1, servedEnd - start + 1)}) for the next page.`;
+      const text = [header, body, ...(footer ? [footer] : [])].join('\n');
+      const result: ToolResult = {
+        call_id: '',
+        status: 'ok',
+        output: text,
+        truncated: partial,
+        meta: {
+          start_line: start,
+          end_line: servedEnd,
+          total_lines: total,
+          ...(partial ? { partial: true } : {}),
+          ...(resolved.resolvedPath ? { resolved_path: resolved.resolvedPath, requested_path: a.path } : {}),
+        },
+      };
+      return result;
     } catch (error) { return { call_id: '', status: 'error', output: await errorWithSuggestion(error, context.workspaceRoot, a.path), truncated: false, meta: {} }; }
   },
 };

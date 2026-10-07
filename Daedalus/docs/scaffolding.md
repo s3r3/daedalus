@@ -75,6 +75,28 @@ marker and startup step.
 - If the generated project ships `AGENTS.md` or docs, read them before
   writing code; then build the requested content **into** the generated
   structure — never as a parallel hand-made skeleton beside it.
+- **Step lock after the generator**: (1) install dependencies, (2) write
+  the requested content/pages into the generated structure, (3) verify
+  by **building** (`npm run build`, `flutter analyze`,
+  `python3 manage.py check` — whatever the recipe declares). Step (3)
+  never starts before step (1) finished, and the plan checklist narrates
+  the same recipe-derived sequence (generate → install → write →
+  build), not the generic "run the project validation checks".
+- **Dev servers are never an agent step**: no `npm run dev`, `next dev`,
+  `vite dev`, `ng serve`, `php artisan serve`, `flutter run`, or
+  `python manage.py runserver` — a dev server never exits and verifies
+  nothing a build does not. Previewing belongs to the user's terminal;
+  an explicitly requested long-running preview uses `background: true`
+  under the background-job rules, never as the verification step.
+- **One approval carries the chain** in ask-first modes: the recipe's
+  declared generator/install/build commands share a single per-task
+  approval (see "Scaffold-chain approvals" in
+  `docs/modes-and-approvals.md`), and an unanswered approval no longer
+  expires into a decline — it waits for the user or for Stop. If the
+  user **declines** a required chain step, the model must not retry it
+  unchanged and must not substitute another command (the dev-server
+  detour): it asks the user (`ask_user`) or ends with a plain partial
+  report naming the declined step.
 - **Express is the bootstrap exception**: it has no project generator.
   Its npm command creates `package.json` when one is absent and installs
   Express into the target directory in the same step; the agent then

@@ -582,11 +582,124 @@ export function missingToolchains(recipe: ScaffoldRecipe, probes: ToolchainProbe
 }
 
 /**
- * Toolchain-bootstrap probes the runtime adds to every scaffold
- * preflight: Docker is the container route for a missing toolchain, and
- * mise/fnm/nvm are the user-level version-manager routes. None of these
- * is ever required — their absence only narrows the playbook.
+ * One step of a recipe's declared command chain. The chain is what a
+ * single approval covers in ask-first modes (see ExecutionHarness): the
+ * generator, the install, and the build/validate command — declared
+ * here, from the recipe, so approval matching never guesses at prose.
  */
+export type ScaffoldChainStep = {
+  step: 'generate' | 'install' | 'build' | 'start' | 'verify';
+  /** Short label for approval cards and plan steps ('install'). */
+  label: string;
+  /** The exact command line the recipe prescribes for this step. */
+  display: string;
+  /** Leading tokens a run_command call must match to count as this step. */
+  tokens: string[];
+};
+
+const NPM_INSTALL_TOKENS = ['npm', 'install'];
+const NPM_BUILD_TOKENS = ['npm', 'run', 'build'];
+
+/** Declared install argv per recipe; absent = the recipe has no install step. */
+const CHAIN_INSTALL_TOKENS: Partial<Record<ScaffoldRecipeId, string[]>> = {
+  nextjs: NPM_INSTALL_TOKENS,
+  'vite-react': NPM_INSTALL_TOKENS,
+  'vite-vue': NPM_INSTALL_TOKENS,
+  angular: NPM_INSTALL_TOKENS,
+  sveltekit: NPM_INSTALL_TOKENS,
+  nuxt: NPM_INSTALL_TOKENS,
+  astro: NPM_INSTALL_TOKENS,
+  nestjs: NPM_INSTALL_TOKENS,
+  expo: NPM_INSTALL_TOKENS,
+  laravel: ['composer', 'install'],
+  flutter: ['flutter', 'pub', 'get'],
+};
+
+/** Declared build/validate argv per recipe; absent = no build step. */
+const CHAIN_BUILD_TOKENS: Partial<Record<ScaffoldRecipeId, string[]>> = {
+  nextjs: NPM_BUILD_TOKENS,
+  'vite-react': NPM_BUILD_TOKENS,
+  'vite-vue': NPM_BUILD_TOKENS,
+  angular: NPM_BUILD_TOKENS,
+  sveltekit: NPM_BUILD_TOKENS,
+  nuxt: NPM_BUILD_TOKENS,
+  astro: NPM_BUILD_TOKENS,
+  nestjs: NPM_BUILD_TOKENS,
+  flutter: ['flutter', 'analyze'],
+  django: ['python3', 'manage.py', 'check'],
+};
+
+/** Split a command line into tokens, stripping one level of quoting. */
+export function commandLineTokens(line: string): string[] {
+  return line
+    .trim()
+    .split(/\s+/)
+    .filter((token) => token.length > 0)
+    .map((token) => token.replace(/^["']|["']$/g, ''));
+}
+
+/**
+ * The recipe's declared command chain for a target dir: the commands one
+ * approval covers for a scaffold task. Database recipes chain their
+ * start + verify commands; framework/api recipes chain generator →
+ * install → build (each only when the recipe declares it). The
+ * container-route generator line counts as the same generate step.
+ */
+export function scaffoldApprovalChain(match: ScaffoldMatch, host: ScaffoldHostInfo = DEFAULT_SCAFFOLD_HOST): ScaffoldChainStep[] {
+  const { recipe, targetDir } = match;
+  if (recipe.category === 'database') {
+    const start = recipe.generator(targetDir);
+    return [
+      { step: 'start', label: 'start', display: 'docker compose up -d', tokens: [start.command, ...start.args] },
+      { step: 'verify', label: 'verify', display: 'docker compose ps', tokens: ['docker', 'compose', 'ps'] },
+    ];
+  }
+  const generator = recipe.generator(targetDir);
+  const steps: ScaffoldChainStep[] = [
+    { step: 'generate', label: 'generator', display: generator.display, tokens: generateMatchTokens([generator.command, ...generator.args], targetDir) },
+  ];
+  if (recipe.container) {
+    const dockerLine = renderDockerGeneratorLine(recipe, targetDir, host);
+    steps.push({ step: 'generate', label: 'generator', display: dockerLine, tokens: generateMatchTokens(commandLineTokens(dockerLine), targetDir) });
+  }
+  const install = CHAIN_INSTALL_TOKENS[recipe.id];
+  if (install && !recipe.generatorInstallsDependencies) {
+    steps.push({ step: 'install', label: 'install', display: install.join(' '), tokens: [...install] });
+  }
+  const build = CHAIN_BUILD_TOKENS[recipe.id];
+  if (build) steps.push({ step: 'build', label: 'build', display: build.join(' '), tokens: [...build] });
+  return steps;
+}
+
+/**
+ * Match tokens for a generator line: everything up to and including the
+ * target dir. The recipe's flags after the dir are prescribed verbatim,
+ * but a model that varies a trailing flag still ran the declared
+ * generator into the declared folder — that is the step. Requiring the
+ * full argv would make the chain (and its single approval) evaporate
+ * over one omitted flag.
+ */
+function generateMatchTokens(tokens: string[], targetDir: string): string[] {
+  const dirIndex = tokens.indexOf(targetDir);
+  return dirIndex >= 0 ? tokens.slice(0, dirIndex + 1) : tokens;
+}
+
+/**
+ * Which chain step (if any) a command line belongs to. Leading-token
+ * match against the declared tokens: `npm install --no-audit` is the
+ * install step, `npm run dev` is nothing the recipe declared.
+ */
+export function scaffoldChainStepFor(chain: ScaffoldChainStep[], commandLine: string): ScaffoldChainStep | undefined {
+  const tokens = commandLineTokens(commandLine);
+  if (tokens.length === 0) return undefined;
+  for (const step of chain) {
+    if (step.tokens.length > tokens.length) continue;
+    if (step.tokens.every((token, index) => token === tokens[index])) return step;
+  }
+  return undefined;
+}
+
+
 export const BOOTSTRAP_PROBE_TOOLS = ['docker', 'mise', 'fnm', 'nvm'];
 
 /**
@@ -687,6 +800,9 @@ export function renderScaffoldPlaybook(match: ScaffoldMatch, probes: ToolchainPr
   if (recipe.category === 'database') return renderDatabasePlaybook(match, probes);
   const generator = recipe.generator(targetDir);
   const missing = missingToolchains(recipe, probes);
+  const chain = scaffoldApprovalChain(match, host);
+  const installStep = chain.find((step) => step.step === 'install');
+  const buildStep = chain.find((step) => step.step === 'build');
   const lines = [
     `This task creates a NEW ${recipe.framework} project in \`${targetDir}/\`. Do NOT hand-write the framework skeleton and do NOT spend turns exploring the workspace first — run the official generator exactly once, in the foreground, then build the requested content into the generated structure.`,
     '',
@@ -701,6 +817,9 @@ export function renderScaffoldPlaybook(match: ScaffoldMatch, probes: ToolchainPr
       : [
           `- Scaffolding and installing are separate steps: the generator skips installation on purpose. After it finishes, run the install as its own command (timeout_ms 600000): ${recipe.installHint.replace('${dir}', targetDir)}. If the install is the slow part, you may instead start it with background: true and poll command_status between other work — never poll in a tight loop, and never claim the project finished installing before the job reports it exited.`,
         ]),
+    `- STEP LOCK — after the generator succeeds, run exactly this sequence in order: (1) ${installStep ? `install dependencies: ${installStep.display} (inside ${targetDir}/, timeout_ms 600000)` : 'dependencies — already installed by the generator'}; (2) write the requested content/pages into the generated structure; (3) verify by building: ${buildStep ? `${buildStep.display} (inside ${targetDir}/)` : 'this recipe declares no build command, so verify the files you wrote exist and say so'}. Never start step (3) before step (1) has actually finished.`,
+    `- NEVER run a dev server as an agent step — no npm run dev, next dev, vite dev, ng serve, php artisan serve, flutter run, or python manage.py runserver: a dev server never exits and verifies nothing a build does not. Previewing belongs to the user's own terminal session; if a long-running preview is ever explicitly requested, run it with background: true under the background-job rules — never as the verification step.`,
+    `- Approval chain (ask-first modes): the generator, install, and build commands above are covered by ONE approval for this task — approving any of them covers the rest of the chain. If the user DECLINES a required chain step instead (a real decline, not a wait for an answer), do not retry that command unchanged and do not substitute a different command (no dev-server detour): call ask_user to ask how to proceed, or finish with a plain partial report naming the declined step and what remains undone.`,
     `- If \`${targetDir}/AGENTS.md\` or other generated docs exist, read them before writing code.`,
     `- Then build the requested content INTO the generated structure (the pages/components/routes the generator created) — never as a parallel hand-made skeleton beside it.`,
     `- Toolchains on this machine: ${formatToolchainSummary(probes)}.`,
@@ -734,6 +853,7 @@ export function renderDatabasePlaybook(match: ScaffoldMatch, probes: ToolchainPr
     `2. Start it via run_command with cwd \`${targetDir}\` and timeout_ms 600000 (the first image pull can be slow; output streams back as it runs):`,
     `  ${generator.display}`,
     `3. Check the result with \`docker compose ps\` in \`${targetDir}/\`, and report the service port plus the fact that the development passwords in the file must be changed before real use.`,
+    `- Approval chain (ask-first modes): starting the stack and checking it (docker compose ps) are covered by ONE approval for this task. If the user DECLINES starting the stack (a real decline, not a wait), do not retry it unchanged and do not substitute a different command: call ask_user, or finish with a plain partial report naming the declined step.`,
     `- ${recipe.installHint}.`,
     `- Toolchains on this machine: ${formatToolchainSummary(probes)}.`,
     '- If the Docker command fails because the daemon is unavailable, report that error plainly and do not claim the database is running.',

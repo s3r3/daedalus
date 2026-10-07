@@ -67,7 +67,11 @@ describe('file tools', () => {
 
   test('read_file truncates oversized files', async () => {
     const root = workspace();
-    writeFileSync(join(root, 'big.txt'), 'x'.repeat(40_000));
+    // Fixture grew 40k → 60k: read_file's serving budget is now aligned
+    // with the loop's 50k shaping cap (a 40k file is served whole, by
+    // design — sub-cap truncation was the read-loop bug). The assertion
+    // is unchanged: an over-budget file reports truncation.
+    writeFileSync(join(root, 'big.txt'), 'x'.repeat(60_000));
     const result = await readFileTool.execute({ path: 'big.txt' }, ctx(root));
     expect(result.truncated).toBe(true);
     expect(result.output).toContain('[truncated]');
