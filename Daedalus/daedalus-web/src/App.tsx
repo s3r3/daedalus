@@ -203,9 +203,12 @@ export function App() {
           style={{ right: `calc(${columns.right}px + 4px)` }}
           title="Drag to resize the right column"
         />
-        {/* Left column: workspace + agent state */}
+        {/* Left column: workspace + agent state. Both children are flexible
+            (min-h-0 + flex-1), so each is bounded by the column and scrolls
+            internally — the workspace panel used to sit at its natural
+            (content) height and push this scroll region to zero. */}
         <aside className="flex min-h-0 flex-col gap-2 lg:overflow-hidden">
-          <WorkspacePanel />
+          <WorkspacePanel className="min-h-0 lg:flex-1" />
           <ScrollArea className="min-h-[240px] lg:min-h-0 lg:flex-1">
             <div className="flex flex-col gap-2 pr-1">
               <ExtensionsPanel />
