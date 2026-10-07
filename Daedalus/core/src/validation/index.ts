@@ -40,6 +40,16 @@ export type ValidatorOptions = {
    * profile or explicit commands are configured.
    */
   changedFiles?: string[];
+  /**
+   * The task's declared target directory (workspace-relative; see
+   * deriveTaskTargetDir in agent/scaffold.ts). When set and that
+   * directory has its own package.json, default checks are discovered
+   * from THAT package.json and run from that directory — never the
+   * workspace root's scripts (including `--workspaces` aggregates). A
+   * target without its own package.json falls back to the changedFiles /
+   * root discovery below. No effect with a profile or explicit commands.
+   */
+  targetDir?: string;
 };
 
 export type Validator = {
@@ -79,16 +89,26 @@ export class CommandValidator implements Validator {
         commands = profileCommands(loaded.profile);
         source = 'profile';
         timeoutMs = timeoutMs ?? loaded.profile.timeoutMs;
-      } else if (options.changedFiles && options.changedFiles.length > 0) {
-        // Changeset-scoped discovery: in a monorepo the root's aggregate
-        // test/lint/build scripts say nothing about a task that only touched
-        // one member package (or no package at all), so the checks follow
-        // the changes instead of the root.
-        const scoped = discoverScopedChecks(options.workspaceRoot, options.changedFiles);
-        commands = scoped.commands;
-        note = scoped.note;
       } else {
-        commands = discoverChecks(options.workspaceRoot);
+        // Anchored tasks first: the declared target subproject's own
+        // package.json decides the checks, run from its directory (see
+        // discoverTargetChecks). Only a target without its own
+        // package.json falls through to changeset/root discovery.
+        const anchored = options.targetDir ? discoverTargetChecks(options.workspaceRoot, options.targetDir) : undefined;
+        if (anchored) {
+          commands = anchored.commands;
+          note = anchored.note;
+        } else if (options.changedFiles && options.changedFiles.length > 0) {
+          // Changeset-scoped discovery: in a monorepo the root's aggregate
+          // test/lint/build scripts say nothing about a task that only touched
+          // one member package (or no package at all), so the checks follow
+          // the changes instead of the root.
+          const scoped = discoverScopedChecks(options.workspaceRoot, options.changedFiles);
+          commands = scoped.commands;
+          note = scoped.note;
+        } else {
+          commands = discoverChecks(options.workspaceRoot);
+        }
       }
     }
     const checks: ValidationCheck[] = [];
@@ -316,6 +336,41 @@ export function discoverScopedChecks(workspaceRoot: string, changedFiles: string
     note = `checks scoped to ${ordered.length === 1 ? 'package' : 'packages'}: ${labels.join(', ')}`;
   }
   return { commands, scoped: true, packages: labels, outsideFiles, ...(note ? { note } : {}) };
+}
+
+export type TargetCheckDiscovery = {
+  commands: ValidationCommand[];
+  /** Why these checks were chosen, incl. which standard scripts the target does not define. */
+  note: string;
+};
+
+const TARGET_CHECK_CANDIDATES = ['test', 'lint', 'build'] as const;
+
+/**
+ * Target-scoped default checks for an anchored task: the checks are the
+ * target subproject's OWN test/lint/build scripts (each only when that
+ * package.json actually defines it — a missing one is a skipped note,
+ * never a failure), run from the target directory. The workspace root's
+ * package.json is never consulted, so monorepo aggregates such as
+ * `npm test --workspaces --run` cannot leak into a subproject's
+ * validation. Returns undefined when the target is the root itself or
+ * has no package.json of its own (non-Node targets: Laravel, Django,
+ * Flutter, …) — the caller then keeps the changeset/root discovery.
+ */
+export function discoverTargetChecks(workspaceRoot: string, targetDir: string): TargetCheckDiscovery | undefined {
+  const rel = normalizeChangedPath(workspaceRoot, targetDir);
+  if (rel === undefined || rel === '') return undefined;
+  if (!readPackageJson(join(workspaceRoot, rel))) return undefined;
+  const commands = discoverChecks(join(workspaceRoot, rel)).map((check) => ({ ...check, cwd: rel }));
+  const present = new Set(commands.map((check) => check.name));
+  const missing = TARGET_CHECK_CANDIDATES.filter((name) => !present.has(name));
+  const skipped = missing.length > 0
+    ? `skipped: ${missing.map((name) => `"${name}"`).join(', ')} ${missing.length === 1 ? 'script is' : 'scripts are'} not defined in ${rel}/package.json`
+    : undefined;
+  const note = commands.length > 0
+    ? [`checks scoped to target directory ${rel}`, ...(skipped ? [skipped] : [])].join('; ')
+    : `no test/lint/build scripts are defined in ${rel}/package.json (target directory ${rel}), so there is nothing to run`;
+  return { commands, note };
 }
 
 export function aggregateValidation(result: ValidationResult): { passed: boolean; result: ValidationResult } {

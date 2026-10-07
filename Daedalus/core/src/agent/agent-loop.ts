@@ -18,10 +18,11 @@ import { handleObservation } from './observation.ts';
 import { resolveToolOutputLimits, shapeToolOutput, writeSpillFile, type ToolOutputLimits } from './tool-output.ts';
 import { compressCommandOutput, type CommandOutputCompression } from './output-compression.ts';
 import { evaluateStopConditions, noProgressCondition } from './stop.ts';
-import { ModeController, isToolCallDenied, isToolVisible, modeDenialMessage } from '../interaction/modes.ts';
+import { ModeController, classifyToolName, isToolCallDenied, isToolVisible, modeDenialMessage } from '../interaction/modes.ts';
 import { isPlanDocumentChange, planDecisionsFromEvents, planDocumentRepairDirective } from '../interaction/plans.ts';
+import { ASK_USER_TOOL_NAME } from '../interaction/questions.ts';
 import { SPAWN_SUBAGENT_TOOL_NAME } from '../interaction/subagents.ts';
-import { creationCompletionRefusal, detectCreationGoal, scaffoldMarkerPresent, type CreationGoal } from './scaffold.ts';
+import { creationCompletionRefusal, deriveTaskTargetDir, detectCreationGoal, pathInsideTarget, scaffoldMarkerPresent, workspaceRelativePath, type CreationGoal } from './scaffold.ts';
 
 export type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor };
 export { interpretTask };
@@ -199,6 +200,17 @@ export class AgentLoop {
   /** File paths each task has mutated (validation check scoping). */
   readonly #changedFiles = new Map<string, Set<string>>();
   /**
+   * Task-target anchor per task (agent/scaffold.ts deriveTaskTargetDir),
+   * resolved lazily and cached; absent = unanchored (pre-anchor
+   * semantics). Drives write confinement, gate v2, and validation
+   * scoping for the task.
+   */
+  readonly #targets = new Map<string, string>();
+  /** Outside-target paths each anchored task has been blocked from writing (ask_user exception candidates). */
+  readonly #blockedOutside = new Map<string, Set<string>>();
+  /** Outside-target paths the user approved via ask_user per task (confinement exceptions). */
+  readonly #targetExceptions = new Map<string, Set<string>>();
+  /**
    * Completion-gate evidence per task: successful run_command executions
    * (shell-created files never appear as per-file changes) and whether the
    * task delegated (children's ledgers belong to the runtime layer).
@@ -298,6 +310,9 @@ export class AgentLoop {
       this.#taskMutated.delete(spec.id);
       this.#escalatedTasks.delete(spec.id);
       this.#changedFiles.delete(spec.id);
+      this.#targets.delete(spec.id);
+      this.#blockedOutside.delete(spec.id);
+      this.#targetExceptions.delete(spec.id);
       this.#validationStalls.delete(spec.id);
       this.#planRepairs.delete(spec.id);
       this.#commandsSucceeded.delete(spec.id);
@@ -326,6 +341,17 @@ export class AgentLoop {
     // (the plan IS the output) from an execution plan.
     await this.#emit(state.id, undefined, 'PLAN_CREATED', { plan, mode: state.mode });
     this.#store.saveState(state.id, state);
+    // Task-target anchor (agent/scaffold.ts deriveTaskTargetDir): a
+    // creation task with a declared target directory is stamped now so
+    // write confinement, completion gate v2, and validation scoping all
+    // share one answer for the whole run; the stamp on state is how the
+    // final report names it. Derivation is conservative — no declared
+    // folder, no anchor.
+    const anchor = this.#targetDirFor(state);
+    if (anchor && state.target_dir !== anchor) {
+      state = { ...state, target_dir: anchor };
+      this.#store.saveState(state.id, state);
+    }
     let iteration = 0;
     let errors = 0;
     let validationFailures = 0;
@@ -389,9 +415,20 @@ export class AgentLoop {
         if (this.#validator && completed) {
           await this.#emit(state.id, undefined, 'VALIDATION_STARTED', { task_id: state.id });
           const changedFiles = [...(this.#changedFiles.get(state.id) ?? [])];
+          // Anchored tasks validate inside their declared target: the
+          // validator runs the target subproject's own scripts from its
+          // directory, never the workspace root's (see ValidatorOptions
+          // targetDir). Re-derived here so a folder the task itself
+          // created mid-run anchors completion too; the fresh stamp
+          // rides into the final report via state.
+          const targetDir = this.#targetDirFor(state);
+          if (targetDir && state.target_dir !== targetDir) {
+            state = { ...state, target_dir: targetDir };
+          }
           const result = await this.#validator.validate({
             workspaceRoot: state.repo_path,
             ...(changedFiles.length > 0 ? { changedFiles } : {}),
+            ...(targetDir ? { targetDir } : {}),
           });
           const gate = completionGate(result, undefined);
           completed = gate.complete;
@@ -919,6 +956,14 @@ export class AgentLoop {
         };
       }
     }
+    // Task-target confinement: an anchored creation task writes inside
+    // its declared target only (see #outsideTargetBlock). Checked after
+    // schema validation (the path argument is known well-formed) and
+    // before dispatch, so a blocked write never reaches the approval
+    // layer — approvals decide WHETHER a write may happen at all, the
+    // anchor decides WHERE this task's writes belong.
+    const confinement = this.#outsideTargetBlock(state, call, turnMode);
+    if (confinement) return { result: confinement };
     return { execute: true };
   }
 
@@ -962,6 +1007,12 @@ export class AgentLoop {
       this.#commandsSucceeded.set(state.id, (this.#commandsSucceeded.get(state.id) ?? 0) + 1);
     }
     if (call.tool === SPAWN_SUBAGENT_TOOL_NAME) this.#delegatedTasks.add(state.id);
+    // ask_user answers can sanction an outside-target exception (see
+    // #grantTargetExceptions): the grant lands in the loop's ledger
+    // immediately, so the very next write attempt already sees it, and
+    // is threaded onto the returned state below so the final report can
+    // name the excepted paths.
+    const grantedExceptions = call.tool === ASK_USER_TOOL_NAME ? this.#grantTargetExceptions(state, call, result) : undefined;
     if (result.meta?.mutating === true) {
       // Validation bookkeeping: remember which files the task changed
       // (checks are scoped to their packages) and that this failure is
@@ -1148,7 +1199,10 @@ export class AgentLoop {
         });
       }
     }
-    return { ...this.#observe.handle({ kind: 'tool_result', result: finalResult }, current), mode: turnMode, last_tool_call_id: call.id, tool_result: finalResult };
+    const observed = { ...this.#observe.handle({ kind: 'tool_result', result: finalResult }, current), mode: turnMode, last_tool_call_id: call.id, tool_result: finalResult };
+    return grantedExceptions
+      ? { ...observed, target_exceptions: [...new Set([...(current.target_exceptions ?? []), ...grantedExceptions])] }
+      : observed;
   }
 
   /** Execute a single tool call end to end (the sequential path). */
@@ -1417,6 +1471,25 @@ export class AgentLoop {
     if (mode === 'ask' || mode === 'plan') return undefined;
     const goal: CreationGoal = detectCreationGoal(state.goal, state.done_criteria);
     if (!goal.creation) return undefined;
+    // Completion gate v2 (anchored, non-scaffold tasks): changing files
+    // is not enough — at least one change must be INSIDE the declared
+    // target. Changes only outside (the incident: a full page written
+    // to an unrelated ayid/index.html) refuse completion exactly like
+    // zero changes, repair turn included. Scaffold goals keep the
+    // marker rule below (the marker lives under the target by
+    // construction); unanchored tasks keep the PR #21 semantics.
+    if (!goal.scaffold) {
+      const targetDir = this.#targetDirFor(state);
+      if (targetDir) {
+        const split = this.#targetChangeSplit(state, targetDir);
+        if (split.inside === 0 && split.outside.length > 0) {
+          return {
+            reason: 'no_files_created',
+            detail: `the task is anchored to target directory "${targetDir}/", but every file it changed is outside the target (${split.outside.slice(0, 5).join(', ')}${split.outside.length > 5 ? ', …' : ''}) — a creation task may report success only when at least one changed file is inside ${targetDir}/; write the deliverable inside ${targetDir}/ (or, when the user wants another location, get their approval with ask_user first)`,
+          };
+        }
+      }
+    }
     const markerPresent = goal.scaffold ? scaffoldMarkerPresent(state.repo_path, goal.scaffold) : false;
     return creationCompletionRefusal(
       goal,
@@ -1428,6 +1501,153 @@ export class AgentLoop {
       markerPresent,
       { deferWhenDelegated: true },
     );
+  }
+
+  /**
+   * The task's declared target directory, when anchored (agent/scaffold.ts
+   * deriveTaskTargetDir). Resolved from the spec once and cached;
+   * re-derived on demand so a folder the task itself creates mid-run can
+   * anchor the completion checks too. One derivation feeds write
+   * confinement, gate v2, and validation scoping, so the three can never
+   * disagree about where this task's work belongs.
+   */
+  #targetDirFor(state: TaskState): string | undefined {
+    const known = this.#targets.get(state.id) ?? state.target_dir;
+    if (known) return known;
+    const derived = deriveTaskTargetDir({
+      goal: state.goal,
+      doneCriteria: state.done_criteria,
+      constraints: state.constraints,
+      planSteps: state.steps.map((step) => step.intent),
+      workspaceRoot: state.repo_path,
+      changedPaths: [...(this.#changedFiles.get(state.id) ?? [])],
+    });
+    if (derived) this.#targets.set(state.id, derived);
+    return derived;
+  }
+
+  /**
+   * Write confinement for anchored tasks. The loop layer is the seam on
+   * purpose: #prepareToolCall is the one choke point sequential calls
+   * AND parallel spawn bursts share, it runs before the call can reach
+   * the approval layer (an approval must never be able to bless an
+   * out-of-target write — it decides WHETHER a write may happen, the
+   * anchor decides WHERE), and the loop owns the per-task ledgers
+   * (change ledger, exceptions) the decision needs. The tool layer
+   * cannot host it: tools see (args, workspaceRoot), never the task's
+   * declared target. spawn_subagent children run their own loops with
+   * their own specs, so confinement follows delegation naturally.
+   *
+   * Confined: file-mutating calls with a path (write_file, edit_file,
+   * edit_search_replace, create_dir, download_file). Never confined:
+   * `.daedalus/**` bookkeeping, paths inside the target, files this
+   * task itself already changed outside (they predate the anchor's
+   * knowledge), and ask_user-approved exception paths. run_command is
+   * deliberately not path-confined (a shell has no single path; it
+   * stays approval-gated, and gate v2 is its backstop: shell-only
+   * changes outside the target still cannot yield success).
+   */
+  #outsideTargetBlock(state: TaskState, call: ToolCall, turnMode: AgentMode): ToolResult | undefined {
+    if (classifyToolName(call.tool) !== 'mutating') return undefined;
+    const rawPath = toolCallTargetPath(call.args);
+    if (!rawPath) return undefined;
+    const targetDir = this.#targetDirFor(state);
+    if (!targetDir) return undefined;
+    const rel = workspaceRelativePath(state.repo_path, rawPath);
+    if (rel !== undefined && (rel === '.daedalus' || rel.startsWith('.daedalus/'))) return undefined;
+    if (rel !== undefined && pathInsideTarget(rel, targetDir)) return undefined;
+    if (rel !== undefined) {
+      for (const changed of this.#changedFiles.get(state.id) ?? []) {
+        const changedRel = workspaceRelativePath(state.repo_path, changed);
+        if (changedRel !== undefined && (rel === changedRel || rel.startsWith(`${changedRel}/`))) return undefined;
+      }
+      for (const exception of this.#targetExceptions.get(state.id) ?? []) {
+        if (rel === exception || rel.startsWith(`${exception}/`)) return undefined;
+      }
+    }
+    const display = rel ?? rawPath;
+    let blocked = this.#blockedOutside.get(state.id);
+    if (!blocked) {
+      blocked = new Set<string>();
+      this.#blockedOutside.set(state.id, blocked);
+    }
+    blocked.add(display);
+    return {
+      call_id: call.id,
+      status: 'denied',
+      output: `Write blocked: this task has a declared target directory "${targetDir}/" — file changes for this task belong inside ${targetDir}/, but this call targets "${display}" outside it, so nothing was changed. Write the file inside ${targetDir}/ instead. If the user really wants the change in "${display}", ask them with ask_user first (name the path "${display}" in the question) and write there only after they approve.`,
+      truncated: false,
+      meta: { tool: call.tool, mode: turnMode, reason: 'outside_task_target', target_dir: targetDir, path: display, mutating: false },
+    };
+  }
+
+  /**
+   * Whether an answered ask_user question sanctions an outside-target
+   * exception — and if so, records it. Deliberately narrow: the path
+   * must be NAMED (in the question, an option label, or the answer
+   * itself — the blocked-write error instructs the model to name it)
+   * and the user's answer must approve it (the chosen option/free text
+   * names the path, or opens with an affirmative), never under a
+   * negation. Granted paths are returned so #recordToolResult can stamp
+   * them on state for the final report. Heuristic by necessity — a
+   * question answer is prose — so anything ambiguous grants nothing.
+   */
+  #grantTargetExceptions(state: TaskState, call: ToolCall, result: ToolResult): string[] | undefined {
+    if (result.meta?.outcome !== 'answered') return undefined;
+    const targetDir = this.#targetDirFor(state);
+    if (!targetDir) return undefined;
+    const args = (call.args ?? {}) as { question?: unknown; options?: unknown };
+    const question = typeof args.question === 'string' ? args.question : '';
+    const labels: string[] = [];
+    if (Array.isArray(args.options)) {
+      for (const option of args.options) {
+        if (typeof option === 'string') labels.push(option);
+        else if (typeof option === 'object' && option !== null && typeof (option as { label?: unknown }).label === 'string') {
+          labels.push((option as { label: string }).label);
+        }
+      }
+    }
+    const optionIndex = typeof result.meta?.option_index === 'number' ? result.meta.option_index : undefined;
+    const answer = (optionIndex !== undefined ? labels[optionIndex] : undefined) ?? freeTextAnswer(result.output);
+    if (!answer) return undefined;
+    // Candidates: paths this task was already blocked from, plus any
+    // path-like token the question or the answer names (pre-approval
+    // before any block attempt).
+    const candidates = new Set<string>(this.#blockedOutside.get(state.id) ?? []);
+    for (const token of pathLikeTokens([question, ...labels, answer].join(' '))) candidates.add(token);
+    const negated = /\b(tidak|jangan|bukan|no|nope|don't|dont)\b/i.test(answer);
+    const granted: string[] = [];
+    for (const candidate of candidates) {
+      const rel = workspaceRelativePath(state.repo_path, candidate);
+      if (rel === undefined || rel === '' || pathInsideTarget(rel, targetDir)) continue;
+      if (rel === '.daedalus' || rel.startsWith('.daedalus/')) continue;
+      const named = question.includes(rel) || labels.some((label) => label.includes(rel)) || answer.includes(rel);
+      if (!named) continue;
+      const approved = !negated && (answer.includes(rel) || AFFIRMATIVE_ANSWER.test(answer.trim()));
+      if (!approved) continue;
+      granted.push(rel);
+    }
+    if (granted.length === 0) return undefined;
+    let exceptions = this.#targetExceptions.get(state.id);
+    if (!exceptions) {
+      exceptions = new Set<string>();
+      this.#targetExceptions.set(state.id, exceptions);
+    }
+    for (const rel of granted) exceptions.add(rel);
+    return granted;
+  }
+
+  /** Split the task's change ledger into inside-target vs outside-target changes (normalized). */
+  #targetChangeSplit(state: TaskState, targetDir: string): { inside: number; outside: string[] } {
+    let inside = 0;
+    const outside: string[] = [];
+    for (const changed of this.#changedFiles.get(state.id) ?? []) {
+      const rel = workspaceRelativePath(state.repo_path, changed);
+      if (rel === undefined) outside.push(changed);
+      else if (pathInsideTarget(rel, targetDir)) inside++;
+      else outside.push(rel);
+    }
+    return { inside, outside };
   }
 
   #done(state: TaskState): boolean {
@@ -1583,6 +1803,30 @@ function toolCallTargetPath(args: unknown): string | undefined {
   return typeof path === 'string' ? path : undefined;
 }
 
+/** Opening words of an ask_user answer that read as approval (Indonesian + English). */
+const AFFIRMATIVE_ANSWER = /^(ya|iya|yes|ok|oke|boleh|setuju|silakan|silahkan|lanjut|lanjutkan|approve|approved|go ahead)\b/i;
+
+/**
+ * The user's free-text answer out of an ask_user result's model-facing
+ * output (`The user answered your question with their own text: "…"` —
+ * questionResultOutput in interaction/questions.ts owns that format).
+ */
+function freeTextAnswer(output: string): string | undefined {
+  const match = /with their own text: "([^"]*)"/.exec(output);
+  const answer = match?.[1]?.trim();
+  return answer ? answer : undefined;
+}
+
+/** Path-like tokens (containing a `/` or a file extension) named in prose. */
+function pathLikeTokens(text: string): string[] {
+  const tokens = new Set<string>();
+  for (const match of text.matchAll(/[A-Za-z0-9_][A-Za-z0-9_./-]*[/.][A-Za-z0-9_./-]*/g)) {
+    const token = match[0].replace(/[.,;:!?)"']+$/, '');
+    if (token.length > 1) tokens.add(token);
+  }
+  return [...tokens];
+}
+
 function toSpec(state: TaskState): TaskSpec {
   return {
     id: state.id,
@@ -1598,6 +1842,7 @@ function toSpec(state: TaskState): TaskSpec {
     model: state.model,
     models: state.models,
     model_strategy: state.model_strategy,
+    ...(state.target_dir ? { target_dir: state.target_dir } : {}),
   };
 }
 

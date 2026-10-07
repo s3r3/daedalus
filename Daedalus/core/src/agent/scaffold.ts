@@ -1,5 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { basename, isAbsolute, join, relative, sep } from 'node:path';
 
 /**
  * Scaffold playbook: deterministic recipes for creating NEW framework
@@ -480,6 +480,17 @@ export function djangoProjectName(targetDir: string): string {
 
 /** Extract an explicit folder target ("di folder X", "in the X folder", "folder X"), sanitized. */
 export function extractTargetDir(text: string): string {
+  return explicitTargetFolder(text) ?? 'app';
+}
+
+/**
+ * The folder a text explicitly names as its destination, sanitized — or
+ * undefined when the text names none. Unlike extractTargetDir there is
+ * no 'app' fallback: callers that must not guess (the task-target
+ * anchor below) need "no folder named" to stay distinguishable from a
+ * folder that was named.
+ */
+export function explicitTargetFolder(text: string): string | undefined {
   const patterns = [
     /\b(?:di|in|into|ke|at)\s+(?:the\s+)?(?:folder|direktori|directory|dir)\s*[:\-]?\s*([A-Za-z0-9_][A-Za-z0-9_./-]*)/i,
     /\b(?:in|into|at)\s+(?:the\s+)?([A-Za-z0-9_][A-Za-z0-9_./-]*)\s+(?:folder|directory|dir)\b/i,
@@ -496,7 +507,7 @@ export function extractTargetDir(text: string): string {
     if (segments.length === 0) continue;
     return segments.join('/');
   }
-  return 'app';
+  return undefined;
 }
 
 /** Does the goal ask to create a NEW project of a recipe-backed framework? */
@@ -941,4 +952,93 @@ export function creationCompletionRefusal(
     reason: 'no_files_created',
     detail: 'no files were created or changed (no write/edit/create and no successful command produced anything)',
   };
+}
+
+/**
+ * ── Task target anchor ───────────────────────────────────────────────
+ *
+ * The incident this answers (Farid's live PR #22 test, 2026-10-07): a
+ * prompt created a Vite project in `tesvite/`, and the follow-up prompt
+ * — after the loop breaker correctly stopped its read loop — wrote the
+ * requested page into the UNRELATED existing file `ayid/index.html`
+ * (overwriting a landing page) and still reported TASK SUCCESS, because
+ * validation saw "changes outside the project's packages" and skipped,
+ * and the completion gate only counted that *something* changed. The
+ * declared target `tesvite/` was never written.
+ *
+ * The fix gives a creation task a declared target directory and holds
+ * the task to it: writes outside the target are blocked in the agent
+ * loop, the completion gate demands at least one change INSIDE it, and
+ * validation runs the target's own package.json scripts. The anchor is
+ * derived conservatively — creation-shaped goals only, and only when
+ * the target is actually declared:
+ *   (a) a scaffold recipe matched → the recipe's output directory; or
+ *   (b) the goal / done criteria / constraints / plan steps explicitly
+ *       name a project folder ("di folder X", "in the X folder", …)
+ *       AND that folder already exists on disk or the task has already
+ *       written into it (i.e. the task itself created it).
+ * Anything else stays unanchored and keeps the pre-anchor semantics
+ * exactly (changeset-scoped validation, PR #21 completion gate): when
+ * in doubt, no anchor — never guess a target the user did not declare.
+ */
+export type TaskTargetInput = {
+  goal: string;
+  doneCriteria?: string[];
+  constraints?: string[];
+  /** Plan step intents, weakest source (execution narration, not user text). */
+  planSteps?: string[];
+  workspaceRoot: string;
+  /** Paths the task has changed so far (workspace-relative or absolute inside it). */
+  changedPaths?: string[];
+};
+
+/**
+ * Normalize a path to workspace-relative POSIX form (the change-ledger
+ * dialect); undefined when it escapes the workspace root. Absolute
+ * paths inside the root resolve against it.
+ */
+export function workspaceRelativePath(workspaceRoot: string, file: string): string | undefined {
+  let rel = isAbsolute(file) ? relative(workspaceRoot, file) : file;
+  rel = rel.split(sep).join('/');
+  if (rel === '..' || rel.startsWith('../')) return undefined;
+  if (rel.startsWith('./')) rel = rel.slice(2);
+  return rel;
+}
+
+/** True when a workspace-relative path is the target dir or lives beneath it. */
+export function pathInsideTarget(rel: string, targetDir: string): boolean {
+  return rel === targetDir || rel.startsWith(`${targetDir}/`);
+}
+
+function isDirectoryInside(workspaceRoot: string, rel: string): boolean {
+  try {
+    return statSync(join(workspaceRoot, rel)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The task's declared target directory (workspace-relative, POSIX), or
+ * undefined when the task is unanchored. See the section comment for the
+ * derivation rules; the changed-paths clause is what lets a folder the
+ * task creates mid-run (via create_dir/write_file, whose paths land in
+ * the loop's ledger) qualify without ever inventing a folder from thin
+ * air — the folder must still be NAMED in the task's own text.
+ */
+export function deriveTaskTargetDir(input: TaskTargetInput): string | undefined {
+  const creation = detectCreationGoal(input.goal, input.doneCriteria ?? []);
+  if (!creation.creation) return undefined;
+  if (creation.scaffold) return creation.scaffold.targetDir;
+  const changed = (input.changedPaths ?? [])
+    .map((path) => workspaceRelativePath(input.workspaceRoot, path))
+    .filter((rel): rel is string => rel !== undefined);
+  const sources = [input.goal, ...(input.doneCriteria ?? []), ...(input.constraints ?? []), ...(input.planSteps ?? [])];
+  for (const source of sources) {
+    const candidate = explicitTargetFolder(source);
+    if (!candidate) continue;
+    if (isDirectoryInside(input.workspaceRoot, candidate)) return candidate;
+    if (changed.some((rel) => rel === candidate || rel.startsWith(`${candidate}/`))) return candidate;
+  }
+  return undefined;
 }
