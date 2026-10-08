@@ -242,7 +242,7 @@ async function serveOneFile(root: string, requestedPath: string, a: ReadRangeArg
 
 export const readFileTool: ToolDefinition = {
   name: 'read_file', description: 'Read UTF-8 text file(s) by 1-based line range: start_line/end_line, or offset (first line) + limit (max lines). Pass `paths` (up to 8) to read several files in one call — comparing two files (an App.tsx and its App.css) costs one step, not two. Use offset/limit to page through a spilled tool-output file or any long file instead of re-running the tool that produced it.', mutating: false,
-  inputSchema: { type: 'object', properties: { path: { type: 'string' }, paths: { type: 'array', items: { type: 'string' }, maxItems: READ_FILE_MAX_BATCH }, start_line: { type: 'integer', minimum: 1 }, end_line: { type: 'integer', minimum: 1 }, offset: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1 } }, additionalProperties: false },
+  inputSchema: { type: 'object', anyOf: [{ required: ['path'] }, { required: ['paths'] }], properties: { path: { type: 'string' }, paths: { type: 'array', items: { type: 'string' }, maxItems: READ_FILE_MAX_BATCH }, start_line: { type: 'integer', minimum: 1 }, end_line: { type: 'integer', minimum: 1 }, offset: { type: 'integer', minimum: 1 }, limit: { type: 'integer', minimum: 1 } }, additionalProperties: false },
   async execute(args, context) {
     const a = args as { path?: unknown; paths?: unknown } & ReadRangeArgs;
     if (Array.isArray(a.paths) && a.paths.length > 0) {
