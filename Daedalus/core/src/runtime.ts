@@ -104,6 +104,8 @@ export type TaskRunnerOptions = {
   autoApprove?: boolean;
   /** Surface provider thought text as THOUGHT events. Defaults to settings.session.thinking (on). */
   thinking?: boolean;
+  /** Stream model text as MODEL_TEXT_DELTA events during a turn (Web live text). Default: off. */
+  streamText?: boolean;
   bus?: EventBus;
   store?: TaskStore;
   /** Shared approval broker (worktree re-dispatch reuses the parent's so decisions reach child runs). */
@@ -984,6 +986,7 @@ export class TaskRunner {
       chatOptions: this.#chatOptions(),
       modeController: this.modeController,
       thinking: spec.thinking ?? options.thinking ?? this.#options.thinking ?? settingsThinking(this.#settings),
+      streamText: this.#options.streamText === true,
       contextLimitTokens: this.#options.contextLimitTokens ?? this.#settings.context?.limitTokens,
       condense: this.#options.condense ?? (this.#settings.context?.condense !== false),
       toolOutput: this.#options.toolOutput ?? this.#settings.toolOutput,

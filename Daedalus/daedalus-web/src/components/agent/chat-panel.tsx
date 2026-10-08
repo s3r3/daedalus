@@ -452,12 +452,12 @@ function ChatRow({ entry }: { entry: ChatEntry }) {
         <li className="px-1 py-0.5" data-testid="chat-entry" data-role="thought">
           {entry.text.length > 280 ? (
             <details>
-              <summary className="cursor-pointer text-[9px] font-semibold uppercase tracking-wider text-muted">thinking</summary>
+              <summary className="cursor-pointer text-[9px] font-semibold uppercase tracking-wider text-muted">thinking{entry.status === 'running' ? ' · live' : ''}</summary>
               <p className="mt-0.5 whitespace-pre-wrap break-words text-[11px] italic text-muted">{entry.text}</p>
             </details>
           ) : (
             <>
-              <span className="text-[9px] font-semibold uppercase tracking-wider text-muted">thinking</span>
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-muted">thinking{entry.status === 'running' ? ' · live' : ''}</span>
               <p className="whitespace-pre-wrap break-words text-[11px] italic text-muted">{entry.text}</p>
             </>
           )}

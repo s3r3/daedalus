@@ -325,6 +325,7 @@ export type EventPayloads = {
   JOB_FINISHED: JobFinished
   FILE_CHANGED: FileChange
   MODEL_REQUEST_STARTED: { provider: string; messages: number; tools: number; phase?: string; context_estimate_tokens?: number; context_limit_tokens?: number; context_percent?: number }
+  MODEL_TEXT_DELTA: { text: string; final?: boolean }
   MODEL_REQUEST_FINISHED: { message?: { content?: string }; usage?: Record<string, number>; finish_reason?: string; model?: string; tier?: string; phase?: string; context_estimate_tokens?: number; context_limit_tokens?: number; context_percent?: number }
   MODEL_REQUEST_FAILED: ModelRequestFailed
   VALIDATION_STARTED: { task_id: string }

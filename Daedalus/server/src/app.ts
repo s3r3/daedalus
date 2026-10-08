@@ -1345,6 +1345,7 @@ export function createApp(ctx: AppContext) {
             mode,
             autoApprove,
             thinking,
+            streamText: true,
             ...(providerId ? { providerId } : {}),
             ...(model ? { model } : {}),
             ...(poolModels.length ? { models: poolModels } : {}),
