@@ -103,6 +103,28 @@ describe('ExtensionsPanel skills inventory', () => {
     expect(toggleSkill).toHaveBeenCalledWith({ root: '/workspace', name: 'greeter', disabled: true })
   })
 
+  test('search filters skills by name and description, and the list lives in its own scroll region', async () => {
+    render(<ExtensionsPanel />)
+    await screen.findAllByTestId('extension-skill-group')
+    expect(screen.getByTestId('extension-skills-scroll')).toBeTruthy()
+    expect(textOf(screen.getByTestId('extension-skills-count'))).toContain('4 found')
+
+    fireEvent.change(screen.getByTestId('extension-skills-search'), { target: { value: 'oracle' } })
+    expect(screen.getAllByTestId('extension-skill-entry').map((entry) => textOf(entry))).toEqual([
+      expect.stringContaining('oracle'),
+      expect.stringContaining('oracle-clone'),
+    ])
+    expect(textOf(screen.getByTestId('extension-skills-count'))).toContain('2 of 4')
+
+    fireEvent.change(screen.getByTestId('extension-skills-search'), { target: { value: 'warmly' } })
+    expect(screen.getAllByTestId('extension-skill-entry')).toHaveLength(1)
+    expect(textOf(screen.getByTestId('extension-skill-entry'))).toContain('greeter')
+
+    fireEvent.change(screen.getByTestId('extension-skills-search'), { target: { value: 'zzz-no-match' } })
+    expect(screen.queryAllByTestId('extension-skill-entry')).toHaveLength(0)
+    expect(textOf(screen.getByTestId('extension-skills-no-match'))).toContain('zzz-no-match')
+  })
+
   test('shows the honest overflow note when enabled winners exceed the prompt index cap', async () => {
     const many = Array.from({ length: 43 }, (_, i) => ({
       name: `bulk-${i}`,

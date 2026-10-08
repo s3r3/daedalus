@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, Search } from 'lucide-react'
 import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core'
 import { api } from '../../api/client'
 import type { ExtensionStatus } from '../../api/types'
 import { useDaedalusStore } from '../../state/taskStore'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
+import { Input } from '../ui/input'
 import { EmptyState, Panel } from '../common/panel'
 
 /**
@@ -23,6 +24,7 @@ export function ExtensionsPanel() {
   const [loading, setLoading] = useState(false)
   const [skillToggleError, setSkillToggleError] = useState<string | null>(null)
   const [skillToggling, setSkillToggling] = useState<string | null>(null)
+  const [skillQuery, setSkillQuery] = useState('')
 
   const load = useCallback(async (): Promise<void> => {
     if (!effectiveRoot) {
@@ -71,6 +73,9 @@ export function ExtensionsPanel() {
     void load()
   }, [load])
 
+  const visibleSkills = status ? filterSkills(status.skills, skillQuery) : []
+  const skillGroupsVisible = skillGroups(visibleSkills)
+
   return (
     <Panel
       title="extensions"
@@ -109,7 +114,16 @@ export function ExtensionsPanel() {
           </section>
 
           <section data-testid="extensions-skills">
-            <p className="mb-1 text-[10px] uppercase tracking-wider text-muted">Skills</p>
+            <p className="mb-1 flex items-baseline justify-between text-[10px] uppercase tracking-wider text-muted">
+              <span>Skills</span>
+              {status.skills.length > 0 ? (
+                <span className="normal-case tracking-normal" data-testid="extension-skills-count">
+                  {skillQuery.trim()
+                    ? `${visibleSkills.length} of ${status.skills.length}`
+                    : `${status.skills.length} found`}
+                </span>
+              ) : null}
+            </p>
             {skillToggleError ? (
               <p role="alert" className="mb-1 text-[10px] text-error" data-testid="extension-skills-error">
                 Could not update skill state: {skillToggleError}
@@ -118,7 +132,26 @@ export function ExtensionsPanel() {
             {status.skills.length === 0 ? (
               <p className="text-muted">none found (.daedalus/skills, ~/.daedalus/skills, ~/.claude/skills, …)</p>
             ) : (
-              skillGroups(status.skills).map((group) => (
+              <>
+                <div className="relative mb-1.5">
+                  <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted" />
+                  <Input
+                    type="search"
+                    value={skillQuery}
+                    onChange={(event) => setSkillQuery(event.target.value)}
+                    placeholder="Search skills by name or description…"
+                    aria-label="Search skills"
+                    data-testid="extension-skills-search"
+                    className="h-7 pl-7 text-[11px]"
+                  />
+                </div>
+                {visibleSkills.length === 0 ? (
+                  <p className="text-muted" data-testid="extension-skills-no-match">
+                    no skills match “{skillQuery.trim()}”
+                  </p>
+                ) : (
+                  <div className="max-h-80 overflow-y-auto pr-1" data-testid="extension-skills-scroll">
+                    {skillGroupsVisible.map((group) => (
                 <div key={group.origin} className="mb-2" data-testid="extension-skill-group" data-origin={group.origin}>
                   <p className="mb-1 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted">
                     <Badge tone="info">{formatSkillOrigin(group.origin as SkillOrigin)}</Badge>
@@ -159,7 +192,10 @@ export function ExtensionsPanel() {
                     ))}
                   </ul>
                 </div>
-              ))
+                    ))}
+                  </div>
+                )}
+              </>
             )}
             {skillIndexOverflow(status.skills) > 0 ? (
               <p className="text-[10px] text-warning" data-testid="extension-skills-overflow">
@@ -221,6 +257,18 @@ export function ExtensionsPanel() {
  * same number the prompt truncates at.
  */
 const SKILL_INDEX_CAP = 40
+
+/** Case-insensitive filter over name, description, and origin for the panel search box. */
+function filterSkills(skills: ExtensionStatus['skills'], query: string): ExtensionStatus['skills'] {
+  const needle = query.trim().toLowerCase()
+  if (!needle) return skills
+  return skills.filter(
+    (skill) =>
+      skill.name.toLowerCase().includes(needle) ||
+      (skill.description ?? '').toLowerCase().includes(needle) ||
+      (skill.origin ?? '').toLowerCase().includes(needle),
+  )
+}
 
 /** Skill search order (workspace > daedalus global > the other tools' skill dirs); unknown origins last. */
 const SKILL_ORIGIN_ORDER = ['workspace', 'global', 'claude', 'codex', 'opencode', 'kilo']
