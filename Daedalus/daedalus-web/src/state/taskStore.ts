@@ -2,7 +2,9 @@ import { create } from 'zustand'
 import type { AgentMode, Attachment, Event, FinalReport, ProviderConfigPublic } from '@daedalus/core'
 import type { StreamStatus, TerminalWireMessage } from '../api/eventStream'
 import type { Conversation, ProviderModel, ProviderPreset, SessionState, TaskSummary, TerminalSession } from '../api/types'
-import { composerPrefsOf, saveComposerPrefs } from './prefs'
+import { composerPrefsOf, saveComposerPrefs, type WebDomain } from './prefs'
+
+export type { WebDomain }
 
 /**
  * Client state for the control plane. Only genuinely shared state lives here
@@ -67,6 +69,10 @@ export type DaedalusState = {
   settingsOpen: boolean
   workspaceRevision: number
   theme: 'daedalus-dark' | 'daedalus-light'
+  /** Active product domain: shared core/workspace, different center canvas. */
+  domain: WebDomain
+  /** Selected slide in the open deck (clamped by the deck hook when read). */
+  slideIndex: number
   openFilePath: string | null
   error: string | null
 
@@ -94,6 +100,8 @@ export type DaedalusState = {
   applyTerminalMessage: (message: TerminalWireMessage) => void
   bumpWorkspaceRevision: () => void
   setTheme: (theme: 'daedalus-dark' | 'daedalus-light') => void
+  setDomain: (domain: WebDomain) => void
+  setSlideIndex: (index: number) => void
   setOpenFile: (path: string | null) => void
   setError: (error: string | null) => void
   reset: () => void
@@ -142,6 +150,8 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   settingsOpen: false,
   workspaceRevision: 0,
   theme: 'daedalus-dark',
+  domain: 'coding',
+  slideIndex: 0,
   openFilePath: null,
   error: null,
 
@@ -269,6 +279,8 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
     }),
   bumpWorkspaceRevision: () => set((state) => ({ workspaceRevision: state.workspaceRevision + 1 })),
   setTheme: (theme) => set({ theme }),
+  setDomain: (domain) => set({ domain }),
+  setSlideIndex: (slideIndex) => set({ slideIndex: Number.isFinite(slideIndex) ? Math.max(0, Math.floor(slideIndex)) : 0 }),
   setOpenFile: (openFilePath) => set({ openFilePath }),
   setError: (error) => set({ error }),
   reset: () =>
@@ -290,6 +302,8 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
       taskAttachments: [],
       settingsOpen: false,
       workspaceRevision: 0,
+      domain: 'coding',
+      slideIndex: 0,
       openFilePath: null,
       error: null,
     })),

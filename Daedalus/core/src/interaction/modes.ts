@@ -22,9 +22,9 @@ export function normalizeAgentMode(value: unknown): AgentMode {
   return AGENT_MODES.includes(value as AgentMode) ? (value as AgentMode) : 'auto';
 }
 
-const READ_TOOLS = new Set(['read_file', 'list_dir', 'grep', 'glob', 'git_diff', 'git_status', 'read_skill', 'lsp_diagnostics', 'fetch_url', 'web_search', 'view_image', 'screenshot', 'search_images', 'command_status']);
-const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'edit_search_replace', 'create_dir', 'download_file']);
-const EXECUTING_TOOLS = new Set(['run_command', 'command_kill']);
+const READ_TOOLS = new Set(['read_file', 'list_dir', 'grep', 'glob', 'git_diff', 'git_status', 'read_skill', 'lsp_diagnostics', 'fetch_url', 'web_search', 'view_image', 'screenshot', 'search_images', 'command_status', 'read_deck', 'validate_deck']);
+const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'edit_search_replace', 'create_dir', 'download_file', 'create_deck', 'add_slide', 'update_slide', 'move_slide', 'delete_slide', 'set_deck_theme']);
+const EXECUTING_TOOLS = new Set(['run_command', 'command_kill', 'export_deck']);
 
 /**
  * The Plan mode carve-out: plan documents are the ONE sanctioned write in

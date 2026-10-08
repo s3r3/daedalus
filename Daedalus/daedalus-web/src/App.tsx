@@ -16,6 +16,8 @@ import { ValidationPanel } from './components/validation/validation-panel'
 import { ErrorPanel, RecoveryPanel } from './components/recovery/recovery-panel'
 import { AttachmentsPanel, ChildTasksPanel, FinalReportView } from './components/report/report-panels'
 import { ScrollArea } from './components/ui/scroll-area'
+import { SlideStage } from './components/slides/slide-stage'
+import { DeckOutlinePanel } from './components/slides/deck-outline'
 import { useEventStream } from './api/useEventStream'
 import { api } from './api/client'
 import { readStoredTheme, applyPaletteVars } from './theme/theme'
@@ -26,9 +28,11 @@ import {
   loadActiveConversationId,
   loadColumnWidths,
   loadComposerPrefs,
+  loadDomain,
   loadWorkspacePanelHeight,
   saveActiveConversationId,
   saveColumnWidths,
+  saveDomain,
   saveWorkspacePanelHeight,
   type ColumnWidths,
 } from './state/prefs'
@@ -57,6 +61,8 @@ export function App() {
   const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
   const setComposer = useDaedalusStore((state) => state.setComposer)
   const setConversation = useDaedalusStore((state) => state.setConversation)
+  const domain = useDaedalusStore((state) => state.domain)
+  const setDomain = useDaedalusStore((state) => state.setDomain)
   const workspaceRoot = workspace.root
 
   // Side-column widths are user layout, persisted across visits. They only
@@ -165,6 +171,16 @@ export function App() {
     const prefs = loadComposerPrefs()
     if (Object.keys(prefs).length > 0) setComposer(prefs)
   }, [setComposer])
+
+  // The active domain (Coding | Slide) is a browser view preference over the
+  // same workspace and core: seed it from storage, then persist changes.
+  useEffect(() => {
+    setDomain(loadDomain())
+  }, [setDomain])
+
+  useEffect(() => {
+    saveDomain(domain)
+  }, [domain])
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme)
@@ -292,6 +308,7 @@ export function App() {
           </div>
           <ScrollArea className="min-h-[240px] lg:min-h-0 lg:flex-1">
             <div className="flex flex-col gap-2 pr-1">
+              {domain === 'slide' ? <DeckOutlinePanel /> : null}
               <ExtensionsPanel />
               <PlanPanel />
               <ActivityTimeline />
@@ -302,24 +319,30 @@ export function App() {
           </ScrollArea>
         </aside>
 
-        {/* Center: code surface + terminal */}
+        {/* Center: code surface + terminal, or the slide canvas in Slide domain */}
         <section className="flex min-h-[420px] min-w-0 flex-col gap-2 rounded-md border border-line bg-surface-base lg:min-h-0">
-          <EditorPane
-            path={openFilePath}
-            content={workspace.content}
-            loading={workspace.loading}
-            error={workspace.error}
-            size={workspace.size}
-            root={workspace.root}
-            kind={workspace.kind}
-            imageSrc={workspace.imageSrc}
-            mediaType={workspace.mediaType}
-            onSaved={(path, content) => {
-              setWorkspace({ path, content, size: new TextEncoder().encode(content).length, loading: false, error: null, kind: 'text', imageSrc: null, mediaType: null })
-              bumpWorkspaceRevision()
-            }}
-          />
-          <TerminalPane />
+          {domain === 'slide' ? (
+            <SlideStage />
+          ) : (
+            <>
+              <EditorPane
+                path={openFilePath}
+                content={workspace.content}
+                loading={workspace.loading}
+                error={workspace.error}
+                size={workspace.size}
+                root={workspace.root}
+                kind={workspace.kind}
+                imageSrc={workspace.imageSrc}
+                mediaType={workspace.mediaType}
+                onSaved={(path, content) => {
+                  setWorkspace({ path, content, size: new TextEncoder().encode(content).length, loading: false, error: null, kind: 'text', imageSrc: null, mediaType: null })
+                  bumpWorkspaceRevision()
+                }}
+              />
+              <TerminalPane />
+            </>
+          )}
         </section>
 
         {/* Right: conversation + changes + final result */}
