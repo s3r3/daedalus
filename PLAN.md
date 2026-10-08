@@ -36,6 +36,8 @@ Last Updated: 2026-10-05
 
 > **Phase 9–10 note (2026-10-05):** Phase 9 integration testing and Phase 10 evaluation are **COMPLETE**. `scripts/check.sh` is green (**290 tests**: core 126, CLI 42, server 24, Web 98). The Phase 10 deterministic harness dataset is 12/12 successful, while the live 12-task run with `kgw/kilo-auto/free` through Farid's recovered 9Router endpoint recorded **0/12 success, 12/12 partial**, all `validation_failed`; raw records are retained under `Daedalus/evaluation/reports/live-kilo-2026-10-05/` and compared in `Daedalus/evaluation/reports/aggregate-combined-2026-10-05/`. Phase 11 documentation/demo preparation is drafted, but the final freeze remains open for thesis screenshots, the owner-manual desktop tray check, the tracked-`.env` security decision, and a release tag/snapshot that must wait for the owner's commit decision. Overall progress is the PLAN average over thirteen phases (Phases 0–10 at 100%, Phase 11 at 50% acceptance ≈ 96%).
 
+> **Current-state update (2026-10-08):** the 290-test figure above is the Phase 9–10 completion record, not the current state. Main (`ef408da8`, PRs #28–#31) is green at **1,093 tests** (core 635, CLI 141, server 70, Web 247), with live TASK SUCCESS runs recorded since (owner's laptop 2026-10-06; end-to-end VM run in 113s on 2026-10-08). The 0/12 live result below stays as the honest Phase 10 record for that model and date. See Phase 11 Status for the current evidence.
+
 > **Phase 8 note (2026-10-04):** Phase 8 was previously recorded as `NOT STARTED` / `0%`. An audit against the
 > actual disk state found **all 30 implementation tasks already shipped** and **all 12 acceptance criteria passing**;
 > the checklist simply had never been reconciled with the code. The four coverage gaps that then held it at 70%
@@ -1531,11 +1533,11 @@ Stabilize, document, and present the finished framework: fix remaining defects, 
 
 ### Status
 
-IN PROGRESS (2026-10-05)
+IN PROGRESS (2026-10-08)
 
-**Prepared and verified:** final documentation preparation is in place (`Daedalus/README.md`, `Daedalus/docs/architecture.md`, `Daedalus/docs/decisions/README.md`, `Daedalus/docs/demo-scenarios.md`, `Daedalus/docs/evaluation.md`, and `Daedalus/docs/limitations-and-future-work.md`), and `bash scripts/check.sh` is green with **290 tests** after the Phase 9/10 work. Phase 10's live result is documented rather than hidden: `kgw/kilo-auto/free` produced 0/12 successful live tasks, all partial by validation failure.
+**Prepared and verified:** final documentation preparation is in place (`Daedalus/README.md`, `Daedalus/docs/architecture.md`, `Daedalus/docs/decisions/README.md`, `Daedalus/docs/demo-scenarios.md`, `Daedalus/docs/evaluation.md`, and `Daedalus/docs/limitations-and-future-work.md`), and `bash scripts/check.sh` is green with **1,150 tests** (core 670, CLI 141, server 74, Web 265), including the PRs #28–#31 interaction fixes, the Web panel polish (single Stop, de-duplicated panels), the tool-upgrade batch (batch edits, ripgrep-backed grep, automatic TypeScript language server, web_search, screenshot verification with the image carriage fixed), and the Web harness batch (inline tool-result images, effective-LSP status, git panel + per-file diff revert, task-history browser, token streaming). Phase 10's live result is documented rather than hidden: `kgw/kilo-auto/free` produced 0/12 successful live tasks, all partial by validation failure; the harness defects behind that class of failure (validation scoping, read-loop stalls, missing per-task target anchoring) are fixed with regression tests, and later live runs on strong models through the same gateway succeeded (TASK SUCCESS / VALIDATION PASSED on the owner's laptop 2026-10-06; 113-second end-to-end VM run 2026-10-08).
 
-**Explicitly not frozen yet:** thesis screenshots have not been captured; the real desktop tray icon/Quit remains an owner-manual check because no native tray backend is bundled; the tracked `.env` security remediation remains Farid's decision; and no release tag/snapshot has been created because Farid instructed not to commit yet. Phase 11 therefore remains `IN PROGRESS`, not `COMPLETE`, and Overall Progress is not set to 100%.
+**Explicitly not frozen yet:** thesis screenshots have not been captured; the real desktop tray icon/Quit remains an owner-manual check because no native tray backend is bundled; the tracked `.env` contains a long-replaced example key (owner-confirmed 2026-10-07, not a live secret), so untracking it is optional tidiness rather than a security blocker; and no release tag/snapshot has been created pending the owner's instruction. Phase 11 therefore remains `IN PROGRESS`, not `COMPLETE`, and Overall Progress is not set to 100%.
 
 ---
 
