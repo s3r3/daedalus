@@ -1,5 +1,6 @@
-export { createDirTool, editFileTool, editSearchReplaceTool, listDirTool, pathInWorkspace, readFileTool, writeFileTool, confined, IGNORED_DIRECTORY_NAMES, MAX_LIST_ENTRIES, walkTreeLines } from './filesystem/index.ts';
+export { createDirTool, editFileTool, editSearchReplaceTool, hunkPreview, listDirTool, pathInWorkspace, readFileTool, READ_FILE_MAX_BATCH, writeFileTool, confined, IGNORED_DIRECTORY_NAMES, MAX_LIST_ENTRIES, walkTreeLines } from './filesystem/index.ts';
 export { applySearchReplace, parseSearchReplaceBlocks, type AppliedSearchReplace, type ParsedSearchReplace, type SearchReplaceBlock } from './filesystem/search-replace.ts';
+export { applyWhitespaceTolerant, findWhitespaceTolerantMatch, reindentReplacement, type TolerantApplied, type TolerantMatch } from './filesystem/text-match.ts';
 export { changedLineCounts, diffLines, renderPatch, type DiffLine } from './filesystem/diff.ts';
 export {
   SANDBOX_ALLOWLIST,
