@@ -759,9 +759,7 @@ export class AgentLoop {
     await this.#emit(state.id, turnId, 'MODEL_REQUEST_STARTED', { provider: this.#provider.name, messages: messages.length, tools: visibleTools?.length ?? 0, mode: turnMode, phase, ...meter });
     let response;
     try {
-      response = this.#streamText
-        ? await this.#chatStreamed(state.id, turnId, messages, visibleTools, phase)
-        : await this.#provider.chat(messages, visibleTools, { ...this.#chatOptions, phase });
+      response = await this.#chatWithEmptyRetry(state.id, turnId, messages, visibleTools, phase);
       await this.#emit(state.id, turnId, 'MODEL_REQUEST_FINISHED', { message: response.message, usage: response.usage, finish_reason: response.finish_reason, phase, ...this.#servedModelFields(state), ...meter });
       await this.#emitThought(state.id, turnId, response.message);
       this.#modelFailures.delete(state.id);
@@ -1789,6 +1787,37 @@ export class AgentLoop {
    * the identical plain request; a stream that dies mid-text throws
    * its real error into the caller's failure accounting.
    */
+  /**
+   * One model request with empty-response resilience. Providers (routed
+   * upstreams especially) intermittently return an empty/malformed body
+   * — "provider response has no choice message" — and a streak of those
+   * used to burn the consecutive-error budget and kill nearly-finished
+   * tasks (the 2026-10-08 live slide run died one step before export,
+   * the deck already valid). Empty/format failures retry inside the
+   * turn with backoff and never reach the error budget; every other
+   * failure surfaces immediately, exactly as before.
+   */
+  async #chatWithEmptyRetry(
+    taskId: string,
+    turnId: string,
+    messages: Message[],
+    tools: import('../providers/llm/types.ts').ToolDefinition[] | undefined,
+    phase: ModelPhase | undefined,
+  ): Promise<import('../providers/llm/types.ts').ChatResponse> {
+    const backoffMs = [600, 1800, 4000];
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return this.#streamText
+          ? await this.#chatStreamed(taskId, turnId, messages, tools, phase)
+          : await this.#provider.chat(messages, tools, { ...this.#chatOptions, phase });
+      } catch (error) {
+        if (modelPoolFailureReason(error) !== 'format_or_empty' || attempt >= backoffMs.length) throw error;
+        await this.#emit(taskId, turnId, 'LOOP_WARNING', { tool: '', repeats: attempt + 1, suppressed: false, kind: 'empty_response_retry', attempt: attempt + 1 });
+        await new Promise((resolve) => setTimeout(resolve, backoffMs[attempt]));
+      }
+    }
+  }
+
   async #chatStreamed(
     taskId: string,
     turnId: string,
@@ -2146,6 +2175,14 @@ export class AgentLoop {
   }
 
   #done(state: TaskState): boolean {
+    // Slide domain: the deliverable is the exported .pptx. Plan steps
+    // advance one per mutating result and read-only calls (validate_deck
+    // in the contract's validate→export order) cannot check one off, so
+    // once a successful export is on record the steps must not veto
+    // completion — the DeckValidator judges the artifact itself. Until
+    // an export lands this stays false and the export gate below keeps
+    // the task working.
+    if (state.domain === 'slide' && this.#slideExports.has(state.id)) return true;
     return state.steps.length > 0 && state.steps.every((s) => s.status === 'done' || s.status === 'skipped');
   }
 }

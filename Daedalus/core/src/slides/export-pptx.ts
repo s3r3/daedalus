@@ -289,10 +289,10 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<{ 
   const accent = hex(deck.theme.accent, '6B50FF');
   const ctx: Ctx = {
     dark,
-    bg: dark ? '201F26' : 'F4F2FA',
-    fg: dark ? 'ECEBF0' : '201F26',
-    sub: dark ? 'BFBCC8' : '4D4C57',
-    surface: dark ? '2D2C36' : 'FFFFFF',
+    bg: hex(deck.theme.background, dark ? '201F26' : 'F4F2FA'),
+    fg: hex(deck.theme.text, dark ? 'ECEBF0' : '201F26'),
+    sub: hex(deck.theme.muted, dark ? 'BFBCC8' : '4D4C57'),
+    surface: hex(deck.theme.surface, dark ? '2D2C36' : 'FFFFFF'),
     accent,
     colors: [accent, ...SERIES_COLORS],
   };
@@ -301,7 +301,7 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<{ 
   pptx.defineLayout({ name: 'DAEDALUS_WIDE', width: W, height: H });
   pptx.layout = 'DAEDALUS_WIDE';
   pptx.title = deck.title;
-  pptx.theme = { headFontFace: 'Arial', bodyFontFace: 'Arial' };
+  pptx.theme = { headFontFace: deck.theme.headingFont ?? 'Arial', bodyFontFace: deck.theme.bodyFont ?? 'Arial' };
 
   for (const s of deck.slides) renderSlide(pptx, s, deck, root, ctx);
   if (deck.slides.length === 0) {

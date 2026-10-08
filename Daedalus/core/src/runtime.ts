@@ -3,14 +3,14 @@ import { EventBus, emitEvent } from './events.ts';
 import { TaskStore } from './persistence.ts';
 import { AgentLoop } from './agent/agent-loop.ts';
 import type { ToolOutputLimits } from './agent/tool-output.ts';
-import { DefaultContextManager } from './agent/context.ts';
+import { DefaultContextManager, type SlideTaskParams } from './agent/context.ts';
 import { interpretTask } from './agent/interpreter.ts';
 import { loadProjectRules } from './agent/rules.ts';
 import { guardEditedFile } from './agent/edit-guard.ts';
 import { loadHooksConfig, runPostToolHooks, runPreToolHooks, type HooksConfig } from './agent/hooks.ts';
 import { loadAgents, workspaceAgentsDir, type AgentDefinition } from './agents/index.ts';
 import { createTaskWorktree, worktreeChangedFiles } from './worktree.ts';
-import { createDefaultRegistry, editSearchReplaceTool } from './tools/index.ts';
+import { createDefaultRegistry, createSlideRegistry, editSearchReplaceTool } from './tools/index.ts';
 import { pathInWorkspace } from './tools/filesystem/index.ts';
 import type { ToolDefinition } from './tools/registry.ts';
 import { existsSync } from 'node:fs';
@@ -208,6 +208,8 @@ export type RunOptions = {
   mode?: AgentMode;
   /** Product domain of this task (the Web sends coding|slide); absent = coding, exact legacy behavior. */
   domain?: TaskDomain;
+  /** Slide composer parameters (only meaningful with domain 'slide'): generation flow, target count, content language, pre-picked template. */
+  slide?: SlideTaskParams;
   thinking?: boolean;
   providerId?: string;
   model?: string;
@@ -713,7 +715,7 @@ export class TaskRunner {
     const spec: TaskSpec = await interpretTask(options.goal, {
       id: options.taskId,
       repo_path: this.#workspaceRoot,
-      mode: effectiveMode ?? this.modeController.mode,
+      mode: options.domain === 'slide' ? 'auto' : (effectiveMode ?? this.modeController.mode),
       domain: options.domain,
       provider_id: options.providerId ?? this.#options.providerId,
       model: effectiveOptions.model ?? this.#options.model ?? modelConfig.models[0],
@@ -846,12 +848,16 @@ export class TaskRunner {
       await extensions.close().catch(() => undefined);
       throw new Error(invocationProblems.join('; '));
     }
-    const registry = createDefaultRegistry();
-    for (const tool of extensions.tools) {
-      try {
-        registry.register(tool);
-      } catch {
-        // A name collision with a built-in tool is skipped, never fatal.
+    // Slide domain: the locked slide registry (deck tools only — coding
+    // tools are not registered and cannot execute) and no extension tools.
+    const registry = options.domain === 'slide' ? createSlideRegistry() : createDefaultRegistry();
+    if (options.domain !== 'slide') {
+      for (const tool of extensions.tools) {
+        try {
+          registry.register(tool);
+        } catch {
+          // A name collision with a built-in tool is skipped, never fatal.
+        }
       }
     }
     // The interactive question tool (Plan mode's ask_user): one instance
@@ -873,7 +879,7 @@ export class TaskRunner {
     // Child runs are built WITHOUT it, so subagents can never delegate
     // further (depth 1 hard stop, by construction rather than by check).
     let subagentTooling: SubagentTooling | undefined;
-    if (!options.parentTaskId) {
+    if (!options.parentTaskId && options.domain !== 'slide') {
       subagentTooling = this.#createSubagentTooling({
         spec,
         options,
@@ -979,6 +985,7 @@ export class TaskRunner {
         visionEnabled,
         skills: extensions.skills.list(),
         ...(options.domain ? { domain: options.domain } : {}),
+        ...(options.slide ? { slide: options.slide } : {}),
         ...(invokedSkills.length > 0 ? { invokedSkills } : {}),
         rules: rules.text ? rules.text : undefined,
         rulesFiles: rules.files,

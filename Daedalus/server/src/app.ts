@@ -33,6 +33,15 @@ import {
   unstagedDiff,
   workspaceAgentsDir,
   resolveSkillSearchDirs,
+  exportDeckToPptx,
+  getSlideTemplate,
+  listSlideTemplates,
+  newSlideId,
+  readDeck,
+  validateDeck,
+  writeDeck,
+  type DeckSpec,
+  type SlideTaskParams,
   type AgentMode,
   type ApprovalDecision,
   type Attachment,
@@ -163,7 +172,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(data);
 }
 
-const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workspace", "/uploads", "/upload", "/attachments", "/extensions", "/review", "/terminals"];
+const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workspace", "/slides", "/uploads", "/upload", "/attachments", "/extensions", "/review", "/terminals"];
 
 function webContentType(path: string): string {
   switch (extname(path).toLowerCase()) {
@@ -1201,6 +1210,42 @@ export function createApp(ctx: AppContext) {
           }
           const domain = parsed.domain === "slide" || parsed.domain === "coding" ? parsed.domain : undefined;
 
+          // Slide composer parameters (Agentic Slide v2): generation flow,
+          // target slide count, content language, pre-picked template. The
+          // Web sends snake_case; camelCase is accepted too. They only take
+          // effect in the slide domain (core renders them into the slide
+          // contract); an unknown template or out-of-range count is a 400,
+          // never a silent ignore.
+          let slide: SlideTaskParams | undefined;
+          if (domain === "slide" && parsed.slide && typeof parsed.slide === "object") {
+            const raw = parsed.slide as Record<string, unknown>;
+            const generation = raw.generation;
+            if (generation !== undefined && generation !== "smart" && generation !== "standard") {
+              sendJson(res, 400, { error: "invalid_slide_generation", request_id: requestId });
+              return;
+            }
+            const countRaw = raw.slide_count ?? raw.slideCount;
+            const slideCount = typeof countRaw === "number" && Number.isFinite(countRaw) ? Math.floor(countRaw) : undefined;
+            if (countRaw !== undefined && (slideCount === undefined || slideCount < 1 || slideCount > 40)) {
+              sendJson(res, 400, { error: "invalid_slide_count", request_id: requestId });
+              return;
+            }
+            const language = typeof raw.language === "string" && raw.language.trim() ? raw.language.trim().slice(0, 40) : undefined;
+            const templateRaw = raw.template_id ?? raw.templateId;
+            const templateId = typeof templateRaw === "string" && templateRaw.trim() ? templateRaw.trim() : undefined;
+            if (templateId && !getSlideTemplate(templateId)) {
+              sendJson(res, 400, { error: "unknown_slide_template", request_id: requestId });
+              return;
+            }
+            const parsed2: SlideTaskParams = {
+              ...(generation ? { generation } : {}),
+              ...(slideCount ? { slideCount } : {}),
+              ...(language ? { language } : {}),
+              ...(templateId ? { templateId } : {}),
+            };
+            slide = Object.keys(parsed2).length > 0 ? parsed2 : undefined;
+          }
+
           await ensureProvidersLoaded(ctx);
           const taskId = crypto.randomUUID();
           const repoPath = resolveTaskRepo(ctx, parsed.repo_path ?? parsed.repoPath);
@@ -1409,6 +1454,7 @@ export function createApp(ctx: AppContext) {
               ...(priorContext ? { priorContext } : {}),
               ...(conversationId ? { conversationId } : {}),
               ...(domain ? { domain } : {}),
+              ...(slide ? { slide } : {}),
             })
             .then((result) => {
               ctx.log.info("task finished", { task_id: taskId, outcome: result.outcome });
@@ -1793,6 +1839,164 @@ export function createApp(ctx: AppContext) {
           await mkdir(join(absolute, ".."), { recursive: true });
           await writeFile(absolute, typeof parsed.content === "string" ? parsed.content : "", "utf8");
           sendJson(res, 200, { path: target, absolute, root });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Agentic Slide deck endpoints (v2): the canvas reads/edits the deck
+    // through core — validateDeck gates every write — instead of treating
+    // deck.json as a raw text file. Mutations return the fresh deck so the
+    // Web can repaint without a second read.
+    if (method === "GET" && url.pathname === "/slides/templates") {
+      sendJson(res, 200, { templates: listSlideTemplates() });
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/slides/deck") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const deck = await readDeck(root);
+          if (!deck) {
+            sendJson(res, 404, { error: "deck_not_found", request_id: requestId });
+            return;
+          }
+          sendJson(res, 200, { root, deck });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && url.pathname.startsWith("/slides/deck")) {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const deck = await readDeck(root);
+          if (!deck) {
+            sendJson(res, 404, { error: "deck_not_found", request_id: requestId });
+            return;
+          }
+          const badDeck = (status: number, error: string, extra: Record<string, unknown> = {}) => sendJson(res, status, { error, request_id: requestId, ...extra });
+          // Validates the candidate deck; on errors responds 422 and
+          // writes nothing, otherwise persists and returns the deck.
+          const commit = async (next: DeckSpec) => {
+            const errors = validateDeck(next, { root }).filter((issue) => issue.severity === "error");
+            if (errors.length > 0) {
+              badDeck(422, "deck_invalid", { issues: errors });
+              return;
+            }
+            await writeDeck(root, next);
+            sendJson(res, 200, { root, deck: next });
+          };
+
+          if (url.pathname === "/slides/deck/theme") {
+            const template = getSlideTemplate(typeof parsed.template_id === "string" ? parsed.template_id : typeof parsed.templateId === "string" ? parsed.templateId : undefined);
+            if ((parsed.template_id !== undefined || parsed.templateId !== undefined) && !template) {
+              badDeck(400, "unknown_slide_template");
+              return;
+            }
+            const accent = parsed.accent;
+            if (accent !== undefined && (typeof accent !== "string" || !/^#[0-9a-fA-F]{6}$/.test(accent))) {
+              badDeck(400, "invalid_accent");
+              return;
+            }
+            if (parsed.dark !== undefined && typeof parsed.dark !== "boolean") {
+              badDeck(400, "invalid_dark");
+              return;
+            }
+            if (!template && accent === undefined && parsed.dark === undefined) {
+              badDeck(400, "nothing_to_apply");
+              return;
+            }
+            const next: DeckSpec = { ...deck, theme: { ...(template ? { ...template.theme, templateId: template.id } : deck.theme) } };
+            if (typeof accent === "string") next.theme = { ...next.theme, accent };
+            if (typeof parsed.dark === "boolean") next.theme = { ...next.theme, dark: parsed.dark };
+            await commit(next);
+            return;
+          }
+
+          if (url.pathname === "/slides/deck/export") {
+            const result = await exportDeckToPptx(deck, root);
+            sendJson(res, 200, { root, path: result.relativePath, bytes: result.bytes, slides: result.slideCount });
+            return;
+          }
+
+          const slideId = typeof parsed.slide_id === "string" ? parsed.slide_id : typeof parsed.slideId === "string" ? parsed.slideId : undefined;
+          const index = deck.slides.findIndex((slide) => slide.id === slideId);
+
+          if (url.pathname === "/slides/deck/slide/add") {
+            const layout = typeof parsed.layout === "string" ? parsed.layout : "";
+            if (!layout) {
+              badDeck(400, "layout_required");
+              return;
+            }
+            if (deck.slides.length >= 40) {
+              badDeck(400, "deck_full");
+              return;
+            }
+            const content = parsed.content && typeof parsed.content === "object" && !Array.isArray(parsed.content) ? (parsed.content as Record<string, unknown>) : {};
+            const at = typeof parsed.index === "number" && Number.isFinite(parsed.index) ? Math.max(0, Math.min(deck.slides.length, Math.floor(parsed.index))) : deck.slides.length;
+            const slide = { id: newSlideId(), layout, content };
+            const next: DeckSpec = { ...deck, slides: [...deck.slides.slice(0, at), slide, ...deck.slides.slice(at)] };
+            const errors = validateDeck(next, { root }).filter((issue) => issue.severity === "error");
+            if (errors.length > 0) {
+              badDeck(422, "deck_invalid", { issues: errors });
+              return;
+            }
+            await writeDeck(root, next);
+            sendJson(res, 200, { root, deck: next, slide_id: slide.id });
+            return;
+          }
+
+          if (!slideId || index < 0) {
+            badDeck(404, "slide_not_found");
+            return;
+          }
+
+          if (url.pathname === "/slides/deck/slide/update") {
+            const content = parsed.content;
+            if (!content || typeof content !== "object" || Array.isArray(content)) {
+              badDeck(400, "content_required");
+              return;
+            }
+            const current = deck.slides[index]!;
+            const layout = typeof parsed.layout === "string" && parsed.layout ? parsed.layout : current.layout;
+            // Shallow merge, exactly like the agent's update_slide.
+            const slides = deck.slides.map((slide, i) => (i === index ? { ...slide, layout, content: { ...slide.content, ...(content as Record<string, unknown>) } } : slide));
+            await commit({ ...deck, slides });
+            return;
+          }
+
+          if (url.pathname === "/slides/deck/slide/delete") {
+            await commit({ ...deck, slides: deck.slides.filter((_, i) => i !== index) });
+            return;
+          }
+
+          if (url.pathname === "/slides/deck/slide/move") {
+            const toRaw = parsed.to_index ?? parsed.toIndex;
+            if (typeof toRaw !== "number" || !Number.isFinite(toRaw)) {
+              badDeck(400, "to_index_required");
+              return;
+            }
+            const to = Math.max(0, Math.min(deck.slides.length - 1, Math.floor(toRaw)));
+            const slides = [...deck.slides];
+            const [moved] = slides.splice(index, 1);
+            slides.splice(to, 0, moved!);
+            await commit({ ...deck, slides });
+            return;
+          }
+
+          badDeck(404, "unknown_slides_route");
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
