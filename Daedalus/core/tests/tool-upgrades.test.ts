@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { editFileTool, editSearchReplaceTool, readFileTool } from '../src/index.ts';
+import { createGrepTool, editFileTool, editSearchReplaceTool, parseRipgrepJson, readFileTool, ripgrepArgs } from '../src/index.ts';
 
 /**
  * Tool-upgrade batch (2026-10-08 audit recommendations): batch read/edit
@@ -105,6 +105,66 @@ describe('edit_file batch + replace_all + tolerance + hunk', () => {
     const result = await editFileTool.execute({ path: 'a.ts', old_string: 'const banana = 9', new_string: 'x' }, ctx(root));
     expect(result.status).toBe('error');
     expect(result.output).toContain('not found');
+  });
+});
+
+describe('grep output modes (JS engine, deterministic)', () => {
+  const jsGrep = createGrepTool({ useRipgrep: false });
+  const seedTree = (root: string): void => {
+    writeFileSync(join(root, 'a.ts'), 'const needle = 1\nconst other = 2\nneedle again\n');
+    writeFileSync(join(root, 'b.md'), 'needle in docs\n');
+  };
+
+  test('files_with_matches lists just the paths', async () => {
+    const root = workspace();
+    seedTree(root);
+    const result = await jsGrep.execute({ pattern: 'needle', output_mode: 'files_with_matches' }, ctx(root));
+    expect(result.status).toBe('ok');
+    expect(result.output.split('\n')).toEqual(['a.ts', 'b.md']);
+    expect(result.meta.mode).toBe('files_with_matches');
+  });
+
+  test('count totals matches per file', async () => {
+    const root = workspace();
+    seedTree(root);
+    const result = await jsGrep.execute({ pattern: 'needle', output_mode: 'count' }, ctx(root));
+    expect(result.output).toContain('a.ts: 2');
+    expect(result.output).toContain('b.md: 1');
+    expect(result.meta.count).toBe(3);
+  });
+
+  test('context lines surround matches with the grep - separator', async () => {
+    const root = workspace();
+    seedTree(root);
+    const result = await jsGrep.execute({ pattern: 'other', context: 1 }, ctx(root));
+    expect(result.output).toContain('a.ts:2: const other = 2');
+    expect(result.output).toContain('a.ts-1- const needle = 1');
+  });
+
+  test('glob filters which files are searched', async () => {
+    const root = workspace();
+    seedTree(root);
+    const result = await jsGrep.execute({ pattern: 'needle', glob: '*.ts' }, ctx(root));
+    expect(result.output).toContain('a.ts');
+    expect(result.output).not.toContain('b.md');
+  });
+
+  test('ripgrep args carry the ignore set and json mode', () => {
+    const args = ripgrepArgs({ pattern: 'x', ignoreCase: true, context: 2 });
+    expect(args).toContain('--json');
+    expect(args).toContain('-i');
+    expect(args).toContain('-C');
+    expect(args.join(' ')).toContain('!node_modules');
+  });
+
+  test('ripgrep JSON parses into the same line shape', () => {
+    const root = workspace();
+    const stdout = [
+      JSON.stringify({ type: 'match', data: { path: { text: 'src/a.ts' }, lines: { text: 'hit\n' }, line_number: 3 } }),
+      JSON.stringify({ type: 'summary', data: {} }),
+    ].join('\n');
+    const lines = parseRipgrepJson(stdout, root, root);
+    expect(lines).toEqual([{ path: 'src/a.ts', line: 3, text: 'hit', context: false }]);
   });
 });
 

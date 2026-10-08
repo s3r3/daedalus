@@ -19,7 +19,7 @@ export {
   type BackgroundJobState,
   type StartJobResult,
 } from './terminal/index.ts';
-export { globTool, grepTool } from './search/index.ts';
+export { createGrepTool, globTool, grepTool, parseRipgrepJson, ripgrepArgs, type GrepOutputMode } from './search/index.ts';
 export {
   createFetchUrlTool,
   fetchUrlTool,
