@@ -43,3 +43,16 @@ export function languageForPath(path: string): string {
   const extension = path.split('.').pop()?.toLowerCase() ?? ''
   return LANGUAGES[extension] ?? 'plaintext'
 }
+
+/**
+ * Model URI for Monaco. The TypeScript service picks its script kind from
+ * the model path's extension (.tsx → TSX, .jsx → JSX); an anonymous
+ * in-memory model has no extension, so Monaco parsed every React file as
+ * plain TS/JS and flagged (or misread) the JSX — the editor "detected
+ * JSX" in .tsx files (Farid's report). Carrying the workspace path in the
+ * URI keeps the real extension in front of the language service.
+ */
+export function modelUriForPath(path: string): string {
+  const normalized = path.replace(/\\/g, '/').replace(/^\/+/, '')
+  return `inmemory://workspace/${normalized}`
+}

@@ -34,6 +34,11 @@ export function TerminalPane() {
   const subscribe = useDaedalusStore((state) => state.terminals.subscribe)
   const active = sessions.find((session) => session.id === activeId) ?? sessions[0]
 
+  // The persisted height is a request, never a guarantee: on a short
+  // window a tall pane used to overflow the center column and clip its
+  // own bottom — exactly where the interactive input row lives (Farid's
+  // report). maxHeight: 100% keeps the whole pane, input included, in
+  // the column; the output area absorbs the squeeze.
   const [height, setHeight] = useState<number>(() => loadTerminalHeight())
   const heightRef = useRef(height)
   heightRef.current = height
@@ -171,7 +176,7 @@ export function TerminalPane() {
         }
         className="shrink-0"
         bodyClassName="flex min-h-0 flex-1 flex-col gap-2"
-        style={{ height: `${height}px` }}
+        style={{ height: `${height}px`, maxHeight: '100%' }}
       >
         <div className="flex shrink-0 items-center gap-1 overflow-x-auto" role="tablist" aria-label="terminal sessions" data-testid="terminal-tabs">
           {sessions.map((session) => (
@@ -327,6 +332,7 @@ function UserTerminal({
           <input
             aria-label={`input for ${session.title}`}
             data-testid="terminal-input"
+            autoFocus
             className="h-7 min-w-0 flex-1 rounded border border-line bg-surface px-2 font-mono text-[11px] text-foreground"
             value={draft}
             onChange={(event) => setDraft(event.target.value)}

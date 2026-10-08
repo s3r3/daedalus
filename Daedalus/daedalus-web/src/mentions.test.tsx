@@ -98,6 +98,50 @@ describe('Composer @-mentions', () => {
     await waitFor(() => expect(vi.mocked(api.createTask)).toHaveBeenCalled())
     expect(vi.mocked(api.createTask).mock.calls[0]?.[0].goal).toBe('edit @src')
   })
+
+  test('an empty @ query shows the workspace root first, not one subtree', async () => {
+    const nested = Array.from({ length: 60 }, (_, i) => ({ path: `cli/pkg-${String(i).padStart(2, '0')}/index.ts`, type: 'file' as const }))
+    vi.mocked(api.files).mockResolvedValueOnce({
+      root: '/ws',
+      files: [
+        { path: 'cli', type: 'dir' as const },
+        { path: 'cli/src', type: 'dir' as const },
+        { path: 'cli/src/index.ts', type: 'file' as const },
+        { path: 'core', type: 'dir' as const },
+        { path: 'README.md', type: 'file' as const },
+        ...nested,
+      ],
+      truncated: false,
+    })
+    const input = await renderComposer()
+    fireEvent.change(input, { target: { value: 'open @' } })
+    await waitFor(() => expect(screen.queryByTestId('mention-palette')).toBeTruthy())
+    const items = screen.getAllByTestId('mention-suggestion')
+    const paths = items.map((item) => item.getAttribute('data-path'))
+    // Root-level entries lead; the long cli/* tail cannot crowd them out.
+    expect(paths.slice(0, 3).sort()).toEqual(['README.md', 'cli', 'core'])
+    expect(paths).not.toContain('cli/src/index.ts')
+    // The palette caps at 50 rendered rows (of 65 matches) and scrolls.
+    expect(items.length).toBe(50)
+  })
+
+  test('the composer stacks above the main grid so its dropdowns are never painted over', async () => {
+    await renderComposer()
+    // While a task runs, the collapse animation traps absolutely-positioned
+    // children (the model picker list) in the form's stacking context;
+    // relative + z-30 keeps the whole composer above the panels below.
+    const form = screen.getByTestId('composer')
+    expect(form.className).toContain('relative')
+    expect(form.className).toContain('z-30')
+  })
+
+  test('a query still reaches folders outside the first subtree', async () => {
+    const input = await renderComposer()
+    fireEvent.change(input, { target: { value: 'open @dae' } })
+    await waitFor(() => expect(screen.queryByTestId('mention-palette')).toBeTruthy())
+    const items = screen.getAllByTestId('mention-suggestion')
+    expect(items.map((item) => item.getAttribute('data-path'))).toEqual(['daedalus-web', 'daedalus-web/src', 'daedalus-web/src/index.ts'])
+  })
 })
 
 describe('Composer Enter to send', () => {

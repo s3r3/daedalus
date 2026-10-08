@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent } from 'react'
 import { TopBar } from './components/layout/top-bar'
 import { Composer } from './components/composer/composer'
 import { WorkspacePanel } from './components/workspace/workspace-panel'
@@ -21,11 +21,14 @@ import { readStoredTheme, applyPaletteVars } from './theme/theme'
 import { useDaedalusStore } from './state/taskStore'
 import {
   COLUMN_WIDTHS,
+  WORKSPACE_PANEL_HEIGHT,
   loadActiveConversationId,
   loadColumnWidths,
   loadComposerPrefs,
+  loadWorkspacePanelHeight,
   saveActiveConversationId,
   saveColumnWidths,
+  saveWorkspacePanelHeight,
   type ColumnWidths,
 } from './state/prefs'
 import { VERSION } from '@daedalus/core/version'
@@ -93,6 +96,60 @@ export function App() {
     const updated = { ...columns, [side]: clampColumn(side, next) }
     setColumns(updated)
     saveColumnWidths(updated)
+  }
+
+  // Workspace-panel height in the left column: 0 = unset, the panel shares
+  // the column evenly with the scroll stack below. Dragging the divider
+  // pins an explicit height (persisted); double-click releases it.
+  const [workspacePanelHeight, setWorkspacePanelHeight] = useState<number>(() => loadWorkspacePanelHeight())
+  const workspacePanelHeightRef = useRef(workspacePanelHeight)
+  workspacePanelHeightRef.current = workspacePanelHeight
+  const clampWorkspacePanelHeight = (value: number): number =>
+    Math.min(WORKSPACE_PANEL_HEIGHT.max, Math.max(WORKSPACE_PANEL_HEIGHT.min, Math.round(value)))
+
+  const effectiveWorkspacePanelHeight = (aside: HTMLElement | null): number => {
+    if (workspacePanelHeightRef.current > 0) return workspacePanelHeightRef.current
+    // Unset: measure the panel as currently laid out so the first drag
+    // starts from what is on screen instead of jumping.
+    const measured = aside?.querySelector<HTMLElement>('[data-testid="workspace-panel"]')?.clientHeight ?? 0
+    return measured > 0 ? measured : 260
+  }
+
+  const startWorkspacePanelResize = (event: PointerEvent<HTMLDivElement>): void => {
+    event.preventDefault()
+    const aside = event.currentTarget.closest('aside')
+    const startY = event.clientY
+    const startHeight = effectiveWorkspacePanelHeight(aside)
+    let latest = startHeight
+    const onMove = (move: globalThis.PointerEvent): void => {
+      latest = clampWorkspacePanelHeight(startHeight + move.clientY - startY)
+      setWorkspacePanelHeight(latest)
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      saveWorkspacePanelHeight(latest)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp, { once: true })
+  }
+
+  const onWorkspacePanelResizeKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
+    const step = event.shiftKey ? 48 : 16
+    let next: number | undefined
+    if (event.key === 'ArrowDown') next = effectiveWorkspacePanelHeight(event.currentTarget.closest('aside')) + step
+    else if (event.key === 'ArrowUp') next = effectiveWorkspacePanelHeight(event.currentTarget.closest('aside')) - step
+    else if (event.key === 'Home') next = WORKSPACE_PANEL_HEIGHT.min
+    else if (event.key === 'End') next = WORKSPACE_PANEL_HEIGHT.max
+    if (next === undefined) return
+    event.preventDefault()
+    const clamped = clampWorkspacePanelHeight(next)
+    setWorkspacePanelHeight(clamped)
+    saveWorkspacePanelHeight(clamped)
+  }
+
+  const resetWorkspacePanelHeight = (): void => {
+    setWorkspacePanelHeight(0)
+    saveWorkspacePanelHeight(0)
   }
 
   useEffect(() => {
@@ -205,12 +262,33 @@ export function App() {
           style={{ right: `calc(${columns.right}px + 4px)` }}
           title="Drag to resize the right column"
         />
-        {/* Left column: workspace + agent state. Both children are flexible
-            (min-h-0 + flex-1), so each is bounded by the column and scrolls
-            internally — the workspace panel used to sit at its natural
-            (content) height and push this scroll region to zero. */}
+        {/* Left column: workspace + agent state. The workspace panel takes a
+            flexible share (or a pinned height from the divider below it) and
+            the scroll stack takes the rest; each is bounded by the column
+            and scrolls internally — the workspace panel used to sit at its
+            natural (content) height and push this scroll region to zero. */}
         <aside className="flex min-h-0 flex-col gap-2 lg:overflow-hidden">
-          <WorkspacePanel className="min-h-0 lg:flex-1" />
+          <WorkspacePanel
+            className={workspacePanelHeight > 0 ? 'min-h-0 shrink-0' : 'min-h-0 lg:flex-1'}
+            style={workspacePanelHeight > 0 ? { height: `${workspacePanelHeight}px` } : undefined}
+          />
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="resize workspace panel"
+            aria-valuemin={WORKSPACE_PANEL_HEIGHT.min}
+            aria-valuemax={WORKSPACE_PANEL_HEIGHT.max}
+            aria-valuenow={workspacePanelHeight > 0 ? workspacePanelHeight : undefined}
+            tabIndex={0}
+            data-testid="workspace-resize-handle"
+            onPointerDown={startWorkspacePanelResize}
+            onDoubleClick={resetWorkspacePanelHeight}
+            onKeyDown={onWorkspacePanelResizeKeyDown}
+            className="group flex h-2 shrink-0 cursor-ns-resize touch-none items-center justify-center rounded hover:bg-primary/20 focus:bg-primary/20 focus:outline-none"
+            title="Drag to resize the workspace panel (double-click resets, arrow keys work too)"
+          >
+            <span className="h-0.5 w-10 rounded bg-line group-hover:bg-primary" />
+          </div>
           <ScrollArea className="min-h-[240px] lg:min-h-0 lg:flex-1">
             <div className="flex flex-col gap-2 pr-1">
               <ExtensionsPanel />

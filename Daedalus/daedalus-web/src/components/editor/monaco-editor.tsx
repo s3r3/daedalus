@@ -3,6 +3,7 @@ import { useDaedalusStore } from '../../state/taskStore'
 import type * as Monaco from 'monaco-editor'
 import type { PaletteName } from '@daedalus/core/palette'
 import { EDITOR_THEME_NAMES, editorTheme } from '../../theme/editor-theme'
+import { modelUriForPath } from './language'
 
 type EditorHandle = Pick<Monaco.editor.IStandaloneCodeEditor, 'getValue' | 'setValue' | 'onDidChangeModelContent' | 'addCommand'>
 
@@ -49,9 +50,13 @@ export function MonacoEditor({
       const [monaco] = await Promise.all([import('monaco-editor'), configureWorkers()])
       if (disposed || !hostRef.current) return
       appliedThemeRef.current = applyEditorThemeName(mode)
+      // The model carries the file's real path: the TS service infers its
+      // script kind from the extension (.tsx → TSX), which an anonymous
+      // in-memory model cannot express.
+      const uri = monaco.Uri.parse(modelUriForPath(path))
+      const model = monaco.editor.getModel(uri) ?? monaco.editor.createModel(latestValueRef.current, language, uri)
       const editor = monaco.editor.create(hostRef.current, {
-        value: latestValueRef.current,
-        language,
+        model,
         theme: applyEditorTheme(monaco, mode),
         readOnly: false,
         automaticLayout: true,
@@ -68,6 +73,7 @@ export function MonacoEditor({
       if (editor.getValue() !== latestValueRef.current) editor.setValue(latestValueRef.current)
       dispose = () => {
         editor.dispose()
+        model.dispose()
         editorRef.current = null
       }
     })()

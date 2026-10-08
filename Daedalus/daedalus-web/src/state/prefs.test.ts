@@ -15,6 +15,10 @@ import {
   TERMINAL_HEIGHT_KEY,
   loadTerminalHeight,
   saveTerminalHeight,
+  WORKSPACE_PANEL_HEIGHT,
+  WORKSPACE_PANEL_HEIGHT_KEY,
+  loadWorkspacePanelHeight,
+  saveWorkspacePanelHeight,
 } from './prefs'
 import { useDaedalusStore } from './taskStore'
 
@@ -107,6 +111,22 @@ describe('panel layout prefs (chat height + column widths)', () => {
     expect(loadChatHeight()).toBe(CHAT_HEIGHT.min)
     localStorage.setItem(CHAT_HEIGHT_KEY, 'not-a-number')
     expect(loadChatHeight()).toBe(CHAT_HEIGHT.default)
+  })
+
+  test('workspace panel height: unset by default, round-trips, clamps, clears on 0', () => {
+    expect(loadWorkspacePanelHeight()).toBe(0)
+    saveWorkspacePanelHeight(330)
+    expect(loadWorkspacePanelHeight()).toBe(330)
+    expect(localStorage.getItem(WORKSPACE_PANEL_HEIGHT_KEY)).toBe('330')
+    saveWorkspacePanelHeight(10_000)
+    expect(loadWorkspacePanelHeight()).toBe(WORKSPACE_PANEL_HEIGHT.max)
+    saveWorkspacePanelHeight(10)
+    expect(loadWorkspacePanelHeight()).toBe(WORKSPACE_PANEL_HEIGHT.min)
+    saveWorkspacePanelHeight(0)
+    expect(loadWorkspacePanelHeight()).toBe(0)
+    expect(localStorage.getItem(WORKSPACE_PANEL_HEIGHT_KEY)).toBeNull()
+    localStorage.setItem(WORKSPACE_PANEL_HEIGHT_KEY, 'not-a-number')
+    expect(loadWorkspacePanelHeight()).toBe(0)
   })
 
   test('terminal height defaults, round-trips, and clamps to its sane range', () => {

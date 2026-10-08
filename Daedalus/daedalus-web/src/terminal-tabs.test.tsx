@@ -78,6 +78,14 @@ describe('TerminalPane tabs', () => {
     expect(screen.queryByTestId('terminal-input')).toBeNull()
   })
 
+  test('the pane height is capped to its column so the input row can never be clipped away', async () => {
+    seed([agentSession, userSession])
+    await renderPane()
+    const panel = screen.getByTestId('terminal-panel')
+    expect(panel.style.maxHeight).toBe('100%')
+    expect(panel.style.height).toMatch(/^\d+px$/)
+  })
+
   test('Enter on the user tab posts the line; buffered output renders', async () => {
     seed([agentSession, userSession])
     await renderPane()

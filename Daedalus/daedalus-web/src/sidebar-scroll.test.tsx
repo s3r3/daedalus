@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 import { App } from './App'
 import { useDaedalusStore } from './state/taskStore'
 
@@ -82,10 +82,36 @@ describe('app shell sidebar scrolling', () => {
     const workspaceBody = workspacePanel?.querySelector('[data-slot="card-body"]')
     expect(classes(workspaceBody)).toEqual(expect.arrayContaining(['min-h-0', 'flex-1', 'overflow-y-auto']))
 
-    // Second child: the Radix scroll area holding extensions/plan/activity.
-    const scroller = left.querySelector(':scope > [data-radix-scroll-area-root], :scope > div')
-    expect(scroller).toBe(left.children[1])
+    // Second child: the workspace resize divider; third: the Radix scroll
+    // area holding extensions/plan/activity.
+    const handle = left.querySelector(':scope > [data-testid="workspace-resize-handle"]')
+    expect(handle).toBe(left.children[1])
+    expect(handle?.getAttribute('role')).toBe('separator')
+    const scroller = left.children[2]
+    expect(scroller?.querySelector('[data-radix-scroll-area-viewport]')).toBeTruthy()
     expect(classes(scroller)).toEqual(expect.arrayContaining(['lg:min-h-0', 'lg:flex-1']))
+  })
+
+  test('dragging the workspace divider pins and persists the panel height', async () => {
+    const { container } = render(<App />)
+    const left = container.querySelector<HTMLElement>('aside')
+    const handle = left?.querySelector<HTMLElement>('[data-testid="workspace-resize-handle"]')
+    expect(handle).toBeTruthy()
+    // jsdom measures 0 for the unset panel, so the drag seeds from the
+    // 260px fallback and grows by the pointer delta. Raw MouseEvents:
+    // fireEvent's pointer events drop clientY in jsdom.
+    fireEvent(handle!, new MouseEvent('pointerdown', { bubbles: true, clientY: 100 }))
+    window.dispatchEvent(new MouseEvent('pointermove', { clientY: 170 }))
+    window.dispatchEvent(new MouseEvent('pointerup', {}))
+    expect(window.localStorage.getItem('daedalus.web.workspace-panel-height.v1')).toBe('330')
+    await waitFor(() => {
+      const panel = left?.querySelector<HTMLElement>('[data-testid="workspace-panel"]')
+      expect(panel?.style.height).toBe('330px')
+      expect(classes(panel)).toEqual(expect.arrayContaining(['shrink-0']))
+    })
+    // Double-click releases the pin back to the even split.
+    fireEvent.doubleClick(handle!)
+    expect(window.localStorage.getItem('daedalus.web.workspace-panel-height.v1')).toBeNull()
   })
 
   test('right column: chat panel stays bounded and the report rail keeps its own scroll region', () => {
