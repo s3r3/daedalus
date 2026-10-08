@@ -176,15 +176,19 @@ describe('unchanged-read stub (fix 1)', () => {
     });
     const state = await loop.run({ id: 'stub-task', goal: 'read then update the file', constraints: [], done_criteria: ['page.txt updated with the new line', 'confirmation file written'], repo_path: ws, status: 'draft' });
     expect(state.status).toBe('done');
-    // Request 3 follows the second read: the model must see the stub, not the file again.
+    // Request 3 follows the second read: the repeat itself is answered
+    // with the stub (no second full serve), while turn history keeps the
+    // FIRST serve in front of the model — present exactly once.
     const afterSecondRead = JSON.stringify(requests[2]);
     expect(afterSecondRead).toContain('[unchanged since your earlier read:');
     expect(afterSecondRead).toContain('lines 1–2 of 2');
-    expect(afterSecondRead).not.toContain('original line');
-    // Request 5 follows the post-edit read: fresh content, no stub.
+    expect(afterSecondRead.split('original line').length - 1).toBe(1);
+    // Request 5 follows the post-edit read: the fresh content is served
+    // for real (the only stub in the transcript is the earlier c2 one,
+    // still visible in history — it is not re-issued for the edited file).
     const afterEditRead = JSON.stringify(requests[4]);
     expect(afterEditRead).toContain('brand new line');
-    expect(afterEditRead).not.toContain('[unchanged since your earlier read');
+    expect(afterEditRead.split('[unchanged since your earlier read').length - 1).toBe(1);
     // The event ledger keeps the executor's raw results; the stub is
     // flagged additively so UIs can show a read was served from context.
     const finished = store.replay('stub-task').filter((event) => event.type === 'TOOL_CALL_FINISHED');
@@ -329,6 +333,49 @@ describe('session anchor for conversation follow-ups (tesvite CSS loop, 2026-10-
     // user's "app.tsx" means — no exploring same-named files elsewhere.
     expect(JSON.stringify(requests[0])).toContain('Session anchor');
     expect(JSON.stringify(requests[0])).toContain('tesvite/src/App.tsx');
+  });
+});
+
+describe('turn history: earlier reads stay in context (tesvite CSS loop)', () => {
+  test('two files read on separate turns are both in front of the model on the next turn', async () => {
+    const home = temp('daedalus-history-home-');
+    const ws = temp('daedalus-history-ws-');
+    writeFileSync(join(ws, 'App.tsx'), 'export const marker_tsx = "tsx-content-alpha";\n');
+    writeFileSync(join(ws, 'App.css'), '.parallax-bg { background: css-content-beta; }\n');
+    const { provider, requests } = scriptedProvider([
+      { toolCalls: [readTool('c1', 'App.tsx')] },
+      { toolCalls: [readTool('c2', 'App.css')] },
+      { toolCalls: [{ id: 'c3', name: 'write_file', args: { path: 'wired.txt', content: 'wired\n' } }] },
+      { content: 'done: compared and wired' },
+    ]);
+    const loop = new AgentLoop({
+      provider,
+      bus: new EventBus(),
+      store: new TaskStore(home),
+      executeTool: async (call) => {
+        if (call.tool === 'read_file') {
+          const result = await readFileTool.execute(call.args, { workspaceRoot: ws });
+          return { ...result, call_id: call.id, meta: { ...result.meta, mutating: false } };
+        }
+        if (call.tool === 'write_file') {
+          const result = await writeFileTool.execute(call.args, { workspaceRoot: ws });
+          return { ...result, call_id: call.id, meta: { ...result.meta, mutating: true } };
+        }
+        return { call_id: call.id, status: 'error', output: `unexpected ${call.tool}`, truncated: false, meta: {} };
+      },
+      stopPolicy: { max_iterations: 20, max_errors: 5 },
+    });
+    const state = await loop.run({ id: 'history-task', goal: 'compare the tsx and css, then wire them', constraints: [], done_criteria: ['wiring marker written'], repo_path: ws, status: 'draft' });
+    expect(state.status).toBe('done');
+    // Request 3 (after both reads): the model can compare the two files
+    // side by side — before turn history, only the App.css read (the
+    // latest result) would be in front of it and App.tsx would need a
+    // re-read. This is the exact comparison the tesvite CSS loop needed.
+    const third = JSON.stringify(requests[2]);
+    expect(third).toContain('tsx-content-alpha');
+    expect(third).toContain('css-content-beta');
+    // History is per-task: nothing from this run leaks into a fresh task.
+    expect(JSON.stringify(requests[0])).not.toContain('tsx-content-alpha');
   });
 });
 

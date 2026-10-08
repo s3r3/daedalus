@@ -49,6 +49,13 @@ export const LOOP_HARD_PAUSE_AT = 5;
 export const STALL_LIMIT = 6;
 /** Stall count at which the tailor early-trigger fires (before the hard stop). */
 export const STALL_ESCALATE_AT = 3;
+/**
+ * Tool-turn history kept per task (see #history): assistant + tool-result
+ * entries. Sized for the longest allowed task (25 iterations, a few
+ * calls each); the context manager's token budget is the real valve,
+ * this cap only bounds memory in-process.
+ */
+export const HISTORY_OBSERVATION_CAP = 80;
 
 /**
  * Refusal text of the pre-build question gate (see #questionGateBlock):
@@ -288,6 +295,21 @@ export class AgentLoop {
   readonly #servedReads = new Map<string, Map<string, { lines: Map<number, string>; totalLines: number; condensedAtServe: number; listingText?: string }>>();
   /** Condensed-tool-message count in each task's latest built request. */
   readonly #condensedCounts = new Map<string, number>();
+  /**
+   * Tool-turn history per task (assistant tool-call messages + their
+   * results, in order), handed to the context manager on every step so a
+   * file read on an earlier turn is still in front of the model on later
+   * turns. Before this, each request carried only the single latest
+   * result (`last_observation`): a file read two turns ago was genuinely
+   * gone from the model's view, so re-reading it was rational, and two
+   * files could never be compared side by side (the tesvite CSS loop:
+   * App.tsx and App.css were never in context at the same time). The
+   * context manager truncates each result and its compact pass keeps the
+   * newest ones within budget — this list is the memory, those are the
+   * valves. Capped so a runaway task cannot grow it without bound; the
+   * trim never leaves a tool result orphaned from its assistant message.
+   */
+  readonly #history = new Map<string, Observation[]>();
   /** Per-signature call counts across the whole task (the breaker ladder). */
   readonly #callCounts = new Map<string, Map<string, number>>();
   /** Per-signature suppression counts (directive at 2, hard-pause at 5 total). */
@@ -386,6 +408,7 @@ export class AgentLoop {
       this.#creationRepairs.delete(spec.id);
       this.#consecutiveTimeouts.delete(spec.id);
       this.#servedReads.delete(spec.id);
+      this.#history.delete(spec.id);
       this.#condensedCounts.delete(spec.id);
       this.#callCounts.delete(spec.id);
       this.#suppressCounts.delete(spec.id);
@@ -650,7 +673,7 @@ export class AgentLoop {
     const turnId = `turn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const turnMode = state.mode ?? this.#modeController.mode;
     const visibleTools = this.#tools?.filter((tool) => isToolVisible(turnMode, tool.function.name));
-    const built = await this.#context.buildMessages({ ...state, mode: turnMode }, [], visibleTools);
+    const built = await this.#context.buildMessages({ ...state, mode: turnMode }, this.#history.get(state.id) ?? [], visibleTools);
     let messages = this.#condense ? condenseToolOutputs(built, { limitTokens: this.#contextLimitTokens }) : built;
     // Track how many tool results condensing has dropped from context:
     // the unchanged-read stub may only claim "already in your context"
@@ -856,6 +879,11 @@ export class AgentLoop {
     // and serializing it would hand the parent three context rebuilds in a
     // row. Observations are still applied in call order afterwards.
     const rawCalls = response.message.tool_calls ?? [];
+    // The tool turn enters the task history before its calls run, so the
+    // next request shows the model its own calls alongside the results
+    // (see #history): earlier reads stay visible instead of evaporating
+    // behind the single latest result.
+    if (rawCalls.length > 0) this.#pushHistory(state.id, { kind: 'assistant', message: response.message });
     let current: TaskState = { ...successfulState, turns: (state.turns ?? 0) + 1 };
     const parsedCalls: Array<{ call: ToolCall } | { parseError: ToolResult }> = [];
     for (const rawCall of rawCalls) {
@@ -888,7 +916,7 @@ export class AgentLoop {
       const entry = parsedCalls[index]!;
       if ('parseError' in entry) {
         const result = entry.parseError;
-        current = { ...this.#observe.handle({ kind: 'tool_result', result }, current), mode: turnMode, last_tool_call_id: result.call_id, tool_result: result };
+        current = { ...this.#observeAndRecord(state, current, result), mode: turnMode, last_tool_call_id: result.call_id, tool_result: result };
         index++;
         continue;
       }
@@ -1332,7 +1360,7 @@ export class AgentLoop {
         });
       }
     }
-    const observed = { ...this.#observe.handle({ kind: 'tool_result', result: finalResult }, current), mode: turnMode, last_tool_call_id: call.id, tool_result: finalResult };
+    const observed = { ...this.#observeAndRecord(state, current, finalResult), mode: turnMode, last_tool_call_id: call.id, tool_result: finalResult };
     let recorded = observed;
     if (grantedExceptions) {
       recorded = { ...recorded, target_exceptions: [...new Set([...(current.target_exceptions ?? []), ...grantedExceptions])] };
@@ -1531,6 +1559,37 @@ export class AgentLoop {
       // Escalation is an optimization, never a failure mode.
       return undefined;
     }
+  }
+
+  /**
+   * Append one entry to the task's tool-turn history (see #history),
+   * trimmed to a bounded window. The trim drops from the front and then
+   * drops any leading tool results: a tool message whose assistant
+   * tool-call message was trimmed away is protocol-invalid for strict
+   * providers, so it never leads the list.
+   */
+  #pushHistory(taskId: string, observation: Observation): void {
+    let history = this.#history.get(taskId);
+    if (!history) {
+      history = [];
+      this.#history.set(taskId, history);
+    }
+    history.push(observation);
+    if (history.length > HISTORY_OBSERVATION_CAP) {
+      history.splice(0, history.length - HISTORY_OBSERVATION_CAP);
+      while (history.length > 0 && history[0]?.kind === 'tool_result') history.shift();
+    }
+  }
+
+  /**
+   * Observe a finished tool call into state AND record it in the task
+   * history (see #history), so the result is still in front of the model
+   * on later turns instead of surviving only as this turn's
+   * `last_observation`.
+   */
+  #observeAndRecord(state: TaskState, current: TaskState, result: ToolResult): TaskState {
+    this.#pushHistory(state.id, { kind: 'tool_result', result });
+    return this.#observe.handle({ kind: 'tool_result', result }, current);
   }
 
   /**
