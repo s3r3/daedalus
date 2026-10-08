@@ -16,6 +16,7 @@ import {
   emitEvent,
   loadAgents,
   loadLspConfig,
+  withDefaultLspServers,
   loadPins,
   loadProjectRules,
   loadMcpConfig,
@@ -85,7 +86,7 @@ export type ExtensionStatus = {
   mcp: Array<{ name: string; connected: boolean; toolCount: number; error?: string }>;
   skills: ExtensionSkill[];
   agents: Array<{ name: string; description: string; model?: string; mode?: string; tools?: string[] }>;
-  lsp: Array<{ name: string; extensions: string[]; configured: boolean; running?: boolean; error?: string }>;
+  lsp: Array<{ name: string; extensions: string[]; configured: boolean; running?: boolean; error?: string; auto?: boolean }>;
   problems: string[];
 };
 
@@ -870,6 +871,12 @@ async function extensionStatus(ctx: AppContext, rootValue: unknown): Promise<Ext
     loadAgents([workspaceAgentsDir(root)]),
     loadLspConfig(root),
   ]);
+  // Report the EFFECTIVE servers the harness will actually use — the
+  // configured list plus core's automatic TypeScript server for TS
+  // workspaces. Reading lsp.json alone made the panel claim "none
+  // configured" while diagnostics were already wired.
+  const configuredLspNames = new Set(lspConfig.servers.map((server) => server.name));
+  const effectiveLsp = await withDefaultLspServers(root, lspConfig.servers);
 
   let mcp: ExtensionStatus["mcp"] = mcpConfig.servers.map((server) => ({ name: server.name, connected: false, toolCount: 0 }));
   if (mcpConfig.servers.length > 0) {
@@ -906,7 +913,13 @@ async function extensionStatus(ctx: AppContext, rootValue: unknown): Promise<Ext
       ...(agent.mode ? { mode: agent.mode } : {}),
       ...(agent.tools ? { tools: agent.tools } : {}),
     })),
-    lsp: lspConfig.servers.map((server) => ({ name: server.name, extensions: [...server.extensions], configured: true, running: false })),
+    lsp: effectiveLsp.map((server) => ({
+      name: server.name,
+      extensions: [...server.extensions],
+      configured: configuredLspNames.has(server.name),
+      running: false,
+      ...(configuredLspNames.has(server.name) ? {} : { auto: true }),
+    })),
     problems: [...mcpConfig.problems, ...lspConfig.problems],
   };
   ctx.extensionStatusCache.set(root, { expiresAt: Date.now() + EXTENSION_STATUS_CACHE_MS, value });

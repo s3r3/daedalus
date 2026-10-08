@@ -262,6 +262,19 @@ describe('shared local core, Web prompts, extensions, and shared workspace', () 
     expect(broken.mcp[0]?.error).toBeTruthy();
   });
 
+  test('GET /extensions/status reports the auto TypeScript server on a TS workspace with no lsp.json', async () => {
+    const { base } = await listen();
+    writeFileSync(join(workspace!, 'tsconfig.json'), '{}');
+
+    const status = await json<{
+      lsp: Array<{ name: string; extensions: string[]; configured: boolean; running: boolean; auto?: boolean }>;
+    }>(await fetch(new URL(`/extensions/status?root=${encodeURIComponent(workspace!)}`, base)));
+    const auto = status.lsp.find((server) => server.name === 'typescript (auto)');
+    expect(auto).toBeDefined();
+    expect(auto).toMatchObject({ configured: false, running: false, auto: true });
+    expect(auto?.extensions).toContain('.ts');
+  });
+
   test('GET /extensions/status also surfaces global skills with their origin', async () => {
     const { base } = await listen();
     writeExtensionFixtures(workspace!);

@@ -122,7 +122,7 @@ export type ExtensionStatus = {
   mcp: Array<{ name: string; connected: boolean; toolCount: number; error?: string }>
   skills: ExtensionSkillSummary[]
   agents: Array<{ name: string; description: string; model?: string; mode?: string; tools?: string[] }>
-  lsp: Array<{ name: string; extensions: string[]; configured: boolean; running?: boolean; error?: string }>
+  lsp: Array<{ name: string; extensions: string[]; configured: boolean; running?: boolean; error?: string; auto?: boolean }>
   problems: string[]
 }
 
