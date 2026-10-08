@@ -33,14 +33,14 @@ export function GitPanel() {
   useEffect(() => {
     if (!root) return
     let cancelled = false
-    api
-      .gitStatus(root)
-      .then((value) => {
+    void (async () => {
+      try {
+        const value = await api.gitStatus(root)
         if (!cancelled) setStatus(value)
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setStatus(null)
-      })
+      }
+    })()
     return () => {
       cancelled = true
     }

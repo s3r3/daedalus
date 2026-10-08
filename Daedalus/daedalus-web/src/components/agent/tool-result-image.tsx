@@ -21,16 +21,16 @@ export function ToolResultImage({ path, thumb = false }: { path: string; thumb?:
     let cancelled = false
     setSrc(null)
     setFailed(false)
-    api
-      .file(root, path)
-      .then((file) => {
+    void (async () => {
+      try {
+        const file = await api.file(root, path)
         if (cancelled) return
         if (file.kind === 'image' && file.src) setSrc(file.src)
         else setFailed(true)
-      })
-      .catch(() => {
+      } catch {
         if (!cancelled) setFailed(true)
-      })
+      }
+    })()
     return () => {
       cancelled = true
     }
