@@ -520,7 +520,11 @@ describe('completion gate end to end (TaskRunner)', () => {
       name: 'delegating',
       async chat(messages: Message[]) {
         const serialized = JSON.stringify(messages);
-        if (serialized.includes('CHILD_BRIEF')) {
+        // Route on the system prompt (this request's own task), not the
+        // whole transcript: with turn history the parent's later requests
+        // legitimately quote the brief inside its spawn call's arguments.
+        const systemText = typeof messages[0]?.content === 'string' ? messages[0].content : '';
+        if (systemText.includes('CHILD_BRIEF')) {
           return { message: { role: 'assistant' as const, content: 'done: looked around, nothing to do' } };
         }
         if (serialized.includes('spawn-marker') || serialized.includes('Tool result')) {

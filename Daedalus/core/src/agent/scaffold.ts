@@ -1055,6 +1055,15 @@ export function creationCompletionRefusal(
  * Anything else stays unanchored and keeps the pre-anchor semantics
  * exactly (changeset-scoped validation, PR #21 completion gate): when
  * in doubt, no anchor — never guess a target the user did not declare.
+ * One extension for chat sessions (2026-10-08, the tesvite CSS loop): a
+ * NON-creation follow-up anchors to the folder an earlier task in the
+ * same conversation recorded as its `target_dir:` (runtime evidence
+ * line) when that folder still exists — the session's established
+ * project. Short follow-ups ("tapi kok masih polos") carry no folder
+ * name of their own; without the recorded anchor they started
+ * unanchored and the model read same-named files across the whole
+ * workspace (the framework's own daedalus-web/src/App.tsx) instead of
+ * the project's, re-reading until the token budget died.
  */
 export type TaskTargetInput = {
   goal: string;
@@ -1128,9 +1137,56 @@ function isDirectoryInside(workspaceRoot: string, rel: string): boolean {
  * the loop's ledger) qualify without ever inventing a folder from thin
  * air — the folder must still be NAMED in the task's own text.
  */
+/**
+ * The folder a previous task's own report recorded (`target_dir: X` is a
+ * runtime evidence line, never user prose), latest mention wins. Follow-up
+ * turns ride the prior conversation in their constraints, so this is how
+ * a chat session's established project folder survives into the next task.
+ */
+export function recordedTargetDir(sources: string[]): string | undefined {
+  let found: string | undefined;
+  for (const source of sources) {
+    for (const match of source.matchAll(/(?:^|\n)\s*target_dir:\s*([A-Za-z0-9_][A-Za-z0-9_.\-/]*)/g)) {
+      const candidate = match[1]?.replace(/[/.]+$/, '');
+      if (candidate && !candidate.startsWith('.daedalus')) found = candidate;
+    }
+  }
+  return found;
+}
+
+/**
+ * One-time session-anchor directive for a conversation follow-up: names
+ * the folder the session is already working in so short follow-ups
+ * ("tapi kok masih polos") resolve against THOSE files instead of
+ * same-named files elsewhere in the workspace (the tesvite incident's
+ * wrong-file reads of the framework's own App.tsx).
+ */
+export function sessionAnchorDirective(targetDir: string): string {
+  return [
+    `Session anchor: this conversation is already working in the \`${targetDir}/\` folder — an earlier message in this chat established it there, and the user's follow-ups refer to the files inside \`${targetDir}/\`.`,
+    `When the user says "the app" or names a file (app.tsx, the css, …), they mean the file inside \`${targetDir}/\` (e.g. \`${targetDir}/src/App.tsx\`), not a same-named file elsewhere in the workspace. Start inside \`${targetDir}/\`: read the specific file there once if you need its contents, then write the change. Do not explore the wider repository unless the user asks for something outside \`${targetDir}/\`.`,
+  ].join('\n');
+}
+
 export function deriveTaskTargetDir(input: TaskTargetInput): string | undefined {
   const creation = detectCreationGoal(input.goal, input.doneCriteria ?? []);
-  if (!creation.creation) return undefined;
+  if (!creation.creation) {
+    // Conversation follow-up (not a creation ask): anchor to the folder
+    // an earlier task in this same chat recorded as its target — the
+    // session's established project — when it still exists (or this task
+    // already wrote into it). Without this, a short follow-up starts
+    // unanchored: nothing confines its writes, scopes its validation, or
+    // tells the model which same-named files are its subject.
+    const changed = (input.changedPaths ?? [])
+      .map((path) => workspaceRelativePath(input.workspaceRoot, path))
+      .filter((rel): rel is string => rel !== undefined);
+    const recorded = recordedTargetDir([input.goal, ...(input.doneCriteria ?? []), ...(input.constraints ?? []), ...(input.planSteps ?? [])]);
+    if (recorded) {
+      if (isDirectoryInside(input.workspaceRoot, recorded)) return recorded;
+      if (changed.some((rel) => rel === recorded || rel.startsWith(`${recorded}/`))) return recorded;
+    }
+    return undefined;
+  }
   if (creation.scaffold) return creation.scaffold.targetDir;
   // Plan-execution follow-ups anchor to the PLAN's own declaration first:
   // its step intents and document bodies (architecture file lists) name the
