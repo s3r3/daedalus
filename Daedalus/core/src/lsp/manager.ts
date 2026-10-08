@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import { extname, join, relative } from 'node:path';
 import type { ToolDefinition } from '../tools/registry.ts';
 import type { ToolResult } from '../contracts.ts';
@@ -8,6 +9,75 @@ import { LspClient, formatDiagnostic, type LspServerConfig } from './client.ts';
 
 export type { LspDiagnostic, LspServerConfig } from './client.ts';
 export { formatDiagnostic } from './client.ts';
+
+/** Extensions the auto-resolved TypeScript language server covers. */
+export const TYPESCRIPT_LSP_EXTENSIONS: readonly string[] = ['.ts', '.tsx', '.js', '.jsx', '.mts', '.cts', '.mjs', '.cjs'];
+
+async function isExecutable(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Is this workspace a TypeScript one (tsconfig, or a typescript dependency)? */
+export async function isTypescriptWorkspace(workspaceRoot: string): Promise<boolean> {
+  if (await fileExists(join(workspaceRoot, 'tsconfig.json'))) return true;
+  try {
+    const parsed = JSON.parse(await readFile(join(workspaceRoot, 'package.json'), 'utf8')) as { dependencies?: Record<string, unknown>; devDependencies?: Record<string, unknown> };
+    return Boolean(parsed.dependencies?.typescript ?? parsed.devDependencies?.typescript);
+  } catch {
+    return false;
+  }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function onPath(command: string): Promise<boolean> {
+  const pathValue = process.env.PATH ?? '';
+  for (const dir of pathValue.split(':')) {
+    if (dir && (await isExecutable(join(dir, command)))) return true;
+  }
+  return false;
+}
+
+/**
+ * Resolve a runnable typescript-language-server for a TS workspace,
+ * best source first: the project's own install, a PATH binary, then
+ * npx (downloads on first use). Undefined for non-TS workspaces. The
+ * config is computed, never written to `.daedalus/lsp.json` — the
+ * user's file stays theirs; a server that still cannot start records
+ * its error in status instead of crashing the run.
+ */
+export async function defaultTypescriptServer(workspaceRoot: string): Promise<LspServerConfig | undefined> {
+  if (!(await isTypescriptWorkspace(workspaceRoot))) return undefined;
+  const extensions = [...TYPESCRIPT_LSP_EXTENSIONS];
+  const localBin = join(workspaceRoot, 'node_modules', '.bin', 'typescript-language-server');
+  if (await isExecutable(localBin)) return { name: 'typescript (auto)', command: localBin, args: ['--stdio'], extensions };
+  if (await onPath('typescript-language-server')) return { name: 'typescript (auto)', command: 'typescript-language-server', args: ['--stdio'], extensions };
+  return { name: 'typescript (auto)', command: 'npx', args: ['-y', 'typescript-language-server', '--stdio'], extensions };
+}
+
+/**
+ * Configured servers + automatic defaults. A user (or caller) server
+ * already covering TypeScript suppresses the auto one; everything else
+ * passes through untouched.
+ */
+export async function withDefaultLspServers(workspaceRoot: string, configured: LspServerConfig[]): Promise<LspServerConfig[]> {
+  const coversTypescript = configured.some((server) => server.extensions.includes('.ts') || server.extensions.includes('.tsx'));
+  if (coversTypescript) return configured;
+  const auto = await defaultTypescriptServer(workspaceRoot);
+  return auto ? [...configured, auto] : configured;
+}
 
 export type LspServerStatus = {
   name: string;

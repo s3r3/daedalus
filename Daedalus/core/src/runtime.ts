@@ -58,7 +58,7 @@ import { ProviderRegistry } from './interaction/providers.ts';
 import { childTaskFromInput, distillChildSummary, type ChildFileChange } from './interaction/orchestrator.ts';
 import { backgroundFinishedNotice, createSpawnSubagentTool, type SpawnDispatch, type SpawnSubagentInput } from './interaction/subagents.ts';
 import { McpManager, loadMcpConfig, type McpServerConfig, type McpServerStatus } from './mcp/index.ts';
-import { LspManager, loadLspConfig, type LspServerConfig, type LspServerStatus } from './lsp/index.ts';
+import { LspManager, loadLspConfig, withDefaultLspServers, type LspServerConfig, type LspServerStatus } from './lsp/index.ts';
 import {
   SkillRegistry,
   createReadSkillTool,
@@ -495,7 +495,12 @@ export class TaskRunner {
    */
   async #prepareExtensions(): Promise<{ tools: ToolDefinition[]; skills: SkillRegistry; lsp: LspManager; close: () => Promise<void> }> {
     const mcpServers = this.#options.mcpServers ?? (await loadMcpConfig(this.#workspaceRoot)).servers;
-    const lspServers = this.#options.lspServers ?? (await loadLspConfig(this.#workspaceRoot)).servers;
+    // Callers who pass lspServers explicitly own the whole list (an
+    // explicit empty list means "no LSP"); otherwise the workspace gets
+    // configured servers PLUS automatic defaults — today the TypeScript
+    // server, so lsp_diagnostics and the edit guard cover TS/TSX with
+    // zero user config instead of staying dormant until lsp.json exists.
+    const lspServers = this.#options.lspServers ?? (await withDefaultLspServers(this.#workspaceRoot, (await loadLspConfig(this.#workspaceRoot)).servers));
     // Workspace skills first (they shadow same-name globals), then any
     // caller-provided dirs, then the global directories (~/.daedalus/skills,
     // other AI tools' skill folders) so global skills work in every workspace.

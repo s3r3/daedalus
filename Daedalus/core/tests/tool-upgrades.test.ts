@@ -2,7 +2,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { createGrepTool, editFileTool, editSearchReplaceTool, parseRipgrepJson, readFileTool, ripgrepArgs } from '../src/index.ts';
+import { createGrepTool, editFileTool, editSearchReplaceTool, parseRipgrepJson, readFileTool, ripgrepArgs, withDefaultLspServers, type LspServerConfig } from '../src/index.ts';
 
 /**
  * Tool-upgrade batch (2026-10-08 audit recommendations): batch read/edit
@@ -165,6 +165,38 @@ describe('grep output modes (JS engine, deterministic)', () => {
     ].join('\n');
     const lines = parseRipgrepJson(stdout, root, root);
     expect(lines).toEqual([{ path: 'src/a.ts', line: 3, text: 'hit', context: false }]);
+  });
+});
+
+describe('LSP automatic TypeScript server', () => {
+  test('a tsconfig workspace gains the auto TS server with full extensions', async () => {
+    const root = workspace();
+    writeFileSync(join(root, 'tsconfig.json'), '{}\n');
+    const servers = await withDefaultLspServers(root, []);
+    const auto = servers.find((server) => server.name === 'typescript (auto)');
+    expect(auto).toBeTruthy();
+    expect(auto!.extensions).toContain('.tsx');
+    expect(auto!.args).toContain('--stdio');
+  });
+
+  test('a plain workspace gains nothing', async () => {
+    const root = workspace();
+    writeFileSync(join(root, 'README.md'), 'hi\n');
+    expect(await withDefaultLspServers(root, [])).toEqual([]);
+  });
+
+  test('a user server already covering .ts suppresses the auto one', async () => {
+    const root = workspace();
+    writeFileSync(join(root, 'tsconfig.json'), '{}\n');
+    const mine: LspServerConfig = { name: 'mine', command: 'my-ts-server', extensions: ['.ts'] };
+    expect(await withDefaultLspServers(root, [mine])).toEqual([mine]);
+  });
+
+  test('a typescript package.json dependency counts as a TS workspace', async () => {
+    const root = workspace();
+    writeFileSync(join(root, 'package.json'), JSON.stringify({ devDependencies: { typescript: '^5' } }));
+    const servers = await withDefaultLspServers(root, []);
+    expect(servers.some((server) => server.name === 'typescript (auto)')).toBe(true);
   });
 });
 
