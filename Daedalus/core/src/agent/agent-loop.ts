@@ -267,6 +267,12 @@ export class AgentLoop {
   readonly #delegatedTasks = new Set<string>();
   /** Creation-shaped tasks that already spent their one create-the-files repair turn. */
   readonly #creationRepairs = new Set<string>();
+  /** Slide tasks with a successful export_deck on record (completion evidence for the slide gate). */
+  readonly #slideExports = new Set<string>();
+  /** Slide tasks that performed deck-building work this task (the slide gate's trigger evidence). */
+  readonly #slideDeckWork = new Set<string>();
+  /** Slide tasks that already spent their one export-the-deck repair turn. */
+  readonly #slideExportRepairs = new Set<string>();
   /** Consecutive provider timeouts per task; the 2nd in a row fails the turn (provider_timeout). */
   readonly #consecutiveTimeouts = new Map<string, number>();
   /**
@@ -406,6 +412,9 @@ export class AgentLoop {
       this.#lastCommandFailure.delete(spec.id);
       this.#delegatedTasks.delete(spec.id);
       this.#creationRepairs.delete(spec.id);
+      this.#slideExports.delete(spec.id);
+      this.#slideDeckWork.delete(spec.id);
+      this.#slideExportRepairs.delete(spec.id);
       this.#consecutiveTimeouts.delete(spec.id);
       this.#servedReads.delete(spec.id);
       this.#history.delete(spec.id);
@@ -618,11 +627,41 @@ export class AgentLoop {
             this.#store.saveState(state.id, state);
             return state;
           }
+          // Slide veto at the run-level completion point (steps done +
+          // validation settled): a slide task that built a deck is not
+          // complete while the deck is unexported, so completion is
+          // vetoed — the first veto spends the one export directive
+          // (shared with the claim-point gate: a done-claim after it
+          // fails there), later vetoes stay silent and simply keep the
+          // task working until the export lands or the loop's own stop
+          // conditions (budget, stalls, iterations) end it honestly.
+          // Failing here instead would kill builds mid-fill, when the
+          // model has legitimately not reached the export step yet.
+          const slideRefusal = this.#slideExportRefusal(state);
+          if (slideRefusal) {
+            if (!this.#slideExportRepairs.has(state.id)) {
+              this.#slideExportRepairs.add(state.id);
+              await this.#emit(state.id, undefined, 'RECOVERY_STARTED', { reason: slideRefusal.reason, strategy: 'export_deck', attempt: 1 });
+              state = {
+                ...state,
+                status: 'active',
+                last_error: undefined,
+                last_observation: `This task is not complete yet: ${slideRefusal.detail}. Finish filling the deck's content, then export it.`,
+              };
+              this.#store.saveState(state.id, state);
+            }
+          } else {
+            state = { ...state, status: completed ? 'done' : 'active' };
+            await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: completed ? 'success' : 'partial', reason: completed ? 'completed' : 'validation_failed' });
+            this.#store.saveState(state.id, state);
+            return state;
+          }
+        } else {
+          state = { ...state, status: completed ? 'done' : 'active' };
+          await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: completed ? 'success' : 'partial', reason: completed ? 'completed' : 'validation_failed' });
+          this.#store.saveState(state.id, state);
+          return state;
         }
-        state = { ...state, status: completed ? 'done' : 'active' };
-        await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: completed ? 'success' : 'partial', reason: completed ? 'completed' : 'validation_failed' });
-        this.#store.saveState(state.id, state);
-        return state;
       }
       if (stop !== undefined) { state = { ...state, status: 'failed', last_error: stop }; await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: stop }); this.#store.saveState(state.id, state); return state; }
       if (iteration >= this.#stopPolicy.max_iterations) { state = { ...state, status: 'failed', last_error: 'max_iterations' }; await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: 'max_iterations' }); this.#store.saveState(state.id, state); return state; }
@@ -860,6 +899,21 @@ export class AgentLoop {
       }
       if (refusal) {
         return { ...successfulState, turns: (state.turns ?? 0) + 1, status: 'failed', last_error: refusal.reason };
+      }
+      // Slide gate at the same claim point: "done:" over a deck that was
+      // never exported is the same fake-Selesai shape, one step later.
+      const slideRefusal = this.#slideExportRefusal({ ...successfulState, mode: turnMode });
+      if (slideRefusal && !this.#slideExportRepairs.has(state.id)) {
+        this.#slideExportRepairs.add(state.id);
+        await this.#emit(state.id, turnId, 'RECOVERY_STARTED', { reason: slideRefusal.reason, strategy: 'export_deck', attempt: 1 });
+        return {
+          ...successfulState,
+          turns: (state.turns ?? 0) + 1,
+          last_observation: `You said done, but ${slideRefusal.detail}, then say done again.`,
+        };
+      }
+      if (slideRefusal) {
+        return { ...successfulState, turns: (state.turns ?? 0) + 1, status: 'failed', last_error: slideRefusal.reason };
       }
       return { ...successfulState, turns: (state.turns ?? 0) + 1, last_observation: action.summary };
     }
@@ -1327,6 +1381,17 @@ export class AgentLoop {
         ...(typeof result.meta.source === 'string' ? { source: result.meta.source } : {}),
       });
     }
+    // Slide completion evidence: a successful export is the deliverable
+    // of a slide task, so the completion gate below can tell "deck built"
+    // apart from "deck delivered". Deck-building calls are the gate's
+    // trigger: a slide task that only read the deck (or asked about it)
+    // is never export-gated.
+    if (result.status === 'ok' && SLIDE_DECK_WORK_TOOLS.has(call.tool)) {
+      this.#slideDeckWork.add(state.id);
+    }
+    if (call.tool === 'export_deck' && result.status === 'ok') {
+      this.#slideExports.add(state.id);
+    }
     // Stall bookkeeping: progress is a file change, a successful
     // command, a download, or a NEW observation (a result this task has
     // not already seen). Anything else — re-reads, repeated searches,
@@ -1783,6 +1848,28 @@ export class AgentLoop {
    * run_command executions (shell creation leaves no per-file trace), the
    * scaffold marker on disk, and whether the task delegated.
    */
+  /**
+   * Slide completion gate: a slide task that built deck content may not
+   * finish "done" while no successful export_deck is on record — the
+   * deck would exist only as deck.json and the user would get no .pptx
+   * (the exact shape of the owner's first successful build, which
+   * stopped one step early despite the contract). The trigger is the
+   * task's own deck work, not goal wording: read-only slide questions
+   * never build, so they are never gated, and Ask/Plan keep their own
+   * semantics.
+   */
+  #slideExportRefusal(state: TaskState): { reason: string; detail: string } | undefined {
+    if (state.domain !== 'slide') return undefined;
+    const mode = state.mode ?? this.#modeController.mode;
+    if (mode === 'ask' || mode === 'plan') return undefined;
+    if (this.#slideExports.has(state.id)) return undefined;
+    if (!this.#slideDeckWork.has(state.id)) return undefined;
+    return {
+      reason: 'slide_export_missing',
+      detail: 'this slide task has not produced a .pptx yet — no successful export_deck call is on record. A slide task is complete only when the deck is exported: call validate_deck, fix every error it reports, then call export_deck',
+    };
+  }
+
   #creationRefusal(state: TaskState): { reason: string; detail: string } | undefined {
     const mode = state.mode ?? this.#modeController.mode;
     // Ask answers questions and Plan's deliverable is the plan document
@@ -2061,6 +2148,9 @@ export class AgentLoop {
 }
 
 const MAX_THOUGHT_CHARS = 4_000;
+
+/** Deck-building slide tools: one successful call means the task built deck content (the slide completion gate's trigger). */
+const SLIDE_DECK_WORK_TOOLS = new Set(['create_deck', 'add_slide', 'update_slide', 'move_slide', 'delete_slide', 'set_deck_theme']);
 
 /** Cheap content fingerprint for the stall tracker's "new observation" test. */
 function observationHash(text: string): string {

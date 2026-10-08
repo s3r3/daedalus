@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { ToolDefinition, ToolExecutionContext } from './registry.ts';
 import { deckPaths, type DeckSpec, type Slide } from '../slides/deck.ts';
-import { getLayout, LAYOUTS, validateSlideContent } from '../slides/layouts.ts';
+import { getLayout, LAYOUTS, validateSlideContent, type PropSchema } from '../slides/layouts.ts';
 import { ensureDeckDir, newDeck, newSlideId, readDeck, summarizeDeck, validateDeck, writeDeck } from '../slides/store.ts';
 import { exportDeckToPptx } from '../slides/export-pptx.ts';
 import type { ToolResult } from '../contracts.ts';
@@ -25,6 +25,31 @@ function mergeShallow(base: Record<string, unknown>, over: Record<string, unknow
 }
 
 const LAYOUT_CATALOG = LAYOUTS.map((l) => `${l.id} (${l.category}): ${l.label}`).join('; ');
+
+/** Compact per-layout content schema (`*` = required), rendered from the same schema objects the validator enforces, so the model sees the exact field shapes (nested objects and array item fields included) instead of guessing them. */
+function summarizeProp(prop: PropSchema): string {
+  if (prop.type === 'array') {
+    const items = prop.items ? summarizeProp(prop.items) : 'string';
+    const bounds = prop.minItems !== undefined || prop.maxItems !== undefined ? ` (${prop.minItems ?? 0}..${prop.maxItems ?? 'n'})` : '';
+    return `${items}[]${bounds}`;
+  }
+  if (prop.type === 'object' && prop.properties) {
+    const required = new Set(prop.required ?? []);
+    const fields = Object.entries(prop.properties).map(([key, value]) => `${key}${required.has(key) ? '*' : ''}: ${summarizeProp(value)}`);
+    return `{ ${fields.join(', ')} }`;
+  }
+  return prop.enum ? prop.enum.join('|') : prop.type;
+}
+
+export function summarizeLayoutSchemas(): string {
+  return LAYOUTS.map((layout) => {
+    const required = new Set(layout.schema.required);
+    const fields = Object.entries(layout.schema.properties).map(([key, value]) => `${key}${required.has(key) ? '*' : ''}: ${summarizeProp(value)}`);
+    return `${layout.id} { ${fields.join(', ')} }`;
+  }).join('\n');
+}
+
+const LAYOUT_SCHEMAS = summarizeLayoutSchemas();
 const WORKFLOW = 'Workflow: create_deck once → add_slide once per outline item (visual layouts preferred: diagrams, charts, icon-grid, stats over plain bullets) → validate_deck → fix issues → export_deck.';
 
 async function loadDeckOrError(root: string): Promise<{ deck: DeckSpec } | { error: ToolResult }> {
@@ -79,7 +104,7 @@ export const readDeckTool: ToolDefinition = {
 
 export const addSlideTool: ToolDefinition = {
   name: 'add_slide',
-  description: `Add one slide to the deck. Layout catalog: ${LAYOUT_CATALOG}. content is merged (shallow) over the layout defaults; invalid content is rejected with validation issues. ${WORKFLOW}`,
+  description: `Add one slide to the deck. Layout catalog: ${LAYOUT_CATALOG}. content is merged (shallow) over the layout defaults; invalid content is rejected with validation issues. ${WORKFLOW}\nContent schemas (* = required; arrays of objects need every item's required fields, e.g. diagram-flow steps are { title*, desc } objects, not plain strings):\n${LAYOUT_SCHEMAS}`,
   inputSchema: {
     type: 'object', required: ['layout'],
     properties: {
@@ -113,7 +138,7 @@ export const addSlideTool: ToolDefinition = {
 
 export const updateSlideTool: ToolDefinition = {
   name: 'update_slide',
-  description: 'Update one slide by id: shallow-merges content into the slide and validates the merged result.',
+  description: `Update one slide by id: shallow-merges content into the slide and validates the merged result. Shallow means a nested field you send replaces the whole nested value, so always send complete nested objects/arrays.\nContent schemas (* = required):\n${LAYOUT_SCHEMAS}`,
   inputSchema: { type: 'object', required: ['slideId', 'content'], properties: { slideId: { type: 'string' }, content: { type: 'object' } }, additionalProperties: false },
   mutating: true,
   async execute(args, context) {

@@ -1,5 +1,5 @@
 import type { ModelTier } from "../../contracts.ts";
-import { LLMContentPolicyError, LLMFormatError, LLMRateLimitError, LLMTimeoutError } from "./errors.ts";
+import { LLMContentPolicyError, LLMFormatError, LLMRateLimitError, LLMTimeoutError, isToolSchemaInvalidError } from "./errors.ts";
 import type { ChatOptions, ChatResponse, LLMProvider, Message, ModelPhase, StreamChunk, ToolDefinition } from "./types.ts";
 
 export type ModelStrategy = "failover" | "round-robin";
@@ -353,6 +353,9 @@ export class ModelPoolProvider implements LLMProvider, ModelController {
 
 export function isModelPoolRetryableError(error: unknown): boolean {
   if (error instanceof LLMContentPolicyError) return false;
+  // A tool schema the provider rejects fails identically on every model
+  // behind the same contract — no failover can fix it.
+  if (isToolSchemaInvalidError(error)) return false;
   const summary = safeErrorSummary(error).toLowerCase();
   if (summary.includes("content_policy") || summary.includes("content policy") || summary.includes("content_filter")) return false;
   if (error instanceof LLMRateLimitError || error instanceof LLMTimeoutError || error instanceof LLMFormatError) return true;
@@ -403,6 +406,7 @@ export function isModelPoolRetryableError(error: unknown): boolean {
 }
 
 export function modelPoolFailureReason(error: unknown): string {
+  if (isToolSchemaInvalidError(error)) return "tool_schema_invalid";
   if (error instanceof LLMTimeoutError) return "timeout";
   if (error instanceof LLMRateLimitError) return "rate_limit";
   if (error instanceof LLMFormatError) return "format_or_empty";
