@@ -73,10 +73,11 @@ export class OpenAICompatProvider implements LLMProvider {
         throw new LLMFormatError("provider response is not valid JSON");
       })) as OpenAIResponse;
       const whole = chatResponseFromJson(json);
-      if (whole.message.content || whole.message.tool_calls?.length) {
+      const wholeText = typeof whole.message.content === "string" ? whole.message.content : "";
+      if (wholeText || whole.message.tool_calls?.length) {
         yield {
           type: "delta",
-          content: whole.message.content,
+          content: wholeText,
           tool_calls: whole.message.tool_calls,
           reasoning: whole.message.reasoning_content ?? whole.message.reasoning ?? whole.message.thinking,
         };
