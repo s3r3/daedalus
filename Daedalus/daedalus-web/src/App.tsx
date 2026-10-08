@@ -28,7 +28,7 @@ import {
   loadActiveConversationId,
   loadColumnWidths,
   loadComposerPrefs,
-  loadDomain,
+  domainFromPathname,
   loadWorkspacePanelHeight,
   saveActiveConversationId,
   saveColumnWidths,
@@ -172,10 +172,15 @@ export function App() {
     if (Object.keys(prefs).length > 0) setComposer(prefs)
   }, [setComposer])
 
-  // The active domain (Coding | Slide) is a browser view preference over the
-  // same workspace and core: seed it from storage, then persist changes.
+  // The active domain (Coding | Slide) is named by the route: the store
+  // seeds from the pathname on load (the pathname wins over the persisted
+  // pref, so a '/slide' link opens Slide), the switcher pushes the
+  // matching URL, and this listener keeps back/forward in sync. The
+  // persisted pref only mirrors the choice for later visits.
   useEffect(() => {
-    setDomain(loadDomain())
+    const onPopState = (): void => setDomain(domainFromPathname(window.location.pathname))
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
   }, [setDomain])
 
   useEffect(() => {

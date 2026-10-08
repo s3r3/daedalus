@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { AgentMode, Attachment, Event, FinalReport, ProviderConfigPublic } from '@daedalus/core'
 import type { StreamStatus, TerminalWireMessage } from '../api/eventStream'
 import type { Conversation, ProviderModel, ProviderPreset, SessionState, TaskSummary, TerminalSession } from '../api/types'
-import { composerPrefsOf, saveComposerPrefs, type WebDomain } from './prefs'
+import { composerPrefsOf, domainFromPathname, saveComposerPrefs, type WebDomain } from './prefs'
 
 export type { WebDomain }
 
@@ -125,6 +125,15 @@ const initialComposer: ComposerState = {
 
 const initialTerminals: TerminalState = { sessions: [], buffers: {}, activeId: null, subscribe: null }
 
+/**
+ * Initial domain comes from the route (see domainFromPathname): the URL
+ * names the domain, so a '/slide' link opens Slide even when the persisted
+ * pref says Coding — the pathname wins over localStorage.
+ */
+function initialDomain(): WebDomain {
+  return typeof window !== 'undefined' ? domainFromPathname(window.location.pathname) : 'coding'
+}
+
 /** Client mirror of the server's ring buffer (same cap, same marker spirit). */
 const TERMINAL_BUFFER_CAP = 200_000
 function capBuffer(text: string): string {
@@ -150,7 +159,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   settingsOpen: false,
   workspaceRevision: 0,
   theme: 'daedalus-dark',
-  domain: 'coding',
+  domain: initialDomain(),
   slideIndex: 0,
   openFilePath: null,
   error: null,
@@ -302,7 +311,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
       taskAttachments: [],
       settingsOpen: false,
       workspaceRevision: 0,
-      domain: 'coding',
+      domain: initialDomain(),
       slideIndex: 0,
       openFilePath: null,
       error: null,

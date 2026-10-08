@@ -5,7 +5,9 @@ import {
   COLUMN_WIDTHS_KEY,
   COMPOSER_PREFS_KEY,
   composerPrefsOf,
+  domainFromPathname,
   loadChatHeight,
+  pathForDomain,
   loadColumnWidths,
   loadComposerPrefs,
   saveChatHeight,
@@ -97,6 +99,25 @@ describe('composer prefs (browser persistence for run defaults)', () => {
     expect(prefs.maxIterations).toBe(42)
     expect(prefs.modelPool).toBe('a-model, b-model')
     expect(prefs.modelStrategy).toBe('round-robin')
+  })
+})
+
+describe('domain from route (the pathname names the domain)', () => {
+  test("'/slide' and everything under it resolve to the slide domain", () => {
+    expect(domainFromPathname('/slide')).toBe('slide')
+    expect(domainFromPathname('/slide/xyz')).toBe('slide')
+  })
+
+  test("the root and any other path resolve to the coding domain", () => {
+    expect(domainFromPathname('/')).toBe('coding')
+    expect(domainFromPathname('/foo')).toBe('coding')
+  })
+
+  test('pathForDomain is the inverse mapping used by the switcher', () => {
+    expect(pathForDomain('slide')).toBe('/slide')
+    expect(pathForDomain('coding')).toBe('/')
+    expect(domainFromPathname(pathForDomain('slide'))).toBe('slide')
+    expect(domainFromPathname(pathForDomain('coding'))).toBe('coding')
   })
 })
 

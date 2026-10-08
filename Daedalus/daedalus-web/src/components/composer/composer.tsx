@@ -24,6 +24,7 @@ type UploadKind = 'file' | 'folder' | 'image' | 'zip'
  */
 export function Composer() {
   const composer = useDaedalusStore((state) => state.composer)
+  const domain = useDaedalusStore((state) => state.domain)
   const workspaceRoot = useDaedalusStore((state) => state.workspace.root)
   const activeTaskId = useDaedalusStore((state) => state.taskId)
   const models = useDaedalusStore((state) => state.models)
@@ -805,7 +806,11 @@ export function Composer() {
         aria-label="task goal"
         data-testid="composer-input"
         rows={2}
-        placeholder="Describe the coding task… type @ to reference a file or folder, /help for slash commands"
+        placeholder={
+          domain === 'slide'
+            ? 'Describe the deck to build… type /help for slash commands'
+            : 'Describe the coding task… type @ to reference a file or folder, /help for slash commands'
+        }
         value={composer.goal}
         onChange={(event) => {
           setComposer({ goal: event.target.value })

@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Circle, Moon, Settings, Sun } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -35,11 +36,48 @@ export function TopBar() {
   const [refreshing, setRefreshing] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyFilter, setHistoryFilter] = useState('')
+  // Anchor for the portaled history dropdown, measured from the wrapper
+  // around the history button (see the portal render below for why it
+  // cannot simply be absolutely positioned inside this header).
+  const historyAnchorRef = useRef<HTMLDivElement>(null)
+  const [historyAnchor, setHistoryAnchor] = useState<{ top: number; right: number } | null>(null)
+  const updateHistoryAnchor = useCallback((): void => {
+    const rect = historyAnchorRef.current?.getBoundingClientRect()
+    if (!rect) return
+    setHistoryAnchor({ top: rect.bottom + 4, right: Math.max(8, window.innerWidth - rect.right) })
+  }, [])
+  const toggleHistory = (): void => {
+    if (historyOpen) {
+      setHistoryOpen(false)
+    } else {
+      updateHistoryAnchor()
+      setHistoryOpen(true)
+    }
+  }
   const historyTasks = useMemo(() => {
     const needle = historyFilter.trim().toLowerCase()
     if (!needle) return tasks
     return tasks.filter((task) => [task.id, task.title ?? '', task.goal ?? '', task.mode ?? '', task.status].join(' ').toLowerCase().includes(needle))
   }, [tasks, historyFilter])
+
+  // While the history dropdown is open, keep the portal anchored to its
+  // button (the layout can shift under it) and close on Escape from
+  // anywhere — focus may sit in the filter input or on a task row, so
+  // listen on the document rather than only on the panel.
+  useEffect(() => {
+    if (!historyOpen) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setHistoryOpen(false)
+    }
+    document.addEventListener('keydown', onKeyDown)
+    window.addEventListener('resize', updateHistoryAnchor)
+    window.addEventListener('scroll', updateHistoryAnchor, true)
+    return () => {
+      document.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('resize', updateHistoryAnchor)
+      window.removeEventListener('scroll', updateHistoryAnchor, true)
+    }
+  }, [historyOpen, updateHistoryAnchor])
 
   const status = taskStatus(taskEvents, pendingApprovals(taskEvents).length, pendingQuestions(taskEvents).length)
   const contextPercent = useMemo(() => latestContextPercent(taskEvents), [taskEvents])
@@ -168,27 +206,37 @@ export function TopBar() {
       ) : null}
 
       <div className="ml-auto flex flex-wrap items-center gap-2">
-        <div className="relative">
+        <div className="relative" ref={historyAnchorRef}>
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setHistoryOpen((open) => !open)}
+            onClick={toggleHistory}
             aria-label="task history"
             aria-expanded={historyOpen}
             data-testid="topbar-history-button"
           >
             history{tasks.length ? ` (${tasks.length})` : ''}
           </Button>
-          {historyOpen ? (
-            <>
-              <button type="button" aria-hidden tabIndex={-1} className="fixed inset-0 z-20 cursor-default" onClick={() => setHistoryOpen(false)} />
-              <div
-                className="absolute right-0 top-full z-30 mt-1 w-[340px] max-w-[86vw] rounded-md border border-line bg-surface p-1.5 shadow-lg"
-                data-testid="task-history"
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape') setHistoryOpen(false)
-                }}
-              >
+          {/* The dropdown renders through a portal into document.body: the
+              composer below this header is position:relative with z-30 and,
+              while a task runs, carries a transform from its collapse
+              animation — both put it in the root stacking contest, where as
+              the later DOM node it painted over this absolutely-positioned
+              panel no matter the z-index declared inside the header (the
+              same stacking-context trap that once hid the composer's own
+              model picker). Portaling out of the header sidesteps the
+              contest entirely: backdrop and panel sit at z-40, above the
+              composer (z-30) and below the settings dialog (z-50), with the
+              panel position:fixed and anchored to the button's rect. */}
+          {historyOpen && historyAnchor
+            ? createPortal(
+                <>
+                  <button type="button" aria-hidden tabIndex={-1} className="fixed inset-0 z-40 cursor-default" onClick={() => setHistoryOpen(false)} />
+                  <div
+                    className="fixed z-40 flex max-h-[70vh] w-[340px] max-w-[86vw] flex-col rounded-md border border-line bg-surface p-1.5 shadow-lg"
+                    style={{ top: historyAnchor.top, right: historyAnchor.right }}
+                    data-testid="task-history"
+                  >
                 <input
                   aria-label="filter tasks"
                   placeholder="filter by title, goal, or id…"
@@ -199,7 +247,7 @@ export function TopBar() {
                 {historyTasks.length === 0 ? (
                   <p className="px-1 py-2 text-[11px] text-muted">{tasks.length === 0 ? 'no tasks recorded yet' : 'no tasks match'}</p>
                 ) : (
-                  <ul className="flex max-h-72 flex-col gap-0.5 overflow-auto">
+                  <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-auto">
                     {historyTasks.map((task) => (
                       <li key={task.id}>
                         <button
@@ -229,9 +277,11 @@ export function TopBar() {
                     ))}
                   </ul>
                 )}
-              </div>
-            </>
-          ) : null}
+                  </div>
+                </>,
+                document.body,
+              )
+            : null}
         </div>
 
         <Button variant="outline" size="sm" onClick={() => void refreshTasks()} disabled={refreshing} aria-label="refresh tasks">
