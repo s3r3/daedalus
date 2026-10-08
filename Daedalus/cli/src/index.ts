@@ -16,6 +16,7 @@ import {
   exitCodeFor,
   loadAgents,
   loadLspConfig,
+  withDefaultLspServers,
   loadMcpConfig,
   loadProjectRules,
   loadSettings,
@@ -68,6 +69,7 @@ function runSkillNames(value: string | undefined): string[] {
     .filter((name) => name.length > 0);
 }
 import { TrayManager } from "./tray.ts";
+import { DeltaSuffixTracker, formatCount, lspSidebarEntries, tokenSummary } from "./live-render.ts";
 import { formatSkillsListing, installBundledSkills, listSkills, setSkillDisabledForWorkspace } from "./skills-bundled.ts";
 
 const SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
@@ -354,9 +356,38 @@ export function formatEvent(event: Omit<Event, "seq" | "ts">): string {
       return `${paint(palette.secondary, "▸")} Child task started: ${p.child?.goal ?? ""}\n`;
     }
     case "CHILD_TASK_FINISHED": {
-      const p = event.payload as { child?: { goal?: string; status?: string; result_summary?: string } };
-      return `${paint(palette.secondary, "▸")} Child task ${p.child?.status ?? "finished"}: ${p.child?.result_summary ?? p.child?.goal ?? ""}\n`;
+      const p = event.payload as { child?: { goal?: string; status?: string; result_summary?: string; usage?: { total_tokens?: number } } };
+      const tokens = typeof p.child?.usage?.total_tokens === "number" ? ` · ${formatCount(p.child.usage.total_tokens)} tokens` : "";
+      return `${paint(palette.secondary, "▸")} Child task ${p.child?.status ?? "finished"}: ${p.child?.result_summary ?? p.child?.goal ?? ""}${tokens}\n`;
     }
+    case "REPLAN_CREATED": {
+      const p = event.payload as { plan?: { steps?: Array<unknown> }; reason?: string };
+      return `${paint(palette.secondary, "✦")} Replan (${p.reason ?? "revised"}): ${p.plan?.steps?.length ?? 0} steps\n`;
+    }
+    case "REVIEW_COMPLETED": {
+      const p = event.payload as { findings?: Array<unknown>; blocking?: number; model?: string };
+      const findings = p.findings?.length ?? 0;
+      return `${paint(palette.info, "◆")} Review by ${p.model ?? "reviewer"}: ${findings} finding${findings === 1 ? "" : "s"}${p.blocking ? ` (${p.blocking} blocking)` : ""}\n`;
+    }
+    case "TAILOR_ESCALATED": {
+      const p = event.payload as { reason?: string; from_model?: string; to_model?: string; model?: string };
+      return `${paint(palette.warning, "↯")} Escalated to stronger model${p.to_model ?? p.model ? ` (${p.to_model ?? p.model})` : ""}: ${p.reason ?? "loop detected"}\n`;
+    }
+    case "MODEL_REQUEST_FAILED": {
+      const p = event.payload as { error?: string; error_kind?: string; model?: string };
+      return `${paint(palette.error, "✖")} Model request failed${p.model ? ` (${p.model})` : ""}${p.error_kind ? ` [${p.error_kind}]` : ""}: ${p.error ?? "unknown error"}\n`;
+    }
+    case "MODEL_TEXT_DELTA":
+      // Streamed text is rendered by the live surfaces (fullscreen chat
+      // preview, `run` TTY increments); formatEvent stays silent so the
+      // text can never print twice.
+      return "";
+    case "MODEL_REQUEST_STARTED":
+    case "MODEL_REQUEST_FINISHED":
+    case "APPROVAL_DECIDED":
+      // Lifecycle bookkeeping: spinners, the usage tracker, and the
+      // approval prompt itself already surface these.
+      return "";
     case "SLASH_COMMAND_EXECUTED": {
       const p = event.payload as { command?: string; text?: string };
       return p.text ? `${p.text}\n` : `${paint(palette.info, "/")} ${p.command ?? "command"}\n`;
@@ -422,7 +453,7 @@ function colorizeScreen(screen: string): string {
 }
 
 type FullscreenRunner = {
-  run: (input: Record<string, unknown>) => Promise<{ outcome: string; events: unknown[]; state: { steps: Array<{ intent: string; status: string }> }; report: { metrics: { files_changed?: number } } }>;
+  run: (input: Record<string, unknown>) => Promise<{ outcome: string; events: unknown[]; state: { steps: Array<{ intent: string; status: string }> }; report: { metrics: { files_changed?: number; tokens_input?: number; tokens_output?: number; tokens_total?: number; model_requests?: number } } }>;
   cancel: (taskId: string) => void;
   approvals: { decide: (key: PermissionKey, decision: "grant" | "deny", remember: boolean) => void };
   questions: { answer: (questionId: string, answer: string) => boolean };
@@ -612,7 +643,8 @@ async function runFullscreenChat(options: {
       });
       session.setStatus(result.outcome);
       session.setPlan(result.state.steps.map((step, index) => `${index + 1}. [${step.status}] ${step.intent}`).join("\n"));
-      session.addSystemLine(`Outcome: ${result.outcome} · events ${result.events.length} · files changed ${result.report.metrics.files_changed ?? 0}`);
+      const tokens = tokenSummary(result.report.metrics);
+      session.addSystemLine(`Outcome: ${result.outcome} · events ${result.events.length} · files changed ${result.report.metrics.files_changed ?? 0}${tokens ? ` · ${tokens}` : ""}`);
     } catch (error) {
       session.setStatus("failed");
       session.addSystemLine(`Error: ${String(error)}`);
@@ -827,10 +859,10 @@ export async function runInteractiveChat(options: {
     name: status.name,
     detail: status.connected ? `connected · ${status.toolCount} tools` : `offline${status.error ? ` · ${status.error}` : ""}`,
   })));
-  session.setLsps(lspConfig.servers.map((server) => ({
-    name: server.name,
-    detail: `${server.extensions.join(" ") || "no extensions"} · configured`,
-  })));
+  // Effective servers, not just configured ones: core adds automatic
+  // defaults (TypeScript) that serve diagnostics without any lsp.json.
+  const effectiveLspServers = await withDefaultLspServers(workspaceRoot, lspConfig.servers);
+  session.setLsps(lspSidebarEntries(lspConfig.servers, effectiveLspServers));
   session.setSkills(skillRegistry.list().map((skill) => ({ name: skill.name, detail: skill.description || "skill" })));
 
   // File-defined subagents (.daedalus/agents/<name>.md) for /agents + sidebar.
@@ -851,6 +883,10 @@ export async function runInteractiveChat(options: {
     models: settings.llm.models,
     modelStrategy: settings.llm.modelStrategy,
     thinking: options.thinking ?? settings.session.thinking,
+    // Human surfaces stream: the session renders MODEL_TEXT_DELTA as
+    // a live preview (the Web's behavior), superseded by the turn's
+    // THOUGHT/reply — never doubled, never in --json output.
+    streamText: true,
   });
 
   let currentTaskId: string | undefined;
@@ -1089,8 +1125,9 @@ export async function runInteractiveChat(options: {
         session.recordTaskExchange(handled.text, `Task ${result.outcome}: ${handled.text}${result.report.evidence[0] ? ` — ${result.report.evidence[0]}` : ''}`);
         applyExtensionStatus(session, runner.extensionStatus);
         session.setPlan(result.state.steps.map((step, index) => `${index + 1}. [${step.status}] ${step.intent}`).join("\n"));
-        session.addSystemLine(`Outcome: ${result.outcome} · events ${result.events.length} · files changed ${result.report.metrics.files_changed ?? 0}`);
-        process.stdout.write(`\nOutcome: ${result.outcome} · events ${result.events.length} · files changed ${result.report.metrics.files_changed ?? 0}\n`);
+        const tokens = tokenSummary(result.report.metrics);
+        session.addSystemLine(`Outcome: ${result.outcome} · events ${result.events.length} · files changed ${result.report.metrics.files_changed ?? 0}${tokens ? ` · ${tokens}` : ""}`);
+        process.stdout.write(`\nOutcome: ${result.outcome} · events ${result.events.length} · files changed ${result.report.metrics.files_changed ?? 0}${tokens ? ` · ${tokens}` : ""}\n`);
         if ((process.stdout as { isTTY?: boolean }).isTTY) process.stdout.write(`${session.renderLayout({ columns: process.stdout.columns })}\n`);
       } catch (error) {
         session.setStatus("failed");
@@ -1346,11 +1383,16 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
         ...(modelStrategy !== undefined ? { modelStrategy } : {}),
         ...(options.thinking === false ? { thinking: false } : {}),
         ...(modelTimeoutMs === undefined ? {} : { modelTimeoutMs }),
+        // TTY humans get streamed model text (rendered incrementally
+        // below); --json/--ci output stays exactly as before.
+        ...(tty ? { streamText: true } : {}),
       });
 
       let currentTaskId: string | undefined;
       let stopSpinner: (() => void) | undefined;
       let rl: ReturnType<typeof createInterface> | undefined;
+      const deltaTracker = new DeltaSuffixTracker();
+      let streamOpen = false;
 
       const promptApproval = async (key: PermissionKey, preview?: string): Promise<void> => {
         rl ??= createInterface({ input: process.stdin });
@@ -1415,9 +1457,25 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
             if (json) {
               process.stdout.write(JSON.stringify(event) + "\n");
             } else if (tty) {
-              if (event.type === "APPROVAL_REQUESTED") {
+              if (event.type === "MODEL_TEXT_DELTA") {
+                // Streamed model text: print only the new suffix. The
+                // turn's own lines (thinking, tool calls) close the
+                // stream line when they arrive — no doubles.
                 stopSpinner?.();
                 stopSpinner = undefined;
+                const suffix = deltaTracker.push(event);
+                if (suffix) {
+                  process.stdout.write(suffix);
+                  streamOpen = true;
+                }
+              } else if (event.type === "APPROVAL_REQUESTED") {
+                stopSpinner?.();
+                stopSpinner = undefined;
+                if (streamOpen) {
+                  process.stdout.write("\n");
+                  streamOpen = false;
+                  deltaTracker.reset();
+                }
                 const payload = event.payload as {
                   key?: PermissionKey;
                   approval?: Parameters<typeof approvalPreviewLine>[0]["approval"];
@@ -1428,6 +1486,11 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
               } else if (event.type === "QUESTION_REQUESTED") {
                 stopSpinner?.();
                 stopSpinner = undefined;
+                if (streamOpen) {
+                  process.stdout.write("\n");
+                  streamOpen = false;
+                  deltaTracker.reset();
+                }
                 const payload = event.payload as { question?: UserQuestionInfo };
                 // Same CI guard as approvals: never touch stdin there; the
                 // question settles on its own timeout with assumptions.
@@ -1435,6 +1498,11 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
               } else {
                 stopSpinner?.();
                 stopSpinner = undefined;
+                if (streamOpen) {
+                  process.stdout.write("\n");
+                  streamOpen = false;
+                  deltaTracker.reset();
+                }
                 const formatted = formatEvent(event);
                 if (formatted) process.stdout.write(formatted);
                 if (event.type === "MODEL_REQUEST_STARTED") startSpinner("thinking...");
@@ -1449,6 +1517,11 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
 
         stopSpinner?.();
         stopSpinner = undefined;
+        if (streamOpen) {
+          process.stdout.write("\n");
+          streamOpen = false;
+          deltaTracker.reset();
+        }
 
         if (ci) {
           // CI contract: outcome + mapped exit code on the final line; the
@@ -1456,6 +1529,12 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
           process.stdout.write(JSON.stringify({ outcome: result.outcome, exit_code: exitCodeFor(result.outcome), report: result.report }) + "\n");
         } else if (json) {
           process.stdout.write(JSON.stringify({ report: result.report, outcome: result.outcome }) + "\n");
+        }
+
+        if (!json) {
+          // The Web's per-task token line, at last also in `run`.
+          const tokens = tokenSummary(result.report.metrics);
+          if (tokens) process.stdout.write(`${tokens}\n`);
         }
 
         const code = exitCodeFor(result.outcome);
