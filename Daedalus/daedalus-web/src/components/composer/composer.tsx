@@ -422,7 +422,7 @@ export function Composer() {
     validate: () => {
       const result = validation(events)
       if (result.running) return 'Validation is running.'
-      if (!result.result) return 'No validation evidence yet. Validation runs as part of a task; switch to Auto or Orchestrator to execute and validate.'
+      if (!result.result) return 'No validation evidence yet. Validation runs as part of a task; switch to Auto to execute and validate.'
       return result.result.checks.map((check) => `${check.name}: ${check.status} (${check.cmd})`).join('\n')
     },
     upload: () => openUpload('file'),
@@ -772,7 +772,7 @@ export function Composer() {
           style={{ borderColor: modeCssVar(composer.mode), color: modeCssVar(composer.mode) }}
           data-testid="mode-badge"
           data-mode={composer.mode}
-          title="Shift+Tab cycles Ask → Manual → Auto → Plan → Orchestrator"
+          title="Shift+Tab cycles Ask → Manual → Auto → Plan"
         >
           {MODE_LABELS[composer.mode]}
         </span>
