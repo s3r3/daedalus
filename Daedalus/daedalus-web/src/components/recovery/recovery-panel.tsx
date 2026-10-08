@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
-import { EmptyState, Panel } from '../common/panel'
+import { Panel } from '../common/panel'
 import { useTaskEvents } from '../../state/hooks'
 import { errors, recoveries, replanCount, type ErrorEntry } from '../../state/selectors'
 
@@ -14,20 +14,21 @@ export function RecoveryPanel() {
   const attempts = useMemo(() => recoveries(events), [events])
   const replans = useMemo(() => replanCount(events), [events])
 
+  // Rendered only when a recovery actually happened: an always-on
+  // "No recovery needed" box is decoration, not information.
+  if (attempts.length === 0 && replans === 0) return null
+
   return (
     <Panel
       title="recovery"
       data-testid="recovery-panel"
       action={
-        <Badge tone={attempts.length + replans > 0 ? 'warning' : 'neutral'} data-testid="recovery-count">
+        <Badge tone="warning" data-testid="recovery-count">
           {attempts.length} retries · {replans} replans
         </Badge>
       }
       bodyClassName="flex flex-col gap-1.5"
     >
-      {attempts.length === 0 && replans === 0 ? (
-        <EmptyState title="No recovery needed" hint="Retries and replans appear here when the agent hits a failure." />
-      ) : (
         <>
           {attempts.map((attempt, index) => (
             <div
@@ -48,7 +49,6 @@ export function RecoveryPanel() {
             </p>
           ) : null}
         </>
-      )}
     </Panel>
   )
 }
@@ -58,22 +58,22 @@ export function ErrorPanel() {
   const entries = useMemo(() => errors(events), [events])
   const [expanded, setExpanded] = useState<number | null>(null)
 
+  // Rendered only when errors were actually recorded: an always-on
+  // "No errors recorded" box is decoration, not information.
+  if (entries.length === 0) return null
+
   return (
     <Panel
       title="errors"
       data-testid="error-panel"
-      action={<Badge tone={entries.length > 0 ? 'error' : 'neutral'}>{entries.length}</Badge>}
+      action={<Badge tone="error">{entries.length}</Badge>}
       bodyClassName="flex flex-col gap-1"
     >
-      {entries.length === 0 ? (
-        <EmptyState title="No errors recorded" hint="Model failures, tool errors, and failed checks are listed here." />
-      ) : (
         <ul className="flex flex-col gap-1">
           {entries.map((entry) => (
             <ErrorRow key={`${entry.seq}-${entry.type}`} entry={entry} expanded={expanded === entry.seq} onToggle={() => setExpanded(expanded === entry.seq ? null : entry.seq)} />
           ))}
         </ul>
-      )}
     </Panel>
   )
 }

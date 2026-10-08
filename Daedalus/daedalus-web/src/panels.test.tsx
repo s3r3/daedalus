@@ -10,7 +10,7 @@ import { ActivityTimeline } from './components/agent/activity-timeline'
 import { ValidationPanel } from './components/validation/validation-panel'
 import { ErrorPanel, RecoveryPanel } from './components/recovery/recovery-panel'
 import { TopBar } from './components/layout/top-bar'
-import { FilesChangedPanel, FinalReportView, ValidationSummary } from './components/report/report-panels'
+import { AttachmentsPanel, ChildTasksPanel, FinalReportView } from './components/report/report-panels'
 
 // Every panel reads its facts from the event log, so the whole suite drives
 // components through seeded events rather than through the socket.
@@ -542,10 +542,10 @@ describe('ValidationPanel', () => {
 })
 
 describe('RecoveryPanel', () => {
-  test('empty state when nothing failed', () => {
+  test('renders nothing when nothing failed', () => {
     seed([ev('TASK_STARTED', { spec: { goal: 'x' } })])
     render(<RecoveryPanel />)
-    expect(textOf(screen.getByTestId('recovery-panel'))).toContain('No recovery needed')
+    expect(screen.queryByTestId('recovery-panel')).toBeNull()
   })
 
   test('counts retries and replans and names the strategy', () => {
@@ -563,10 +563,10 @@ describe('RecoveryPanel', () => {
 })
 
 describe('ErrorPanel', () => {
-  test('empty state with no errors', () => {
+  test('renders nothing with no errors', () => {
     seed([ev('TASK_STARTED', { spec: { goal: 'x' } })])
     render(<ErrorPanel />)
-    expect(textOf(screen.getByTestId('error-panel'))).toContain('No errors recorded')
+    expect(screen.queryByTestId('error-panel')).toBeNull()
   })
 
   test('classifies a model failure and expands its context on demand', async () => {
@@ -608,37 +608,16 @@ describe('TopBar', () => {
 })
 
 describe('report panels', () => {
-  test('files changed renders an empty state', () => {
+  test('attachments and child tasks panels render nothing while empty', () => {
     seed([])
-    render(<FilesChangedPanel />)
-    expect(textOf(screen.getByTestId('files-changed-panel'))).toContain('files changed')
-  })
-
-  test('files changed lists each path from FILE_CHANGED', () => {
-    seed([
-      ev('FILE_CHANGED', { path: 'src/health.ts', operation: 'create', patch: '+export const ok = true', added: 1, removed: 0 }),
-      ev('FILE_CHANGED', { path: 'src/health.test.ts', operation: 'create', patch: '+test', added: 1, removed: 0 }),
-    ])
-    render(<FilesChangedPanel />)
-    const panel = screen.getByTestId('files-changed-panel')
-    expect(textOf(panel)).toContain('src/health.ts')
-    expect(textOf(panel)).toContain('src/health.test.ts')
-  })
-
-  test('validation summary is empty before checks run', () => {
-    seed([])
-    render(<ValidationSummary />)
-    expect(screen.getByTestId('validation-summary-panel')).toBeTruthy()
-  })
-
-  test('validation summary reflects a real verdict', () => {
-    seed([
-      ev('VALIDATION_PASSED', {
-        result: { checks: [{ name: 'build', cmd: 'npm run build', status: 'pass', exit_code: 0, summary: '', diagnostics: [] }] },
-      }),
-    ])
-    render(<ValidationSummary />)
-    expect(textOf(screen.getByTestId('validation-summary-panel'))).toContain('build')
+    render(
+      <>
+        <AttachmentsPanel />
+        <ChildTasksPanel />
+      </>,
+    )
+    expect(screen.queryByTestId('attachments-panel')).toBeNull()
+    expect(screen.queryByTestId('child-tasks-panel')).toBeNull()
   })
 
   test('the final report shows outcome and metrics', () => {

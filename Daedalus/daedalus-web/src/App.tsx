@@ -13,7 +13,7 @@ import { PlanChipsBar } from './components/agent/plan-chips-bar'
 import { TerminalPane } from './components/terminal/terminal-pane'
 import { ValidationPanel } from './components/validation/validation-panel'
 import { ErrorPanel, RecoveryPanel } from './components/recovery/recovery-panel'
-import { AttachmentsPanel, ChildTasksPanel, FilesChangedPanel, FinalReportView, ValidationSummary } from './components/report/report-panels'
+import { AttachmentsPanel, ChildTasksPanel, FinalReportView } from './components/report/report-panels'
 import { ScrollArea } from './components/ui/scroll-area'
 import { useEventStream } from './api/useEventStream'
 import { api } from './api/client'
@@ -329,8 +329,6 @@ export function App() {
               <DiffViewer />
               <AttachmentsPanel />
               <ChildTasksPanel />
-              <FilesChangedPanel />
-              <ValidationSummary />
               <FinalReportView report={report} />
               <p className="pb-2 text-center text-[9px] uppercase tracking-wider text-muted">daedalus core {VERSION}</p>
             </div>

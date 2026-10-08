@@ -92,15 +92,6 @@ export function TopBar() {
     }
   }
 
-  const cancelTask = async (): Promise<void> => {
-    if (!taskId) return
-    try {
-      await api.cancelTask(taskId)
-    } catch {
-      /* cancellation is best effort; the stream reports the outcome */
-    }
-  }
-
   const toggleThinking = async (): Promise<void> => {
     const next = !composer.thinking
     try {
@@ -189,12 +180,6 @@ export function TopBar() {
         <Button variant="outline" size="sm" onClick={() => void refreshTasks()} disabled={refreshing} aria-label="refresh tasks">
           refresh
         </Button>
-
-        {taskId && (status === 'running' || status === 'awaiting-approval' || status === 'awaiting-answer') ? (
-          <Button variant="danger" size="sm" onClick={() => void cancelTask()} data-testid="topbar-stop" aria-label="stop the running task">
-            ■ stop
-          </Button>
-        ) : null}
 
         <Button
           variant={settingsOpen ? 'default' : 'outline'}
