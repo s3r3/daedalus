@@ -99,6 +99,7 @@ describe('Composer', () => {
     expect(createTask).toHaveBeenCalledWith({
       goal: 'add a health endpoint',
       repo_path: '',
+      domain: 'coding',
       auto_approve: true,
       max_iterations: 7,
       mode: 'auto',

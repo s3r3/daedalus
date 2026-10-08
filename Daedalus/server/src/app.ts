@@ -1195,6 +1195,11 @@ export function createApp(ctx: AppContext) {
             return;
           }
           const isolation = parsed.isolation === "worktree" ? ("worktree" as const) : undefined;
+          if (parsed.domain !== undefined && parsed.domain !== "coding" && parsed.domain !== "slide") {
+            sendJson(res, 400, { error: "invalid_domain", request_id: requestId });
+            return;
+          }
+          const domain = parsed.domain === "slide" || parsed.domain === "coding" ? parsed.domain : undefined;
 
           await ensureProvidersLoaded(ctx);
           const taskId = crypto.randomUUID();
@@ -1284,8 +1289,10 @@ export function createApp(ctx: AppContext) {
           // conversation and pure questions go straight to the model and the
           // reply is the result — no manufactured plan, no tool loop, no
           // validation. Modes still govern everything classified as a task;
-          // attachments/worktrees always take the task path.
-          const intent = attachments.length || isolation || skillNames.length ? "task" : classifyWebIntent(goal);
+          // attachments/worktrees always take the task path. Slide-domain
+          // submits also always take the full task path: the fast answer
+          // paths have no tool loop, so they could never touch the deck.
+          const intent = attachments.length || isolation || skillNames.length || domain === "slide" ? "task" : classifyWebIntent(goal);
           if (intent !== "task") {
             const task = {
               id: taskId,
@@ -1302,6 +1309,7 @@ export function createApp(ctx: AppContext) {
               ...(poolModels.length ? { models: poolModels } : {}),
               ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
               ...(conversationId ? { conversation_id: conversationId } : {}),
+              ...(domain ? { domain } : {}),
               attachments,
               created_at: new Date().toISOString(),
             };
@@ -1367,6 +1375,7 @@ export function createApp(ctx: AppContext) {
             ...(poolModels.length ? { models: poolModels } : {}),
             ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
             ...(conversationId ? { conversation_id: conversationId } : {}),
+            ...(domain ? { domain } : {}),
             attachments,
             ...(skillNames.length ? { skills: skillNames } : {}),
             ...(isolation ? { isolation } : {}),
@@ -1399,6 +1408,7 @@ export function createApp(ctx: AppContext) {
               ...(typeof parsed.plan_task_id === "string" && parsed.plan_task_id ? { planTaskId: parsed.plan_task_id } : {}),
               ...(priorContext ? { priorContext } : {}),
               ...(conversationId ? { conversationId } : {}),
+              ...(domain ? { domain } : {}),
             })
             .then((result) => {
               ctx.log.info("task finished", { task_id: taskId, outcome: result.outcome });

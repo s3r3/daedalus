@@ -1,4 +1,4 @@
-export type TaskSpec = { id: string; goal: string; repo_path: string; constraints: string[]; done_criteria: string[]; created_at: string; mode?: AgentMode; parent_task_id?: string; attachments?: Attachment[]; provider_id?: string; model?: string; models?: string[]; model_strategy?: ModelStrategy; thinking?: boolean; title?: string; rules_files?: string[]; agent?: string; /** Declared target directory (workspace-relative) of an anchored creation task — see deriveTaskTargetDir in agent/scaffold.ts; stamped by the agent loop, never guessed. */ target_dir?: string; /** Execute-the-plan follow-up: the earlier (plan-mode) task whose approved documents this task builds against; stamped by the runner when planTaskId is given. */ plan_task_id?: string; /** Chat conversation this task belongs to (Web chat sessions); turns are recorded server-side. */ conversation_id?: string };
+export type TaskSpec = { id: string; goal: string; repo_path: string; constraints: string[]; done_criteria: string[]; created_at: string; mode?: AgentMode; /** Product domain of this task; absent = coding, exact legacy behavior. */ domain?: TaskDomain; parent_task_id?: string; attachments?: Attachment[]; provider_id?: string; model?: string; models?: string[]; model_strategy?: ModelStrategy; thinking?: boolean; title?: string; rules_files?: string[]; agent?: string; /** Declared target directory (workspace-relative) of an anchored creation task — see deriveTaskTargetDir in agent/scaffold.ts; stamped by the agent loop, never guessed. */ target_dir?: string; /** Execute-the-plan follow-up: the earlier (plan-mode) task whose approved documents this task builds against; stamped by the runner when planTaskId is given. */ plan_task_id?: string; /** Chat conversation this task belongs to (Web chat sessions); turns are recorded server-side. */ conversation_id?: string };
 export type PlanStepStatus = 'pending' | 'active' | 'done' | 'skipped';
 export type PlanStep = { id: string; intent: string; status: PlanStepStatus; evidence: string[] };
 export type Plan = { id: string; task_id: string; steps: PlanStep[]; version: number; status: 'draft' | 'active' | 'complete' };
@@ -33,6 +33,8 @@ export type TailorEscalatedPayload = {
 };
 
 export type AgentMode = 'ask' | 'manual' | 'auto' | 'plan' | 'orchestrator';
+/** Product domain a task runs in; domains re-skin the harness around the artifact being produced. */
+export type TaskDomain = 'coding' | 'slide';
 export type ModelStrategy = 'failover' | 'round-robin';
 /**
  * Capability tier of one model in a pool (tailor suite): the harness routes

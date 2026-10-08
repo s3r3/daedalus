@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useDaedalusStore } from './state/taskStore'
 import { DomainSwitch } from './components/layout/domain-switch'
 import { TopBar } from './components/layout/top-bar'
 import { Composer } from './components/composer/composer'
 
 const listTasks = vi.fn()
+const createTask = vi.fn()
 
 vi.mock('./api/client', () => ({
   api: {
@@ -14,7 +15,7 @@ vi.mock('./api/client', () => ({
     taskAttachments: vi.fn(async () => ({ attachments: [] })),
     getConversation: vi.fn(async () => ({ conversation: null })),
     cancelTask: vi.fn(async () => ({ cancelled: true, cancel_requested: true, task_id: 'task-1' })),
-    createTask: vi.fn(async () => ({ id: 'task-new' })),
+    createTask: (...args: unknown[]) => createTask(...args),
     setMode: vi.fn(async () => ({ session: {} })),
     setAutoApprove: vi.fn(async () => ({ session: {} })),
     updateSession: vi.fn(async () => ({ session: {} })),
@@ -37,6 +38,8 @@ beforeEach(() => {
   useDaedalusStore.getState().reset()
   listTasks.mockReset()
   listTasks.mockResolvedValue({ tasks: [] })
+  createTask.mockReset()
+  createTask.mockResolvedValue({ id: 'task-new' })
 })
 
 afterEach(() => {
@@ -77,6 +80,28 @@ describe('Composer placeholder follows the domain', () => {
     expect(screen.getByTestId('composer-input').getAttribute('placeholder')).toBe(
       'Describe the coding task… type @ to reference a file or folder, /help for slash commands',
     )
+  })
+})
+
+describe('Composer submit carries the store domain to the server', () => {
+  test('slide domain: api.createTask is called with domain slide', async () => {
+    useDaedalusStore.setState({ domain: 'slide' })
+    render(<Composer />)
+    const input = screen.getByTestId('composer-input')
+    fireEvent.change(input, { target: { value: 'buatkan deck tentang bahaya AI untuk anak' } })
+    fireEvent.click(screen.getByTestId('composer-submit'))
+    await waitFor(() => expect(createTask).toHaveBeenCalled())
+    expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ domain: 'slide' }))
+  })
+
+  test('coding domain: api.createTask is called with domain coding', async () => {
+    useDaedalusStore.setState({ domain: 'coding' })
+    render(<Composer />)
+    const input = screen.getByTestId('composer-input')
+    fireEvent.change(input, { target: { value: 'tulis fungsi halo dunia' } })
+    fireEvent.click(screen.getByTestId('composer-submit'))
+    await waitFor(() => expect(createTask).toHaveBeenCalled())
+    expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ domain: 'coding' }))
   })
 })
 

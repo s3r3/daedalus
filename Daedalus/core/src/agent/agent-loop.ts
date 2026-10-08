@@ -679,6 +679,11 @@ export class AgentLoop {
     // the unchanged-read stub may only claim "already in your context"
     // for serves no new condensing has since overtaken.
     this.#condensedCounts.set(state.id, messages.filter((message) => message.content === CONDENSED_TOOL_OUTPUT).length);
+    // The request just built carried each history entry in full, so a
+    // long skill body in history has been served: shrink it to a stub
+    // now, or every later request re-sends the whole body (up to 16K)
+    // and the loop burns its token budget re-reading its own context.
+    this.#stubServedSkillBodies(state.id);
     // Anti-loop guidance queued by a previous turn rides along as an extra
     // user note so the model sees the warning in its very next request.
     const guidance = this.#pendingGuidance.get(state.id);
@@ -1460,6 +1465,34 @@ export class AgentLoop {
       next = await this.#recordToolResult(state, next, entry.call, result, turnMode, turnId);
     }
     return next;
+  }
+
+  /**
+   * Replace long, already-served skill bodies in the task history with
+   * a short stub. Runs only after the current request was built from
+   * the full history (see step), so the body reaches the model exactly
+   * once in full; later turns carry the stub instead of re-sending up
+   * to 16K of playbook per request. Entries already stubbed are left
+   * alone; short results are not worth stubbing.
+   */
+  #stubServedSkillBodies(taskId: string): void {
+    const history = this.#history.get(taskId);
+    if (!history) return;
+    for (let index = 0; index < history.length; index++) {
+      const entry = history[index]!;
+      if (entry.kind !== 'tool_result') continue;
+      const skillName = entry.result.meta?.skill;
+      if (typeof skillName !== 'string' || entry.result.output.length <= 500) continue;
+      if (entry.result.output.startsWith('(skill "')) continue;
+      history[index] = {
+        kind: 'tool_result',
+        result: {
+          ...entry.result,
+          output: `(skill "${skillName}" body already served in full earlier in this task — not repeated here. Follow it from memory; do not read_skill it again.)`,
+          truncated: false,
+        },
+      };
+    }
   }
 
   #guardFor(state: TaskState): LoopGuard {
