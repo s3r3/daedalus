@@ -55,20 +55,7 @@ export class OpenAICompatProvider implements LLMProvider {
     const json = (await response.json().catch(() => {
       throw new LLMFormatError("provider response is not valid JSON");
     })) as OpenAIResponse;
-    const choice = json.choices?.[0];
-    if (!choice?.message) throw new LLMFormatError("provider response has no choice message");
-    if (choice.finish_reason === "content_filter") throw new LLMContentPolicyError("provider refused the request (content_filter)");
-    return {
-      message: {
-        role: toRole(choice.message.role),
-        content: choice.message.content ?? "",
-        tool_calls: choice.message.tool_calls,
-        ...reasoningFields(choice.message),
-      },
-      usage: normalizeUsage(json.usage),
-      finish_reason: choice.finish_reason ?? undefined,
-      raw: json,
-    };
+    return chatResponseFromJson(json);
   }
 
   async *stream(messages: Message[], tools?: ToolDefinition[], options: ChatOptions = {}): AsyncIterable<StreamChunk> {
@@ -78,6 +65,26 @@ export class OpenAICompatProvider implements LLMProvider {
       throw providerHttpError(response.status, json, response.headers.get("retry-after"));
     }
     if (!response.body) throw new LLMFormatError("provider streaming response has no body");
+    // Some gateways ignore stream:true and answer with the plain JSON
+    // body. That response is already complete — surface it as chunks
+    // instead of letting the caller retry and double-consume the turn.
+    if ((response.headers.get("content-type") ?? "").includes("application/json")) {
+      const json = (await response.json().catch(() => {
+        throw new LLMFormatError("provider response is not valid JSON");
+      })) as OpenAIResponse;
+      const whole = chatResponseFromJson(json);
+      if (whole.message.content || whole.message.tool_calls?.length) {
+        yield {
+          type: "delta",
+          content: whole.message.content,
+          tool_calls: whole.message.tool_calls,
+          reasoning: whole.message.reasoning_content ?? whole.message.reasoning ?? whole.message.thinking,
+        };
+      }
+      if (whole.usage) yield { type: "usage", usage: whole.usage };
+      if (whole.finish_reason) yield { type: "finish", finish_reason: whole.finish_reason };
+      return;
+    }
 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -97,7 +104,12 @@ export class OpenAICompatProvider implements LLMProvider {
           try { chunk = JSON.parse(data) as OpenAIResponse; } catch { throw new LLMFormatError("malformed streaming JSON"); }
           const choice = chunk.choices?.[0];
           const delta = choice?.delta;
-          if (delta?.content) yield { type: "delta", content: delta.content, tool_calls: delta.tool_calls };
+          const reasoning = [delta?.reasoning_content, delta?.reasoning, delta?.thinking].find(
+            (value): value is string => typeof value === "string" && value.length > 0,
+          );
+          if (delta?.content || reasoning) {
+            yield { type: "delta", content: delta?.content ?? "", tool_calls: delta?.tool_calls, ...(reasoning ? { reasoning } : {}) };
+          }
           if (choice?.finish_reason) yield { type: "finish", finish_reason: choice.finish_reason };
           const usage = normalizeUsage(chunk.usage);
           if (usage) yield { type: "usage", usage };
@@ -123,6 +135,24 @@ export class OpenAICompatProvider implements LLMProvider {
       throw new LLMError("LLM request failed", { cause: error, code: "network" });
     }
   }
+}
+
+/** The non-streaming JSON body → ChatResponse, shared by chat() and stream()'s JSON branch. */
+function chatResponseFromJson(json: OpenAIResponse): ChatResponse {
+  const choice = json.choices?.[0];
+  if (!choice?.message) throw new LLMFormatError("provider response has no choice message");
+  if (choice.finish_reason === "content_filter") throw new LLMContentPolicyError("provider refused the request (content_filter)");
+  return {
+    message: {
+      role: toRole(choice.message.role),
+      content: choice.message.content ?? "",
+      tool_calls: choice.message.tool_calls,
+      ...reasoningFields(choice.message),
+    },
+    usage: normalizeUsage(json.usage),
+    finish_reason: choice.finish_reason ?? undefined,
+    raw: json,
+  };
 }
 
 function reasoningFields(message: { reasoning_content?: unknown; reasoning?: unknown; thinking?: unknown }): Pick<Message, "reasoning_content" | "reasoning" | "thinking"> {

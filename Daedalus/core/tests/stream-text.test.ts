@@ -43,6 +43,16 @@ describe('StreamMessageAssembler', () => {
     assembler.push({ type: 'delta', content: 'done: all set' });
     expect(assembler.toResponse().message).toEqual({ role: 'assistant', content: 'done: all set' });
   });
+
+  test('reasoning fragments land on the message like the chat path', () => {
+    const assembler = new StreamMessageAssembler();
+    assembler.push({ type: 'delta', content: '', reasoning: 'Read the ' });
+    assembler.push({ type: 'delta', content: '', reasoning: 'skill first.' });
+    assembler.push({ type: 'delta', content: 'Working.', tool_calls: [{ index: 0, id: 'r1', type: 'function', function: { name: 'read_skill', arguments: '{}' } } as never] });
+    const message = assembler.toResponse().message;
+    expect(message.reasoning_content).toBe('Read the skill first.');
+    expect(message.content).toBe('Working.');
+  });
 });
 
 function workspace(): string {

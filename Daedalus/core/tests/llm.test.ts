@@ -435,3 +435,51 @@ describe("Provider Instrumentation", () => {
     expect(events).toEqual(["started", "finished"]);
   });
 });
+
+describe("OpenAICompatProvider streaming", () => {
+  test("parses SSE deltas, usage, and finish", async () => {
+    const fetchImpl = fakeFetch(async () => {
+      const sse = [
+        'data: {"choices":[{"delta":{"content":"Hel"}}]}',
+        'data: {"choices":[{"delta":{"content":"lo"}}]}',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}',
+        "data: [DONE]",
+        "",
+      ].join("\n");
+      return new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+    });
+    const provider = new OpenAICompatProvider({ baseUrl: "https://example.test/v1", apiKey: "k", model: "m", fetch: fetchImpl });
+    const chunks = [];
+    for await (const chunk of provider.stream([userMessage("hi")])) chunks.push(chunk);
+    expect(chunks).toContainEqual({ type: "delta", content: "Hel", tool_calls: undefined });
+    expect(chunks).toContainEqual({ type: "usage", usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 } });
+    expect(chunks).toContainEqual({ type: "finish", finish_reason: "stop" });
+  });
+
+  test("a gateway that ignores stream:true and answers JSON yields the whole message once", async () => {
+    const fetchImpl = fakeFetch(async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "",
+                tool_calls: [{ id: "c1", type: "function", function: { name: "ask_user", arguments: "{}" } }],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+          usage: { prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const provider = new OpenAICompatProvider({ baseUrl: "https://example.test/v1", apiKey: "k", model: "m", fetch: fetchImpl });
+    const chunks = [];
+    for await (const chunk of provider.stream([userMessage("hi")])) chunks.push(chunk);
+    const delta = chunks.find((chunk) => chunk.type === "delta");
+    expect(delta?.type === "delta" ? delta.tool_calls?.[0]?.function?.name : undefined).toBe("ask_user");
+    expect(chunks).toContainEqual({ type: "finish", finish_reason: "tool_calls" });
+  });
+});

@@ -8,21 +8,25 @@ type ToolCallBuffer = { id?: string; name: string; arguments: string };
  * argument string pieces); the loop's turn machine needs the same
  * whole message `chat()` would have returned, so the fragments are
  * concatenated per index and the argument string is parsed later by
- * the usual action parser — never here. Content and usage ride
- * along; reasoning deltas are not part of the StreamChunk contract,
- * so thinking text surfaces via the finished message as before.
+ * the usual action parser — never here. Content, reasoning text, and
+ * usage ride along, so THOUGHT derivation sees the same message the
+ * non-streaming path would have produced.
  */
 export class StreamMessageAssembler {
   #content = "";
+  #reasoning = "";
   #byIndex = new Map<number, ToolCallBuffer>();
   #anonymous: ToolCallBuffer[] = [];
   #usage: Usage | undefined;
   #finishReason: string | undefined;
-  #chunks = 0;
 
-  /** True while nothing usable has arrived (drives the chat() fallback). */
+  /**
+   * True while nothing the turn can act on has arrived — no text, no
+   * tool-call fragments (drives the loop's chat() fallback for
+   * providers whose stream yields nothing usable at all).
+   */
   get empty(): boolean {
-    return this.#chunks === 0 && !this.#content && this.#byIndex.size === 0 && this.#anonymous.length === 0;
+    return !this.#content && this.#byIndex.size === 0 && this.#anonymous.length === 0;
   }
 
   /** Content text so far (what the live delta events carry). */
@@ -31,7 +35,6 @@ export class StreamMessageAssembler {
   }
 
   push(chunk: StreamChunk): void {
-    this.#chunks += 1;
     if (chunk.type === "usage") {
       this.#usage = chunk.usage;
       return;
@@ -41,6 +44,7 @@ export class StreamMessageAssembler {
       return;
     }
     this.#content += chunk.content;
+    if (chunk.reasoning) this.#reasoning += chunk.reasoning;
     for (const partial of chunk.tool_calls ?? []) this.#pushToolCall(partial);
   }
 
@@ -76,6 +80,7 @@ export class StreamMessageAssembler {
       role: "assistant",
       content: this.#content,
       ...(toolCalls ? { tool_calls: toolCalls } : {}),
+      ...(this.#reasoning ? { reasoning_content: this.#reasoning } : {}),
     };
     return {
       message,

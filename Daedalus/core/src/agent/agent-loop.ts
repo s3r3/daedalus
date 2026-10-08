@@ -1639,7 +1639,12 @@ export class AgentLoop {
     if (assembler.empty) {
       return this.#provider.chat(messages, tools, { ...this.#chatOptions, phase });
     }
-    await this.#emit(taskId, turnId, 'MODEL_TEXT_DELTA', { text: assembler.text, final: true });
+    // Only text turns produce delta events: a tool-call turn with no
+    // prose must leave the event sequence exactly as it was before
+    // streaming existed (the CLI/Web parity contract).
+    if (assembler.text) {
+      await this.#emit(taskId, turnId, 'MODEL_TEXT_DELTA', { text: assembler.text, final: true });
+    }
     return assembler.toResponse();
   }
 

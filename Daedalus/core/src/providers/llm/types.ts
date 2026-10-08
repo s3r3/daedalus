@@ -73,7 +73,7 @@ export type ChatOptions = {
 };
 
 export type StreamChunk =
-  | { type: "delta"; content: string; tool_calls?: Partial<ToolCall>[] }
+  | { type: "delta"; content: string; tool_calls?: Partial<ToolCall>[]; reasoning?: string }
   | { type: "usage"; usage: Usage }
   | { type: "finish"; finish_reason?: string };
 
