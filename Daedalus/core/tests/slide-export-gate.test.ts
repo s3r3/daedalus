@@ -1,0 +1,153 @@
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, test } from 'vitest';
+import {
+  AgentLoop,
+  EventBus,
+  TaskStore,
+  createDefaultRegistry,
+  type LLMProvider,
+  type Message,
+  type TaskSpec,
+} from '../src/index.ts';
+
+const cleanups: Array<() => void> = [];
+afterEach(() => {
+  while (cleanups.length) cleanups.pop()?.();
+});
+
+function temp(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+type ScriptStep = { tool: string; args: unknown } | { text: string };
+
+/** Same scripted-provider shape as the completion-gate suite: unscripted turns claim done. */
+function scriptedProvider(steps: ScriptStep[], seen?: Message[][]): LLMProvider {
+  let index = 0;
+  return {
+    name: 'slide-gate-scripted',
+    async chat(messages: Message[]) {
+      seen?.push(messages);
+      const step = steps[index++];
+      if (!step) return { message: { role: 'assistant' as const, content: 'done: nothing further scripted' } };
+      if ('text' in step) return { message: { role: 'assistant' as const, content: step.text } };
+      return {
+        message: {
+          role: 'assistant' as const,
+          content: '',
+          tool_calls: [{ id: `call-${index}`, type: 'function' as const, function: { name: step.tool, arguments: JSON.stringify(step.args) } }],
+        },
+      };
+    },
+    async *stream() {
+      yield { type: 'delta', content: '' };
+    },
+  };
+}
+
+function makeLoop(root: string, provider: LLMProvider): { loop: AgentLoop; store: TaskStore } {
+  const registry = createDefaultRegistry();
+  const store = new TaskStore(join(root, '.daedalus-tasks'));
+  const loop = new AgentLoop({
+    provider,
+    bus: new EventBus(),
+    store,
+    stopPolicy: { max_iterations: 12, max_errors: 5 },
+    executeTool: (call) => registry.execute(call, { workspaceRoot: root }),
+  });
+  return { loop, store };
+}
+
+function spec(root: string, id: string, goal: string, domain?: 'slide', criteria: string[] = ['outline deck dibuat', 'isi slide lengkap', 'deck ter-export ke pptx']): TaskSpec {
+  return {
+    id,
+    goal,
+    repo_path: root,
+    constraints: [],
+    done_criteria: criteria,
+    created_at: new Date().toISOString(),
+    ...(domain ? { domain } : {}),
+  };
+}
+
+function pptxFiles(root: string): string[] {
+  const dir = join(root, 'deck');
+  return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith('.pptx')) : [];
+}
+
+describe('slide completion gate in the agent loop', () => {
+  test('a slide task that exports before claiming done succeeds and leaves a .pptx', async () => {
+    const root = temp('daedalus-slide-gate-ok-');
+    const provider = scriptedProvider([
+      { tool: 'create_deck', args: { title: 'Keamanan Anak' } },
+      { tool: 'add_slide', args: { layout: 'bullets', content: { title: 'Poin Utama', points: ['satu', 'dua'] } } },
+      { tool: 'export_deck', args: {} },
+    ]);
+    const { loop } = makeLoop(root, provider);
+    const state = await loop.run(spec(root, 'gate-ok', 'buatkan deck presentasi tentang keamanan anak', 'slide'));
+    expect(state.status).toBe('done');
+    expect(pptxFiles(root)).toHaveLength(1);
+  });
+
+  test('claiming done over an unexported deck buys one repair turn, then fails slide_export_missing', async () => {
+    const root = temp('daedalus-slide-gate-refuse-');
+    const seen: Message[][] = [];
+    const provider = scriptedProvider([
+      { tool: 'create_deck', args: { title: 'Keamanan Anak' } },
+      { tool: 'add_slide', args: { layout: 'bullets', content: { title: 'Poin', points: ['satu'] } } },
+    ], seen);
+    const { loop, store } = makeLoop(root, provider);
+    const state = await loop.run(spec(root, 'gate-refuse', 'buatkan deck presentasi tentang keamanan anak', 'slide'));
+    expect(state.status).toBe('failed');
+    expect(state.last_error).toBe('slide_export_missing');
+    // create + add + first done-claim + refusal repair + second done-claim.
+    expect(seen.length).toBeGreaterThanOrEqual(4);
+    const recoveries = store.replay('gate-refuse').filter((event) => event.type === 'RECOVERY_STARTED');
+    expect(recoveries).toHaveLength(1);
+    expect(JSON.stringify(recoveries[0]?.payload ?? {})).toContain('slide_export_missing');
+    expect(pptxFiles(root)).toHaveLength(0);
+  });
+
+  test('after the repair turn, exporting lets the next done-claim succeed', async () => {
+    const root = temp('daedalus-slide-gate-repair-');
+    const provider = scriptedProvider([
+      { tool: 'create_deck', args: { title: 'Keamanan Anak' } },
+      { tool: 'add_slide', args: { layout: 'bullets', content: { title: 'Poin', points: ['satu'] } } },
+      { text: 'done: deck selesai' },
+      { tool: 'export_deck', args: {} },
+    ]);
+    const { loop } = makeLoop(root, provider);
+    const state = await loop.run(spec(root, 'gate-repair', 'buatkan deck presentasi tentang keamanan anak', 'slide'));
+    expect(state.status).toBe('done');
+    expect(pptxFiles(root)).toHaveLength(1);
+  });
+
+  test('a read-only slide question is never export-gated', async () => {
+    const root = temp('daedalus-slide-gate-question-');
+    mkdirSync(join(root, 'deck'), { recursive: true });
+    writeFileSync(join(root, 'deck', 'deck.json'), '{"slides":[{},{}]}\n');
+    const provider = scriptedProvider([{ tool: 'read_file', args: { path: 'deck/deck.json' } }]);
+    const { loop, store } = makeLoop(root, provider);
+    const state = await loop.run(spec(root, 'gate-question', 'ada berapa slide di deck workspace ini?', 'slide', ['pertanyaan terjawab']));
+    // The assertion is the gate's absence: no export repair is started and
+    // the task never fails for the slide reason. (How question-shaped
+    // goals fare as tasks is a separate harness concern.)
+    expect(state.last_error).not.toBe('slide_export_missing');
+    expect(store.replay('gate-question').filter((event) => event.type === 'RECOVERY_STARTED')).toEqual([]);
+  });
+
+  test('a coding task doing the same work is never slide-gated', async () => {
+    const root = temp('daedalus-slide-gate-coding-');
+    const provider = scriptedProvider([
+      { tool: 'write_file', args: { path: 'catatan.txt', content: 'halo\n' } },
+    ]);
+    const { loop } = makeLoop(root, provider);
+    const state = await loop.run(spec(root, 'gate-coding', 'buatkan file catatan', undefined, ['file catatan dibuat']));
+    expect(state.status).toBe('done');
+    expect(state.last_error).toBeUndefined();
+  });
+});

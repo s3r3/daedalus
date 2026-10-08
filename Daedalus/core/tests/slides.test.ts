@@ -131,6 +131,20 @@ describe('slide tools end-to-end', () => {
 });
 
 describe('slide tool mode classification', () => {
+  test('deck-writing tool descriptions carry the nested content schemas the validator enforces', () => {
+    const add = SLIDE_TOOLS.find((tool) => tool.name === 'add_slide');
+    const update = SLIDE_TOOLS.find((tool) => tool.name === 'update_slide');
+    for (const tool of [add, update]) {
+      expect(tool?.description).toContain('diagram-flow');
+      expect(tool?.description).toContain('steps*');
+      expect(tool?.description).toContain('title*');
+      expect(tool?.description).toContain('timeline');
+      expect(tool?.description).toContain('when*');
+      expect(tool?.description).toContain('comparison');
+      expect(tool?.description).toContain('points*');
+    }
+  });
+
   test('read/mutating/executing classes and visibility', () => {
     expect(classifyToolName('read_deck')).toBe('read');
     expect(classifyToolName('validate_deck')).toBe('read');
