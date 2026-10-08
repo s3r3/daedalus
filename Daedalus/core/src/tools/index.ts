@@ -23,10 +23,18 @@ export { createGrepTool, globTool, grepTool, parseRipgrepJson, ripgrepArgs, type
 export {
   createFetchUrlTool,
   fetchUrlTool,
+  createWebSearchTool,
+  webSearchTool,
+  parseDuckDuckGoHtml,
+  webSearchBackend,
   FETCH_URL_MAX_BODY_CHARS,
   FETCH_URL_MAX_CHARS,
   FETCH_URL_MAX_REDIRECTS,
   FETCH_URL_TIMEOUT_MS,
+  WEB_SEARCH_DEFAULT_COUNT,
+  WEB_SEARCH_MAX_COUNT,
+  WEB_SEARCH_MAX_QUERIES,
+  WEB_SEARCH_TIMEOUT_MS,
   capFetchedText,
   decodeHtmlEntities,
   htmlToText,
@@ -34,6 +42,9 @@ export {
   validateFetchTarget,
   type FetchUrlImpl,
   type FetchUrlResponse,
+  type WebSearchBackend,
+  type WebSearchFetchImpl,
+  type WebSearchResult,
 } from './web/index.ts';
 export { viewImageTool, VIEW_IMAGE_MAX_BYTES, sniffImageMime } from './media/index.ts';
 export {
@@ -64,12 +75,12 @@ export { ToolRegistry, MAX_TOOL_CALL_TIMEOUT_MS, clampCallTimeoutMs, type ToolDe
 import { createDirTool, editFileTool, listDirTool, readFileTool, writeFileTool } from './filesystem/index.ts';
 import { commandKillTool, commandStatusTool, gitDiffTool, gitStatusTool, runCommandTool } from './terminal/index.ts';
 import { globTool, grepTool } from './search/index.ts';
-import { fetchUrlTool } from './web/index.ts';
+import { fetchUrlTool, webSearchTool } from './web/index.ts';
 import { viewImageTool } from './media/index.ts';
 import { downloadFileTool, searchImagesTool } from './images/index.ts';
 import { ToolRegistry, type ToolDefinition } from './registry.ts';
 
-export const DEFAULT_TOOLS: ToolDefinition[] = [readFileTool, writeFileTool, editFileTool, createDirTool, listDirTool, grepTool, globTool, runCommandTool, commandStatusTool, commandKillTool, gitDiffTool, gitStatusTool, fetchUrlTool, viewImageTool, searchImagesTool, downloadFileTool];
+export const DEFAULT_TOOLS: ToolDefinition[] = [readFileTool, writeFileTool, editFileTool, createDirTool, listDirTool, grepTool, globTool, runCommandTool, commandStatusTool, commandKillTool, gitDiffTool, gitStatusTool, fetchUrlTool, webSearchTool, viewImageTool, searchImagesTool, downloadFileTool];
 
 export function createDefaultRegistry(): ToolRegistry {
   const registry = new ToolRegistry();

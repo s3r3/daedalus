@@ -200,6 +200,45 @@ describe('LSP automatic TypeScript server', () => {
   });
 });
 
+describe('web_search', () => {
+  test('parses DuckDuckGo HTML results (uddg unwrap, tags stripped)', async () => {
+    const { parseDuckDuckGoHtml: parse } = await import('../src/index.ts');
+    const html = [
+      '<a rel="nofollow" class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fvite.dev%2Fguide%2F&amp;rut=abc">Vite <b>Guide</b></a>',
+      '<a class="result__snippet" href="//duckduckgo.com/l/?x">Getting started with <b>Vite</b> &amp; templates.</a>',
+    ].join('\n');
+    const results = parse(html);
+    expect(results).toHaveLength(1);
+    expect(results[0]!.url).toBe('https://vite.dev/guide/');
+    expect(results[0]!.title).toBe('Vite Guide');
+    expect(results[0]!.snippet).toContain('Getting started with Vite & templates.');
+  });
+
+  test('the tool returns numbered results from a stubbed backend', async () => {
+    const { createWebSearchTool: makeTool } = await import('../src/index.ts');
+    const tool = makeTool({
+      env: {},
+      fetchImpl: async () => ({
+        status: 200,
+        headers: { get: (): string | null => null },
+        text: async () => '<a class="result__a" href="https://example.com/docs">Docs</a><a class="result__snippet">read me</a>',
+      }),
+    });
+    const result = await tool.execute({ query: 'how to thing' }, ctx('/tmp'));
+    expect(result.status).toBe('ok');
+    expect(result.output).toContain('via duckduckgo');
+    expect(result.output).toContain('1. Docs');
+    expect(result.output).toContain('https://example.com/docs');
+  });
+
+  test('requires a query', async () => {
+    const { createWebSearchTool: makeTool } = await import('../src/index.ts');
+    const tool = makeTool({ env: {} });
+    const result = await tool.execute({}, ctx('/tmp'));
+    expect(result.status).toBe('error');
+  });
+});
+
 describe('edit_search_replace whitespace tolerance', () => {
   test('a block whose indentation drifted applies via the tolerant fallback', async () => {
     const root = workspace();
