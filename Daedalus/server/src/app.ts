@@ -779,6 +779,32 @@ function allTaskIds(ctx: AppContext): string[] {
   return [...ids];
 }
 
+/**
+ * The task that produced `.daedalus/plans/<slug>/`: the one whose event
+ * log most recently recorded a FILE_CHANGED inside that folder. Resolved
+ * from the store (never from goal text), so a plan execution launched
+ * long after the planning session still carries its plan identity.
+ */
+function planProducerTaskId(ctx: AppContext, slug: string): string | null {
+  const prefix = `.daedalus/plans/${slug}/`;
+  let producer: string | null = null;
+  let latest = "";
+  for (const store of taskStores(ctx)) {
+    for (const taskId of store.listTasks()) {
+      for (const event of store.replay(taskId)) {
+        if (event.type !== "FILE_CHANGED") continue;
+        const path = (event.payload as { path?: unknown }).path;
+        if (typeof path !== "string" || !path.replace(/\\/g, "/").startsWith(prefix)) continue;
+        if (producer === null || event.ts >= latest) {
+          producer = taskId;
+          latest = event.ts;
+        }
+      }
+    }
+  }
+  return producer;
+}
+
 function summarizeFrom(ctx: AppContext, lookup: TaskLookup, taskId: string): Record<string, unknown> {
   const { store, state } = lookup;
   const spec = (state.spec && typeof state.spec === "object" ? state.spec : state) as Record<string, unknown>;
@@ -1793,7 +1819,14 @@ export function createApp(ctx: AppContext) {
     if (method === "GET" && url.pathname === "/workspace/plans") {
       try {
         const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
-        sendJson(res, 200, { root, plans: listPlanDocuments(root) });
+        // Resolve each plan's producing task from the event log (the task
+        // whose FILE_CHANGED events wrote the slug's documents, latest
+        // write wins) so a chip execution can carry plan_task_id even when
+        // the producing task is not on screen. Without it the follow-up
+        // arrives as a bare creation-shaped goal and the pre-build
+        // question gate mistakes an approved spec for a fresh brief.
+        const plans = listPlanDocuments(root).map((plan) => ({ ...plan, taskId: planProducerTaskId(ctx, plan.slug) }));
+        sendJson(res, 200, { root, plans });
       } catch (error) {
         sendJson(res, errorStatus(error), { error: errorMessage(error) });
       }

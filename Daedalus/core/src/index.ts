@@ -461,6 +461,7 @@ export {
   extractTargetDir,
   flutterProjectName,
   formatToolchainSummary,
+  planDocumentFolder,
   gatherWorkspaceContext,
   missingToolchains,
   normalizePromptFamilySetting,

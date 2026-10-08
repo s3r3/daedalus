@@ -176,6 +176,13 @@ export type WorkspacePlan = {
   title: string | null
   /** Newest document mtime (ISO), or null when unreadable. */
   updatedAt: string | null
+  /**
+   * The plan-mode task that produced the documents, resolved by the
+   * server from the task store; null when unknown. When present, an
+   * execution carries plan_task_id even if the producing task is not on
+   * screen, so the approved plan is never re-gated as a fresh brief.
+   */
+  taskId: string | null
 }
 export type WorkspacePlans = { root: string; plans: WorkspacePlan[] }
 

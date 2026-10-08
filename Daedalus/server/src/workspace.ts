@@ -154,6 +154,14 @@ export type PlanDocumentGroup = {
   title: string | null;
   /** Newest document mtime, ISO; null when unreadable. */
   updatedAt: string | null;
+  /**
+   * The plan-mode task that produced these documents, resolved by the
+   * server from the task store (null when unknown — e.g. documents copied
+   * in by hand). Lets a plan execution carry plan_task_id even when the
+   * producing task is not on screen, so the follow-up is never mistaken
+   * for a fresh underspecified brief.
+   */
+  taskId: string | null;
 };
 
 export const MAX_PLAN_DOCUMENTS = 50;
@@ -216,6 +224,7 @@ export function listPlanDocuments(root: string): PlanDocumentGroup[] {
       documents: ordered.map((name) => `.daedalus/plans/${slug}/${name}`),
       title,
       updatedAt: updatedAtMs > 0 ? new Date(updatedAtMs).toISOString() : null,
+      taskId: null,
     });
   }
   groups.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? "") || a.slug.localeCompare(b.slug));

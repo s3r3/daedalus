@@ -54,12 +54,16 @@ function twoPlans() {
       title: 'Rencana Website Sekolah',
       documents: ['.daedalus/plans/website-sekolah/plan.md', '.daedalus/plans/website-sekolah/PRD.md'],
       updatedAt: '2026-10-07T00:00:00.000Z',
+      taskId: null,
     },
     {
       slug: 'blog-pribadi',
       title: 'Blog Pribadi',
       documents: ['.daedalus/plans/blog-pribadi/plan.md'],
       updatedAt: '2026-10-06T00:00:00.000Z',
+      // The server resolved the producing task from the event log, so
+      // even this earlier-session plan executes with plan identity.
+      taskId: 'task-plan-blog',
     },
   ]
 }
@@ -156,7 +160,7 @@ describe('PlanChipsBar', () => {
     expect(useDaedalusStore.getState().composer.mode).toBe('auto')
   })
 
-  test('Execute on a plan from an earlier session launches from its document path alone', async () => {
+  test('Execute on a plan from an earlier session carries the server-resolved plan_task_id', async () => {
     seed()
     render(<PlanChipsBar />)
     await waitFor(() => expect(screen.getAllByTestId('plan-chip')).toHaveLength(2))
@@ -166,6 +170,9 @@ describe('PlanChipsBar', () => {
     const input = createTask.mock.calls[0]?.[0] as Record<string, unknown>
     expect(input.goal).toBe('Execute the approved plan in .daedalus/plans/blog-pribadi/plan.md')
     expect(input.mode).toBe('auto')
-    expect('plan_task_id' in input).toBe(false)
+    // Resolved by the server from the task store (GET /workspace/plans
+    // taskId): the follow-up is an approved-plan execution, so core pins
+    // the documents and never re-gates it as a fresh underspecified brief.
+    expect(input.plan_task_id).toBe('task-plan-blog')
   })
 })

@@ -1040,6 +1040,15 @@ export type TaskTargetInput = {
   goal: string;
   doneCriteria?: string[];
   constraints?: string[];
+  /**
+   * The approved plan's OWN texts (step intents + pinned document bodies),
+   * set only for plan-execution follow-ups. A folder named here outranks
+   * goal/session constraint text, and qualifies even before it exists on
+   * disk: the approved plan is the declaration, creating the folder is the
+   * task. Without this, a follow-up inherits whatever folder an earlier
+   * task in the same chat happened to name (chat-context bleed).
+   */
+  planSources?: string[];
   /** Plan step intents, weakest source (execution narration, not user text). */
   planSteps?: string[];
   workspaceRoot: string;
@@ -1058,6 +1067,24 @@ export function workspaceRelativePath(workspaceRoot: string, file: string): stri
   if (rel === '..' || rel.startsWith('../')) return undefined;
   if (rel.startsWith('./')) rel = rel.slice(2);
   return rel;
+}
+
+/**
+ * The top-level folder a plan document's file references point at
+ * ("Files: ayid/index.html" → "ayid"), or undefined when the text names no
+ * file path. Plan documents declare work through file lists more often
+ * than through "folder X" phrasing, so this reads the first path-like
+ * token's first segment; `.daedalus` bookkeeping paths never qualify.
+ */
+export function planDocumentFolder(text: string): string | undefined {
+  for (const match of text.matchAll(/(?:^|[\s(`"'>|=:-])([A-Za-z0-9_-]+)\/([A-Za-z0-9_./-]+)/g)) {
+    const segment = match[1];
+    const rest = match[2] ?? '';
+    if (!segment || segment === 'daedalus') continue;
+    if (!rest.includes('.') && !rest.includes('/')) continue;
+    return segment;
+  }
+  return undefined;
 }
 
 /** True when a workspace-relative path is the target dir or lives beneath it. */
@@ -1085,6 +1112,17 @@ export function deriveTaskTargetDir(input: TaskTargetInput): string | undefined 
   const creation = detectCreationGoal(input.goal, input.doneCriteria ?? []);
   if (!creation.creation) return undefined;
   if (creation.scaffold) return creation.scaffold.targetDir;
+  // Plan-execution follow-ups anchor to the PLAN's own declaration first:
+  // its step intents and document bodies (architecture file lists) name the
+  // folder the user approved, ahead of any folder leftover chat-session
+  // constraints happen to mention, and the name qualifies on the plan's
+  // authority alone — the folder need not exist yet, creating it is the
+  // approved work. Other tasks keep the conservative rule below (named
+  // folder must already exist or be one this task already changed).
+  for (const source of input.planSources ?? []) {
+    const candidate = explicitTargetFolder(source) ?? planDocumentFolder(source);
+    if (candidate && !candidate.startsWith('.daedalus')) return candidate;
+  }
   const changed = (input.changedPaths ?? [])
     .map((path) => workspaceRelativePath(input.workspaceRoot, path))
     .filter((rel): rel is string => rel !== undefined);

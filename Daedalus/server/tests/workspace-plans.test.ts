@@ -87,4 +87,27 @@ describe('GET /workspace/plans', () => {
       rmSync(outside, { recursive: true, force: true })
     }
   })
+
+  test('resolves the producing task from the event log so executions can carry plan_task_id', async () => {
+    // Seed the store BEFORE listen(): one plan task wrote the slug's
+    // documents (FILE_CHANGED events), an unrelated task did not.
+    tmp = mkdtempSync(join(tmpdir(), 'daedalus-plans-state-'))
+    workspace = makeWorkspace()
+    const store = new TaskStore(join(tmp, 'state'))
+    const ev = (taskId: string, type: string, payload: unknown) =>
+      ({ task_id: taskId, ts: '2026-10-07T00:00:00.000Z', type, payload }) as never
+    store.append('task-plan-1', ev('task-plan-1', 'FILE_CHANGED', { path: '.daedalus/plans/website-sekolah/plan.md' }))
+    store.append('task-plan-1', ev('task-plan-1', 'FILE_CHANGED', { path: '.daedalus/plans/website-sekolah/PRD.md' }))
+    store.append('task-other', ev('task-other', 'FILE_CHANGED', { path: 'src/index.ts' }))
+    const ctx = createContext({ store, bus: new EventBus(), cwd: workspace })
+    server = createApp(ctx)
+    channel = attachWebSocket(ctx, server)
+    await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+    const res = await fetch(new URL(`/workspace/plans?root=${encodeURIComponent(workspace)}`, `http://127.0.0.1:${port}`))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { plans: Array<{ slug: string; taskId: string | null }> }
+    expect(body.plans).toHaveLength(1)
+    expect(body.plans[0]!.taskId).toBe('task-plan-1')
+  })
 })

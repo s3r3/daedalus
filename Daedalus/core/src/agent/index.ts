@@ -21,6 +21,7 @@ export {
   formatToolchainSummary,
   missingToolchains,
   pathInsideTarget,
+  planDocumentFolder,
   probeToolchains,
   questionGateAppliesToGoal,
   renderDatabasePlaybook,

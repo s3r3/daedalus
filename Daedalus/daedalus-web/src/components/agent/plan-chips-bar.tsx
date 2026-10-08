@@ -62,10 +62,13 @@ export function PlanChipsBar() {
 
   if (!workspaceRoot || visible.length === 0) return null
 
-  // When the plan on screen is one the task behind the chat produced, the
-  // follow-up carries plan_task_id exactly like ExecutePlanBar; a plan
-  // drafted in an earlier session has no producing task on screen, so it
-  // launches from its document path alone.
+  // The follow-up carries plan_task_id so core pins the approved
+  // documents instead of re-deriving (or re-gating) the brief. The
+  // producing task is known three ways, best first: the server resolved
+  // it for this plan (GET /workspace/plans taskId — works for plans from
+  // earlier sessions too), or the plan on screen is one the task behind
+  // the chat just produced. Only a plan with no resolvable producer
+  // (documents copied in by hand) launches from its document path alone.
   const slugOf = (path: string): string | null => {
     const match = /^\.daedalus\/plans\/([^/]+)\//.exec(path)
     return match ? match[1]! : null
@@ -87,10 +90,11 @@ export function PlanChipsBar() {
     setFailure(null)
     try {
       const planDoc = activePlan.documents.find((path) => path.toLowerCase().endsWith('plan.md')) ?? activePlan.documents[0]
+      const planTaskId = activePlan.taskId ?? (onScreenSlug && taskId ? taskId : undefined)
       await executePlanDocument({
         workspaceRoot,
         planDoc: planDoc!,
-        ...(onScreenSlug && taskId ? { planTaskId: taskId } : {}),
+        ...(planTaskId ? { planTaskId } : {}),
       })
     } catch (error) {
       setFailure(error instanceof Error ? error.message : String(error))

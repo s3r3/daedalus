@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import type { EventBus } from '../events.ts';
 import { emitEvent } from '../events.ts';
 import type { TaskStore } from '../persistence.ts';
@@ -19,7 +20,7 @@ import { resolveToolOutputLimits, shapeToolOutput, writeSpillFile, type ToolOutp
 import { compressCommandOutput, type CommandOutputCompression } from './output-compression.ts';
 import { evaluateStopConditions, noProgressCondition } from './stop.ts';
 import { ModeController, classifyToolName, isToolCallDenied, isToolVisible, modeDenialMessage } from '../interaction/modes.ts';
-import { hasPlanDocument, planDecisionsFromEvents, planDocumentRepairDirective } from '../interaction/plans.ts';
+import { PLAN_DOCUMENT_FILES, hasPlanDocument, isPlanDocumentChange, planDecisionsFromEvents, planDocumentRepairDirective } from '../interaction/plans.ts';
 import { ASK_USER_TOOL_NAME } from '../interaction/questions.ts';
 import { SPAWN_SUBAGENT_TOOL_NAME } from '../interaction/subagents.ts';
 import { creationCompletionRefusal, deriveTaskTargetDir, detectCreationGoal, pathInsideTarget, questionGateAppliesToGoal, scaffoldMarkerPresent, workspaceRelativePath, type CreationGoal } from './scaffold.ts';
@@ -1648,12 +1649,47 @@ export class AgentLoop {
       goal: state.goal,
       doneCriteria: state.done_criteria,
       constraints: state.constraints,
+      // An execute-the-plan follow-up anchors to the approved plan's own
+      // declaration (step intents + pinned document bodies), never to a
+      // folder an earlier task in the same chat session happened to name —
+      // the pinned documents and steps outrank the leftover session text
+      // riding in constraints (see deriveTaskTargetDir planSources).
+      ...(state.plan_task_id ? { planSources: this.#planSourcesFor(state) } : {}),
       planSteps: state.steps.map((step) => step.intent),
       workspaceRoot: state.repo_path,
       changedPaths: [...(this.#changedFiles.get(state.id) ?? [])],
     });
     if (derived) this.#targets.set(state.id, derived);
     return derived;
+  }
+
+  /**
+   * The approved plan's own texts for a follow-up task: its step intents
+   * first (the tasks.md step-lock), then the pinned document bodies read
+   * back from the workspace (architecture file lists name the target
+   * folder most explicitly). The documents are located through the plan
+   * task's own event log — the same replay the runtime pins from — so the
+   * anchor derives from the plan artifact, never from goal prose.
+   */
+  #planSourcesFor(state: TaskState): string[] {
+    const sources = state.steps.map((step) => step.intent);
+    if (!state.plan_task_id) return sources;
+    const documents = new Set<string>();
+    for (const event of this.#store.replay(state.plan_task_id)) {
+      if (event.type !== 'FILE_CHANGED') continue;
+      const path = (event.payload as { path?: unknown }).path;
+      if (isPlanDocumentChange(path)) documents.add(path.replace(/\\/g, '/'));
+    }
+    const rank = (path: string): number => PLAN_DOCUMENT_FILES.indexOf(path.split('/').at(-1) as typeof PLAN_DOCUMENT_FILES[number]);
+    for (const path of [...documents].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b))) {
+      try {
+        sources.push(readFileSync(join(state.repo_path, path), 'utf8').slice(0, 6_000));
+      } catch {
+        // A document that vanished between planning and execution simply
+        // contributes no anchor text; the step intents still can.
+      }
+    }
+    return sources;
   }
 
   /**
@@ -1677,9 +1713,14 @@ export class AgentLoop {
     let applies = false;
     if (this.#questionGate) {
       const mode = state.mode ?? this.#modeController.mode;
-      applies = (mode === 'auto' || mode === 'manual')
+      // An approved-plan follow-up (spec.plan_task_id) is NEVER gated: the
+      // plan interview already produced the spec the user approved, and
+      // the pinned documents are that spec — they are never re-classified
+      // as an underspecified raw brief (the classifier only ever reads
+      // goal + done_criteria, never the pinned constraint text).
+      applies = !state.plan_task_id
+        && (mode === 'auto' || mode === 'manual')
         && !state.parent_task_id
-        && !state.plan_task_id
         && questionGateAppliesToGoal(state.goal, state.done_criteria);
     }
     this.#questionGates.set(state.id, applies);
