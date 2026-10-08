@@ -46,7 +46,7 @@ export {
   type WebSearchFetchImpl,
   type WebSearchResult,
 } from './web/index.ts';
-export { viewImageTool, VIEW_IMAGE_MAX_BYTES, sniffImageMime } from './media/index.ts';
+export { createScreenshotTool, screenshotTool, resolveScreenshotBrowser, screenshotChromeArgs, SCREENSHOT_DEFAULT_HEIGHT, SCREENSHOT_DEFAULT_WIDTH, SCREENSHOT_TIMEOUT_MS, viewImageTool, VIEW_IMAGE_MAX_BYTES, sniffImageMime, type ScreenshotRunner } from './media/index.ts';
 export {
   createDownloadFileTool,
   createSearchImagesTool,
@@ -76,11 +76,11 @@ import { createDirTool, editFileTool, listDirTool, readFileTool, writeFileTool }
 import { commandKillTool, commandStatusTool, gitDiffTool, gitStatusTool, runCommandTool } from './terminal/index.ts';
 import { globTool, grepTool } from './search/index.ts';
 import { fetchUrlTool, webSearchTool } from './web/index.ts';
-import { viewImageTool } from './media/index.ts';
+import { screenshotTool, viewImageTool } from './media/index.ts';
 import { downloadFileTool, searchImagesTool } from './images/index.ts';
 import { ToolRegistry, type ToolDefinition } from './registry.ts';
 
-export const DEFAULT_TOOLS: ToolDefinition[] = [readFileTool, writeFileTool, editFileTool, createDirTool, listDirTool, grepTool, globTool, runCommandTool, commandStatusTool, commandKillTool, gitDiffTool, gitStatusTool, fetchUrlTool, webSearchTool, viewImageTool, searchImagesTool, downloadFileTool];
+export const DEFAULT_TOOLS: ToolDefinition[] = [readFileTool, writeFileTool, editFileTool, createDirTool, listDirTool, grepTool, globTool, runCommandTool, commandStatusTool, commandKillTool, gitDiffTool, gitStatusTool, fetchUrlTool, webSearchTool, viewImageTool, screenshotTool, searchImagesTool, downloadFileTool];
 
 export function createDefaultRegistry(): ToolRegistry {
   const registry = new ToolRegistry();

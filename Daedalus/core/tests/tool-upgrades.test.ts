@@ -200,6 +200,56 @@ describe('LSP automatic TypeScript server', () => {
   });
 });
 
+describe('screenshot tool', () => {
+  // 1x1 transparent PNG.
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+
+  test('captures through the injected runner and rides the view_image carriage', async () => {
+    const { createScreenshotTool } = await import('../src/index.ts');
+    const { writeFileSync: writeSync } = await import('node:fs');
+    const root = workspace();
+    const tool = createScreenshotTool({
+      resolveBrowser: async () => 'fake-chrome',
+      now: () => 123,
+      runner: async (_binary, args) => {
+        const out = args.find((a) => a.startsWith('--screenshot='))!.slice('--screenshot='.length);
+        writeSync(out, PNG);
+        return { code: 0, stderr: '' };
+      },
+    });
+    const result = await tool.execute({ url: 'http://localhost:5173/' }, ctx(root));
+    expect(result.status).toBe('ok');
+    expect(result.output).toContain('.daedalus/screenshots/');
+    expect(String(result.meta.image_data_url)).toMatch(/^data:image\/png;base64,/);
+    expect(result.meta.image_path).toContain('localhost-');
+  });
+
+  test('no browser is an honest error with the fix named', async () => {
+    const { createScreenshotTool } = await import('../src/index.ts');
+    const tool = createScreenshotTool({ resolveBrowser: async () => undefined, runner: async () => ({ code: 0, stderr: '' }) });
+    const result = await tool.execute({ url: 'http://localhost:5173/' }, ctx(workspace()));
+    expect(result.status).toBe('error');
+    expect(result.output).toContain('DAEDALUS_CHROME_BIN');
+    expect(result.output).toContain('do not claim it renders correctly');
+  });
+
+  test('refuses non-http URLs and vision-less models', async () => {
+    const { createScreenshotTool } = await import('../src/index.ts');
+    const tool = createScreenshotTool({ resolveBrowser: async () => 'fake-chrome', runner: async () => ({ code: 0, stderr: '' }) });
+    const fileResult = await tool.execute({ url: 'file:///etc/passwd' }, ctx(workspace()));
+    expect(fileResult.status).toBe('error');
+    const blind = await tool.execute({ url: 'http://localhost:5173/' }, { workspaceRoot: workspace(), visionEnabled: false });
+    expect(blind.status).toBe('denied');
+  });
+
+  test('chrome args carry the window size and screenshot target', async () => {
+    const { screenshotChromeArgs } = await import('../src/index.ts');
+    const args = screenshotChromeArgs('http://localhost:5173/', '/tmp/x.png', 1280, 800);
+    expect(args).toContain('--window-size=1280,800');
+    expect(args).toContain('--screenshot=/tmp/x.png');
+  });
+});
+
 describe('web_search', () => {
   test('parses DuckDuckGo HTML results (uddg unwrap, tags stripped)', async () => {
     const { parseDuckDuckGoHtml: parse } = await import('../src/index.ts');
