@@ -23,6 +23,7 @@ type JsonSchemaObject = {
   type?: unknown;
   properties?: Record<string, { type?: unknown } | undefined>;
   required?: unknown;
+  anyOf?: unknown;
 };
 
 function receivedKind(value: unknown): string {
@@ -65,6 +66,19 @@ export function validateToolCallArguments(
   for (const field of required) {
     if (record[field] === undefined) {
       return { ok: false, field, reason: `tool ${toolName} is missing required parameter <${field}>` };
+    }
+  }
+  // anyOf alternatives of required-groups ("path OR paths"): at least
+  // one alternative must be fully present. This keeps the gate honest
+  // for tools whose shape is a choice between parameter sets instead of
+  // letting an empty call fall through to a handler error.
+  if (Array.isArray(shape.anyOf)) {
+    const alternatives = shape.anyOf
+      .map((alt) => (alt && typeof alt === 'object' && Array.isArray((alt as JsonSchemaObject).required) ? ((alt as JsonSchemaObject).required as unknown[]).filter((f): f is string => typeof f === 'string') : []))
+      .filter((fields) => fields.length > 0);
+    if (alternatives.length > 0 && !alternatives.some((fields) => fields.every((field) => record[field] !== undefined))) {
+      const names = alternatives.map((fields) => fields.join(' + ')).join(' OR ');
+      return { ok: false, field: alternatives[0]?.[0], reason: `tool ${toolName} is missing required parameters: provide ${names}` };
     }
   }
   const properties = shape.properties ?? {};

@@ -7,6 +7,10 @@ export {
 export {
   LspManager,
   loadLspConfig,
+  withDefaultLspServers,
+  defaultTypescriptServer,
+  isTypescriptWorkspace,
+  TYPESCRIPT_LSP_EXTENSIONS,
   LSP_CONFIG_RELATIVE_PATH,
   type LspServerStatus,
 } from './manager.ts';
