@@ -20,6 +20,10 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { changedLineCounts, diffLines, renderPatch } from './tools/filesystem/diff.ts';
 import { ApprovalBroker, ExecutionHarness, commandLineOf, resolveApprovalTimeoutMs, type ApprovalDecision, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
 import { CommandValidator, type ValidationCommand, type Validator } from './validation/index.ts';
+import { DeckValidator } from './slides/deck-validator.ts';
+
+/** Slide tasks validate their deck, never the workspace's coding checks. */
+const deckValidator = new DeckValidator();
 import { createProviderFromSettings } from './providers/index.ts';
 import { OpenAICompatProvider } from './providers/llm/openai-compat.ts';
 import { ModelPoolProvider, asModelController, normalizeModelList } from './providers/llm/model-pool.ts';
@@ -984,7 +988,7 @@ export class TaskRunner {
         pins,
         ...(scaffoldPlaybook ? { scaffoldPlaybook } : {}),
       }),
-      validator: this.validator,
+      validator: options.domain === 'slide' ? deckValidator : this.validator,
       tools: toolSchemas,
       stopPolicy: { max_iterations: options.maxIterations ?? this.#options.maxIterations ?? 25, max_errors: options.maxErrors ?? 5 },
       chatOptions: this.#chatOptions(),
@@ -1490,7 +1494,7 @@ export class TaskRunner {
       approvalMemory: this.#options.approvalMemory,
       approvalTimeoutMs: this.#options.approvalTimeoutMs,
       harness: this.#options.harness,
-      validator: this.validator,
+      validator: options.domain === 'slide' ? deckValidator : this.validator,
       approvalPolicy: this.#options.approvalPolicy,
       autoApprove: this.#options.autoApprove,
       thinking: this.#options.thinking,

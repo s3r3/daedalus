@@ -77,6 +77,7 @@ export const SLIDE_DOMAIN_PROMPT = [
   'Use ONLY the built-in deck tools (create_deck, read_deck, add_slide, update_slide, move_slide, delete_slide, set_deck_theme, validate_deck, export_deck); never use an external presentation service or API, and never load a presentation-maker skill.',
   "Workflow: (1) OUTLINE FIRST — call create_deck, then add_slide once per outline item (title + layout) so the complete outline is visible before any content is filled in; prefer visual layouts (diagram, chart, icon-grid, stats, timeline, comparison) over plain bullet lists. (2) Fill in each slide's content with update_slide. (3) Call validate_deck and fix every error it reports. (4) Call export_deck to produce the .pptx file.",
   'Do not write deck JSON by hand with write_file, and do not report done before export_deck succeeds.',
+  'The deliverable is the exported .pptx file, not a document: never write slide content as .md/.txt files, and never build or convert slides with run_command scripts (no python-pptx, no markdown-to-PPTX conversion). If deck/deck.json already exists in this workspace, continue that deck with read_deck instead of starting a document.',
 ].join('\n');
 
 /**
