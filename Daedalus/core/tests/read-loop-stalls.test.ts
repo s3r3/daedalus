@@ -675,3 +675,83 @@ describe('search_images next-step template (fix 4)', () => {
     expect(result.output).not.toContain('Suggested sequence');
   });
 });
+
+describe('hard-pause vs token budget ordering (live bug 2026-10-07)', () => {
+  /**
+   * Five identical reads where the 5th reply's usage crosses a small
+   * budget in the SAME step that fires the hard-pause: usage accounting
+   * records input_token_budget before the tool calls are processed, so
+   * the card opens with the budget already blown. The task must wait
+   * for the answer — under the bug it failed behind the card.
+   */
+  function blownBudgetLoop() {
+    const replies: Reply[] = [
+      ...Array.from({ length: 4 }, (_, i) => ({ toolCalls: [readTool(`c${i}`, 'same.txt')], usage: { prompt_tokens: 10, completion_tokens: 0, total_tokens: 10 } })),
+      { toolCalls: [readTool('c4', 'same.txt')], usage: { prompt_tokens: 500, completion_tokens: 0, total_tokens: 500 } },
+    ];
+    const home = temp('daedalus-pause-budget-home-');
+    const ws = temp('daedalus-pause-budget-ws-');
+    const { provider } = scriptedProvider(replies);
+    const store = new TaskStore(home);
+    let executions = 0;
+    let resolvePause: ((decision: 'continue' | 'stop') => void) | undefined;
+    let signalAsked: (() => void) | undefined;
+    const asked = new Promise<void>((resolve) => { signalAsked = resolve; });
+    const loop = new AgentLoop({
+      provider,
+      bus: new EventBus(),
+      store,
+      inputTokenBudget: 100,
+      executeTool: async (call) => {
+        executions += 1;
+        return { call_id: call.id, status: 'ok', output: 'file body', truncated: false, meta: { mutating: false } };
+      },
+      stopPolicy: { max_iterations: 30, max_errors: 10 },
+      onLoopHardPause: () => new Promise<'continue' | 'stop'>((resolve) => {
+        resolvePause = resolve;
+        signalAsked?.();
+      }),
+    });
+    return { loop, store, ws, asked, executions: () => executions, answer: (decision: 'continue' | 'stop') => resolvePause?.(decision) };
+  }
+
+  test('budget crossed at the 5th repeat: the task waits on the pending question, then Continue ends it with input_token_budget', async () => {
+    const { loop, store, ws, asked, executions, answer } = blownBudgetLoop();
+    let settled = false;
+    const runPromise = loop
+      .run({ id: 'pause-budget', goal: 'read the file', constraints: [], done_criteria: ['result reported'], repo_path: ws, status: 'draft' })
+      .then((state) => { settled = true; return state; });
+
+    // The hard-pause question is pending — the blown budget must NOT
+    // have ended the task underneath it.
+    await asked;
+    expect(settled).toBe(false);
+    expect(store.replay('pause-budget').some((event) => event.type === 'TASK_COMPLETED')).toBe(false);
+
+    answer('continue');
+    const state = await runPromise;
+    expect(state.status).toBe('failed');
+    expect(state.last_error).toBe('input_token_budget');
+    expect(state.last_observation).toContain('input token budget reached');
+    // Repeats 1–3 executed, the 4th was suppressed, the 5th executed
+    // after the user's continue re-armed it.
+    expect(executions()).toBe(4);
+    const events = store.replay('pause-budget');
+    const hardPauseAt = events.findIndex((event) => event.type === 'LOOP_WARNING' && (event.payload as { kind?: string }).kind === 'hard_pause');
+    const completedAt = events.findIndex((event) => event.type === 'TASK_COMPLETED');
+    expect(hardPauseAt).toBeGreaterThanOrEqual(0);
+    expect(completedAt).toBeGreaterThan(hardPauseAt);
+  });
+
+  test('same setup, Stop ends the task as loop_hard_pause, not the queued budget stop', async () => {
+    const { loop, store, ws, asked, executions, answer } = blownBudgetLoop();
+    const runPromise = loop.run({ id: 'pause-stop', goal: 'read the file', constraints: [], done_criteria: ['result reported'], repo_path: ws, status: 'draft' });
+    await asked;
+    answer('stop');
+    const state = await runPromise;
+    expect(state.status).toBe('failed');
+    expect(state.last_error).toBe('loop_hard_pause');
+    expect(executions()).toBe(3);
+    expect(store.replay('pause-stop').some((event) => event.type === 'TASK_COMPLETED')).toBe(true);
+  });
+});

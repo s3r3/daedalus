@@ -50,8 +50,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`
     try {
-      const body = (await response.json()) as { error?: string }
-      if (body.error) message = body.error
+      const body = (await response.json()) as { error?: string; message?: string }
+      // Prefer the server's human sentence when it sends one (e.g. the
+      // task-ended question answer); machine error tokens are a last
+      // resort, never what the user should read.
+      if (body.message) message = body.message
+      else if (body.error) message = body.error
     } catch {
       /* keep the status text */
     }

@@ -94,4 +94,20 @@ describe('Phase 8.5 API client', () => {
       '/tasks/task-1/attachments',
     ])
   })
+
+  test('answerQuestion surfaces the server human message on a stale (task-ended) answer', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse(
+          { success: false, error: 'question_not_pending', message: 'This task already ended — this question can no longer be answered.' },
+          false,
+          410,
+        ),
+      ),
+    )
+    await expect(api.answerQuestion('tq-done', 'question-9', 'Continue a different way')).rejects.toThrow(
+      'This task already ended — this question can no longer be answered.',
+    )
+  })
 })

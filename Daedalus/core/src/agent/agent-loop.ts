@@ -283,6 +283,22 @@ export class AgentLoop {
   readonly #inputTokens = new Map<string, number>();
   /** Tasks with a pending hard-stop (stall / pause-stop / token budget). */
   readonly #hardStops = new Map<string, { reason: string; detail: string }>();
+  /**
+   * Causes whose hard stop must not fire while a hard-pause question is
+   * pending user input (live bug, 2026-10-07): usage accounting and the
+   * stall backstop record the stop inside the step, while the same step
+   * may go on to ask the user how to proceed. Applying the stop under
+   * the pending card ends the task behind the user's back and leaves a
+   * live-looking card whose answers then fail. Deferring both causes
+   * until the question settles means Continue re-arms the repeated
+   * call, the loop top re-checks, and a still-blown budget then ends
+   * the task partial with the reason stated — never a dead card. Only
+   * while a question is actually pending, and only these two reasons:
+   * the gate cannot outlive the question (see #pendingQuestions).
+   */
+  readonly #DEFERRED_HARD_STOP_REASONS = new Set(['input_token_budget', 'no_progress']);
+  /** Tasks with a hard-pause question awaiting the user right now; resolves when it settles. */
+  readonly #pendingQuestions = new Map<string, Promise<void>>();
   #cancelled = new Set<string>();
   readonly #invalidActions = new Map<string, number>();
 
@@ -395,6 +411,16 @@ export class AgentLoop {
       // fast and honestly beats burning more turns.
       const hardStop = this.#hardStops.get(state.id);
       if (hardStop) {
+        const pendingQuestion = this.#pendingQuestions.get(state.id);
+        if (pendingQuestion && this.#DEFERRED_HARD_STOP_REASONS.has(hardStop.reason)) {
+          // The token budget (or stall backstop) crossed while a
+          // hard-pause question is pending user input: do not end the
+          // task under the card. Wait for the answer, then re-check on
+          // the next pass — Continue with the budget still blown ends
+          // the task right here, partial, with the reason stated.
+          await pendingQuestion;
+          continue;
+        }
         state = { ...state, status: 'failed', last_error: hardStop.reason, last_observation: hardStop.detail };
         await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: hardStop.reason, detail: hardStop.detail });
         this.#store.saveState(state.id, state);
@@ -917,9 +943,21 @@ export class AgentLoop {
         suppressed: true,
         kind: 'hard_pause',
       });
-      const decision = this.#onLoopHardPause
-        ? await this.#onLoopHardPause({ taskId: state.id, tool: call.tool, repeats: totalRepeats, signature })
-        : 'stop';
+      // While this question is pending user input, budget/stall hard
+      // stops stay deferred (see the gate at the top of #runTask): the
+      // user decides first, the budget is re-checked after.
+      let settleQuestion!: () => void;
+      const questionSettled = new Promise<void>((resolve) => { settleQuestion = resolve; });
+      this.#pendingQuestions.set(state.id, questionSettled);
+      let decision: 'continue' | 'stop' = 'stop';
+      try {
+        decision = this.#onLoopHardPause
+          ? await this.#onLoopHardPause({ taskId: state.id, tool: call.tool, repeats: totalRepeats, signature })
+          : 'stop';
+      } finally {
+        this.#pendingQuestions.delete(state.id);
+        settleQuestion();
+      }
       if (decision === 'continue') {
         guard.resetCall(call.tool, call.args);
         callCounts.delete(signature);
