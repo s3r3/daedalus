@@ -1,5 +1,7 @@
-import { describe, expect, test, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+
+afterEach(() => cleanup())
 import type { Event } from '@daedalus/core'
 import { activity, chatTranscript, latestContextPercent } from './state/selectors'
 import { useDaedalusStore } from './state/taskStore'
@@ -63,9 +65,19 @@ describe('selectors: loop warnings and context meter', () => {
 })
 
 describe('TopBar additions', () => {
-  test('the task picker prefers the helper title and the ctx chip shows usage', async () => {
+  test('the history list prefers the helper title and the ctx chip shows usage', async () => {
     listTasks.mockResolvedValue({
-      tasks: [{ id: 'task-abcdef-1234', status: 'done', goal: 'fix the login crash on startup please', title: 'Fix Login Crash' }],
+      tasks: [
+        {
+          id: 'task-abcdef-1234',
+          status: 'done',
+          goal: 'fix the login crash on startup please',
+          title: 'Fix Login Crash',
+          event_count: 12,
+          running: false,
+          updated_at: new Date().toISOString(),
+        },
+      ],
     })
     useDaedalusStore.setState({
       taskId: 'task-abcdef-1234',
@@ -75,12 +87,32 @@ describe('TopBar additions', () => {
     })
     render(<TopBar />)
 
-    const picker = await screen.findByLabelText('select task')
-    expect(picker.textContent).toContain('Fix Login Crash')
-    expect(picker.textContent).not.toContain('fix the login crash')
+    fireEvent.click(await screen.findByTestId('topbar-history-button'))
+    const row = await screen.findByTestId('history-task')
+    expect(row.textContent).toContain('Fix Login Crash')
+    expect(row.textContent).not.toContain('fix the login crash')
+    expect(row.textContent).toContain('done')
 
     const chip = screen.getByTestId('topbar-context-meter')
     expect(chip.textContent).toContain('ctx 64%')
+  })
+
+  test('the history filter narrows by goal text', async () => {
+    listTasks.mockResolvedValue({
+      tasks: [
+        { id: 'task-aaaa-1111', status: 'done', goal: 'build the vite scaffold', event_count: 3, running: false },
+        { id: 'task-bbbb-2222', status: 'failed', goal: 'fix the laravel migration', event_count: 7, running: false },
+      ],
+    })
+    useDaedalusStore.setState({ taskId: null, events: [] })
+    render(<TopBar />)
+
+    fireEvent.click(await screen.findByTestId('topbar-history-button'))
+    expect(await screen.findAllByTestId('history-task')).toHaveLength(2)
+    fireEvent.change(screen.getByLabelText('filter tasks'), { target: { value: 'laravel' } })
+    const rows = screen.getAllByTestId('history-task')
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.textContent).toContain('laravel')
   })
 
   test('no ctx chip renders when no event carries a meter reading', () => {

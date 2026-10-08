@@ -86,6 +86,13 @@ export function ChildTasksPanel() {
                 <span className="truncate text-foreground">{child.label ?? child.goal}</span>
               </div>
               {child.result_summary ? <p className="mt-0.5 text-[10px] text-muted">{child.result_summary}</p> : null}
+              {typeof child.usage?.total_tokens === 'number' ? (
+                <p className="text-[10px] text-muted" data-testid="child-task-usage">
+                  tokens {child.usage.total_tokens} total
+                  {typeof child.usage.input_tokens === 'number' ? ` (${child.usage.input_tokens} in · ${child.usage.output_tokens ?? 0} out)` : ''} · {child.usage.requests}{' '}
+                  requests
+                </p>
+              ) : null}
               {child.budget ? (
                 <p className="text-[10px] text-muted">
                   budget: {child.budget.max_iterations} iterations / {child.budget.max_errors} errors

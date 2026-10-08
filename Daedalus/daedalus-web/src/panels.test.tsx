@@ -620,6 +620,25 @@ describe('report panels', () => {
     expect(screen.queryByTestId('child-tasks-panel')).toBeNull()
   })
 
+  test('a child task row shows its own token usage when the provider reported it', () => {
+    seed([
+      ev('CHILD_TASK_FINISHED', {
+        child: {
+          id: 'child-1',
+          parent_task_id: 'task-1',
+          goal: 'write the tests',
+          label: 'test writer',
+          status: 'done',
+          created_at: new Date().toISOString(),
+          usage: { requests: 4, reported: 4, input_tokens: 900, output_tokens: 300, total_tokens: 1200 },
+        },
+      }),
+    ])
+    render(<ChildTasksPanel />)
+    expect(textOf(screen.getByTestId('child-task-usage'))).toContain('tokens 1200 total')
+    expect(textOf(screen.getByTestId('child-task-usage'))).toContain('900 in · 300 out')
+  })
+
   test('the final report shows outcome and metrics', () => {
     render(
       <FinalReportView
