@@ -72,15 +72,18 @@ export {
 } from './images/index.ts';
 export { ToolRegistry, MAX_TOOL_CALL_TIMEOUT_MS, clampCallTimeoutMs, type ToolDefinition, type ModelToolSchema, type ToolExecutionContext } from './registry.ts';
 
+export { createDeckTool, readDeckTool, addSlideTool, updateSlideTool, moveSlideTool, deleteSlideTool, setDeckThemeTool, validateDeckTool, exportDeckTool, SLIDE_TOOLS } from './slides.ts';
+
 import { createDirTool, editFileTool, listDirTool, readFileTool, writeFileTool } from './filesystem/index.ts';
 import { commandKillTool, commandStatusTool, gitDiffTool, gitStatusTool, runCommandTool } from './terminal/index.ts';
 import { globTool, grepTool } from './search/index.ts';
 import { fetchUrlTool, webSearchTool } from './web/index.ts';
 import { screenshotTool, viewImageTool } from './media/index.ts';
 import { downloadFileTool, searchImagesTool } from './images/index.ts';
+import { createDeckTool, readDeckTool, addSlideTool, updateSlideTool, moveSlideTool, deleteSlideTool, setDeckThemeTool, validateDeckTool, exportDeckTool } from './slides.ts';
 import { ToolRegistry, type ToolDefinition } from './registry.ts';
 
-export const DEFAULT_TOOLS: ToolDefinition[] = [readFileTool, writeFileTool, editFileTool, createDirTool, listDirTool, grepTool, globTool, runCommandTool, commandStatusTool, commandKillTool, gitDiffTool, gitStatusTool, fetchUrlTool, webSearchTool, viewImageTool, screenshotTool, searchImagesTool, downloadFileTool];
+export const DEFAULT_TOOLS: ToolDefinition[] = [readFileTool, writeFileTool, editFileTool, createDirTool, listDirTool, grepTool, globTool, runCommandTool, commandStatusTool, commandKillTool, gitDiffTool, gitStatusTool, fetchUrlTool, webSearchTool, viewImageTool, screenshotTool, searchImagesTool, downloadFileTool, createDeckTool, readDeckTool, addSlideTool, updateSlideTool, moveSlideTool, deleteSlideTool, setDeckThemeTool, validateDeckTool, exportDeckTool];
 
 export function createDefaultRegistry(): ToolRegistry {
   const registry = new ToolRegistry();

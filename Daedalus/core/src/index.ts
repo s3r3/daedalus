@@ -659,4 +659,58 @@ export {
   type WorktreeRecord,
 } from "./worktree.ts";
 
+export {
+  DECK_DIRNAME,
+  DECK_FILENAME,
+  DECK_ASSETS_DIRNAME,
+  MAX_SLIDES,
+  LONG_TEXT_CHARS,
+  deckPaths,
+  deckRelativePaths,
+  slugifyTitle,
+  type DeckSpec,
+  type DeckTheme,
+  type Slide,
+  type DeckIssue,
+} from "./slides/deck.ts";
+
+export {
+  LAYOUTS,
+  LAYOUT_IDS,
+  getLayout,
+  validateSlideContent,
+  type LayoutDef,
+  type LayoutCategory,
+  type LayoutSchema,
+  type PropSchema,
+  type PropSchemaType,
+} from "./slides/layouts.ts";
+
+export {
+  ensureDeckDir,
+  readDeck,
+  writeDeck,
+  newDeck,
+  newDeckId,
+  newSlideId,
+  validateDeck,
+  summarizeDeck,
+  type ValidateDeckOptions,
+} from "./slides/store.ts";
+
+export { exportDeckToPptx } from "./slides/export-pptx.ts";
+
+export {
+  createDeckTool,
+  readDeckTool,
+  addSlideTool,
+  updateSlideTool,
+  moveSlideTool,
+  deleteSlideTool,
+  setDeckThemeTool,
+  validateDeckTool,
+  exportDeckTool,
+  SLIDE_TOOLS,
+} from "./tools/index.ts";
+
 export { VERSION } from "./version.ts";

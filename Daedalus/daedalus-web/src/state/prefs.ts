@@ -65,6 +65,37 @@ export function saveComposerPrefs(prefs: ComposerPrefs, storage: Storage | undef
 }
 
 /**
+ * Active product domain (Agentic Coding vs Agentic Slide). The domain only
+ * re-skins the workspace — center canvas and outline — while the workspace,
+ * chat, and core stay shared, so the choice is a view preference that
+ * belongs next to the other browser prefs, not on the server.
+ */
+export type WebDomain = 'coding' | 'slide'
+
+export const DOMAIN_PREFS_KEY = 'daedalus.web.domain.v1'
+
+const DOMAINS: ReadonlySet<string> = new Set(['coding', 'slide'])
+
+export function loadDomain(storage: Storage | undefined = defaultStorage()): WebDomain {
+  if (!storage) return 'coding'
+  try {
+    const value = storage.getItem(DOMAIN_PREFS_KEY)
+    return value !== null && DOMAINS.has(value) ? (value as WebDomain) : 'coding'
+  } catch {
+    return 'coding'
+  }
+}
+
+export function saveDomain(domain: WebDomain, storage: Storage | undefined = defaultStorage()): void {
+  if (!storage || !DOMAINS.has(domain)) return
+  try {
+    storage.setItem(DOMAIN_PREFS_KEY, domain)
+  } catch {
+    /* storage can be unavailable (private mode, quota); the domain just stays session-local */
+  }
+}
+
+/**
  * The active chat conversation per workspace root. The conversation itself
  * lives on the server (file-backed, shared with nothing else); the browser
  * only remembers WHICH one is open here so a reload returns to the same

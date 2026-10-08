@@ -8,6 +8,7 @@ import { useDaedalusStore } from '../../state/taskStore'
 import { saveActiveConversationId } from '../../state/prefs'
 import { latestContextPercent, pendingApprovals, pendingQuestions, taskStatus } from '../../state/selectors'
 import { useTaskEvents } from '../../state/hooks'
+import { DomainSwitch } from './domain-switch'
 import { useTheme } from '../../theme/theme'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 import { STATUS_TONE } from '../agent/status-tone'
@@ -115,6 +116,8 @@ export function TopBar() {
         <strong className="text-sm tracking-[0.2em] text-primary">DAEDALUS</strong>
         <span className="hidden text-[10px] uppercase tracking-wider text-muted sm:inline">agentic coding framework</span>
       </div>
+
+      <DomainSwitch />
 
       <Separator orientation="vertical" className="mx-1 hidden h-5 sm:block" />
 

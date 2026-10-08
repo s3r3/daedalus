@@ -1,0 +1,66 @@
+import { join } from 'node:path';
+
+export type DeckTheme = {
+  accent?: string;
+  dark?: boolean;
+};
+
+export type Slide = {
+  id: string;
+  layout: string;
+  content: Record<string, unknown>;
+  notes?: string;
+};
+
+export type DeckSpec = {
+  version: 1;
+  id: string;
+  title: string;
+  theme: DeckTheme;
+  slides: Slide[];
+};
+
+export type DeckIssue = {
+  slideId?: string;
+  layout?: string;
+  field?: string;
+  code: string;
+  message: string;
+  severity: 'error' | 'warning';
+};
+
+export const DECK_DIRNAME = 'deck';
+export const DECK_FILENAME = 'deck.json';
+export const DECK_ASSETS_DIRNAME = 'assets';
+export const MAX_SLIDES = 40;
+export const LONG_TEXT_CHARS = 140;
+
+export function deckPaths(root: string): { dir: string; file: string; assetsDir: string } {
+  const dir = join(root, DECK_DIRNAME);
+  return {
+    dir,
+    file: join(dir, DECK_FILENAME),
+    assetsDir: join(dir, DECK_ASSETS_DIRNAME),
+  };
+}
+
+/** Relative (workspace) paths, for messages/tools. */
+export function deckRelativePaths(): { dir: string; file: string; assetsDir: string } {
+  return {
+    dir: DECK_DIRNAME,
+    file: `${DECK_DIRNAME}/${DECK_FILENAME}`,
+    assetsDir: `${DECK_DIRNAME}/${DECK_ASSETS_DIRNAME}`,
+  };
+}
+
+export function slugifyTitle(title: string): string {
+  const slug = title
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+    .replace(/-+$/g, '');
+  return slug.length > 0 ? slug : 'deck';
+}
