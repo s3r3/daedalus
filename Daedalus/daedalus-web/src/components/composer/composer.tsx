@@ -185,7 +185,8 @@ export function Composer() {
     if (!mentionToken || mentionKey === dismissedMention || suggestions.length > 0 || skillOpen) return []
     const entries = fileIndex.root === workspaceRoot ? fileIndex.entries : []
     const needle = mentionToken.query.toLowerCase()
-    return entries.filter((entry) => entry.path.toLowerCase().includes(needle)).slice(0, 12)
+    const matches = entries.filter((entry) => entry.path.toLowerCase().includes(needle))
+    return rankMentionMatches(matches, needle).slice(0, 50)
   }, [mentionToken, mentionKey, dismissedMention, suggestions.length, skillOpen, fileIndex, workspaceRoot])
   const mentionOpen = mentionToken !== null && mentionCandidates.length > 0
 
@@ -421,7 +422,7 @@ export function Composer() {
     validate: () => {
       const result = validation(events)
       if (result.running) return 'Validation is running.'
-      if (!result.result) return 'No validation evidence yet. Validation runs as part of a task; switch to Auto or Orchestrator to execute and validate.'
+      if (!result.result) return 'No validation evidence yet. Validation runs as part of a task; switch to Auto to execute and validate.'
       return result.result.checks.map((check) => `${check.name}: ${check.status} (${check.cmd})`).join('\n')
     },
     upload: () => openUpload('file'),
@@ -757,7 +758,12 @@ export function Composer() {
     <form
       ref={formRef}
       onSubmit={submit}
-      className={`flex flex-col gap-2 border-b border-line bg-surface-base px-3 py-2 ${activeTaskId ? 'motion-composer-collapse' : ''}`}
+      // relative + z-30: while a task runs the collapse animation leaves a
+      // transform/opacity fill on this form, trapping the model picker's
+      // dropdown inside the form's stacking context — the panels below
+      // then painted over the open model list (Farid's report). Keeping
+      // the whole composer above the main grid restores the dropdown.
+      className={`relative z-30 flex flex-col gap-2 border-b border-line bg-surface-base px-3 py-2 ${activeTaskId ? 'motion-composer-collapse' : ''}`}
       data-testid="composer"
     >
       <div className="flex flex-wrap items-center gap-2">
@@ -766,7 +772,7 @@ export function Composer() {
           style={{ borderColor: modeCssVar(composer.mode), color: modeCssVar(composer.mode) }}
           data-testid="mode-badge"
           data-mode={composer.mode}
-          title="Shift+Tab cycles Ask → Manual → Auto → Plan → Orchestrator"
+          title="Shift+Tab cycles Ask → Manual → Auto → Plan"
         >
           {MODE_LABELS[composer.mode]}
         </span>
@@ -1065,6 +1071,24 @@ function parseSkillInvocation(goal: string): { name: string; task: string } | nu
  * whitespace, followed by path characters — `foo@bar` is not a mention.
  * Returns the index of the `@` and the partial path typed so far.
  */
+/**
+ * Order @-mention matches for the palette. An empty query means "show me
+ * the workspace": root-level entries first, then deeper ones (the flat
+ * index is alphabetical, so without this the first screenful is one
+ * subtree — cli/, cli/assets, cli/src… — and the rest of the root looks
+ * missing). With a query, names starting with it win; path order breaks
+ * ties so keyboard navigation stays predictable.
+ */
+export function rankMentionMatches(entries: WorkspaceFileEntry[], needle: string): WorkspaceFileEntry[] {
+  const depth = (path: string): number => path.split('/').length
+  const basename = (path: string): string => path.split('/').at(-1)?.toLowerCase() ?? ''
+  return [...entries].sort((a, b) => {
+    if (needle.length === 0) return depth(a.path) - depth(b.path) || a.path.localeCompare(b.path)
+    const boost = (entry: WorkspaceFileEntry): number => (basename(entry.path).startsWith(needle) ? 0 : 1)
+    return boost(a) - boost(b) || a.path.localeCompare(b.path)
+  })
+}
+
 function activeMentionToken(goal: string, caret: number): { start: number; query: string } | null {
   if (caret <= 0 || caret > goal.length) return null
   let start = caret - 1

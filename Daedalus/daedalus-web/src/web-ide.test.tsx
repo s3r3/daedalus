@@ -3,8 +3,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { Event } from '@daedalus/core'
 import { EditorPane } from './components/editor/editor-pane'
+import { DiffViewer } from './components/editor/diff-viewer'
 import { ExtensionsPanel } from './components/settings/extensions-panel'
-import { FilesChangedPanel } from './components/report/report-panels'
 import { useDaedalusStore } from './state/taskStore'
 
 const saveFile = vi.fn()
@@ -86,16 +86,16 @@ describe('Web IDE editing', () => {
     expect((screen.getByTestId('mock-monaco') as HTMLTextAreaElement).value).toBe('my unsaved edit\n')
   })
 
-  test('clicking a Files Changed entry opens that file in the editor state', async () => {
+  test('opening a changed file from the Diff panel loads it into the editor state', async () => {
     const event = {
       seq: 1,
       task_id: 'task-1',
       ts: new Date().toISOString(),
       type: 'FILE_CHANGED',
-      payload: { path: 'src/main.ts', operation: 'modified', added: 2, removed: 1 },
+      payload: { path: 'src/main.ts', operation: 'modified', added: 2, removed: 1, patch: '+a\n+b\n-c', lines: [{ kind: 'add', text: 'a' }, { kind: 'add', text: 'b' }, { kind: 'remove', text: 'c' }] },
     } as Event
     useDaedalusStore.setState({ taskId: 'task-1', events: [event], workspace: { root: '/workspace', path: '', content: '', loading: false, error: null, size: 0, kind: 'text', imageSrc: null, mediaType: null } })
-    render(<FilesChangedPanel />)
+    render(<DiffViewer />)
     await userEvent.click(screen.getByRole('button', { name: 'open changed file src/main.ts' }))
     expect(file).toHaveBeenCalledWith('/workspace', 'src/main.ts')
     expect(useDaedalusStore.getState().openFilePath).toBe('src/main.ts')

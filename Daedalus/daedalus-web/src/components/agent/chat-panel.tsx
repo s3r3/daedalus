@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
-import { ArrowDown, CircleQuestionMark, MessageSquarePlus, ShieldAlert, Square } from 'lucide-react'
+import { ArrowDown, CircleQuestionMark, MessageSquarePlus, ShieldAlert } from 'lucide-react'
 import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -15,6 +15,7 @@ import { ApprovalCard } from '../approval/approval-card'
 import { QuestionCard } from '../approval/question-card'
 import { ExecutePlanBar } from './execute-plan-bar'
 import { STATUS_TONE, type Tone } from './status-tone'
+import { ToolResultImage } from './tool-result-image'
 
 type ChatRowModel =
   | { kind: 'entry'; entry: ChatEntry }
@@ -25,8 +26,9 @@ type ChatRowModel =
  * tool calls with their short results, and status lines — the same recorded
  * event log the CLI prints, rendered next to Diff/Attachments so a running
  * task reads like a conversation instead of a raw timeline. Facts come from
- * `chatTranscript()`; this panel owns only scroll behaviour, its (user-sized)
- * height, and the Stop control for the run it is showing.
+ * `chatTranscript()`; this panel owns only scroll behaviour and its
+ * (user-sized) height. Stopping the run lives on the composer (its Run
+ * button morphs into the one Stop), not here.
  *
  * When a chat conversation is active, the panel renders the whole session:
  * recorded turns in order, with the live task's event segment expanded in
@@ -48,7 +50,6 @@ export function ChatPanel() {
   const questions = useMemo(() => pendingQuestions(events), [events])
   const status = taskStatus(events, pending.length, questions.length)
   const usage = useMemo(() => taskUsage(events), [events])
-  const running = status === 'running' || status === 'awaiting-approval' || status === 'awaiting-answer'
 
   const rows = useMemo<ChatRowModel[]>(() => {
     if (!conversation) return entries.map((entry) => ({ kind: 'entry' as const, entry }))
@@ -122,7 +123,6 @@ export function ChatPanel() {
   const scrollRef = useRef<HTMLDivElement>(null)
   const pinnedRef = useRef(true)
   const [pinned, setPinned] = useState(true)
-  const [stopping, setStopping] = useState(false)
 
   // The panel's height is the user's, not the content's: dragged once,
   // persisted, restored. The column below simply flows underneath.
@@ -135,11 +135,6 @@ export function ChatPanel() {
     pinnedRef.current = true
     setPinned(true)
   }, [taskId])
-
-  // A fresh run (or a finished one) clears any stale "stopping…" label.
-  useEffect(() => {
-    if (!running) setStopping(false)
-  }, [running, taskId])
 
   // The pending cards are the transcript's last blocks, so their head ids are
   // scroll dependencies on purpose: a request landing while the reader is
@@ -168,18 +163,6 @@ export function ChatPanel() {
     if (el) el.scrollTop = el.scrollHeight
     pinnedRef.current = true
     setPinned(true)
-  }
-
-  const stop = async (): Promise<void> => {
-    if (!taskId || stopping) return
-    setStopping(true)
-    try {
-      await api.cancelTask(taskId)
-      // The terminal TASK_COMPLETED lands within one poll cycle and flips
-      // `running` off, which clears this label via the effect above.
-    } catch {
-      setStopping(false)
-    }
   }
 
   const clampHeight = (value: number): number => Math.min(CHAT_HEIGHT.max, Math.max(CHAT_HEIGHT.min, Math.round(value)))
@@ -233,20 +216,6 @@ export function ChatPanel() {
             <MessageSquarePlus />
             new chat
           </Button>
-          {running && taskId ? (
-            <Button
-              type="button"
-              variant="danger"
-              size="sm"
-              onClick={() => void stop()}
-              disabled={stopping}
-              data-testid="chat-stop"
-              aria-label={`stop task ${taskId}`}
-            >
-              <Square className="fill-current" />
-              {stopping ? 'stopping…' : 'stop'}
-            </Button>
-          ) : null}
           <Badge tone="neutral">{rows.length}</Badge>
           <Badge tone={STATUS_TONE[status]} data-testid="chat-status">
             {status}
@@ -483,12 +452,12 @@ function ChatRow({ entry }: { entry: ChatEntry }) {
         <li className="px-1 py-0.5" data-testid="chat-entry" data-role="thought">
           {entry.text.length > 280 ? (
             <details>
-              <summary className="cursor-pointer text-[9px] font-semibold uppercase tracking-wider text-muted">thinking</summary>
+              <summary className="cursor-pointer text-[9px] font-semibold uppercase tracking-wider text-muted">thinking{entry.status === 'running' ? ' · live' : ''}</summary>
               <p className="mt-0.5 whitespace-pre-wrap break-words text-[11px] italic text-muted">{entry.text}</p>
             </details>
           ) : (
             <>
-              <span className="text-[9px] font-semibold uppercase tracking-wider text-muted">thinking</span>
+              <span className="text-[9px] font-semibold uppercase tracking-wider text-muted">thinking{entry.status === 'running' ? ' · live' : ''}</span>
               <p className="whitespace-pre-wrap break-words text-[11px] italic text-muted">{entry.text}</p>
             </>
           )}
@@ -513,6 +482,7 @@ function ChatRow({ entry }: { entry: ChatEntry }) {
           ) : entry.status === 'running' ? (
             <p className="mt-0.5 text-[10px] text-muted">awaiting result…</p>
           ) : null}
+          {entry.image ? <ToolResultImage path={entry.image.path} /> : null}
         </li>
       )
     case 'approval':

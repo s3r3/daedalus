@@ -17,6 +17,7 @@ import type {
   UploadResponse,
   WorkspaceEntry,
   WorkspaceFile,
+  WorkspaceGitStatus,
   WorkspaceFiles,
   WorkspacePins,
   WorkspacePlans,
@@ -228,6 +229,14 @@ export const api = {
   list: (root: string, path = '.') => request<{ path: string; items: WorkspaceEntry[] }>(`/workspace/list${query({ root, path })}`),
 
   file: (root: string, path: string) => request<WorkspaceFile>(`/workspace/file${query({ root, path })}`),
+
+  gitStatus: (root: string) => request<WorkspaceGitStatus>(`/workspace/git-status${query({ root })}`),
+
+  gitRevert: (root: string, path: string) =>
+    request<{ reverted: string; root: string }>('/workspace/git-revert', {
+      method: 'POST',
+      body: JSON.stringify({ root, path }),
+    }),
 
   /** Plan documents the Plan-mode flow wrote under .daedalus/plans (chips above the composer). */
   plans: (root: string) => request<WorkspacePlans>(`/workspace/plans${query({ root })}`),

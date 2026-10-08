@@ -58,7 +58,7 @@ import { ProviderRegistry } from './interaction/providers.ts';
 import { childTaskFromInput, distillChildSummary, type ChildFileChange } from './interaction/orchestrator.ts';
 import { backgroundFinishedNotice, createSpawnSubagentTool, type SpawnDispatch, type SpawnSubagentInput } from './interaction/subagents.ts';
 import { McpManager, loadMcpConfig, type McpServerConfig, type McpServerStatus } from './mcp/index.ts';
-import { LspManager, loadLspConfig, type LspServerConfig, type LspServerStatus } from './lsp/index.ts';
+import { LspManager, loadLspConfig, withDefaultLspServers, type LspServerConfig, type LspServerStatus } from './lsp/index.ts';
 import {
   SkillRegistry,
   createReadSkillTool,
@@ -104,6 +104,8 @@ export type TaskRunnerOptions = {
   autoApprove?: boolean;
   /** Surface provider thought text as THOUGHT events. Defaults to settings.session.thinking (on). */
   thinking?: boolean;
+  /** Stream model text as MODEL_TEXT_DELTA events during a turn (Web live text). Default: off. */
+  streamText?: boolean;
   bus?: EventBus;
   store?: TaskStore;
   /** Shared approval broker (worktree re-dispatch reuses the parent's so decisions reach child runs). */
@@ -495,7 +497,12 @@ export class TaskRunner {
    */
   async #prepareExtensions(): Promise<{ tools: ToolDefinition[]; skills: SkillRegistry; lsp: LspManager; close: () => Promise<void> }> {
     const mcpServers = this.#options.mcpServers ?? (await loadMcpConfig(this.#workspaceRoot)).servers;
-    const lspServers = this.#options.lspServers ?? (await loadLspConfig(this.#workspaceRoot)).servers;
+    // Callers who pass lspServers explicitly own the whole list (an
+    // explicit empty list means "no LSP"); otherwise the workspace gets
+    // configured servers PLUS automatic defaults — today the TypeScript
+    // server, so lsp_diagnostics and the edit guard cover TS/TSX with
+    // zero user config instead of staying dormant until lsp.json exists.
+    const lspServers = this.#options.lspServers ?? (await withDefaultLspServers(this.#workspaceRoot, (await loadLspConfig(this.#workspaceRoot)).servers));
     // Workspace skills first (they shadow same-name globals), then any
     // caller-provided dirs, then the global directories (~/.daedalus/skills,
     // other AI tools' skill folders) so global skills work in every workspace.
@@ -979,6 +986,7 @@ export class TaskRunner {
       chatOptions: this.#chatOptions(),
       modeController: this.modeController,
       thinking: spec.thinking ?? options.thinking ?? this.#options.thinking ?? settingsThinking(this.#settings),
+      streamText: this.#options.streamText === true,
       contextLimitTokens: this.#options.contextLimitTokens ?? this.#settings.context?.limitTokens,
       condense: this.#options.condense ?? (this.#settings.context?.condense !== false),
       toolOutput: this.#options.toolOutput ?? this.#settings.toolOutput,

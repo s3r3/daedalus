@@ -5,6 +5,7 @@ import { emitEvent } from '../events.ts';
 import type { TaskStore } from '../persistence.ts';
 import type { ContentBlock, LLMProvider, Message, ModelPhase } from '../providers/llm/types.ts';
 import { classifyLLMError, LLMAuthError, LLMContentPolicyError, type LLMErrorKind } from '../providers/llm/errors.ts';
+import { StreamMessageAssembler } from '../providers/llm/stream-assembly.ts';
 import { asModelController, modelPoolFailureReason } from '../providers/llm/model-pool.ts';
 import type { AgentMode, Event, ModelTier, Plan, PlanStep, TaskSpec, TaskState, ToolCall, ToolResult } from '../contracts.ts';
 import type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor } from './types.ts';
@@ -92,6 +93,14 @@ export type AgentLoopOptions = {
   autoApprove?: boolean;
   /** Surface provider/interpreter thought text as THOUGHT events. Default: on. */
   thinking?: boolean;
+  /**
+   * Stream model text as MODEL_TEXT_DELTA events while the turn is in
+   * flight (the Web renders it live; the finished message still lands
+   * as MODEL_REQUEST_FINISHED + THOUGHT). The turn itself is assembled
+   * from the stream, so tool calls survive. Default: off — surfaces
+   * that render per-turn blocks (CLI) keep the old rhythm.
+   */
+  streamText?: boolean;
   /** Context-window token budget for the meter + condensing. Default 128000. */
   contextLimitTokens?: number;
   /** Condense older tool outputs when over 70% of the context limit. Default: on. */
@@ -195,6 +204,7 @@ export class AgentLoop {
   readonly #chatOptions?: import('../providers/llm/types.ts').ChatOptions;
   readonly #modeController: ModeController;
   readonly #thinking: boolean;
+  readonly #streamText: boolean;
   readonly #contextLimitTokens: number;
   readonly #condense: boolean;
   readonly #toolOutputLimits: ToolOutputLimits;
@@ -221,7 +231,7 @@ export class AgentLoop {
    * `#recordToolResult`, so the event log, persisted state, and CLI
    * transcript only ever see the tool's one-line placeholder output.
    */
-  readonly #pendingImages = new Map<string, Array<{ path: string; mime: string; dataUrl: string }>>();
+  readonly #pendingImages = new Map<string, Array<{ source: string; path: string; mime: string; dataUrl: string }>>();
   /** File paths each task has mutated (validation check scoping). */
   readonly #changedFiles = new Map<string, Set<string>>();
   /**
@@ -324,6 +334,7 @@ export class AgentLoop {
     this.#chatOptions = options.chatOptions;
     this.#modeController = options.modeController ?? new ModeController(options.mode ?? 'auto', options.autoApprove ?? false);
     this.#thinking = options.thinking !== false;
+    this.#streamText = options.streamText === true;
     this.#contextLimitTokens = options.contextLimitTokens && options.contextLimitTokens > 0 ? options.contextLimitTokens : 128_000;
     this.#condense = options.condense !== false;
     this.#toolOutputLimits = resolveToolOutputLimits(options.toolOutput);
@@ -644,16 +655,16 @@ export class AgentLoop {
     if (notices.length > 0) {
       messages = [...messages, ...notices.map((content) => ({ role: 'user' as const, content }))];
     }
-    // Images the model asked to see (view_image): attached as an image_url
-    // block on a user message, the same carriage user uploads take in the
-    // context manager. Drained exactly once; the matching tool result in
-    // the history stays its one-line placeholder text.
+    // Images the model asked to see (view_image, screenshot): attached as
+    // an image_url block on a user message, the same carriage user
+    // uploads take in the context manager. Drained exactly once; the
+    // matching tool result in the history stays its one-line placeholder.
     const pendingImages = this.#pendingImages.get(state.id);
     if (pendingImages && pendingImages.length > 0) {
       this.#pendingImages.delete(state.id);
       for (const image of pendingImages) {
         const content: ContentBlock[] = [
-          { type: 'text', text: `Image attached from view_image (${image.path}, ${image.mime}):` },
+          { type: 'text', text: `Image attached from ${image.source} (${image.path}, ${image.mime}):` },
           { type: 'image_url', image_url: { url: image.dataUrl } },
         ];
         messages = [...messages, { role: 'user' as const, content }];
@@ -667,7 +678,9 @@ export class AgentLoop {
     await this.#emit(state.id, turnId, 'MODEL_REQUEST_STARTED', { provider: this.#provider.name, messages: messages.length, tools: visibleTools?.length ?? 0, mode: turnMode, phase, ...meter });
     let response;
     try {
-      response = await this.#provider.chat(messages, visibleTools, { ...this.#chatOptions, phase });
+      response = this.#streamText
+        ? await this.#chatStreamed(state.id, turnId, messages, visibleTools, phase)
+        : await this.#provider.chat(messages, visibleTools, { ...this.#chatOptions, phase });
       await this.#emit(state.id, turnId, 'MODEL_REQUEST_FINISHED', { message: response.message, usage: response.usage, finish_reason: response.finish_reason, phase, ...this.#servedModelFields(state), ...meter });
       await this.#emitThought(state.id, turnId, response.message);
       this.#modelFailures.delete(state.id);
@@ -1130,15 +1143,20 @@ export class AgentLoop {
         files.add(changedPath);
       }
     }
-    // view_image carriage: lift the image payload out of the result before
-    // it is shaped, emitted, or persisted. The bytes queue for the next
-    // model request (see `step`); from here on the result is only the
-    // tool's placeholder text, so the event log, the saved task state, and
+    // Image carriage: lift the image payload out of the result before
+    // it is shaped, emitted, or persisted. The contract is the meta key,
+    // not the tool name — view_image started it, screenshot (and any
+    // future image-producing tool) joins by returning the same
+    // image_data_url meta. The bytes queue for the next model request
+    // (see `step`); from here on the result is only the tool's
+    // placeholder text, so the event log, the saved task state, and
     // every transcript render the placeholder — never a base64 dump.
     let safeResult = result;
-    if (call.tool === 'view_image' && result.status === 'ok' && typeof result.meta?.image_data_url === 'string') {
+    if (result.status === 'ok' && typeof result.meta?.image_data_url === 'string'
+      && typeof result.meta?.image_mime === 'string' && result.meta.image_mime.startsWith('image/')) {
       const pending = this.#pendingImages.get(state.id) ?? [];
       pending.push({
+        source: call.tool,
         path: typeof result.meta.image_path === 'string' ? result.meta.image_path : 'image',
         mime: typeof result.meta.image_mime === 'string' ? result.meta.image_mime : 'image/*',
         dataUrl: result.meta.image_data_url,
@@ -1579,6 +1597,55 @@ export class AgentLoop {
     this.#spillCounters.set(taskId, next);
     const stem = tool.replace(/[^A-Za-z0-9._-]+/g, '_');
     return join(this.#store.taskDir(taskId), 'tool-output', `${next}-${stem}.txt`);
+  }
+
+  /**
+   * One model turn over the streaming contract: text lands as
+   * MODEL_TEXT_DELTA events (cumulative, throttled) while the whole
+   * message — tool calls included — is assembled for the turn
+   * machine. A provider that refuses streaming before producing
+   * anything (unknown stream options, no SSE support) falls back to
+   * the identical plain request; a stream that dies mid-text throws
+   * its real error into the caller's failure accounting.
+   */
+  async #chatStreamed(
+    taskId: string,
+    turnId: string,
+    messages: Message[],
+    tools: import('../providers/llm/types.ts').ToolDefinition[] | undefined,
+    phase: ModelPhase | undefined,
+  ): Promise<import('../providers/llm/types.ts').ChatResponse> {
+    const assembler = new StreamMessageAssembler();
+    let lastEmitAt = 0;
+    let emitted = false;
+    try {
+      for await (const chunk of this.#provider.stream(messages, tools, { ...this.#chatOptions, phase })) {
+        assembler.push(chunk);
+        if (chunk.type === 'delta' && chunk.content) {
+          const now = Date.now();
+          if (now - lastEmitAt >= 100) {
+            lastEmitAt = now;
+            emitted = true;
+            await this.#emit(taskId, turnId, 'MODEL_TEXT_DELTA', { text: assembler.text });
+          }
+        }
+      }
+    } catch (error) {
+      if (!emitted && assembler.empty) {
+        return this.#provider.chat(messages, tools, { ...this.#chatOptions, phase });
+      }
+      throw error;
+    }
+    if (assembler.empty) {
+      return this.#provider.chat(messages, tools, { ...this.#chatOptions, phase });
+    }
+    // Only text turns produce delta events: a tool-call turn with no
+    // prose must leave the event sequence exactly as it was before
+    // streaming existed (the CLI/Web parity contract).
+    if (assembler.text) {
+      await this.#emit(taskId, turnId, 'MODEL_TEXT_DELTA', { text: assembler.text, final: true });
+    }
+    return assembler.toResponse();
   }
 
   async #emitThought(taskId: string, turnId: string, message: Message): Promise<void> {

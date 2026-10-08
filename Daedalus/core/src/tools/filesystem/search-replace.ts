@@ -8,11 +8,16 @@
  * - Each block is `<<<<<<< SEARCH` / anchor / `=======` / replacement /
  *   `>>>>>>> REPLACE`.
  * - The anchor must match the file content EXACTLY (byte-for-byte) and
- *   EXACTLY ONCE at its position in the block sequence. There is no fuzzy
- *   matching and no whitespace forgiveness: a mismatch fails the whole call
- *   (nothing is written) with an instructive error, because a silently
- *   mis-applied edit is worse than a loud failure.
+ *   EXACTLY ONCE at its position in the block sequence. When the exact
+ *   match misses, ONE fallback runs: a unique whitespace-tolerant match
+ *   (same lines modulo indentation; the replacement is re-indented onto
+ *   the file's indentation and the result flags that it fired). There is
+ *   no other fuzzy matching: anything else fails the whole call (nothing
+ *   is written) with an instructive error, because a silently mis-applied
+ *   edit is worse than a loud failure.
  */
+
+import { applyWhitespaceTolerant } from './text-match.ts';
 
 export type SearchReplaceBlock = { search: string; replace: string };
 
@@ -61,7 +66,7 @@ export function parseSearchReplaceBlocks(text: string): ParsedSearchReplace {
 }
 
 export type AppliedSearchReplace =
-  | { content: string; applied: number }
+  | { content: string; applied: number; tolerant: number }
   | { error: string };
 
 /**
@@ -74,6 +79,7 @@ export function applySearchReplace(content: string, text: string, path: string):
     return { error: `could not parse SEARCH/REPLACE blocks for ${path}: ${parsed.error}. Emit blocks exactly as:\n<<<<<<< SEARCH\n<exact lines already in the file>\n=======\n<the replacement lines>\n>>>>>>> REPLACE` };
   }
   let current = content;
+  let tolerant = 0;
   for (const [position, block] of parsed.blocks.entries()) {
     const label = `SEARCH block ${position + 1} of ${parsed.blocks.length} for ${path}`;
     if (block.search.length === 0) {
@@ -81,7 +87,15 @@ export function applySearchReplace(content: string, text: string, path: string):
     }
     const occurrences = current.split(block.search).length - 1;
     if (occurrences === 0) {
-      return { error: `${label}: anchor matched 0 times — the anchor must be byte-exact (same whitespace, same code) as the current file content. Re-read ${path} with read_file and copy the anchor exactly; do not paraphrase or reformat it.` };
+      // One lenient fallback (unique, same lines modulo indentation);
+      // the result reports it so the model knows tolerance fired.
+      const relaxed = applyWhitespaceTolerant(current, block.search, block.replace);
+      if (relaxed) {
+        current = relaxed.content;
+        tolerant++;
+        continue;
+      }
+      return { error: `${label}: anchor matched 0 times — not byte-exact, and no unique whitespace-tolerant match either. Re-read ${path} with read_file and copy the anchor exactly; do not paraphrase or reformat it.` };
     }
     if (occurrences > 1) {
       return { error: `${label}: anchor matched ${occurrences} times — it must be unique. Add surrounding lines to the SEARCH anchor until it appears exactly once in ${path}.` };
@@ -90,5 +104,5 @@ export function applySearchReplace(content: string, text: string, path: string):
     // must be inserted literally, not read as replacement patterns.
     current = current.replace(block.search, () => block.replace);
   }
-  return { content: current, applied: parsed.blocks.length };
+  return { content: current, applied: parsed.blocks.length, tolerant };
 }

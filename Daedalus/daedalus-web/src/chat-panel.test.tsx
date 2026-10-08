@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { Event } from '@daedalus/core'
 import { useDaedalusStore } from './state/taskStore'
 import { ChatPanel } from './components/agent/chat-panel'
@@ -169,12 +169,11 @@ describe('ChatPanel stop + resize', () => {
     vi.mocked(api.cancelTask).mockClear()
   })
 
-  test('shows a prominent Stop while running and calls the cancel API', async () => {
+  test('carries no Stop of its own — the one Stop lives on the composer', () => {
     seed([started()])
     render(<ChatPanel />)
-    const stop = screen.getByTestId('chat-stop')
-    fireEvent.click(stop)
-    await waitFor(() => expect(vi.mocked(api.cancelTask)).toHaveBeenCalledWith('task-1'))
+    expect(screen.queryByTestId('chat-stop')).toBeNull()
+    expect(screen.queryByTestId('topbar-stop')).toBeNull()
   })
 
   test('hides Stop when idle and reports a stopped task as stopped, not failed', () => {

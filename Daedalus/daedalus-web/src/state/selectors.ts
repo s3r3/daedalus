@@ -721,6 +721,13 @@ export type ChatEntry = {
   tool?: string
   /** Set on role 'skill': the activation chip payload (name, origin, who loaded it). */
   skill?: { name: string; origin: string; via: 'agent' | 'user' }
+  /**
+   * Set on role 'tool' when the result carried an image the model looked
+   * at (view_image, screenshot): the loop strips the bytes and records
+   * `image_attached` + `image_path` in the result meta, so the chat can
+   * render the picture itself via the workspace file endpoint.
+   */
+  image?: { path: string; mime?: string }
 }
 
 /**
@@ -744,6 +751,16 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
     const thought = payloadOf(event, 'THOUGHT')
     if (thought?.text) thoughtByTurn.set(event.turn_id, { text: thought.text.trim(), source: thought.source })
   }
+  // Live streamed text per turn (cumulative; the last delta wins). It
+  // renders only while the turn has produced no finished entry — the
+  // THOUGHT / final reply supersedes it, so history never doubles.
+  const liveTextByTurn = new Map<string, { seq: number; ts: string; text: string }>()
+  for (const event of events) {
+    if (event.type !== 'MODEL_TEXT_DELTA' || !event.turn_id) continue
+    const delta = payloadOf(event, 'MODEL_TEXT_DELTA')
+    if (delta?.text) liveTextByTurn.set(event.turn_id, { seq: event.seq, ts: event.ts, text: delta.text })
+  }
+  const finishedTurns = new Set<string>()
   const entries: ChatEntry[] = []
   for (const event of events) {
     const base = { seq: event.seq, ts: event.ts }
@@ -763,12 +780,16 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
       case 'THOUGHT': {
         if (!thinking) break
         const text = payloadOf(event, 'THOUGHT')?.text?.trim()
-        if (text) entries.push({ ...base, role: 'thought', text: truncateChat(text, 4000) })
+        if (text) {
+          entries.push({ ...base, role: 'thought', text: truncateChat(text, 4000) })
+          if (event.turn_id) finishedTurns.add(event.turn_id)
+        }
         break
       }
       case 'MODEL_REQUEST_FINISHED': {
         const content = payloadOf(event, 'MODEL_REQUEST_FINISHED')?.message?.content?.trim()
         if (!content) break
+        if (event.turn_id) finishedTurns.add(event.turn_id)
         // Duplicate of the same-turn tool-call thought (see the
         // pre-scan above): the thought entry already carries this prose.
         const thought = thinking && event.turn_id ? thoughtByTurn.get(event.turn_id) : undefined
@@ -780,6 +801,10 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
         const call = payloadOf(event, 'TOOL_CALL_STARTED')?.call
         if (!call) break
         const result = views.get(call.id)?.result
+        const imageMeta = result?.meta
+        const image = imageMeta?.image_attached === true && typeof imageMeta?.image_path === 'string'
+          ? { path: imageMeta.image_path, ...(typeof imageMeta.image_mime === 'string' ? { mime: imageMeta.image_mime } : {}) }
+          : undefined
         entries.push({
           ...base,
           role: 'tool',
@@ -787,6 +812,7 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
           text: summarizeArgs(call.args) ?? '',
           detail: result?.output ? truncateChat(result.output.trim(), 400) : undefined,
           status: result ? toolStatus(result.status) : 'running',
+          ...(image ? { image } : {}),
         })
         break
       }
@@ -936,6 +962,17 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
       }
       default:
         break
+    }
+  }
+  // Turns still in flight: their streamed text is the newest thing the
+  // user should see, placed where the finished thought will land.
+  if (thinking) {
+    for (const [turnId, live] of liveTextByTurn) {
+      if (finishedTurns.has(turnId)) continue
+      const entry: ChatEntry = { seq: live.seq, ts: live.ts, role: 'thought', text: truncateChat(live.text, 4000), status: 'running' }
+      const at = entries.findIndex((candidate) => candidate.seq > live.seq)
+      if (at === -1) entries.push(entry)
+      else entries.splice(at, 0, entry)
     }
   }
   return entries

@@ -124,10 +124,13 @@ export function composerPrefsOf(composer: {
  */
 export const CHAT_HEIGHT_KEY = 'daedalus.web.chat-height.v1'
 export const TERMINAL_HEIGHT_KEY = 'daedalus.web.terminal-height.v1'
+export const WORKSPACE_PANEL_HEIGHT_KEY = 'daedalus.web.workspace-panel-height.v1'
 export const COLUMN_WIDTHS_KEY = 'daedalus.web.column-widths.v1'
 
 export const CHAT_HEIGHT = { min: 140, max: 720, default: 320 } as const
 export const TERMINAL_HEIGHT = { min: 120, max: 560, default: 180 } as const
+/** Workspace panel height in the left column; 0 = unset (shares the column evenly). */
+export const WORKSPACE_PANEL_HEIGHT = { min: 140, max: 640, default: 0 } as const
 export const COLUMN_WIDTHS = {
   left: { min: 240, max: 480, default: 320 },
   right: { min: 280, max: 560, default: 360 },
@@ -172,6 +175,28 @@ export function saveTerminalHeight(height: number, storage: Storage | undefined 
   if (!storage) return
   try {
     storage.setItem(TERMINAL_HEIGHT_KEY, String(clamp(height, TERMINAL_HEIGHT.min, TERMINAL_HEIGHT.max)))
+  } catch {
+    /* unavailable storage just keeps the height session-local */
+  }
+}
+
+/** Persisted workspace-panel height; 0 means unset (the panel flexes). */
+export function loadWorkspacePanelHeight(storage: Storage | undefined = defaultStorage()): number {
+  if (!storage) return WORKSPACE_PANEL_HEIGHT.default
+  try {
+    const parsed = Number(storage.getItem(WORKSPACE_PANEL_HEIGHT_KEY))
+    return Number.isFinite(parsed) && parsed > 0 ? clamp(parsed, WORKSPACE_PANEL_HEIGHT.min, WORKSPACE_PANEL_HEIGHT.max) : WORKSPACE_PANEL_HEIGHT.default
+  } catch {
+    return WORKSPACE_PANEL_HEIGHT.default
+  }
+}
+
+/** Saving 0 clears the preference and restores the even split. */
+export function saveWorkspacePanelHeight(height: number, storage: Storage | undefined = defaultStorage()): void {
+  if (!storage) return
+  try {
+    if (height > 0) storage.setItem(WORKSPACE_PANEL_HEIGHT_KEY, String(clamp(height, WORKSPACE_PANEL_HEIGHT.min, WORKSPACE_PANEL_HEIGHT.max)))
+    else storage.removeItem(WORKSPACE_PANEL_HEIGHT_KEY)
   } catch {
     /* unavailable storage just keeps the height session-local */
   }

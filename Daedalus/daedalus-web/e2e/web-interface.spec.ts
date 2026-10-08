@@ -149,8 +149,8 @@ test.describe('Daedalus web interface', () => {
     await page.goto('/')
     await submitTask(page)
 
-    await expect(page.getByTestId('files-changed-panel')).toContainText('src/health.ts')
-    await expect(page.getByTestId('validation-summary-panel')).toContainText('build')
+    await expect(page.getByTestId('diff-panel')).toContainText('src/health.ts')
+    await expect(page.getByTestId('validation-panel')).toContainText('build')
 
     const report = page.getByTestId('final-report-panel')
     await expect(report).toBeVisible()

@@ -250,14 +250,16 @@ describe('Phase 9 — tool integration and terminal failures', () => {
       { workspaceRoot: workspace },
     );
 
-    // The default set grew in three batches: fetch_url (read a public docs
+    // The default set grew in batches: fetch_url (read a public docs
     // page) + view_image (look at a workspace image), then search_images
     // (read-only Openverse/Wikimedia lookup) + download_file (mutating
     // image download into the workspace, mode-gated like the write tools),
     // then the background-job pair command_status (read) + command_kill
-    // (execution class) behind run_command's background start.
+    // (execution class) behind run_command's background start, then the
+    // 2026-10-08 tool-upgrades pair web_search (discovery half of
+    // fetch_url) + screenshot (verify rendered pages by looking).
     expect(DEFAULT_TOOLS.map((tool) => tool.name)).toEqual([
-      'read_file', 'write_file', 'edit_file', 'create_dir', 'list_dir', 'grep', 'glob', 'run_command', 'command_status', 'command_kill', 'git_diff', 'git_status', 'fetch_url', 'view_image', 'search_images', 'download_file',
+      'read_file', 'write_file', 'edit_file', 'create_dir', 'list_dir', 'grep', 'glob', 'run_command', 'command_status', 'command_kill', 'git_diff', 'git_status', 'fetch_url', 'web_search', 'view_image', 'screenshot', 'search_images', 'download_file',
     ]);
     expect((await call('create_dir', { path: 'src' })).status).toBe('ok');
     expect((await call('write_file', { path: 'src/app.ts', content: "export const value = 'broken';\n" })).status).toBe('ok');

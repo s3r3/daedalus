@@ -32,6 +32,13 @@ export function TopBar() {
   const taskEvents = useTaskEvents()
   const { theme, toggle } = useTheme()
   const [refreshing, setRefreshing] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyFilter, setHistoryFilter] = useState('')
+  const historyTasks = useMemo(() => {
+    const needle = historyFilter.trim().toLowerCase()
+    if (!needle) return tasks
+    return tasks.filter((task) => [task.id, task.title ?? '', task.goal ?? '', task.mode ?? '', task.status].join(' ').toLowerCase().includes(needle))
+  }, [tasks, historyFilter])
 
   const status = taskStatus(taskEvents, pendingApprovals(taskEvents).length, pendingQuestions(taskEvents).length)
   const contextPercent = useMemo(() => latestContextPercent(taskEvents), [taskEvents])
@@ -89,15 +96,6 @@ export function TopBar() {
       /* the header stays usable without the task list */
     } finally {
       setRefreshing(false)
-    }
-  }
-
-  const cancelTask = async (): Promise<void> => {
-    if (!taskId) return
-    try {
-      await api.cancelTask(taskId)
-    } catch {
-      /* cancellation is best effort; the stream reports the outcome */
     }
   }
 
@@ -167,34 +165,75 @@ export function TopBar() {
       ) : null}
 
       <div className="ml-auto flex flex-wrap items-center gap-2">
-        <label className="flex items-center gap-1 text-[10px] uppercase tracking-wider text-muted">
-          <span className="hidden sm:inline">task</span>
-          <select
-            aria-label="select task"
-            className="h-7 max-w-[220px] rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
-            value={taskId ?? ''}
-            onChange={(event) => {
-              if (event.target.value !== '') void selectTask(event.target.value)
-            }}
+        <div className="relative">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setHistoryOpen((open) => !open)}
+            aria-label="task history"
+            aria-expanded={historyOpen}
+            data-testid="topbar-history-button"
           >
-            <option value="">new task…</option>
-            {tasks.map((task) => (
-              <option key={task.id} value={task.id}>
-                {task.id.slice(0, 8)} · {task.mode ? `${task.mode} · ` : ''}{task.title ?? task.goal ?? task.status}
-              </option>
-            ))}
-          </select>
-        </label>
+            history{tasks.length ? ` (${tasks.length})` : ''}
+          </Button>
+          {historyOpen ? (
+            <>
+              <button type="button" aria-hidden tabIndex={-1} className="fixed inset-0 z-20 cursor-default" onClick={() => setHistoryOpen(false)} />
+              <div
+                className="absolute right-0 top-full z-30 mt-1 w-[340px] max-w-[86vw] rounded-md border border-line bg-surface p-1.5 shadow-lg"
+                data-testid="task-history"
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') setHistoryOpen(false)
+                }}
+              >
+                <input
+                  aria-label="filter tasks"
+                  placeholder="filter by title, goal, or id…"
+                  value={historyFilter}
+                  onChange={(event) => setHistoryFilter(event.target.value)}
+                  className="mb-1 h-7 w-full rounded border border-line bg-surface-base px-1.5 text-[11px] text-foreground"
+                />
+                {historyTasks.length === 0 ? (
+                  <p className="px-1 py-2 text-[11px] text-muted">{tasks.length === 0 ? 'no tasks recorded yet' : 'no tasks match'}</p>
+                ) : (
+                  <ul className="flex max-h-72 flex-col gap-0.5 overflow-auto">
+                    {historyTasks.map((task) => (
+                      <li key={task.id}>
+                        <button
+                          type="button"
+                          data-testid="history-task"
+                          data-task-id={task.id}
+                          onClick={() => {
+                            setHistoryOpen(false)
+                            void selectTask(task.id)
+                          }}
+                          className={`flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] hover:bg-surface-base ${
+                            task.id === taskId ? 'border border-primary' : 'border border-transparent'
+                          }`}
+                        >
+                          <Badge tone={task.running ? 'info' : summaryTone(task.status)}>{task.running ? 'running' : task.status}</Badge>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-foreground">{task.title ?? task.goal ?? task.id.slice(0, 8)}</span>
+                            <span className="block truncate text-[10px] text-muted">
+                              {task.id.slice(0, 8)}
+                              {task.mode ? ` · ${task.mode}` : ''}
+                              {` · ${task.event_count} events`}
+                              {timeAgo(task.updated_at ?? task.created_at) ? ` · ${timeAgo(task.updated_at ?? task.created_at)}` : ''}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </>
+          ) : null}
+        </div>
 
         <Button variant="outline" size="sm" onClick={() => void refreshTasks()} disabled={refreshing} aria-label="refresh tasks">
           refresh
         </Button>
-
-        {taskId && (status === 'running' || status === 'awaiting-approval' || status === 'awaiting-answer') ? (
-          <Button variant="danger" size="sm" onClick={() => void cancelTask()} data-testid="topbar-stop" aria-label="stop the running task">
-            ■ stop
-          </Button>
-        ) : null}
 
         <Button
           variant={settingsOpen ? 'default' : 'outline'}
@@ -244,6 +283,27 @@ async function selectTask(taskId: string): Promise<void> {
       /* the task view alone remains usable */
     }
   }
+}
+
+/** Badge tone for a task-summary status word (core state, not the live derived status). */
+function summaryTone(status: string): 'success' | 'warning' | 'error' | 'info' | 'neutral' {
+  if (status === 'done' || status === 'success') return 'success'
+  if (status === 'failed' || status === 'error') return 'error'
+  if (status === 'partial' || status === 'stopped') return 'warning'
+  if (status === 'running') return 'info'
+  return 'neutral'
+}
+
+/** "5m ago" style stamp for the history list; empty for unparseable input. */
+function timeAgo(ts: string | null | undefined): string {
+  if (!ts) return ''
+  const then = Date.parse(ts)
+  if (!Number.isFinite(then)) return ''
+  const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000))
+  if (seconds < 60) return 'just now'
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`
+  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h ago`
+  return `${Math.floor(seconds / 86_400)}d ago`
 }
 
 function connectionTone(connection: string): 'success' | 'warning' | 'error' | 'neutral' {

@@ -122,7 +122,7 @@ export type ExtensionStatus = {
   mcp: Array<{ name: string; connected: boolean; toolCount: number; error?: string }>
   skills: ExtensionSkillSummary[]
   agents: Array<{ name: string; description: string; model?: string; mode?: string; tools?: string[] }>
-  lsp: Array<{ name: string; extensions: string[]; configured: boolean; running?: boolean; error?: string }>
+  lsp: Array<{ name: string; extensions: string[]; configured: boolean; running?: boolean; error?: string; auto?: boolean }>
   problems: string[]
 }
 
@@ -187,6 +187,13 @@ export type WorkspacePlan = {
 export type WorkspacePlans = { root: string; plans: WorkspacePlan[] }
 
 export type WorkspaceFileEntry = { path: string; type: 'file' | 'dir' }
+
+/** Worktree state from GET /workspace/git-status (the user's own git, read-only). */
+export type WorkspaceGitStatus = {
+  isRepo: boolean
+  branch: string | null
+  files: Array<{ path: string; status: 'untracked' | 'added' | 'modified' | 'deleted' | 'renamed' | 'changed' }>
+}
 export type WorkspaceFiles = { root: string; files: WorkspaceFileEntry[]; truncated: boolean }
 
 export type ProviderTestResult = {
@@ -318,6 +325,7 @@ export type EventPayloads = {
   JOB_FINISHED: JobFinished
   FILE_CHANGED: FileChange
   MODEL_REQUEST_STARTED: { provider: string; messages: number; tools: number; phase?: string; context_estimate_tokens?: number; context_limit_tokens?: number; context_percent?: number }
+  MODEL_TEXT_DELTA: { text: string; final?: boolean }
   MODEL_REQUEST_FINISHED: { message?: { content?: string }; usage?: Record<string, number>; finish_reason?: string; model?: string; tier?: string; phase?: string; context_estimate_tokens?: number; context_limit_tokens?: number; context_percent?: number }
   MODEL_REQUEST_FAILED: ModelRequestFailed
   VALIDATION_STARTED: { task_id: string }

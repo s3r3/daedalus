@@ -10,6 +10,8 @@ The 12-task evaluation suite, runner, aggregator, deterministic subset, and dete
 
 The live 12-task run was completed on 2026-10-05 after `llm.ayid.cc.cd` recovered, using model `kgw/kilo-auto/free`. The retained dataset is `Daedalus/evaluation/reports/live-kilo-2026-10-05/`, with a deterministic-vs-live comparison in `Daedalus/evaluation/reports/aggregate-combined-2026-10-05/`. The live outcome was **0/12 success and 12/12 partial**, all classified as `validation_failed`: the model generally inspected the fixture but did not make the required file change before validation/recovery budgets ended. This is a valid negative result for that provider/model/configuration, not evidence that the deterministic harness result transfers to live models.
 
+**Update (2026-10-08):** the harness defects that compounded that result — validation mis-scoping, read-loop stalls, missing per-task target anchoring, and per-turn context rebuilt from only the most recent observation — have since been fixed with regression tests, and live runs on a strong model through the same gateway have succeeded (TASK SUCCESS / VALIDATION PASSED on the owner's laptop, 2026-10-06; an end-to-end VM run completed in 113 seconds on 2026-10-08). The 0/12 remains the honest result for `kgw/kilo-auto/free` on the 2026-10-05 harness; it is no longer the standing live result.
+
 ### Native desktop tray is not bundled
 
 The daemon lifecycle, tray menu model (Open CLI/Open Web/Status/Quit), capability detection, and fake-backend ordering tests are implemented. This build does **not** bundle a native tray backend, and the development VM is headless, so a real desktop icon and right-click Quit have not been verified. Headless behaviour intentionally reports the limitation and directs the user to `daedalus status` / `daedalus stop`.
@@ -17,6 +19,8 @@ The daemon lifecycle, tray menu model (Open CLI/Open Web/Status/Quit), capabilit
 ### Tracked `.env` requires an owner decision
 
 `Daedalus/.env` is present and tracked in this repository clone. Its contents are not reproduced in documentation. Treat any real credential that has ever been committed to a public/shared repository as exposed. The safe remediation is to rotate the provider key, remove `.env` from git tracking/history, and keep only `.env.example` with empty values. That remediation changes credentials and repository history, so it has not been performed as part of this documentation preparation.
+
+**Update (2026-10-07):** the owner confirms the tracked key is a long-replaced example, not a live secret; rotation has in effect already happened. Removing `.env` from tracking remains optional tidiness and has still not been performed.
 
 Also note: `.env.example` is only a template. The current entry points read process environment and do not automatically load `.env`; export the variables or configure providers through the server/Web registry.
 

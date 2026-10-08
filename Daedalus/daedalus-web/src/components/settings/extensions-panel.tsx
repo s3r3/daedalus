@@ -231,9 +231,10 @@ export function ExtensionsPanel() {
               <ul className="flex flex-col gap-1">
                 {status.lsp.map((server) => (
                   <li key={server.name} className="flex items-center gap-1.5" data-testid="extension-lsp-entry">
-                    <Badge tone="info">configured</Badge>
+                    <Badge tone="info">{server.auto ? 'auto' : 'configured'}</Badge>
                     <span className="text-foreground">{server.name}</span>
                     <span className="text-muted">{server.extensions.join(', ')}</span>
+                    {server.auto ? <span className="text-muted">· starts on first use</span> : null}
                   </li>
                 ))}
               </ul>

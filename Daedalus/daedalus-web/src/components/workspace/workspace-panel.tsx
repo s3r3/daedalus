@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
 import { ChevronDown, ChevronRight, File as FileIcon, Folder, FolderOpen, ImagePlus, Pin, PinOff, UploadCloud } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -16,7 +16,7 @@ import { useDaedalusStore } from '../../state/taskStore'
  * shell gives it a flexible share (App.tsx) so the panel can never grow to
  * its full content height and starve the scroll region below it.
  */
-export function WorkspacePanel({ className }: { className?: string } = {}) {
+export function WorkspacePanel({ className, style }: { className?: string; style?: CSSProperties } = {}) {
   const workspace = useDaedalusStore((state) => state.workspace)
   const setWorkspace = useDaedalusStore((state) => state.setWorkspace)
   const setSession = useDaedalusStore((state) => state.setSession)
@@ -293,6 +293,7 @@ export function WorkspacePanel({ className }: { className?: string } = {}) {
       title="workspace"
       data-testid="workspace-panel"
       className={className}
+      style={style}
       action={
         root.length > 0 ? (
           <Badge tone="primary" className="max-w-[150px] truncate">

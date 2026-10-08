@@ -289,3 +289,150 @@ export function createFetchUrlTool(options: { fetchImpl?: FetchUrlImpl; timeoutM
 }
 
 export const fetchUrlTool: ToolDefinition = createFetchUrlTool();
+
+/**
+ * web_search: the discovery half fetch_url deliberately lacked. The
+ * model often knows WHAT it needs (an install command, an error's
+ * meaning) but not the exact URL; without search it guesses URLs from
+ * memory or gives up to `--help` probing. Backend order: Brave
+ * (DAEDALUS_BRAVE_SEARCH_API_KEY), Tavily (DAEDALUS_TAVILY_API_KEY),
+ * then keyless DuckDuckGo HTML. Results are title/URL/snippet only —
+ * fetch_url reads the chosen page in full.
+ */
+
+export const WEB_SEARCH_TIMEOUT_MS = 15_000;
+export const WEB_SEARCH_MAX_QUERIES = 3;
+export const WEB_SEARCH_DEFAULT_COUNT = 5;
+export const WEB_SEARCH_MAX_COUNT = 10;
+
+export type WebSearchResult = { title: string; url: string; snippet: string };
+
+export type WebSearchFetchImpl = (
+  url: string,
+  init: { method?: string; headers: Record<string, string>; body?: string; signal: AbortSignal },
+) => Promise<FetchUrlResponse>;
+
+export type WebSearchBackend = 'brave' | 'tavily' | 'duckduckgo';
+
+export function webSearchBackend(env: NodeJS.ProcessEnv = process.env): WebSearchBackend {
+  if (env.DAEDALUS_BRAVE_SEARCH_API_KEY) return 'brave';
+  if (env.DAEDALUS_TAVILY_API_KEY) return 'tavily';
+  return 'duckduckgo';
+}
+
+function stripTags(html: string): string {
+  return decodeHtmlEntities(html.replace(/<[^>]*>/g, ' ')).replace(/\s+/g, ' ').trim();
+}
+
+/** Parse DuckDuckGo's keyless HTML results page into title/url/snippet rows. Exported for tests. */
+export function parseDuckDuckGoHtml(html: string): WebSearchResult[] {
+  const results: WebSearchResult[] = [];
+  const linkPattern = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+  const snippetPattern = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+  const snippets: string[] = [];
+  for (let match = snippetPattern.exec(html); match; match = snippetPattern.exec(html)) snippets.push(stripTags(match[1] ?? ''));
+  let index = 0;
+  for (let match = linkPattern.exec(html); match; match = linkPattern.exec(html)) {
+    let href = decodeHtmlEntities(match[1] ?? '');
+    try {
+      const parsed = new URL(href.startsWith('//') ? `https:${href}` : href, 'https://duckduckgo.com');
+      const uddg = parsed.searchParams.get('uddg');
+      if (uddg) href = uddg;
+      else href = parsed.href;
+    } catch { /* keep the raw href */ }
+    results.push({ title: stripTags(match[2] ?? ''), url: href, snippet: snippets[index] ?? '' });
+    index++;
+  }
+  return results;
+}
+
+export function createWebSearchTool(options: { fetchImpl?: WebSearchFetchImpl; timeoutMs?: number; env?: NodeJS.ProcessEnv } = {}): ToolDefinition {
+  const timeoutMs = options.timeoutMs ?? WEB_SEARCH_TIMEOUT_MS;
+  const env = options.env ?? process.env;
+  const fetchImpl: WebSearchFetchImpl = options.fetchImpl ?? ((url, init) => fetch(url, init));
+
+  const runOne = async (backend: WebSearchBackend, query: string, count: number, signal: AbortSignal): Promise<WebSearchResult[]> => {
+    if (backend === 'brave') {
+      const url = `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${count}`;
+      const response = await fetchImpl(url, { headers: { accept: 'application/json', 'x-subscription-token': env.DAEDALUS_BRAVE_SEARCH_API_KEY as string }, signal });
+      if (response.status < 200 || response.status >= 300) throw new Error(`Brave search returned HTTP ${response.status}`);
+      const body = JSON.parse(await response.text()) as { web?: { results?: Array<{ title?: string; url?: string; description?: string }> } };
+      return (body.web?.results ?? []).slice(0, count).map((r) => ({ title: r.title ?? '', url: r.url ?? '', snippet: r.description ?? '' }));
+    }
+    if (backend === 'tavily') {
+      const response = await fetchImpl('https://api.tavily.com/search', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ api_key: env.DAEDALUS_TAVILY_API_KEY, query, max_results: count }),
+        signal,
+      });
+      if (response.status < 200 || response.status >= 300) throw new Error(`Tavily search returned HTTP ${response.status}`);
+      const body = JSON.parse(await response.text()) as { results?: Array<{ title?: string; url?: string; content?: string }> };
+      return (body.results ?? []).slice(0, count).map((r) => ({ title: r.title ?? '', url: r.url ?? '', snippet: r.content ?? '' }));
+    }
+    const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+    const response = await fetchImpl(url, { headers: { 'user-agent': 'Mozilla/5.0 (X11; Linux x86_64) Daedalus/1.0' }, signal });
+    if (response.status < 200 || response.status >= 300) throw new Error(`DuckDuckGo search returned HTTP ${response.status}`);
+    return parseDuckDuckGoHtml(await response.text()).slice(0, count);
+  };
+
+  return {
+    name: 'web_search',
+    description: [
+      'Search the public web for something you do not know (an install command, an error message, current docs): returns titles, URLs, and snippets. Follow up with fetch_url on the result you choose to read it in full.',
+      'Pass one `query` or up to 3 `queries` merged in one call. Uses Brave/Tavily when their API key env var is set, otherwise a keyless DuckDuckGo backend (which may refuse when rate-limited — then fetch a known docs URL directly instead of retrying in a loop).',
+    ].join(' '),
+    mutating: false,
+    timeoutMs: timeoutMs * WEB_SEARCH_MAX_QUERIES + 5_000,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'One search query' },
+        queries: { type: 'array', items: { type: 'string' }, maxItems: WEB_SEARCH_MAX_QUERIES, description: 'Up to 3 queries in one call' },
+        count: { type: 'integer', minimum: 1, maximum: WEB_SEARCH_MAX_COUNT, description: 'Results per query (default 5)' },
+      },
+      additionalProperties: false,
+    },
+    async execute(args, context): Promise<ToolResult> {
+      const a = args as { query?: unknown; queries?: unknown; count?: unknown };
+      const queries = [...(typeof a.query === 'string' && a.query.trim() ? [a.query.trim()] : []), ...(Array.isArray(a.queries) ? a.queries.filter((q): q is string => typeof q === 'string' && q.trim().length > 0).map((q) => q.trim()) : [])].slice(0, WEB_SEARCH_MAX_QUERIES);
+      if (queries.length === 0) return { call_id: '', status: 'error', output: 'web_search requires a "query" string or "queries" array (up to 3).', truncated: false, meta: { reason: 'invalid_arguments' } };
+      const count = typeof a.count === 'number' && Number.isFinite(a.count) ? Math.min(WEB_SEARCH_MAX_COUNT, Math.max(1, Math.floor(a.count))) : WEB_SEARCH_DEFAULT_COUNT;
+      const backend = webSearchBackend(env);
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs * queries.length);
+      timer.unref?.();
+      const onHostAbort = (): void => controller.abort();
+      context.signal?.addEventListener('abort', onHostAbort, { once: true });
+      try {
+        const sections: string[] = [];
+        let total = 0;
+        for (const query of queries) {
+          const results = await runOne(backend, query, count, controller.signal);
+          total += results.length;
+          sections.push([
+            `## ${query}`,
+            ...(results.length === 0 ? ['(no results)'] : results.map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet}` : ''}`)),
+          ].join('\n'));
+        }
+        return {
+          call_id: '',
+          status: 'ok',
+          output: `Web search via ${backend} (${total} result${total === 1 ? '' : 's'}):\n\n${sections.join('\n\n')}`,
+          truncated: false,
+          meta: { backend, queries: queries.length, count: total },
+        };
+      } catch (error) {
+        if (controller.signal.aborted) {
+          return { call_id: '', status: 'timeout', output: `web_search timed out via the ${backend} backend — fetch a known docs URL with fetch_url instead of retrying search in a loop.`, truncated: false, meta: { reason: 'timeout', backend } };
+        }
+        return { call_id: '', status: 'error', output: `web_search failed via the ${backend} backend: ${(error as Error)?.message ?? String(error)}. If it refuses (rate limit / no key), fetch a known docs URL with fetch_url instead.`, truncated: false, meta: { reason: 'search_failed', backend } };
+      } finally {
+        clearTimeout(timer);
+        context.signal?.removeEventListener('abort', onHostAbort);
+      }
+    },
+  };
+}
+
+export const webSearchTool: ToolDefinition = createWebSearchTool();
