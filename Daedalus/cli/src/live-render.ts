@@ -21,8 +21,6 @@ export function spinnerGlyph(tick: number): string {
   return SPINNER_FRAMES[((tick % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length] ?? "";
 }
 
-/** Membership test for "is this char a spinner glyph" (screen colorizers). */
-export const SPINNER_FRAME_SET: ReadonlySet<string> = new Set(SPINNER_FRAMES);
 
 const SCRAMBLE_GLYPHS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789#$%&*+=<>";
 
@@ -104,24 +102,4 @@ export class DeltaSuffixTracker {
     this.#turnId = undefined;
     this.#printed = "";
   }
-}
-
-/**
- * Sidebar rows for the language servers a workspace will ACTUALLY
- * use: configured servers plus core's automatic defaults. An entry
- * present in `effective` but not `configured` is automatic — saying
- * so beats the old configured-only list, which claimed "none" on
- * TypeScript workspaces while the auto server served diagnostics.
- */
-export function lspSidebarEntries(
-  configured: Array<{ name: string; extensions: string[] }>,
-  effective: Array<{ name: string; extensions: string[] }>,
-): Array<{ name: string; detail: string }> {
-  const configuredNames = new Set(configured.map((server) => server.name));
-  return effective.map((server) => {
-    const extensions = server.extensions.join(" ") || "no extensions";
-    return configuredNames.has(server.name)
-      ? { name: server.name, detail: `${extensions} · configured` }
-      : { name: server.name, detail: `${extensions} · auto (starts on first use)` };
-  });
 }

@@ -39,7 +39,7 @@ describe('CLI', () => {
     expect(written.join('')).toContain('serve')
     expect(written.join('')).toContain('status')
     expect(written.join('')).toContain('stop')
-    expect(written.join('')).toContain('chat')
+    expect(written.join('')).not.toContain('chat')
     expect(written.join('')).toContain('ask')
   })
 

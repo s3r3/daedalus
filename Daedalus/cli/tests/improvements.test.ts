@@ -4,7 +4,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { TaskStore } from '@daedalus/core'
 import { buildProgram, formatEvent } from '../src/index.ts'
-import { InteractiveSession } from '../src/interactive.ts'
 
 const cleanups: Array<() => void> = []
 afterEach(() => {
@@ -79,42 +78,3 @@ describe('restore command', () => {
   })
 })
 
-describe('InteractiveSession additions', () => {
-  test('/rewind dispatches to the rewind callback', async () => {
-    const session = new InteractiveSession({ workspaceRoot: tempDir('daedalus-cli-sess-') })
-    session.setCallbacks({
-      rewind: async () => ({ text: 'Rewound task t-1:\nrestored a.txt', action: 'rewind' }),
-    })
-    const result = await session.handleInput('/rewind')
-    expect(result.text).toContain('Rewound task t-1')
-    expect(result.text).toContain('restored a.txt')
-  })
-
-  test('/rewind without a runner attached explains itself', async () => {
-    const session = new InteractiveSession({ workspaceRoot: tempDir('daedalus-cli-sess2-') })
-    const result = await session.handleInput('/rewind')
-    expect(result.text).toContain('Rewind is unavailable')
-  })
-
-  test('ctx% from MODEL_REQUEST events shows in the status bar', () => {
-    const session = new InteractiveSession({ workspaceRoot: tempDir('daedalus-cli-sess3-') })
-    expect(session.statusBar()).not.toContain('ctx ')
-    session.observeEvent({
-      seq: 1,
-      task_id: 't1',
-      type: 'MODEL_REQUEST_STARTED',
-      payload: { provider: 'fake', messages: 4, tools: 3, context_estimate_tokens: 640, context_limit_tokens: 1000, context_percent: 64 },
-      ts: new Date().toISOString(),
-    })
-    expect(session.contextPercent).toBe(64)
-    expect(session.statusBar()).toContain('ctx 64%')
-  })
-
-  test('loaded rules files show in the status bar', () => {
-    const session = new InteractiveSession({ workspaceRoot: tempDir('daedalus-cli-sess4-') })
-    expect(session.statusBar()).not.toContain('rules')
-    session.setRulesFiles(['AGENTS.md'])
-    expect(session.rulesFiles).toEqual(['AGENTS.md'])
-    expect(session.statusBar()).toContain('rules AGENTS.md')
-  })
-})

@@ -4,8 +4,65 @@ import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadSettings, resolveDaedalusHome } from '@daedalus/core';
-import { truncateVisible } from './interactive.ts';
 import { detectTray, type TrayStatus } from './tray.ts';
+
+const ANSI_PATTERN = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g;
+
+/** Strip ANSI escapes, tabs, and control characters from terminal text. */
+export function sanitizeTerminalText(text: string): string {
+  return text
+    .replace(ANSI_PATTERN, '')
+    .replace(/\t/g, '  ')
+    .replace(/[\u0000-\u001f\u007f-\u009f]/g, '');
+}
+
+/** Terminal cell width of one code point (combining = 0, East Asian wide/fullwidth and emoji = 2). */
+function charCellWidth(codePoint: number): number {
+  if (codePoint === 0) return 0;
+  if (codePoint < 0x20 || (codePoint >= 0x7f && codePoint < 0xa0)) return 0;
+  if (codePoint >= 0x0300 && codePoint <= 0x036f) return 0; // combining diacriticals
+  if (
+    (codePoint >= 0x1100 && codePoint <= 0x115f) // Hangul Jamo
+    || (codePoint >= 0x2e80 && codePoint <= 0xa4cf) // CJK radicals, kana, han
+    || (codePoint >= 0xac00 && codePoint <= 0xd7a3) // Hangul syllables
+    || (codePoint >= 0xf900 && codePoint <= 0xfaff) // CJK compatibility ideographs
+    || (codePoint >= 0xfe30 && codePoint <= 0xfe4f) // CJK compatibility forms
+    || (codePoint >= 0xff00 && codePoint <= 0xff60) // fullwidth forms
+    || (codePoint >= 0x1f300 && codePoint <= 0x1faff) // emoji and symbols
+    || (codePoint >= 0x20000 && codePoint <= 0x2fffd)
+    || (codePoint >= 0x30000 && codePoint <= 0x3fffd)
+  ) return 2;
+  return 1;
+}
+
+/** Visible terminal-cell width of a string (escapes stripped). */
+export function visibleWidth(text: string): number {
+  let width = 0;
+  for (const ch of sanitizeTerminalText(text)) width += charCellWidth(ch.codePointAt(0) ?? 0);
+  return width;
+}
+
+/**
+ * Truncate `text` to at most `width` terminal cells (ellipsis when cut).
+ * Escape sequences are stripped rather than sliced, so the result can never
+ * contain a partial escape or split a surrogate pair.
+ */
+export function truncateVisible(text: string, width: number): string {
+  if (width <= 0) return '';
+  const clean = sanitizeTerminalText(text.replace(/[\r\n]+/g, ' '));
+  if (visibleWidth(clean) <= width) return clean;
+  if (width === 1) return '…';
+  const budget = width - 1;
+  let used = 0;
+  let out = '';
+  for (const ch of clean) {
+    const w = charCellWidth(ch.codePointAt(0) ?? 0);
+    if (used + w > budget) break;
+    used += w;
+    out += ch;
+  }
+  return `${out.trimEnd()}…`;
+}
 
 export type DaemonState = {
   pid: number;
@@ -341,7 +398,7 @@ export async function fetchDaemonWorkspace(url: string, fetchImpl: typeof fetch 
   }
 }
 
-export type MenuAction = 'web' | 'cli' | 'tray' | 'exit' | 'invalid';
+export type MenuAction = 'web' | 'tray' | 'exit' | 'invalid';
 export type LauncherAction = Exclude<MenuAction, 'invalid'>;
 
 export type LauncherMenuItem = {
@@ -351,20 +408,24 @@ export type LauncherMenuItem = {
   description: string;
 };
 
-/** The four launcher choices, in display order (keys 1–4). */
+/**
+ * The three launcher choices, in display order (keys 1–3). The launcher
+ * starts the harness and opens its Web workspace; the interactive
+ * terminal UI was removed (2026-10-08, Farid's decision) because the
+ * harness loses nothing without it — every capability lives in core and
+ * the Web carries the surfaces a terminal cannot.
+ */
 export const LAUNCHER_MENU_ITEMS: LauncherMenuItem[] = [
   { key: '1', action: 'web', label: 'Web UI', description: 'Open in Browser' },
-  { key: '2', action: 'cli', label: 'Terminal UI', description: 'Interactive CLI' },
-  { key: '3', action: 'tray', label: 'Hide to Tray', description: 'Background' },
-  { key: '4', action: 'exit', label: 'Exit', description: '' },
+  { key: '2', action: 'tray', label: 'Hide to Tray', description: 'Background' },
+  { key: '3', action: 'exit', label: 'Exit', description: '' },
 ];
 
 export function parseMenuChoice(input: string | null | undefined): MenuAction {
   const normalized = (input ?? '').trim().toLowerCase();
   if (normalized === '1') return 'web';
-  if (normalized === '2') return 'cli';
-  if (normalized === '3') return 'tray';
-  if (normalized === '4' || normalized === '0' || normalized === 'q' || normalized === 'quit' || normalized === 'exit') return 'exit';
+  if (normalized === '2') return 'tray';
+  if (normalized === '3' || normalized === '0' || normalized === 'q' || normalized === 'quit' || normalized === 'exit') return 'exit';
   return 'invalid';
 }
 
@@ -405,7 +466,7 @@ export function launcherMenuFrame(selection: number, status: DaemonStatus): stri
       const label = `${item.key}  ${item.label}${item.description ? ` (${item.description})` : ''}`;
       return `│  ${index === clamped ? '❯' : ' '} ${label}`;
     }),
-    '╰─ ↑/↓ select · Enter confirm · 1–4 jump · q quit',
+    '╰─ ↑/↓ select · Enter confirm · 1–3 jump · q quit',
   ];
   return lines.join('\n');
 }
@@ -485,7 +546,6 @@ export type StopServerResult = { stopped: boolean; pid?: number; reason: string 
 export type LauncherChoiceDeps = {
   status: DaemonStatus;
   print: (text: string) => void;
-  openCli: () => Promise<void>;
   openWeb: () => Promise<void>;
   hideToTray?: () => Promise<void> | void;
   /** Stop the background server; the launcher's `Exit` choice goes through this. */
@@ -494,9 +554,9 @@ export type LauncherChoiceDeps = {
 
 /**
  * Carry out one chosen launcher action and print what happens next. The
- * background server keeps running for Web, CLI, and Tray; `Exit` shuts it
- * down through the same stop mechanism as `daedalus stop`. Returns the
- * action so callers can react further.
+ * background server keeps running for Web and Tray; `Exit` shuts it down
+ * through the same stop mechanism as `daedalus stop`. Returns the action
+ * so callers can react further.
  */
 export async function runLauncherChoice(action: LauncherAction, deps: LauncherChoiceDeps): Promise<LauncherAction> {
   const url = deps.status.server_url;
@@ -505,10 +565,6 @@ export async function runLauncherChoice(action: LauncherAction, deps: LauncherCh
       await deps.openWeb();
       deps.print(`Web UI: ${url} (server keeps running in the background; \`daedalus stop\` stops it).\n`);
       return 'web';
-    case 'cli':
-      await deps.openCli();
-      deps.print(`CLI closed. The background server is still running at ${url} (workspace ${deps.status.workspace ?? process.cwd()}); \`daedalus stop\` stops it.\n`);
-      return 'cli';
     case 'tray':
       await deps.hideToTray?.();
       deps.print(`Background mode: only the server keeps running at ${url}. Tray: ${deps.status.tray.reason}\n`);
@@ -537,7 +593,7 @@ export async function runStartupMenu(deps: LauncherChoiceDeps & {
   for (;;) {
     const action = parseMenuChoice(await deps.readChoice());
     if (action === 'invalid') {
-      deps.print('Please choose 1, 2, 3, 4, or q.\n');
+      deps.print('Please choose 1, 2, 3, or q.\n');
       continue;
     }
     return runLauncherChoice(action, deps);
@@ -570,7 +626,6 @@ export async function runBareLauncher(deps: {
   ensureDaemon: () => Promise<EnsureDaemonResult>;
   readChoice: () => Promise<string | null>;
   print: (text: string) => void;
-  openCli: () => Promise<void>;
   openWeb: (url: string) => Promise<void>;
   hideToTray?: () => Promise<void> | void;
   stopServer: () => Promise<StopServerResult>;
@@ -580,7 +635,6 @@ export async function runBareLauncher(deps: {
     status: ensured.status,
     readChoice: deps.readChoice,
     print: deps.print,
-    openCli: deps.openCli,
     openWeb: () => deps.openWeb(ensured.status.server_url),
     hideToTray: deps.hideToTray,
     stopServer: deps.stopServer,
