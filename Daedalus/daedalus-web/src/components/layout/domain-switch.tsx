@@ -1,13 +1,15 @@
 import { Code2, Presentation } from 'lucide-react'
 import { useDaedalusStore, type WebDomain } from '../../state/taskStore'
-import { saveDomain } from '../../state/prefs'
+import { pathForDomain, saveDomain } from '../../state/prefs'
 import { cn } from '../../lib/utils'
 
 /**
  * Domain switcher (Agentic Coding | Agentic Slide). Domains are what the
  * harness produces, not how autonomously it works: switching re-skins the
- * center canvas around the same workspace, chat, and core. The choice
- * persists as a browser pref (App also mirrors store changes back).
+ * center canvas around the same workspace, chat, and core. The route names
+ * the domain ('/slide' vs '/'), so choosing also pushes the matching URL —
+ * back/forward then replays the switch via App's popstate listener. The
+ * choice persists as a browser pref (App also mirrors store changes back).
  */
 const OPTIONS: Array<{ domain: WebDomain; label: string; Icon: typeof Code2 }> = [
   { domain: 'coding', label: 'Coding', Icon: Code2 },
@@ -21,6 +23,9 @@ export function DomainSwitch() {
   const choose = (next: WebDomain): void => {
     setDomain(next)
     saveDomain(next)
+    // The URL names the domain: push it so the choice is shareable and
+    // back/forward navigates domains (App's popstate listener re-reads it).
+    if (typeof window !== 'undefined') window.history.pushState(null, '', pathForDomain(next))
   }
 
   return (

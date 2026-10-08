@@ -137,6 +137,17 @@ export function serverUrl(host: string, port: number): string {
   return `http://${host}:${port}`;
 }
 
+/**
+ * Join a server base URL with an app path without doubling slashes.
+ * `'/'` returns the base unchanged so the Coding route stays byte-for-byte
+ * identical to the pre-picker behaviour; any other path is appended.
+ */
+export function joinServerUrl(serverUrl: string, path: string): string {
+  const base = serverUrl.replace(/\/+$/, '');
+  if (path === '/') return base;
+  return `${base}${path.startsWith('/') ? path : `/${path}`}`;
+}
+
 export function serverMainPath(): string {
   return fileURLToPath(new URL('../../server/src/main.ts', import.meta.url));
 }
@@ -398,7 +409,7 @@ export async function fetchDaemonWorkspace(url: string, fetchImpl: typeof fetch 
   }
 }
 
-export type MenuAction = 'web' | 'tray' | 'exit' | 'invalid';
+export type MenuAction = 'coding' | 'slide' | 'tray' | 'exit' | 'invalid';
 export type LauncherAction = Exclude<MenuAction, 'invalid'>;
 
 export type LauncherMenuItem = {
@@ -409,23 +420,26 @@ export type LauncherMenuItem = {
 };
 
 /**
- * The three launcher choices, in display order (keys 1–3). The launcher
- * starts the harness and opens its Web workspace; the interactive
- * terminal UI was removed (2026-10-08, Farid's decision) because the
- * harness loses nothing without it — every capability lives in core and
- * the Web carries the surfaces a terminal cannot.
+ * The four launcher choices, in display order (keys 1–4). The launcher
+ * starts the harness and opens its Web workspace — Daedalus Coding at
+ * `/` or Daedalus Slide at `/slide`; the interactive terminal UI was
+ * removed (2026-10-08, Farid's decision) because the harness loses
+ * nothing without it — every capability lives in core and the Web
+ * carries the surfaces a terminal cannot.
  */
 export const LAUNCHER_MENU_ITEMS: LauncherMenuItem[] = [
-  { key: '1', action: 'web', label: 'Web UI', description: 'Open in Browser' },
-  { key: '2', action: 'tray', label: 'Hide to Tray', description: 'Background' },
-  { key: '3', action: 'exit', label: 'Exit', description: '' },
+  { key: '1', action: 'coding', label: 'Daedalus Coding', description: 'Web UI' },
+  { key: '2', action: 'slide', label: 'Daedalus Slide', description: 'Web UI' },
+  { key: '3', action: 'tray', label: 'Hide to Tray', description: 'Background' },
+  { key: '4', action: 'exit', label: 'Exit', description: '' },
 ];
 
 export function parseMenuChoice(input: string | null | undefined): MenuAction {
   const normalized = (input ?? '').trim().toLowerCase();
-  if (normalized === '1') return 'web';
-  if (normalized === '2') return 'tray';
-  if (normalized === '3' || normalized === '0' || normalized === 'q' || normalized === 'quit' || normalized === 'exit') return 'exit';
+  if (normalized === '1') return 'coding';
+  if (normalized === '2') return 'slide';
+  if (normalized === '3') return 'tray';
+  if (normalized === '4' || normalized === '0' || normalized === 'q' || normalized === 'quit' || normalized === 'exit') return 'exit';
   return 'invalid';
 }
 
@@ -466,7 +480,7 @@ export function launcherMenuFrame(selection: number, status: DaemonStatus): stri
       const label = `${item.key}  ${item.label}${item.description ? ` (${item.description})` : ''}`;
       return `│  ${index === clamped ? '❯' : ' '} ${label}`;
     }),
-    '╰─ ↑/↓ select · Enter confirm · 1–3 jump · q quit',
+    '╰─ ↑/↓ select · Enter confirm · 1–4 jump · q quit',
   ];
   return lines.join('\n');
 }
@@ -546,7 +560,7 @@ export type StopServerResult = { stopped: boolean; pid?: number; reason: string 
 export type LauncherChoiceDeps = {
   status: DaemonStatus;
   print: (text: string) => void;
-  openWeb: () => Promise<void>;
+  openWeb: (path: string) => Promise<void>;
   hideToTray?: () => Promise<void> | void;
   /** Stop the background server; the launcher's `Exit` choice goes through this. */
   stopServer: () => Promise<StopServerResult>;
@@ -561,10 +575,14 @@ export type LauncherChoiceDeps = {
 export async function runLauncherChoice(action: LauncherAction, deps: LauncherChoiceDeps): Promise<LauncherAction> {
   const url = deps.status.server_url;
   switch (action) {
-    case 'web':
-      await deps.openWeb();
+    case 'coding':
+      await deps.openWeb('/');
       deps.print(`Web UI: ${url} (server keeps running in the background; \`daedalus stop\` stops it).\n`);
-      return 'web';
+      return 'coding';
+    case 'slide':
+      await deps.openWeb('/slide');
+      deps.print(`Slide UI: ${joinServerUrl(url, '/slide')} (server keeps running in the background; \`daedalus stop\` stops it).\n`);
+      return 'slide';
     case 'tray':
       await deps.hideToTray?.();
       deps.print(`Background mode: only the server keeps running at ${url}. Tray: ${deps.status.tray.reason}\n`);
@@ -593,7 +611,7 @@ export async function runStartupMenu(deps: LauncherChoiceDeps & {
   for (;;) {
     const action = parseMenuChoice(await deps.readChoice());
     if (action === 'invalid') {
-      deps.print('Please choose 1, 2, 3, or q.\n');
+      deps.print('Please choose 1, 2, 3, 4, or q.\n');
       continue;
     }
     return runLauncherChoice(action, deps);
@@ -635,7 +653,7 @@ export async function runBareLauncher(deps: {
     status: ensured.status,
     readChoice: deps.readChoice,
     print: deps.print,
-    openWeb: () => deps.openWeb(ensured.status.server_url),
+    openWeb: (path: string) => deps.openWeb(joinServerUrl(ensured.status.server_url, path)),
     hideToTray: deps.hideToTray,
     stopServer: deps.stopServer,
   });

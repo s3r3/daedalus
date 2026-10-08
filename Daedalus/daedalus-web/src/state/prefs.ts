@@ -96,6 +96,21 @@ export function saveDomain(domain: WebDomain, storage: Storage | undefined = def
 }
 
 /**
+ * The route is the source of truth for the active domain: '/slide' (and
+ * anything under it) opens Agentic Slide, every other path opens Agentic
+ * Coding. The pathname wins over the persisted pref so a shared/bookmarked
+ * URL lands in the domain it names; the pref only mirrors the choice.
+ */
+export function domainFromPathname(pathname: string): WebDomain {
+  return pathname.startsWith('/slide') ? 'slide' : 'coding'
+}
+
+/** Canonical path for a domain — the inverse mapping used by the switcher. */
+export function pathForDomain(domain: WebDomain): string {
+  return domain === 'slide' ? '/slide' : '/'
+}
+
+/**
  * The active chat conversation per workspace root. The conversation itself
  * lives on the server (file-backed, shared with nothing else); the browser
  * only remembers WHICH one is open here so a reload returns to the same

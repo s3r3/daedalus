@@ -47,6 +47,7 @@ import {
   ensureDaemon,
   fetchDaemonWorkspace,
   getDaemonStatus,
+  joinServerUrl,
   openBrowser,
   runBareLauncher,
   runLauncherMenu,
@@ -493,9 +494,9 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
         print(`A Daedalus server from ${daemonWorkspace} is already running at ${ensured.status.server_url}; it stays anchored there and its Web UI keeps that workspace.\n`);
       }
     }
-    const openWeb = async (): Promise<void> => {
-      const browser = (deps.openBrowser ?? openBrowser)(ensured.status.server_url);
-      print(`Opening Web with ${browser.command}: ${ensured.status.server_url}\n`);
+    const openWeb = async (targetUrl: string): Promise<void> => {
+      const browser = (deps.openBrowser ?? openBrowser)(targetUrl);
+      print(`Opening Web with ${browser.command}: ${targetUrl}\n`);
     };
     const hideToTray = async (): Promise<void> => {
       // Honest background mode: no native tray backend is bundled, so this
@@ -530,9 +531,9 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
             renderer.close();
             print(text);
           },
-          openWeb: async () => {
+          openWeb: async (path: string) => {
             renderer.close();
-            await openWeb();
+            await openWeb(joinServerUrl(ensured.status.server_url, path));
           },
           hideToTray,
           stopServer,
@@ -557,8 +558,8 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
         }
       }),
       print,
-      openWeb: async () => {
-        await openWeb();
+      openWeb: async (url: string) => {
+        await openWeb(url);
       },
       hideToTray,
       stopServer,
