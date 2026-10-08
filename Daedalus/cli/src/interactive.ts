@@ -126,6 +126,10 @@ export class InteractiveSession {
   #attachments: Attachment[] = [];
   #callbacks: InteractiveCallbacks;
   #transcript: string[] = [];
+  /** Streamed text of the in-flight turn: a live preview only, never committed as-is. */
+  #liveTurnText: string | undefined;
+  /** A finished text-only turn awaiting its THOUGHT (or task end) before it joins the transcript as the reply. */
+  #pendingReply: string | undefined;
   /** Recent casual-chat exchanges (user/assistant), capped at 6 turns. */
   #chatHistory: Message[] = [];
   #modifiedFiles = new Map<string, ModifiedFile>();
@@ -495,7 +499,39 @@ export class InteractiveSession {
     this.#scrollOffset = Number.MAX_SAFE_INTEGER;
   }
 
+  /** The in-flight turn's streamed text, while it is still a preview. */
+  get liveTurnText(): string | undefined {
+    return this.#liveTurnText;
+  }
+
+  #flushPendingReply(): void {
+    if (!this.#pendingReply) return;
+    this.addAssistantLine(this.#pendingReply);
+    this.#pendingReply = undefined;
+  }
+
   observeEvent(event: Event): void {
+    if (event.type === 'MODEL_TEXT_DELTA') {
+      // Cumulative streamed text: keep it as a live preview. It joins
+      // the transcript only when the turn resolves as the reply.
+      const payload = event.payload as { text?: string };
+      if (payload.text) this.#liveTurnText = payload.text;
+      return;
+    }
+    if (event.type === 'MODEL_REQUEST_FINISHED') {
+      // The streamed turn resolves here. Prose that accompanied tool
+      // calls was a preamble — drop it. A text-only turn IS the reply:
+      // stash it so this turn's THOUGHT still prints first.
+      const payload = event.payload as { message?: { tool_calls?: unknown[] } };
+      if (this.#liveTurnText) {
+        if (!payload.message?.tool_calls?.length) this.#pendingReply = this.#liveTurnText;
+        this.#liveTurnText = undefined;
+      }
+    }
+    if (event.type === 'TASK_COMPLETED') {
+      this.#flushPendingReply();
+      this.#liveTurnText = undefined;
+    }
     if (event.type === 'MODEL_REQUEST_STARTED' || event.type === 'MODEL_REQUEST_FINISHED') {
       const payload = event.payload as { context_percent?: number };
       if (typeof payload.context_percent === 'number') this.#contextPercent = payload.context_percent;
@@ -512,6 +548,8 @@ export class InteractiveSession {
         shown.forEach((line, index) => this.addTranscript(index === 0 ? `thinking · ${line}` : `  ${line}`));
         if (lines.length > shown.length) this.addTranscript(`thinking · … (${lines.length - shown.length} more lines)`);
       }
+      // The reply this thinking produced joins right below it.
+      this.#flushPendingReply();
       return;
     }
     if (event.type === 'FILE_CHANGED') {
@@ -597,12 +635,20 @@ export class InteractiveSession {
     return lines;
   }
 
+  /** The live preview's visible tail: last lines of the in-flight turn's streamed text. */
+  #liveDisplayLines(): string[] {
+    if (!this.#liveTurnText) return [];
+    const lines = this.#liveTurnText.split(/\r?\n/).map((line) => line.trimEnd()).filter((line) => line.trim().length > 0);
+    return lines.slice(-3).map((line, index) => (index === 0 ? `thinking · live · ${line}` : `  ${line}`));
+  }
+
   renderLayout(options: { transcript?: string[]; input?: string; columns?: number } = {}): string {
     const columns = Math.max(40, Math.min(180, options.columns ?? 110));
     const transcript = options.transcript ?? this.#transcript;
     const leftBase = [
       'Daedalus',
       ...(transcript.length ? transcript.slice(-18) : ['No messages yet. Type a goal, or / for commands.']),
+      ...this.#liveDisplayLines(),
       '',
       `> ${options.input ?? ''}`,
     ];
@@ -958,7 +1004,7 @@ export class InteractiveSession {
     const contentRows = Math.max(6, rows - footerLines.length);
     this.#lastContentRows = contentRows;
     const transcript = options.transcript ?? this.#transcript;
-    const displayTranscript = (transcript.length ? transcript : ['Type a goal below, or press / for commands.'])
+    const displayTranscript = [...(transcript.length ? transcript : ['Type a goal below, or press / for commands.']), ...this.#liveDisplayLines()]
       .map((line) => sanitizeTerminalText(line));
     const wrapped: string[] = [];
     for (const line of displayTranscript) {
