@@ -618,6 +618,7 @@ export function Composer() {
       const created = await api.createTask({
         goal,
         repo_path: workspaceRoot,
+        domain,
         auto_approve: composer.autoApprove,
         max_iterations: composer.maxIterations,
         mode: composer.mode,

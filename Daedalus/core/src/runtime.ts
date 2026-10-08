@@ -1,4 +1,4 @@
-import type { AgentMode, Attachment, ChildTask, ChildTaskErrorReason, Event, FinalReport, ModelStrategy, ProviderConfig, TaskSpec, TaskState, ToolCall, ToolResult, ValidationResult } from './contracts.ts';
+import type { AgentMode, Attachment, ChildTask, ChildTaskErrorReason, Event, FinalReport, ModelStrategy, ProviderConfig, TaskDomain, TaskSpec, TaskState, ToolCall, ToolResult, ValidationResult } from './contracts.ts';
 import { EventBus, emitEvent } from './events.ts';
 import { TaskStore } from './persistence.ts';
 import { AgentLoop } from './agent/agent-loop.ts';
@@ -202,6 +202,8 @@ export type RunOptions = {
   goal: string;
   taskId?: string;
   mode?: AgentMode;
+  /** Product domain of this task (the Web sends coding|slide); absent = coding, exact legacy behavior. */
+  domain?: TaskDomain;
   thinking?: boolean;
   providerId?: string;
   model?: string;
@@ -495,7 +497,7 @@ export class TaskRunner {
    * best-effort — a broken extension is recorded in `extensionStatus`, never
    * thrown — and `close()` must run when the run ends.
    */
-  async #prepareExtensions(): Promise<{ tools: ToolDefinition[]; skills: SkillRegistry; lsp: LspManager; close: () => Promise<void> }> {
+  async #prepareExtensions(domain?: TaskDomain): Promise<{ tools: ToolDefinition[]; skills: SkillRegistry; lsp: LspManager; close: () => Promise<void> }> {
     const mcpServers = this.#options.mcpServers ?? (await loadMcpConfig(this.#workspaceRoot)).servers;
     // Callers who pass lspServers explicitly own the whole list (an
     // explicit empty list means "no LSP"); otherwise the workspace gets
@@ -522,7 +524,7 @@ export class TaskRunner {
     const agents = await loadAgents([workspaceAgentsDir(this.#workspaceRoot)]);
 
     const tools: ToolDefinition[] = [];
-    if (skills.size > 0) tools.push(createReadSkillTool(skills));
+    if (skills.size > 0) tools.push(domain !== undefined ? createReadSkillTool(skills, { domain }) : createReadSkillTool(skills));
 
     const mcp = new McpManager(mcpServers);
     if (mcpServers.length > 0) {
@@ -708,6 +710,7 @@ export class TaskRunner {
       id: options.taskId,
       repo_path: this.#workspaceRoot,
       mode: effectiveMode ?? this.modeController.mode,
+      domain: options.domain,
       provider_id: options.providerId ?? this.#options.providerId,
       model: effectiveOptions.model ?? this.#options.model ?? modelConfig.models[0],
       models: modelConfig.models.length > 0 ? modelConfig.models : undefined,
@@ -811,7 +814,7 @@ export class TaskRunner {
       return this.#runInWorktree(options, spec, agent);
     }
 
-    const extensions = await this.#prepareExtensions();
+    const extensions = await this.#prepareExtensions(options.domain);
     this.#activeLsp = extensions.lsp;
     // Explicit skill invocations for this task (Web/CLI `/skill <name>`):
     // resolve each name against the run's registry. A hit force-loads the
@@ -971,6 +974,7 @@ export class TaskRunner {
         workspaceRoot: this.#workspaceRoot,
         visionEnabled,
         skills: extensions.skills.list(),
+        ...(options.domain ? { domain: options.domain } : {}),
         ...(invokedSkills.length > 0 ? { invokedSkills } : {}),
         rules: rules.text ? rules.text : undefined,
         rulesFiles: rules.files,
@@ -1575,6 +1579,7 @@ export class TaskRunner {
           goal: child.goal,
           taskId: child.id,
           mode: childMode,
+          domain: options.domain,
           parentTaskId: parentId,
           providerId: options.providerId,
           model: options.model,

@@ -6,6 +6,7 @@ export {
   dedupeSkillsByName,
   formatSkillOrigin,
   globalSkillSearchDirs,
+  isPresentationSkill,
   loadSkillInventory,
   loadSkills,
   parseSkillMarkdown,

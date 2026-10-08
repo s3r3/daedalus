@@ -87,9 +87,9 @@ export function explorationSuppressedNote(path: string): string {
   return `(repeat suppressed: you already listed "${path}" above and it has not changed since. Do not list it again — proceed to the actual change now: create_dir/write_file/edit_file for the target, or reply "done: <summary>" if nothing remains.)`;
 }
 
-/** Suppressed read_skill answer: the full text is already in the conversation. */
+/** Suppressed read_skill answer: the body was already served in this task. */
 export function skillAlreadyLoadedNote(name: string): string {
-  return `(skill "${name}" is already loaded earlier in this task — its full instructions are in the conversation above, do not load it again. Continue with the next concrete action: create_dir/write_file/edit_file or another tool the task needs.)`;
+  return `(skill "${name}" already loaded in this task — not repeated. Continue with the next concrete action; do not load it again.)`;
 }
 
 /**

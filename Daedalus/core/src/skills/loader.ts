@@ -3,7 +3,7 @@ import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import type { ToolDefinition } from '../tools/registry.ts';
-import type { ToolResult } from '../contracts.ts';
+import type { TaskDomain, ToolResult } from '../contracts.ts';
 
 /**
  * Skills are playbook folders: `<dir>/<name>/SKILL.md` with a minimal YAML
@@ -346,6 +346,19 @@ export function resolveSkillSearchDirs(workspaceRoot: string, options?: SkillDir
   return [{ dir: workspaceSkillsDir(workspaceRoot), origin: 'workspace' }, ...globalSkillSearchDirs(options)];
 }
 
+/**
+ * Presentation-maker skill detection, deliberately generic (never a
+ * hard-coded skill name): a name/description reading as a slide,
+ * presentation, PowerPoint, Keynote, ppt/pptx, or deck builder. The
+ * Slide domain uses it to keep external presentation skills out of the
+ * prompt index and to redirect `read_skill` at the built-in deck tools.
+ */
+const PRESENTATION_SKILL_PATTERN = /slide|slides|presentation|powerpoint|keynote|\bpptx?\b|\bdeck\b/;
+
+export function isPresentationSkill(name: string, description?: string): boolean {
+  return PRESENTATION_SKILL_PATTERN.test(`${name} ${description ?? ''}`.toLowerCase());
+}
+
 const MAX_SKILL_OUTPUT = 16_000;
 
 /**
@@ -360,7 +373,7 @@ export function renderSkillBody(skill: Skill): { text: string; truncated: boolea
 }
 
 /** Read-only tool letting the agent load a skill's full instructions on demand. */
-export function createReadSkillTool(registry: SkillRegistry): ToolDefinition {
+export function createReadSkillTool(registry: SkillRegistry, options?: { domain?: TaskDomain }): ToolDefinition {
   const listed = dedupeSkillsByName(registry.list());
   const shownNames = listed.slice(0, MAX_SKILLS_IN_PROMPT).map((skill) => skill.name);
   const available = listed.length
@@ -384,6 +397,19 @@ export function createReadSkillTool(registry: SkillRegistry): ToolDefinition {
         return { call_id: '', status: 'error', output: 'read_skill requires a string "name".', truncated: false, meta: {} };
       }
       const skill = registry.get(name);
+      // Slide domain: a presentation-maker skill is never loaded — the
+      // built-in deck tools are the only presentation surface (see
+      // SLIDE_DOMAIN_PROMPT). The redirect carries no `skill` meta, so
+      // it never emits SKILL_LOADED: no skill body entered the context.
+      if (options?.domain === 'slide' && isPresentationSkill(name, skill?.description)) {
+        return {
+          call_id: '',
+          status: 'ok',
+          output: `Skill "${name}" was not loaded: in the Slide domain, external presentation skills are not used — build the deck with the built-in deck tools only: create_deck → add_slide (outline first, one slide per outline item) → validate_deck → export_deck.`,
+          truncated: false,
+          meta: { redirected_skill: name, reason: 'slide_domain' },
+        };
+      }
       if (!skill) {
         // A name the workspace config disables is not in the registry at
         // all; say so plainly instead of reporting it as unknown, so the

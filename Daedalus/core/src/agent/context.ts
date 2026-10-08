@@ -1,10 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
 import type { ContentBlock, Message, ToolDefinition } from '../providers/llm/types.ts';
-import type { Attachment, PromptFamily, TaskState } from '../contracts.ts';
+import type { Attachment, PromptFamily, TaskDomain, TaskState } from '../contracts.ts';
 import { buildPrompt, estimateTokens, systemMessage, userMessage } from '../providers/index.ts';
 import { modePromptContract } from '../interaction/modes.ts';
-import { MAX_SKILLS_IN_PROMPT, dedupeSkillsByName, formatSkillOrigin, type SkillInfo, type SkillOrigin } from '../skills/index.ts';
+import { MAX_SKILLS_IN_PROMPT, dedupeSkillsByName, formatSkillOrigin, isPresentationSkill, type SkillInfo, type SkillOrigin } from '../skills/index.ts';
 import { walkTreeLines } from '../tools/filesystem/index.ts';
 import { promptFamilyFragment } from './prompt-dialects.ts';
 import { resolveMentionSection } from './mentions.ts';
@@ -12,6 +12,8 @@ import type { ContextManager, Observation } from './types.ts';
 
 export type ContextManagerOptions = {
   budget?: number;
+  /** Product domain of this task; 'slide' pins the deck-only contract and hides presentation-maker skills. Absent = coding. */
+  domain?: TaskDomain;
   workspaceRoot?: string;
   visionEnabled?: boolean;
   maxImageBytes?: number;
@@ -66,6 +68,18 @@ export const MAX_PINNED_LINES_PER_FILE = 6;
 export const MAX_PINNED_TOTAL_CHARS = 2_400;
 
 /**
+ * Slide-domain contract (domain: 'slide'), pinned into every prompt of a
+ * slide task: deck production runs on the built-in deck tools alone, in
+ * outline-first order. Coding tasks never see this section.
+ */
+export const SLIDE_DOMAIN_PROMPT = [
+  'Slide domain: this task produces a presentation deck.',
+  'Use ONLY the built-in deck tools (create_deck, read_deck, add_slide, update_slide, move_slide, delete_slide, set_deck_theme, validate_deck, export_deck); never use an external presentation service or API, and never load a presentation-maker skill.',
+  "Workflow: (1) OUTLINE FIRST — call create_deck, then add_slide once per outline item (title + layout) so the complete outline is visible before any content is filled in; prefer visual layouts (diagram, chart, icon-grid, stats, timeline, comparison) over plain bullet lists. (2) Fill in each slide's content with update_slide. (3) Call validate_deck and fix every error it reports. (4) Call export_deck to produce the .pptx file.",
+  'Do not write deck JSON by hand with write_file, and do not report done before export_deck succeeds.',
+].join('\n');
+
+/**
  * Context Manager: ordered prompt sections (role, task, plan, constraints),
  * token budgeting, and observation truncation (PLAN.md §3.1).
  *
@@ -75,6 +89,7 @@ export const MAX_PINNED_TOTAL_CHARS = 2_400;
  * explicitly that the image bytes were not sent.
  */
 export class DefaultContextManager implements ContextManager {
+  readonly #domain?: TaskDomain;
   readonly #budget: number;
   readonly #workspaceRoot?: string;
   readonly #visionEnabled: boolean;
@@ -92,6 +107,7 @@ export class DefaultContextManager implements ContextManager {
 
   constructor(options: number | ContextManagerOptions = 16_000) {
     const resolved = typeof options === 'number' ? { budget: options } : options;
+    this.#domain = resolved.domain;
     this.#budget = resolved.budget ?? 16_000;
     this.#workspaceRoot = resolved.workspaceRoot;
     this.#visionEnabled = resolved.visionEnabled === true;
@@ -99,8 +115,13 @@ export class DefaultContextManager implements ContextManager {
     this.#maxImages = resolved.maxImages ?? DEFAULT_MAX_IMAGES;
     // Deduped by name at the door: whatever list a caller hands in, the
     // prompt advertises each skill once (the loader already dedupes, this
-    // keeps the guarantee for direct/raw feeds too).
-    this.#skills = dedupeSkillsByName(resolved.skills ?? []);
+    // keeps the guarantee for direct/raw feeds too). In the Slide domain
+    // presentation-maker skills leave the index entirely — the built-in
+    // deck tools are the only presentation surface there.
+    const listedSkills = dedupeSkillsByName(resolved.skills ?? []);
+    this.#skills = resolved.domain === 'slide'
+      ? listedSkills.filter((skill) => !isPresentationSkill(skill.name, skill.description))
+      : listedSkills;
     this.#invokedSkills = resolved.invokedSkills ?? [];
     this.#rules = resolved.rules;
     this.#rulesFiles = resolved.rulesFiles ?? [];
@@ -136,6 +157,9 @@ export class DefaultContextManager implements ContextManager {
           : []),
         { id: 'plan', content: state.steps.map((s) => `- [${s.status}] ${s.intent}`).join('\n') || '(no plan yet)' },
         { id: 'mode', content: modePromptContract(state.mode ?? 'auto') },
+        ...(this.#domain === 'slide'
+          ? [{ id: 'domain', content: SLIDE_DOMAIN_PROMPT }]
+          : []),
         { id: 'constraints', content: state.constraints.join('\n') || '(none)' },
         {
           id: 'protocol',

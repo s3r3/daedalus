@@ -77,6 +77,8 @@ function query(params: Record<string, string | number | undefined>): string {
 export type CreateTaskInput = {
   goal: string
   repo_path: string
+  /** Domain produk aktif saat submit ('coding'|'slide'); server meneruskannya ke core agar task berjalan dengan toolset domain tersebut. */
+  domain?: 'coding' | 'slide'
   auto_approve?: boolean
   max_iterations?: number
   constraints?: string[]
