@@ -221,7 +221,7 @@ export class AgentLoop {
    * `#recordToolResult`, so the event log, persisted state, and CLI
    * transcript only ever see the tool's one-line placeholder output.
    */
-  readonly #pendingImages = new Map<string, Array<{ path: string; mime: string; dataUrl: string }>>();
+  readonly #pendingImages = new Map<string, Array<{ source: string; path: string; mime: string; dataUrl: string }>>();
   /** File paths each task has mutated (validation check scoping). */
   readonly #changedFiles = new Map<string, Set<string>>();
   /**
@@ -644,16 +644,16 @@ export class AgentLoop {
     if (notices.length > 0) {
       messages = [...messages, ...notices.map((content) => ({ role: 'user' as const, content }))];
     }
-    // Images the model asked to see (view_image): attached as an image_url
-    // block on a user message, the same carriage user uploads take in the
-    // context manager. Drained exactly once; the matching tool result in
-    // the history stays its one-line placeholder text.
+    // Images the model asked to see (view_image, screenshot): attached as
+    // an image_url block on a user message, the same carriage user
+    // uploads take in the context manager. Drained exactly once; the
+    // matching tool result in the history stays its one-line placeholder.
     const pendingImages = this.#pendingImages.get(state.id);
     if (pendingImages && pendingImages.length > 0) {
       this.#pendingImages.delete(state.id);
       for (const image of pendingImages) {
         const content: ContentBlock[] = [
-          { type: 'text', text: `Image attached from view_image (${image.path}, ${image.mime}):` },
+          { type: 'text', text: `Image attached from ${image.source} (${image.path}, ${image.mime}):` },
           { type: 'image_url', image_url: { url: image.dataUrl } },
         ];
         messages = [...messages, { role: 'user' as const, content }];
@@ -1130,15 +1130,20 @@ export class AgentLoop {
         files.add(changedPath);
       }
     }
-    // view_image carriage: lift the image payload out of the result before
-    // it is shaped, emitted, or persisted. The bytes queue for the next
-    // model request (see `step`); from here on the result is only the
-    // tool's placeholder text, so the event log, the saved task state, and
+    // Image carriage: lift the image payload out of the result before
+    // it is shaped, emitted, or persisted. The contract is the meta key,
+    // not the tool name — view_image started it, screenshot (and any
+    // future image-producing tool) joins by returning the same
+    // image_data_url meta. The bytes queue for the next model request
+    // (see `step`); from here on the result is only the tool's
+    // placeholder text, so the event log, the saved task state, and
     // every transcript render the placeholder — never a base64 dump.
     let safeResult = result;
-    if (call.tool === 'view_image' && result.status === 'ok' && typeof result.meta?.image_data_url === 'string') {
+    if (result.status === 'ok' && typeof result.meta?.image_data_url === 'string'
+      && typeof result.meta?.image_mime === 'string' && result.meta.image_mime.startsWith('image/')) {
       const pending = this.#pendingImages.get(state.id) ?? [];
       pending.push({
+        source: call.tool,
         path: typeof result.meta.image_path === 'string' ? result.meta.image_path : 'image',
         mime: typeof result.meta.image_mime === 'string' ? result.meta.image_mime : 'image/*',
         dataUrl: result.meta.image_data_url,

@@ -250,6 +250,66 @@ describe('screenshot tool', () => {
   });
 });
 
+describe('screenshot through the agent loop', () => {
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+
+  test('the captured PNG reaches the next model request; logs stay base64-free', async () => {
+    const { AgentLoop, EventBus, TaskStore, createScreenshotTool: makeShot, screenshotTool } = await import('../src/index.ts');
+    const { writeFileSync: writeSync } = await import('node:fs');
+    const root = workspace();
+    const home = workspace();
+    const shotTool = makeShot({
+      resolveBrowser: async () => 'fake-chrome',
+      now: () => 42,
+      runner: async (_binary: string, args: string[]) => {
+        const out = args.find((a: string) => a.startsWith('--screenshot='))!.slice('--screenshot='.length);
+        writeSync(out, PNG);
+        return { code: 0, stderr: '' };
+      },
+    });
+    const seen: unknown[] = [];
+    let calls = 0;
+    const provider = {
+      name: 'scripted',
+      async chat(messages: unknown) {
+        seen.push(messages);
+        calls++;
+        if (calls <= 2) {
+          return { message: { role: 'assistant' as const, content: '', tool_calls: [{ id: `s${calls}`, type: 'function' as const, function: { name: 'screenshot', arguments: '{"url":"http://localhost:5173/"}' } }] } };
+        }
+        return { message: { role: 'assistant' as const, content: 'done: examined the page twice' } };
+      },
+      async *stream() { /* non-streaming */ },
+    };
+    const store = new TaskStore(home);
+    const loop = new AgentLoop({
+      provider: provider as never,
+      bus: new EventBus(),
+      store,
+      tools: [{ type: 'function', function: { name: 'screenshot', description: 'shot', parameters: screenshotTool.inputSchema as Record<string, unknown> } }],
+      executeTool: async (call: { id: string }) => {
+        const result = await shotTool.execute({ url: 'http://localhost:5173/' }, ctx(root));
+        // Mirror registry dispatch: it stamps the tool's mutating flag
+        // onto meta, which the step-completion rule reads.
+        return { ...result, call_id: call.id, meta: { ...result.meta, mutating: false } };
+      },
+      stopPolicy: { max_iterations: 20, max_errors: 5 },
+    });
+    const state = await loop.run({ id: 'shot-task', goal: 'screenshot the dev page', constraints: [], done_criteria: ['examine the rendered page', 'examine the page again to confirm'], repo_path: root, status: 'draft' });
+    expect(state.status).toBe('done');
+    expect(seen.length).toBeGreaterThanOrEqual(2);
+    const secondRequest = JSON.stringify(seen[1]);
+    expect(secondRequest).toContain('"type":"image_url"');
+    expect(secondRequest).toContain('data:image/png;base64,iVBOR');
+    expect(secondRequest).toContain('Image attached from screenshot (');
+    const finished = store.replay('shot-task').filter((event) => event.type === 'TOOL_CALL_FINISHED');
+    expect(JSON.stringify(finished)).not.toContain('data:image/png;base64');
+    const shotResult = (finished[0]?.payload as { result: { meta: Record<string, unknown> } }).result;
+    expect(shotResult.meta.image_attached).toBe(true);
+    expect(shotResult.meta.image_data_url).toBeUndefined();
+  });
+});
+
 describe('web_search', () => {
   test('parses DuckDuckGo HTML results (uddg unwrap, tags stripped)', async () => {
     const { parseDuckDuckGoHtml: parse } = await import('../src/index.ts');
