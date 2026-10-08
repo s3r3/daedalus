@@ -50,6 +50,25 @@ export class LLMContentPolicyError extends LLMError {
   }
 }
 
+/**
+ * True when a provider rejection says the tool schema itself is invalid
+ * (Bedrock/Anthropic: `TOOL_SCHEMA_INVALID`, "input_schema does not support
+ * oneOf/allOf/anyOf at the top level"). The identical request will be
+ * rejected identically forever, so this is deterministic — never worth a
+ * retry or a failover to another model behind the same schema contract.
+ */
+export function isToolSchemaInvalidError(error: unknown): boolean {
+  const summary = (error instanceof Error ? `${error.name}: ${error.message}` : String(error)).toLowerCase();
+  if (summary.includes("tool_schema_invalid")) return true;
+  if (!summary.includes("input_schema")) return false;
+  return (
+    summary.includes("oneof") ||
+    summary.includes("allof") ||
+    summary.includes("anyof") ||
+    summary.includes("does not support")
+  );
+}
+
 export type LLMErrorKind = "transient" | "fatal" | "other";
 
 /**
@@ -69,6 +88,9 @@ export function classifyLLMError(error: unknown): LLMErrorKind {
 
   const summary = (error instanceof Error ? `${error.name}: ${error.message}` : String(error)).toLowerCase();
   if (summary.includes("content_policy") || summary.includes("content policy") || summary.includes("content_filter") || summary.includes("authentication failed") || summary.includes("invalid api key")) return "fatal";
+  // A rejected tool schema (TOOL_SCHEMA_INVALID) fails identically on
+  // every retry — fail fast instead of burning the error budget.
+  if (isToolSchemaInvalidError(error)) return "fatal";
   if (
     summary.includes("rate limit") ||
     summary.includes("too many requests") ||

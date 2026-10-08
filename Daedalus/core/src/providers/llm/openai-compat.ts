@@ -1,4 +1,5 @@
 import { LLMAuthError, LLMContentPolicyError, LLMError, LLMFormatError, LLMRateLimitError, LLMTimeoutError } from "./errors.ts";
+import { normalizeToolSchemas } from "./schema-normalize.ts";
 import type { ChatOptions, ChatResponse, LLMProvider, Message, StreamChunk, ToolDefinition, ToolCall, Usage } from "./types.ts";
 
 export const DEFAULT_LLM_TIMEOUT_MS = 180_000;
@@ -128,7 +129,11 @@ export class OpenAICompatProvider implements LLMProvider {
       return await this.#fetch(`${this.#baseUrl}/chat/completions`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${this.#apiKey}` },
-        body: JSON.stringify({ model: this.#model, messages, ...(tools?.length ? { tools } : {}), stream, stream_options: stream ? { include_usage: true } : undefined, temperature: options.temperature, max_tokens: options.max_tokens, top_p: options.top_p, stop: options.stop }),
+        // Tool schemas go out Bedrock/Anthropic-safe: top-level oneOf/
+        // allOf/anyOf combinators are flattened (Bedrock rejects the whole
+        // request over one); the declared schemas and the runtime
+        // validator keep the original semantics. See schema-normalize.ts.
+        body: JSON.stringify({ model: this.#model, messages, ...(tools?.length ? { tools: normalizeToolSchemas(tools) } : {}), stream, stream_options: stream ? { include_usage: true } : undefined, temperature: options.temperature, max_tokens: options.max_tokens, top_p: options.top_p, stop: options.stop }),
         signal,
       });
     } catch (error) {
