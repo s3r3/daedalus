@@ -2,7 +2,7 @@ import { describe, expect, test } from 'vitest'
 import type { Event } from '@daedalus/core'
 import { formatEvent } from '../src/index.ts'
 import { InteractiveSession } from '../src/interactive.ts'
-import { DeltaSuffixTracker, lspSidebarEntries, tokenSummary } from '../src/live-render.ts'
+import { DeltaSuffixTracker, SPINNER_FRAME_SET, SPINNER_FRAMES, lspSidebarEntries, scrambleText, spinnerGlyph, tokenSummary } from '../src/live-render.ts'
 
 function event(partial: Partial<Event> & { type: Event['type'] }): Event {
   return { seq: 1, task_id: 't1', ts: new Date().toISOString(), payload: {}, ...partial }
@@ -83,6 +83,50 @@ describe('formatEvent parity cases', () => {
       payload: { child: { status: 'done', result_summary: 'wrote file' } },
     }))
     expect(without).not.toContain('tokens')
+  })
+})
+
+describe('spinner + scramble (design tokens)', () => {
+  test('frames are the Web motion token, byte for byte', () => {
+    expect(SPINNER_FRAMES).toBe('⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏')
+    expect(spinnerGlyph(0)).toBe('⠋')
+    expect(spinnerGlyph(1)).toBe('⠙')
+    expect(spinnerGlyph(10)).toBe('⠋')
+    expect(spinnerGlyph(-1)).toBe('⠏')
+    expect(SPINNER_FRAME_SET.has('⠹')).toBe(true)
+    expect(SPINNER_FRAME_SET.has('x')).toBe(false)
+  })
+
+  test('scramble resolves left-to-right and holds the settled label', () => {
+    const zero = () => 0 // rng pinned: glyph is always 'A'
+    expect(scrambleText('thinking', 0, zero)).toBe('AAAAAAAA')
+    expect(scrambleText('thinking', 2, zero)).toBe('tAAAAAAA')
+    expect(scrambleText('thinking', 99, zero)).toBe('thinking')
+    expect(scrambleText('a b.c', 0, zero)).toBe('A A.A')
+  })
+})
+
+describe('interactive session working animation', () => {
+  test('working line shows spinner, scrambled label, elapsed; settles, then clears at task end', () => {
+    const session = new InteractiveSession({ workspaceRoot: '/tmp/ws' })
+    session.observeEvent(event({ type: 'TASK_STARTED', payload: {} }))
+    const early = session.renderLayout({ columns: 100 })
+    expect(early).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] .+ · 0s/)
+    for (let i = 0; i < 12; i++) session.tickActivity()
+    expect(session.renderLayout({ columns: 100 })).toContain('thinking · 0s')
+    expect(session.activityFrame).toBe(12)
+    session.observeEvent(event({ type: 'TOOL_CALL_STARTED', payload: { call: { tool: 'read_file', args: {} } } }))
+    for (let i = 0; i < 12; i++) session.tickActivity()
+    expect(session.renderLayout({ columns: 100 })).toContain('working · 0s')
+    session.observeEvent(event({ type: 'TASK_COMPLETED', payload: { outcome: 'success', reason: 'completed' } }))
+    expect(session.renderLayout({ columns: 100 })).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] .* · \d+s/)
+  })
+
+  test('status bar accumulates reported tokens', () => {
+    const session = new InteractiveSession({ workspaceRoot: '/tmp/ws' })
+    expect(session.statusBar()).not.toContain('tokens')
+    session.observeEvent(event({ type: 'MODEL_REQUEST_FINISHED', payload: { usage: { prompt_tokens: 100, completion_tokens: 23, total_tokens: 123 } } }))
+    expect(session.statusBar()).toContain('tokens 123')
   })
 })
 
