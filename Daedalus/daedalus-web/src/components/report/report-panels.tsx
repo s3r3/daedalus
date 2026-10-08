@@ -6,6 +6,7 @@ import { EmptyState, Panel } from '../common/panel'
 import { useActiveTaskId, useTaskEvents } from '../../state/hooks'
 import { useDaedalusStore } from '../../state/taskStore'
 import { attachmentsFromEvents, childTasks, outcomeOf, reportFromEvents } from '../../state/selectors'
+import { ToolResultImage } from '../agent/tool-result-image'
 import { STATUS_TONE, type TaskStatus } from '../agent/status-tone'
 
 const METRIC_LABELS: Record<string, string> = {
@@ -52,6 +53,7 @@ export function AttachmentsPanel() {
         <ul className="flex flex-col gap-0.5">
           {attachments.map((attachment) => (
             <li key={attachment.id} className="flex items-center gap-1.5 text-[11px]" data-testid="attachment-entry" data-kind={attachment.kind}>
+              {attachment.kind === 'image' && attachment.workspacePath ? <ToolResultImage path={attachment.workspacePath} thumb /> : null}
               <Badge tone={attachment.kind === 'image' ? 'info' : 'neutral'}>{attachment.kind}</Badge>
               <span className="min-w-0 flex-1">
                 <span className="block truncate text-foreground">{attachment.name}</span>

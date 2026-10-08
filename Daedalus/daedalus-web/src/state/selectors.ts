@@ -721,6 +721,13 @@ export type ChatEntry = {
   tool?: string
   /** Set on role 'skill': the activation chip payload (name, origin, who loaded it). */
   skill?: { name: string; origin: string; via: 'agent' | 'user' }
+  /**
+   * Set on role 'tool' when the result carried an image the model looked
+   * at (view_image, screenshot): the loop strips the bytes and records
+   * `image_attached` + `image_path` in the result meta, so the chat can
+   * render the picture itself via the workspace file endpoint.
+   */
+  image?: { path: string; mime?: string }
 }
 
 /**
@@ -780,6 +787,10 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
         const call = payloadOf(event, 'TOOL_CALL_STARTED')?.call
         if (!call) break
         const result = views.get(call.id)?.result
+        const imageMeta = result?.meta
+        const image = imageMeta?.image_attached === true && typeof imageMeta?.image_path === 'string'
+          ? { path: imageMeta.image_path, ...(typeof imageMeta.image_mime === 'string' ? { mime: imageMeta.image_mime } : {}) }
+          : undefined
         entries.push({
           ...base,
           role: 'tool',
@@ -787,6 +798,7 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
           text: summarizeArgs(call.args) ?? '',
           detail: result?.output ? truncateChat(result.output.trim(), 400) : undefined,
           status: result ? toolStatus(result.status) : 'running',
+          ...(image ? { image } : {}),
         })
         break
       }

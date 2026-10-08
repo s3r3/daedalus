@@ -15,6 +15,7 @@ import { ApprovalCard } from '../approval/approval-card'
 import { QuestionCard } from '../approval/question-card'
 import { ExecutePlanBar } from './execute-plan-bar'
 import { STATUS_TONE, type Tone } from './status-tone'
+import { ToolResultImage } from './tool-result-image'
 
 type ChatRowModel =
   | { kind: 'entry'; entry: ChatEntry }
@@ -481,6 +482,7 @@ function ChatRow({ entry }: { entry: ChatEntry }) {
           ) : entry.status === 'running' ? (
             <p className="mt-0.5 text-[10px] text-muted">awaiting result…</p>
           ) : null}
+          {entry.image ? <ToolResultImage path={entry.image.path} /> : null}
         </li>
       )
     case 'approval':
