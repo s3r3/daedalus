@@ -74,7 +74,7 @@ Framework:             Daedalus
 Web:                   React + Vite + TypeScript   (Daedalus/daedalus-web/)
 Package Manager:       npm
 Web Project Status:    Phase 8.5 Web UI implemented; built UI can be served by the Daedalus server
-CLI:                   Interactive Crush-style CLI + launcher (`serve`/`status`/`stop`) over @daedalus/core
+CLI:                   Launcher + headless commands (`serve`/`status`/`stop`/`run`) over @daedalus/core. The interactive terminal UI was removed 2026-10-08 by owner decision — deleting it costs the harness nothing (check.sh enforces zero agent/tool/LLM logic outside core), and the Web is the interactive surface.
 Daedalus Core:         Execution Harness COMPLETE (approval gate, sandbox, disk caps, process cancellation, audit events) + 5 modes, slash commands, provider registry, attachments, orchestrator budgets
 Event Bus / WebSocket: Foundation implemented (in-process bus, /tasks/events WS); approval events now broadcast over WS
 ```

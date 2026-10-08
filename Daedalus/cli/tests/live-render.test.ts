@@ -1,8 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import type { Event } from '@daedalus/core'
 import { formatEvent } from '../src/index.ts'
-import { InteractiveSession } from '../src/interactive.ts'
-import { DeltaSuffixTracker, SPINNER_FRAME_SET, SPINNER_FRAMES, lspSidebarEntries, scrambleText, spinnerGlyph, tokenSummary } from '../src/live-render.ts'
+import { DeltaSuffixTracker, SPINNER_FRAMES, scrambleText, spinnerGlyph, tokenSummary } from '../src/live-render.ts'
 
 function event(partial: Partial<Event> & { type: Event['type'] }): Event {
   return { seq: 1, task_id: 't1', ts: new Date().toISOString(), payload: {}, ...partial }
@@ -43,16 +42,6 @@ describe('DeltaSuffixTracker', () => {
   })
 })
 
-describe('lspSidebarEntries', () => {
-  test('automatic servers are marked, configured ones are not', () => {
-    const configured = [{ name: 'pyright', extensions: ['.py'] }]
-    const effective = [...configured, { name: 'typescript (auto)', extensions: ['.ts', '.tsx'] }]
-    expect(lspSidebarEntries(configured, effective)).toEqual([
-      { name: 'pyright', detail: '.py · configured' },
-      { name: 'typescript (auto)', detail: '.ts .tsx · auto (starts on first use)' },
-    ])
-  })
-})
 
 describe('formatEvent parity cases', () => {
   test('events the CLI used to drop now render one honest line', () => {
@@ -93,8 +82,6 @@ describe('spinner + scramble (design tokens)', () => {
     expect(spinnerGlyph(1)).toBe('⠙')
     expect(spinnerGlyph(10)).toBe('⠋')
     expect(spinnerGlyph(-1)).toBe('⠏')
-    expect(SPINNER_FRAME_SET.has('⠹')).toBe(true)
-    expect(SPINNER_FRAME_SET.has('x')).toBe(false)
   })
 
   test('scramble resolves left-to-right and holds the settled label', () => {
@@ -106,67 +93,4 @@ describe('spinner + scramble (design tokens)', () => {
   })
 })
 
-describe('interactive session working animation', () => {
-  test('working line shows spinner, scrambled label, elapsed; settles, then clears at task end', () => {
-    const session = new InteractiveSession({ workspaceRoot: '/tmp/ws' })
-    session.observeEvent(event({ type: 'TASK_STARTED', payload: {} }))
-    const early = session.renderLayout({ columns: 100 })
-    expect(early).toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] .+ · 0s/)
-    for (let i = 0; i < 12; i++) session.tickActivity()
-    expect(session.renderLayout({ columns: 100 })).toContain('thinking · 0s')
-    expect(session.activityFrame).toBe(12)
-    session.observeEvent(event({ type: 'TOOL_CALL_STARTED', payload: { call: { tool: 'read_file', args: {} } } }))
-    for (let i = 0; i < 12; i++) session.tickActivity()
-    expect(session.renderLayout({ columns: 100 })).toContain('working · 0s')
-    session.observeEvent(event({ type: 'TASK_COMPLETED', payload: { outcome: 'success', reason: 'completed' } }))
-    expect(session.renderLayout({ columns: 100 })).not.toMatch(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] .* · \d+s/)
-  })
 
-  test('status bar accumulates reported tokens', () => {
-    const session = new InteractiveSession({ workspaceRoot: '/tmp/ws' })
-    expect(session.statusBar()).not.toContain('tokens')
-    session.observeEvent(event({ type: 'MODEL_REQUEST_FINISHED', payload: { usage: { prompt_tokens: 100, completion_tokens: 23, total_tokens: 123 } } }))
-    expect(session.statusBar()).toContain('tokens 123')
-  })
-})
-
-describe('interactive session live streaming', () => {
-  function delta(text: string, turnId = 'turn-1'): Event {
-    return event({ type: 'MODEL_TEXT_DELTA', turn_id: turnId, payload: { text } })
-  }
-
-  test('the live preview shows in the layout, then the finished reply commits below its THOUGHT', () => {
-    const session = new InteractiveSession({ workspaceRoot: '/tmp/ws' })
-    session.observeEvent(delta('Sedang menyusun '))
-    session.observeEvent(delta('Sedang menyusun jawaban'))
-    expect(session.liveTurnText).toBe('Sedang menyusun jawaban')
-    expect(session.renderLayout({ columns: 100 })).toContain('thinking · live · Sedang menyusun jawaban')
-
-    session.observeEvent(event({ type: 'MODEL_REQUEST_FINISHED', payload: { message: { role: 'assistant', content: 'Sedang menyusun jawaban' } } }))
-    expect(session.liveTurnText).toBeUndefined()
-    session.observeEvent(event({ type: 'THOUGHT', payload: { text: 'reasoned first', source: 'provider_reasoning' } }))
-    const layout = session.renderLayout({ columns: 100 })
-    expect(layout).not.toContain('thinking · live')
-    expect(layout).toContain('thinking · reasoned first')
-    expect(layout).toContain('Daedalus › Sedang menyusun jawaban')
-  })
-
-  test('prose accompanying tool calls is a preamble and is dropped', () => {
-    const session = new InteractiveSession({ workspaceRoot: '/tmp/ws' })
-    session.observeEvent(delta('Saya baca dulu filenya'))
-    session.observeEvent(event({
-      type: 'MODEL_REQUEST_FINISHED',
-      payload: { message: { role: 'assistant', content: 'Saya baca dulu filenya', tool_calls: [{ id: 'c1' }] } },
-    }))
-    session.observeEvent(event({ type: 'TASK_COMPLETED', payload: { outcome: 'success', reason: 'completed' } }))
-    expect(session.renderLayout({ columns: 100 })).not.toContain('Daedalus › Saya baca dulu filenya')
-  })
-
-  test('a reply without THOUGHT commits at task completion', () => {
-    const session = new InteractiveSession({ workspaceRoot: '/tmp/ws', thinking: false })
-    session.observeEvent(delta('Jawaban final'))
-    session.observeEvent(event({ type: 'MODEL_REQUEST_FINISHED', payload: { message: { role: 'assistant', content: 'Jawaban final' } } }))
-    session.observeEvent(event({ type: 'TASK_COMPLETED', payload: { outcome: 'success', reason: 'completed' } }))
-    expect(session.renderLayout({ columns: 100 })).toContain('Daedalus › Jawaban final')
-  })
-})

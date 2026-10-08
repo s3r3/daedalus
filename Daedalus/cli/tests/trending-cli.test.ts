@@ -6,7 +6,6 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { SLASH_COMMANDS, loadSkills, workspaceSkillsDir } from '@daedalus/core';
 import { buildProgram, formatEvent, parseIsolation } from '../src/index.ts';
-import { InteractiveSession } from '../src/interactive.ts';
 import { formatSkillsListing, installBundledSkills, listSkills } from '../src/skills-bundled.ts';
 
 const cleanups: Array<() => void> = [];
@@ -134,25 +133,7 @@ describe('slash commands for agents and review', () => {
     expect(names).toContain('review');
   });
 
-  test('/agents dispatches to the session callback', async () => {
-    const session = new InteractiveSession({
-      workspaceRoot: temp('daedalus-session-agents-'),
-      callbacks: { listAgents: () => 'only-reader — Read-only child · tools: read_file' },
-    });
-    const result = await session.handleInput('/agents');
-    expect(result.kind).toBe('slash');
-    expect(result.text).toContain('only-reader');
-  });
 
-  test('/review dispatches to the session callback', async () => {
-    const session = new InteractiveSession({
-      workspaceRoot: temp('daedalus-session-review-'),
-      callbacks: { review: () => ({ text: '- **[high] a.ts:1** — boom', action: 'review' }) },
-    });
-    const result = await session.handleInput('/review');
-    expect(result.kind).toBe('slash');
-    expect(result.text).toContain('**[high] a.ts:1**');
-  });
 });
 
 describe('hook events render for humans', () => {

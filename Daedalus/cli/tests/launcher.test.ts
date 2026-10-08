@@ -20,7 +20,7 @@ import {
   writeDaemonState,
   type DaemonState,
 } from '../src/launcher.ts';
-import { visibleWidth } from '../src/interactive.ts';
+import { visibleWidth } from '../src/launcher.ts';
 import { TrayManager, TRAY_ICON_PATH, detectTray, trayMenuItems } from '../src/tray.ts';
 
 const cleanups: Array<() => void> = [];
@@ -79,25 +79,25 @@ describe('launcher arrow-key menu', () => {
     tray: detectTray({}, 'linux'),
   };
 
-  test('frame shows the four choices, the selection marker, URL, and workspace', () => {
+  test('frame shows the three choices, the selection marker, URL, and workspace', () => {
     const frame = launcherMenuFrame(0, frameStatus);
     expect(frame).toContain('Daedalus');
     expect(frame).toContain('http://127.0.0.1:3080');
     expect(frame).toContain('/home/you/project');
     expect(frame).toContain('❯ 1  Web UI (Open in Browser)');
-    expect(frame).toContain('2  Terminal UI (Interactive CLI)');
-    expect(frame).toContain('3  Hide to Tray (Background)');
-    expect(frame).toContain('4  Exit');
-    expect(launcherMenuFrame(2, frameStatus)).toContain('❯ 3  Hide to Tray (Background)');
+    expect(frame).toContain('2  Hide to Tray (Background)');
+    expect(frame).toContain('3  Exit');
+    expect(launcherMenuFrame(1, frameStatus)).toContain('❯ 2  Hide to Tray (Background)');
   });
 
   test('selection wraps and keys map to actions', () => {
-    expect(nextLauncherSelection(0, 'up')).toBe(3);
-    expect(nextLauncherSelection(3, 'down')).toBe(0);
+    expect(nextLauncherSelection(0, 'up')).toBe(2);
+    expect(nextLauncherSelection(2, 'down')).toBe(0);
     expect(nextLauncherSelection(1, 'down')).toBe(2);
     expect(launcherKeyAction('enter', 0)).toBe('web');
-    expect(launcherKeyAction('enter', 1)).toBe('cli');
-    expect(launcherKeyAction('3', 0)).toBe('tray');
+    expect(launcherKeyAction('enter', 1)).toBe('tray');
+    expect(launcherKeyAction('2', 0)).toBe('tray');
+    expect(launcherKeyAction('3', 0)).toBe('exit');
     expect(launcherKeyAction('q', 2)).toBe('exit');
     expect(launcherKeyAction('escape', 0)).toBe('exit');
     expect(launcherKeyAction('z', 0)).toBeUndefined();
@@ -107,13 +107,11 @@ describe('launcher arrow-key menu', () => {
 
   test('arrow keys navigate, then Enter opens the Web', async () => {
     const openWeb = vi.fn(async () => undefined);
-    const openCli = vi.fn(async () => undefined);
     const printed: string[] = [];
     const keys = ['down', 'up', 'enter'];
     const result = await runLauncherMenu({
       status: frameStatus,
       print: (text) => printed.push(text),
-      openCli,
       openWeb,
       stopServer,
       render: () => undefined,
@@ -121,23 +119,21 @@ describe('launcher arrow-key menu', () => {
     });
     expect(result).toBe('web');
     expect(openWeb).toHaveBeenCalledTimes(1);
-    expect(openCli).not.toHaveBeenCalled();
     expect(stopServer).not.toHaveBeenCalled();
     expect(printed.join('\n')).toContain('server keeps running in the background');
   });
 
-  test('number key 3 hides to tray and reports the honest backend note', async () => {
+  test('number key 2 hides to tray and reports the honest backend note', async () => {
     const hideToTray = vi.fn(async () => undefined);
     const printed: string[] = [];
     const result = await runLauncherMenu({
       status: frameStatus,
       print: (text) => printed.push(text),
-      openCli: async () => undefined,
       openWeb: async () => undefined,
       hideToTray,
       stopServer,
       render: () => undefined,
-      readKey: async () => '3',
+      readKey: async () => '2',
     });
     expect(result).toBe('tray');
     expect(hideToTray).toHaveBeenCalledTimes(1);
@@ -163,11 +159,9 @@ describe('launcher Exit shuts the server down', () => {
     const printed: string[] = [];
     const stopServer = vi.fn(async () => ({ stopped: true, pid: 4242, reason: 'daemon stopped' }));
     const openWeb = vi.fn(async () => undefined);
-    const openCli = vi.fn(async () => undefined);
     const result = await runLauncherMenu({
       status: exitStatus,
       print: (text) => printed.push(text),
-      openCli,
       openWeb,
       stopServer,
       render: () => undefined,
@@ -176,7 +170,6 @@ describe('launcher Exit shuts the server down', () => {
     expect(result).toBe('exit');
     expect(stopServer).toHaveBeenCalledTimes(1);
     expect(openWeb).not.toHaveBeenCalled();
-    expect(openCli).not.toHaveBeenCalled();
     expect(printed.join('\n')).toContain('Daedalus server stopped (pid 4242). Bye.');
   });
 
@@ -186,11 +179,10 @@ describe('launcher Exit shuts the server down', () => {
     const result = await runLauncherMenu({
       status: exitStatus,
       print: (text) => printed.push(text),
-      openCli: async () => undefined,
       openWeb: async () => undefined,
       stopServer,
       render: () => undefined,
-      readKey: async () => '4',
+      readKey: async () => '3',
     });
     expect(result).toBe('exit');
     expect(printed.join('\n')).toContain('No server running. Bye.');
@@ -204,7 +196,6 @@ describe('launcher Exit shuts the server down', () => {
     const result = await runLauncherMenu({
       status: exitStatus,
       print: (text) => printed.push(text),
-      openCli: async () => undefined,
       openWeb: async () => undefined,
       stopServer,
       render: () => undefined,
@@ -220,11 +211,10 @@ describe('launcher Exit shuts the server down', () => {
     const result = await runLauncherMenu({
       status: exitStatus,
       print: (text) => printed.push(text),
-      openCli: async () => undefined,
       openWeb: async () => undefined,
       stopServer,
       render: () => undefined,
-      readKey: async () => '4',
+      readKey: async () => '3',
     });
     expect(result).toBe('exit');
     expect(printed.join('\n')).toContain('Could not stop the Daedalus server: daemon did not exit before the stop timeout. Bye.');
@@ -336,13 +326,13 @@ describe('in-place frame renderer', () => {
       columns: () => 100,
     });
     // The Farid sequence: arrow keys bouncing around the menu.
-    for (const selection of [0, 1, 2, 1, 2, 3, 2, 1]) renderer.paint(launcherMenuFrame(selection, menuStatus));
+    for (const selection of [0, 1, 2, 1, 2, 1, 0, 1]) renderer.paint(launcherMenuFrame(selection, menuStatus));
     renderer.close();
     const screen = emulateTerminal(output, 100);
     expect(screen.length).toBe(frameRows);
     expect(screen.filter((line) => line.includes('╭─ Daedalus')).length).toBe(1);
     expect(screen.filter((line) => line.includes('Server: http://127.0.0.1:3080')).length).toBe(1);
-    expect(screen.join('\n')).toContain('❯ 2  Terminal UI (Interactive CLI)');
+    expect(screen.join('\n')).toContain('❯ 2  Hide to Tray (Background)');
     expect(output.match(/\x1b\[\?25l/g)).toHaveLength(1);
     expect(output.match(/\x1b\[\?25h/g)).toHaveLength(1);
     // close() is idempotent: a second close emits nothing more.
@@ -358,7 +348,7 @@ describe('in-place frame renderer', () => {
       },
       columns: () => 40,
     });
-    for (const selection of [0, 1, 2, 3]) renderer.paint(launcherMenuFrame(selection, menuStatus));
+    for (const selection of [0, 1, 2]) renderer.paint(launcherMenuFrame(selection, menuStatus));
     renderer.close();
     const screen = emulateTerminal(output, 40);
     expect(screen.length).toBe(frameRows);
@@ -514,9 +504,9 @@ describe('stopDaemon', () => {
 describe('startup menu', () => {
   test('parses menu choices', () => {
     expect(parseMenuChoice('1')).toBe('web');
-    expect(parseMenuChoice('2')).toBe('cli');
-    expect(parseMenuChoice('3')).toBe('tray');
-    expect(parseMenuChoice('4')).toBe('exit');
+    expect(parseMenuChoice('2')).toBe('tray');
+    expect(parseMenuChoice('3')).toBe('exit');
+    expect(parseMenuChoice('4')).toBe('invalid');
     expect(parseMenuChoice('0')).toBe('exit');
     expect(parseMenuChoice('q')).toBe('exit');
     expect(parseMenuChoice('x')).toBe('invalid');
@@ -526,7 +516,6 @@ describe('startup menu', () => {
     const choices = ['x', '1'];
     const printed: string[] = [];
     const openWeb = vi.fn(async () => undefined);
-    const openCli = vi.fn(async () => undefined);
     const stopServer = vi.fn(async () => ({ stopped: true, pid: 123, reason: 'daemon stopped' }));
     const status = {
       running: true,
@@ -540,23 +529,21 @@ describe('startup menu', () => {
     };
     const result = await runStartupMenu({
       status,
-      readChoice: async () => choices.shift() ?? '4',
+      readChoice: async () => choices.shift() ?? '3',
       print: (text) => printed.push(text),
-      openCli,
       openWeb,
       stopServer,
     });
     expect(result).toBe('web');
     expect(openWeb).toHaveBeenCalledTimes(1);
-    expect(openCli).not.toHaveBeenCalled();
     expect(stopServer).not.toHaveBeenCalled();
     expect(printed.join('\n')).toContain('1  Web UI (Open in Browser)');
     expect(printed.join('\n')).toContain('server keeps running in the background');
     expect(startupMenuText(status)).toContain('Choose an interface:');
   });
 
-  test('choice 2 opens the CLI', async () => {
-    const openCli = vi.fn(async () => undefined);
+  test('choice 2 hides to tray', async () => {
+    const hideToTray = vi.fn(async () => undefined);
     const stopServer = vi.fn(async () => ({ stopped: true, pid: 123, reason: 'daemon stopped' }));
     const result = await runStartupMenu({
       status: {
@@ -570,16 +557,16 @@ describe('startup menu', () => {
       },
       readChoice: async () => '2',
       print: () => undefined,
-      openCli,
+      hideToTray,
       openWeb: async () => undefined,
       stopServer,
     });
-    expect(result).toBe('cli');
-    expect(openCli).toHaveBeenCalledTimes(1);
+    expect(result).toBe('tray');
+    expect(hideToTray).toHaveBeenCalledTimes(1);
     expect(stopServer).not.toHaveBeenCalled();
   });
 
-  test('choice 4 exits and shuts the server down', async () => {
+  test('choice 3 exits and shuts the server down', async () => {
     const printed: string[] = [];
     const stopServer = vi.fn(async () => ({ stopped: true, pid: 123, reason: 'daemon stopped' }));
     const result = await runStartupMenu({
@@ -592,9 +579,8 @@ describe('startup menu', () => {
         state_file: '/tmp/daemon.json',
         tray: detectTray({}, 'linux'),
       },
-      readChoice: async () => '4',
+      readChoice: async () => '3',
       print: (text) => printed.push(text),
-      openCli: async () => undefined,
       openWeb: async () => undefined,
       stopServer,
     });

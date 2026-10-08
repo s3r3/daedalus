@@ -40,7 +40,7 @@ bash scripts/dev.sh
 Or use the CLI from source:
 
 ```bash
-# Bare launcher: starts/reuses one background server, then shows 1 CLI / 2 Web / 0 leave.
+# Bare launcher: starts/reuses one background server, then offers Web UI / Hide to Tray / Exit.
 node --experimental-strip-types cli/src/index.ts
 
 # Lifecycle commands
@@ -48,8 +48,8 @@ node --experimental-strip-types cli/src/index.ts serve --daemon
 node --experimental-strip-types cli/src/index.ts status
 node --experimental-strip-types cli/src/index.ts stop
 
-# Interactive CLI and one-shot runs
-node --experimental-strip-types cli/src/index.ts chat --cwd /path/to/workspace
+# One-shot runs (the interactive terminal chat was removed on 2026-10-08;
+# the Web UI is the interactive surface — the harness itself is unchanged)
 node --experimental-strip-types cli/src/index.ts run "Add input validation" --cwd /path/to/workspace
 node --experimental-strip-types cli/src/index.ts run "Fix the failing test" --cwd /path/to/workspace --json
 node --experimental-strip-types cli/src/index.ts health
@@ -61,7 +61,7 @@ When `daedalus-web/dist` has been built, the Node server also serves the Web UI 
 
 ### Agent modes
 
-Modes are defined once in core and shared by the CLI and Web. Press **Shift+Tab** in either composer/input surface to cycle at the next turn boundary:
+Modes are defined once in core and carried by every surface: the Web composer cycles them with **Shift+Tab** at the next turn boundary, and `daedalus run --mode <mode>` selects one for a one-shot run:
 
 | Mode | Behaviour |
 |---|---|
@@ -73,7 +73,7 @@ Modes are defined once in core and shared by the CLI and Web. Press **Shift+Tab*
 
 ### Slash commands
 
-Typing `/` opens the shared command palette in the CLI and Web composer. Available commands:
+Typing `/` opens the shared command palette in the Web composer. Available commands:
 
 `/help`, `/mode`, `/models`, `/providers`, `/settings`, `/auto-approve`, `/plan`, `/workspace`, `/files`, `/upload`, `/image`, `/diff`, `/validate`, `/new`, `/clear`, `/status`, `/cancel`, `/exit`.
 
