@@ -23,7 +23,7 @@ import { ModeController, classifyToolName, isToolCallDenied, isToolVisible, mode
 import { PLAN_DOCUMENT_FILES, hasPlanDocument, isPlanDocumentChange, planDecisionsFromEvents, planDocumentRepairDirective } from '../interaction/plans.ts';
 import { ASK_USER_TOOL_NAME } from '../interaction/questions.ts';
 import { SPAWN_SUBAGENT_TOOL_NAME } from '../interaction/subagents.ts';
-import { creationCompletionRefusal, deriveTaskTargetDir, detectCreationGoal, pathInsideTarget, questionGateAppliesToGoal, scaffoldMarkerPresent, workspaceRelativePath, type CreationGoal } from './scaffold.ts';
+import { creationCompletionRefusal, deriveTaskTargetDir, detectCreationGoal, pathInsideTarget, questionGateAppliesToGoal, scaffoldMarkerPresent, summarizeCommandFailure, workspaceRelativePath, type CreationGoal } from './scaffold.ts';
 
 export type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor };
 export { interpretTask };
@@ -245,6 +245,8 @@ export class AgentLoop {
    * task delegated (children's ledgers belong to the runtime layer).
    */
   readonly #commandsSucceeded = new Map<string, number>();
+  /** Most recent failed run_command per task, one line, for gate evidence. */
+  readonly #lastCommandFailure = new Map<string, string>();
   readonly #delegatedTasks = new Set<string>();
   /** Creation-shaped tasks that already spent their one create-the-files repair turn. */
   readonly #creationRepairs = new Set<string>();
@@ -364,6 +366,7 @@ export class AgentLoop {
       this.#validationStalls.delete(spec.id);
       this.#planRepairs.delete(spec.id);
       this.#commandsSucceeded.delete(spec.id);
+      this.#lastCommandFailure.delete(spec.id);
       this.#delegatedTasks.delete(spec.id);
       this.#creationRepairs.delete(spec.id);
       this.#consecutiveTimeouts.delete(spec.id);
@@ -1087,6 +1090,9 @@ export class AgentLoop {
     if (call.tool === 'run_command' && result.status === 'ok') {
       this.#commandsSucceeded.set(state.id, (this.#commandsSucceeded.get(state.id) ?? 0) + 1);
     }
+    if (call.tool === 'run_command' && result.status !== 'ok') {
+      this.#lastCommandFailure.set(state.id, summarizeCommandFailure(commandLineForCall(call), result.output ?? ''));
+    }
     if (call.tool === SPAWN_SUBAGENT_TOOL_NAME) this.#delegatedTasks.add(state.id);
     // ask_user answers can sanction an outside-target exception (see
     // #grantTargetExceptions): the grant lands in the loop's ledger
@@ -1628,6 +1634,7 @@ export class AgentLoop {
         filesChanged: this.#changedFiles.get(state.id)?.size ?? 0,
         commandsSucceeded: this.#commandsSucceeded.get(state.id) ?? 0,
         delegated: this.#delegatedTasks.has(state.id),
+        lastCommandFailure: this.#lastCommandFailure.get(state.id),
       },
       markerPresent,
       { deferWhenDelegated: true },

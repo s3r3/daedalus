@@ -37,6 +37,7 @@ import {
   scaffoldApprovalChain,
   scaffoldChainStepFor,
   scaffoldMarkerPresent,
+  summarizeCommandFailure,
   workspaceRelativePath,
   type ScaffoldChainStep,
   type ToolchainProbe,
@@ -1178,17 +1179,29 @@ export class TaskRunner {
         // in `collected`, so delegated work counts here.
         const changedPaths = new Set<string>();
         let commandsSucceeded = 0;
+        let lastCommandFailure: string | undefined;
         for (const event of collected) {
           if (event.type === 'FILE_CHANGED') {
             const path = (event.payload as { path?: unknown }).path;
             if (typeof path === 'string') changedPaths.add(path);
           } else if (event.type === 'TOOL_CALL_FINISHED') {
             const payload = event.payload as {
-              call?: { args?: { path?: unknown } };
-              result?: { meta?: { mutating?: unknown } };
+              call?: { tool?: unknown; args?: { path?: unknown; command?: unknown; args?: unknown } };
+              result?: { status?: unknown; output?: unknown; meta?: { mutating?: unknown } };
             };
             const path = payload.call?.args?.path;
             if (payload.result?.meta?.mutating === true && typeof path === 'string') changedPaths.add(path);
+            if (payload.call?.tool === 'run_command' && payload.result?.status !== 'ok' && payload.result?.status !== undefined) {
+              const commandParts: string[] = [];
+              if (typeof payload.call.args?.command === 'string') commandParts.push(payload.call.args.command);
+              if (Array.isArray(payload.call.args?.args)) {
+                for (const arg of payload.call.args.args) if (typeof arg === 'string') commandParts.push(arg);
+              }
+              lastCommandFailure = summarizeCommandFailure(
+                commandParts.join(' ') || 'run_command',
+                typeof payload.result.output === 'string' ? payload.result.output : '',
+              );
+            }
           } else if (event.type === 'COMMAND_FINISHED' && (event.payload as { exit_code?: unknown }).exit_code === 0) {
             commandsSucceeded++;
           }
@@ -1196,7 +1209,7 @@ export class TaskRunner {
         const markerPresent = creationGoal.scaffold ? scaffoldMarkerPresent(this.#workspaceRoot, creationGoal.scaffold) : false;
         const refusal = creationCompletionRefusal(
           creationGoal,
-          { filesChanged: changedPaths.size, commandsSucceeded, delegated: collected.some((event) => event.type === 'CHILD_TASK_STARTED') },
+          { filesChanged: changedPaths.size, commandsSucceeded, delegated: collected.some((event) => event.type === 'CHILD_TASK_STARTED'), lastCommandFailure },
           markerPresent,
         );
         if (refusal) {
