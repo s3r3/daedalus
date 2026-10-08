@@ -22,7 +22,20 @@ export function DiffViewer() {
   const root = useDaedalusStore((state) => state.workspace.root)
   const setWorkspace = useDaedalusStore((state) => state.setWorkspace)
   const setOpenFile = useDaedalusStore((state) => state.setOpenFile)
+  const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
   const [openError, setOpenError] = useState<string | null>(null)
+  const [revertNote, setRevertNote] = useState<string | null>(null)
+
+  const revertChangedFile = async (path: string): Promise<void> => {
+    if (!root) return
+    try {
+      await api.gitRevert(root, path)
+      setRevertNote(`reverted ${path} to HEAD — the diff above stays as the task record`)
+    } catch (error) {
+      setRevertNote(error instanceof Error ? error.message : String(error))
+    }
+    bumpWorkspaceRevision()
+  }
 
   const openChangedFile = async (path: string): Promise<void> => {
     if (!root) {
@@ -81,12 +94,26 @@ export function DiffViewer() {
         </p>
       ) : null}
 
-      {active ? <FileDiff change={active} onOpen={(path) => void openChangedFile(path)} /> : null}
+      {revertNote ? (
+        <p className="text-[10px] text-muted" data-testid="diff-revert-note">
+          {revertNote}
+        </p>
+      ) : null}
+
+      {active ? (
+        <FileDiff
+          key={active.path}
+          change={active}
+          onOpen={(path) => void openChangedFile(path)}
+          onRevert={active.operation !== 'created' ? (path) => void revertChangedFile(path) : undefined}
+        />
+      ) : null}
     </Panel>
   )
 }
 
-export function FileDiff({ change, onOpen }: { change: FileChange; onOpen?: (path: string) => void }) {
+export function FileDiff({ change, onOpen, onRevert }: { change: FileChange; onOpen?: (path: string) => void; onRevert?: (path: string) => void }) {
+  const [revertArmed, setRevertArmed] = useState(false)
   return (
     <div className="min-h-0 flex-1 overflow-auto" data-testid="diff-body">
       <div className="flex items-center gap-2 py-1 text-[10px] text-muted">
@@ -102,6 +129,32 @@ export function FileDiff({ change, onOpen }: { change: FileChange; onOpen?: (pat
           >
             open in editor
           </Button>
+        ) : null}
+        {onRevert ? (
+          revertArmed ? (
+            <span className="flex items-center gap-1">
+              <span className="text-warning">discard edits?</span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setRevertArmed(false)
+                  onRevert(change.path)
+                }}
+                aria-label={`confirm revert changed file ${change.path}`}
+              >
+                revert
+              </Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => setRevertArmed(false)} aria-label={`cancel revert changed file ${change.path}`}>
+                keep
+              </Button>
+            </span>
+          ) : (
+            <Button type="button" variant="outline" size="sm" onClick={() => setRevertArmed(true)} aria-label={`revert changed file ${change.path}`}>
+              revert
+            </Button>
+          )
         ) : null}
         <span className="ml-auto">
           +{change.added} / -{change.removed}

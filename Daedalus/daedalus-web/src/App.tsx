@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, ty
 import { TopBar } from './components/layout/top-bar'
 import { Composer } from './components/composer/composer'
 import { WorkspacePanel } from './components/workspace/workspace-panel'
+import { GitPanel } from './components/workspace/git-panel'
 import { SettingsDialog } from './components/settings/settings-dialog'
 import { ExtensionsPanel } from './components/settings/extensions-panel'
 import { EditorPane } from './components/editor/editor-pane'
@@ -327,6 +328,7 @@ export function App() {
           <ScrollArea className="min-h-[320px] lg:min-h-0 lg:flex-1">
             <div className="flex flex-col gap-2 pr-1">
               <DiffViewer />
+              <GitPanel />
               <AttachmentsPanel />
               <ChildTasksPanel />
               <FinalReportView report={report} />

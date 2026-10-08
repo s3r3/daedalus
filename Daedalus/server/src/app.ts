@@ -45,6 +45,7 @@ import {
 } from "@daedalus/core";
 import { collectRoots, listDirectory, listFilesFlat, listPlanDocuments, buildTree, resolveInside, MAX_FILE_BYTES, IMAGE_MEDIA_TYPES, MAX_IMAGE_FILE_BYTES } from "./workspace.ts";
 import { classifyWebIntent, executeFastPath } from "./fast-path.ts";
+import { gitStatus, revertFileToHead } from "./git-status.ts";
 import {
   ConversationStore,
   historyMessages,
@@ -1914,6 +1915,46 @@ export function createApp(ctx: AppContext) {
       } catch (error) {
         sendJson(res, errorMessage(error).includes("escapes workspace") ? 404 : errorStatus(error), { error: errorMessage(error) });
       }
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/workspace/git-status") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          sendJson(res, 200, await gitStatus(root));
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/workspace/git-revert") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const target = sanitizeRelativePath(typeof parsed.path === "string" ? parsed.path : "");
+          if (!target) {
+            sendJson(res, 400, { error: "path_required", request_id: requestId });
+            return;
+          }
+          const outcome = await revertFileToHead(root, target);
+          if (!outcome.ok) {
+            const statusCode = outcome.reason === "untracked" ? 400 : 409;
+            sendJson(res, statusCode, { error: outcome.reason, request_id: requestId });
+            return;
+          }
+          sendJson(res, 200, { reverted: target, root });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
       return;
     }
 

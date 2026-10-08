@@ -187,6 +187,13 @@ export type WorkspacePlan = {
 export type WorkspacePlans = { root: string; plans: WorkspacePlan[] }
 
 export type WorkspaceFileEntry = { path: string; type: 'file' | 'dir' }
+
+/** Worktree state from GET /workspace/git-status (the user's own git, read-only). */
+export type WorkspaceGitStatus = {
+  isRepo: boolean
+  branch: string | null
+  files: Array<{ path: string; status: 'untracked' | 'added' | 'modified' | 'deleted' | 'renamed' | 'changed' }>
+}
 export type WorkspaceFiles = { root: string; files: WorkspaceFileEntry[]; truncated: boolean }
 
 export type ProviderTestResult = {
