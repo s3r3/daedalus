@@ -1527,7 +1527,29 @@ export function createApp(ctx: AppContext) {
             break;
           }
         }
-        sendJson(res, success ? 200 : 404, { success, question_id: questionId, ...(success ? {} : { error: "question_not_pending" }) });
+        if (success) {
+          sendJson(res, 200, { success, question_id: questionId });
+          return;
+        }
+        // No live broker holds the question: the task may simply have
+        // ended (the card outlived the run that asked it). Distinguish
+        // that stale card from a genuinely unknown id and say it in
+        // words — the runner is already gone from activeRunners here,
+        // so a bare question_not_pending reads as a broken button.
+        const lookup = findTask(ctx, taskId);
+        const ended = lookup !== undefined
+          && ((typeof lookup.state.status === "string" && ["done", "failed"].includes(lookup.state.status))
+            || lookup.store.replay(taskId).some((event) => event.type === "TASK_COMPLETED"));
+        if (ended) {
+          sendJson(res, 410, {
+            success: false,
+            question_id: questionId,
+            error: "question_not_pending",
+            message: "This task already ended — this question can no longer be answered.",
+          });
+          return;
+        }
+        sendJson(res, 404, { success: false, question_id: questionId, error: "question_not_pending" });
       })();
       return;
     }

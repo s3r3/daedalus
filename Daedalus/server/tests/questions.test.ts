@@ -153,6 +153,27 @@ describe('POST /tasks/{id}/questions/{questionId}', () => {
     expect(body).toMatchObject({ success: true, question_id: 'question-1' });
     await expect(pending).resolves.toEqual({ outcome: 'answered', answer: 'Gelap' });
   });
+
+  test('answering a stale card after the task ended: 410 with a human task-ended message', async () => {
+    const workspace = temp('daedalus-srv-q-ws-');
+    const home = temp('daedalus-srv-q-home-');
+    const { base, ctx } = await listen(workspace, home);
+    // The task is over (state saved failed, completion on the log) and its
+    // runner is gone from activeRunners — the card is stale, not unknown.
+    ctx.store.saveState('tq-done', { status: 'failed' });
+    ctx.store.append('tq-done', { seq: 1, task_id: 'tq-done', type: 'TASK_COMPLETED', payload: {}, ts: new Date().toISOString() });
+
+    const res = await fetch(new URL('/tasks/tq-done/questions/question-9', base), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ answer: 'Continue a different way' }),
+    });
+    expect(res.status).toBe(410);
+    const body = await json<{ success: boolean; error?: string; message?: string }>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toBe('question_not_pending');
+    expect(body.message).toMatch(/task already ended/);
+  });
 });
 
 describe('interactive plan mode end-to-end', () => {

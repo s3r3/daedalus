@@ -48,7 +48,7 @@ import { loadPins } from './pins.ts';
 import type { EditFormat, ModelTier, PromptFamily, PromptFamilySetting, ReviewGateReport } from './contracts.ts';
 import { TextProtocolProvider, type ProtocolSwitchInfo } from './providers/llm/text-protocol.ts';
 import { ModeController, isPlanDocumentPath, normalizeAgentMode, restrictMode } from './interaction/modes.ts';
-import { QuestionBroker, createAskUserTool, resolveQuestionTimeoutMs, type UserQuestionInfo } from './interaction/questions.ts';
+import { QuestionBroker, createAskUserTool, questionResultOutput, resolveQuestionTimeoutMs, type UserQuestionInfo } from './interaction/questions.ts';
 import { hasPlanDocument, parseTasksDocument, planDecisionsFromEvents, planSlugFromGoal, renderAssembledPlanDocuments, PLAN_DOCUMENT_FILES } from './interaction/plans.ts';
 import { replan as defaultReplan } from './agent/planner.ts';
 import type { Planner } from './agent/types.ts';
@@ -899,8 +899,26 @@ export class TaskRunner {
       };
       try {
         emitEvent({ bus: this.bus, store: this.store }, info.taskId, undefined, 'QUESTION_REQUESTED', { question });
-        const answer = await this.questions.ask(question);
-        return answer.outcome === 'answered' && /continue/i.test(answer.answer ?? '') ? 'continue' : 'stop';
+        const result = await this.questions.ask(question);
+        // The card must close when the wait resolves — answered, timed
+        // out, or cancelled. A missing QUESTION_ANSWERED keeps the Web
+        // rendering the loop-pause card after the task has moved on or
+        // ended, so pressing it then fails with a bare
+        // question_not_pending behind a live-looking card (live bug,
+        // 2026-10-07). Same payload shape as the ask_user tool's own
+        // closing event.
+        const formatted = questionResultOutput(question, result);
+        emitEvent({ bus: this.bus, store: this.store }, info.taskId, undefined, 'QUESTION_ANSWERED', {
+          question_id: question.id,
+          question: question.question,
+          outcome: result.outcome,
+          ...(result.answer !== undefined ? { answer: result.answer } : {}),
+          ...(formatted.optionIndex !== undefined ? { option_index: formatted.optionIndex } : {}),
+          ...(result.outcome === 'timeout' ? { timed_out: true } : {}),
+          ...(result.outcome === 'cancelled' ? { cancelled: true } : {}),
+        });
+        await this.bus.drain();
+        return result.outcome === 'answered' && /continue/i.test(result.answer ?? '') ? 'continue' : 'stop';
       } catch {
         return 'stop';
       }
@@ -1046,6 +1064,14 @@ export class TaskRunner {
     } finally {
       this.#activeLoops.delete(spec.id);
       this.#scaffoldChains.delete(spec.id);
+      // A question still pending at task end (natural finish, error,
+      // provider failure, harness throw — or an asker whose wait was
+      // abandoned) settles as cancelled, so it can never outlive the
+      // task as an un-answerable card. The waiters emit their own
+      // QUESTION_ANSWERED when the broker settles them (the ask_user
+      // tool; the loop-pause handler above), which is what clears the
+      // card in the Web.
+      this.questions.cancelTasks([spec.id]);
       // The task is over: its background jobs die with it.
       jobManager.killAll(spec.id);
       this.#jobManagers.delete(spec.id);
