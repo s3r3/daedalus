@@ -17,6 +17,8 @@ export {
   djangoProjectName,
   explicitTargetFolder,
   extractTargetDir,
+  recordedTargetDir,
+  sessionAnchorDirective,
   flutterProjectName,
   formatToolchainSummary,
   missingToolchains,

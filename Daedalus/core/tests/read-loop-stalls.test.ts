@@ -12,11 +12,12 @@
  * no continuation path, so re-reading was rational.
  */
 import { afterEach, describe, expect, test } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   AgentLoop,
+  CONDENSED_TOOL_OUTPUT,
   EventBus,
   ModelPoolProvider,
   TaskRunner,
@@ -218,6 +219,116 @@ describe('unchanged-read stub (fix 1)', () => {
     });
     await loop.run({ id: 'stub-list', goal: 'look around', constraints: [], done_criteria: ['contents reported', 'confirmation file written'], repo_path: ws, status: 'draft' });
     expect(JSON.stringify(requests[2])).toContain('[unchanged since your earlier listing:');
+  });
+});
+
+describe('unchanged-read stub after condensing (tesvite CSS loop, 2026-10-08)', () => {
+  test('an identical re-read after condensing gets the honest stub, never a second full serve', async () => {
+    const home = temp('daedalus-condensed-home-');
+    const ws = temp('daedalus-condensed-ws-');
+    writeFileSync(join(ws, 'page.txt'), 'original line\n');
+    const { provider, requests } = scriptedProvider([
+      { toolCalls: [readTool('c1')] },
+      { toolCalls: [readTool('c2')] },
+      { toolCalls: [readTool('c3')] },
+      { toolCalls: [{ id: 'c4', name: 'write_file', args: { path: 'confirm.txt', content: 'confirmed\n' } }] },
+      { content: 'done: finished' },
+    ]);
+    // A context that reports one condensed tool output from the second
+    // turn on — the production squeeze, made deterministic.
+    let builds = 0;
+    const context = {
+      async buildMessages(state: { last_observation?: string; goal: string }) {
+        builds += 1;
+        const messages: Message[] = [
+          { role: 'system', content: 'test system' },
+          { role: 'user', content: state.last_observation ?? state.goal },
+        ];
+        if (builds >= 2) messages.push({ role: 'tool', content: CONDENSED_TOOL_OUTPUT, tool_call_id: 'condensed-marker' });
+        return messages;
+      },
+      async compact(messages: Message[]) { return messages; },
+      estimate(messages: Message[]) { return messages.length; },
+    };
+    const loop = new AgentLoop({
+      provider,
+      bus: new EventBus(),
+      store: new TaskStore(home),
+      context,
+      executeTool: async (call) => {
+        if (call.tool === 'read_file') {
+          const result = await readFileTool.execute(call.args, { workspaceRoot: ws });
+          return { ...result, call_id: call.id, meta: { ...result.meta, mutating: false } };
+        }
+        if (call.tool === 'write_file') {
+          const result = await writeFileTool.execute(call.args, { workspaceRoot: ws });
+          return { ...result, call_id: call.id, meta: { ...result.meta, mutating: true } };
+        }
+        return { call_id: call.id, status: 'error', output: `unexpected ${call.tool}`, truncated: false, meta: {} };
+      },
+      stopPolicy: { max_iterations: 20, max_errors: 5 },
+    });
+    const state = await loop.run({ id: 'condensed-stub-task', goal: 'read then update the file', constraints: [], done_criteria: ['confirmation file written'], repo_path: ws, status: 'draft' });
+    expect(state.status).toBe('done');
+    // The request after the first condensed re-read: the honest stub, and
+    // the file body is NOT served a second time (the old forget-on-condense
+    // behavior re-emitted it on every repeat until the budget died).
+    const afterCondensedRead = JSON.stringify(requests[2]);
+    expect(afterCondensedRead).toContain('[already read earlier in this task:');
+    expect(afterCondensedRead).toContain('pushed out of your visible context');
+    expect(afterCondensedRead).not.toContain('[unchanged since your earlier read:');
+    expect(afterCondensedRead).not.toContain('original line');
+    // A third identical read is still the cheap stub, not a full serve.
+    const afterThirdRead = JSON.stringify(requests[3]);
+    expect(afterThirdRead).toContain('[already read earlier in this task:');
+    expect(afterThirdRead).not.toContain('original line');
+  });
+});
+
+describe('session anchor for conversation follow-ups (tesvite CSS loop, 2026-10-08)', () => {
+  test('a follow-up inherits the recorded target and is told its working folder up front', async () => {
+    const home = temp('daedalus-anchor-home-');
+    const ws = temp('daedalus-anchor-ws-');
+    mkdirSync(join(ws, 'tesvite', 'src'), { recursive: true });
+    writeFileSync(join(ws, 'tesvite', 'src', 'App.tsx'), 'export default function App() { return null; }\n');
+    const priorContext = [
+      "Earlier in this conversation (most recent last) — the user's follow-ups refer to this; continue from it instead of starting cold:",
+      'User: buat project vite react di folder tesvite, buat halaman website tentang biodata presiden putin dari russia yang lengkap',
+      'Daedalus: Selesai. (buat project vite react di folder tesvite, buat halaman website tentang biodata presiden putin dari russia yang lengkap)',
+      'target_dir: tesvite',
+    ].join('\n');
+    const { provider, requests } = scriptedProvider([
+      { toolCalls: [{ id: 'c1', name: 'write_file', args: { path: 'tesvite/src/App.tsx', content: 'export default function App() { return <main className="parallax-container" />; }\n' } }] },
+      { content: 'done: styling wired in tesvite' },
+    ]);
+    const loop = new AgentLoop({
+      provider,
+      bus: new EventBus(),
+      store: new TaskStore(home),
+      executeTool: async (call) => {
+        if (call.tool === 'write_file') {
+          const result = await writeFileTool.execute(call.args, { workspaceRoot: ws });
+          return { ...result, call_id: call.id, meta: { ...result.meta, mutating: true } };
+        }
+        return { call_id: call.id, status: 'error', output: `unexpected ${call.tool}`, truncated: false, meta: {} };
+      },
+      stopPolicy: { max_iterations: 20, max_errors: 5 },
+    });
+    const state = await loop.run({
+      id: 'anchor-followup',
+      goal: 'tapi gk diterapkan kan kok masih gini nih polos dia di app.tsx bukan jsx',
+      constraints: [priorContext],
+      done_criteria: ['App.tsx styling updated inside tesvite'],
+      repo_path: ws,
+      status: 'draft',
+      conversation_id: 'conv-tesvite',
+    });
+    expect(state.status).toBe('done');
+    expect(state.target_dir).toBe('tesvite');
+    // The very first request names the working folder and the file the
+    // user's "app.tsx" means — no exploring same-named files elsewhere.
+    expect(JSON.stringify(requests[0])).toContain('Session anchor');
+    expect(JSON.stringify(requests[0])).toContain('tesvite/src/App.tsx');
   });
 });
 

@@ -145,6 +145,30 @@ describe('deriveTaskTargetDir — the anchor derivation', () => {
     expect(deriveTaskTargetDir({ goal: 'halaman apa saja yang ada di folder tesvite?', workspaceRoot: root })).toBeUndefined();
   });
 
+  test('a chat follow-up anchors to the target an earlier task in the session recorded', () => {
+    const root = incidentWorkspace();
+    // The prior conversation rides in constraints; the runtime's own
+    // report evidence line (`target_dir: tesvite`) is the anchor source —
+    // never folder prose in the user's new message.
+    const priorContext = [
+      'Earlier in this conversation (most recent last) — the user\'s follow-ups refer to this; continue from it instead of starting cold:',
+      'User: buat project vite react di folder tesvite, buat halaman website tentang biodata presiden putin',
+      'Daedalus: Selesai. (buat project vite react di folder tesvite, buat halaman website tentang biodata presiden putin)',
+      'target_dir: tesvite',
+    ].join('\n');
+    expect(deriveTaskTargetDir({ goal: 'tapi gk diterapkan kan kok masih gini nih polos', constraints: [priorContext], workspaceRoot: root })).toBe('tesvite');
+    // The latest recorded target wins when a session moved projects.
+    const moved = `${priorContext}\nUser: pindah, sekarang kerjakan yang lama\nDaedalus: Selesai. (rapikan folder arsip)\ntarget_dir: arsip-lama`;
+    mkdirSync(join(root, 'arsip-lama'), { recursive: true });
+    expect(deriveTaskTargetDir({ goal: 'lanjutkan', constraints: [moved], workspaceRoot: root })).toBe('arsip-lama');
+  });
+
+  test('a recorded target that no longer exists does not anchor the follow-up', () => {
+    const root = incidentWorkspace();
+    const priorContext = 'Daedalus: Selesai. (project lama)\ntarget_dir: sudah-dihapus';
+    expect(deriveTaskTargetDir({ goal: 'tapi kok masih polos', constraints: [priorContext], workspaceRoot: root })).toBeUndefined();
+  });
+
   test('explicitTargetFolder never guesses; extractTargetDir keeps its app fallback', () => {
     expect(explicitTargetFolder('simpan di folder tesvite')).toBe('tesvite');
     expect(explicitTargetFolder('buat halaman tentang putin')).toBeUndefined();

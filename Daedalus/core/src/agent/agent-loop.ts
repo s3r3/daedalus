@@ -24,7 +24,7 @@ import { ModeController, classifyToolName, isToolCallDenied, isToolVisible, mode
 import { PLAN_DOCUMENT_FILES, hasPlanDocument, isPlanDocumentChange, planDecisionsFromEvents, planDocumentRepairDirective } from '../interaction/plans.ts';
 import { ASK_USER_TOOL_NAME } from '../interaction/questions.ts';
 import { SPAWN_SUBAGENT_TOOL_NAME } from '../interaction/subagents.ts';
-import { creationCompletionRefusal, deriveTaskTargetDir, detectCreationGoal, pathInsideTarget, questionGateAppliesToGoal, scaffoldMarkerPresent, summarizeCommandFailure, workspaceRelativePath, type CreationGoal } from './scaffold.ts';
+import { creationCompletionRefusal, deriveTaskTargetDir, detectCreationGoal, pathInsideTarget, questionGateAppliesToGoal, scaffoldMarkerPresent, sessionAnchorDirective, summarizeCommandFailure, workspaceRelativePath, type CreationGoal } from './scaffold.ts';
 
 export type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor };
 export { interpretTask };
@@ -274,9 +274,13 @@ export class AgentLoop {
    * Ranges each task has already been SERVED in full by read_file /
    * list_dir (path → line-numbered lines), with the condensed-message
    * count at serve time. A re-read whose lines are all recorded with
-   * identical content — and no new condensing has dropped them from
-   * context since — is answered with a short stub instead of re-emitting
-   * the whole file into history (the incident's 8 identical reads).
+   * identical content is answered with a short stub instead of
+   * re-emitting the whole file into history (the incident's 8 identical
+   * reads). The stub's wording follows the condensing clock: while the
+   * earlier copy is still in context it says so; once condensing has
+   * pushed it out, it says that instead and steers to a narrow range —
+   * the record itself is never forgotten on condensing, because
+   * forgetting re-served whole files and fed the re-read death spiral.
    * Recording happens only when the model actually received the full
    * text: a shaped/truncated serve records nothing, so a range the
    * model only partially received is never stubbed.
@@ -413,6 +417,16 @@ export class AgentLoop {
     if (anchor && state.target_dir !== anchor) {
       state = { ...state, target_dir: anchor };
       this.#store.saveState(state.id, state);
+    }
+    // Session anchor (chat follow-ups): a non-creation task in a
+    // conversation that inherited the session's recorded target gets one
+    // directive up front naming its working folder — short follow-ups
+    // name no folder, and without this the model resolved file names
+    // against the whole workspace (the tesvite CSS-loop incident: it
+    // read the framework's own daedalus-web/src/App.tsx instead of
+    // tesvite/src/App.tsx, repeatedly, until the token budget died).
+    if (anchor && state.conversation_id && !detectCreationGoal(state.goal, state.done_criteria).creation) {
+      this.#pendingGuidance.set(state.id, sessionAnchorDirective(anchor));
     }
     let iteration = 0;
     let errors = 0;
@@ -1521,13 +1535,13 @@ export class AgentLoop {
 
   /**
    * The unchanged-read stub. Returns the stub text when this read's
-   * lines were all served before with identical content and no new
-   * condensing has dropped them from context since; otherwise records
+   * lines were all served before with identical content; otherwise records
    * what was just served and returns undefined (full text flows). The
    * comparison runs against the freshly executed result, so an external
    * edit (or a command that rewrote the file) invalidates the record by
    * content, not by clock — the stale-stub failure mode (Claude Code
-   * #60684) cannot occur.
+   * #60684) cannot occur. Condensing never invalidates the record (see
+   * the branch comments): it only changes which stub wording is honest.
    */
   #readStubFor(taskId: string, call: ToolCall, result: ToolResult): string | undefined {
     const args = (call.args ?? {}) as { path?: unknown };
@@ -1540,8 +1554,14 @@ export class AgentLoop {
     if (call.tool === 'list_dir') {
       const path = typeof args.path === 'string' && args.path ? args.path : '.';
       const existing = perTask.get(path);
-      if (existing?.listingText === result.output && existing.condensedAtServe === condensedNow) {
-        return `[unchanged since your earlier listing: ${path} — the same entries, already in your context. Do not list it again; proceed to the actual change (write_file/edit_file/run_command), or finish.]`;
+      if (existing?.listingText === result.output) {
+        // Identical listing. If condensing has since pushed the earlier
+        // copy out of view, say exactly that (never claim it is still in
+        // context) — re-serving the whole listing is how fat tasks spiral
+        // into re-read loops until the token budget stops them.
+        return condensedNow > existing.condensedAtServe
+          ? `[already listed earlier in this task: ${path} — the entries are unchanged, but the earlier listing has been pushed out of your visible context to save space. Do not list it again; proceed to the actual change (write_file/edit_file/run_command), or finish.]`
+          : `[unchanged since your earlier listing: ${path} — the same entries, already in your context. Do not list it again; proceed to the actual change (write_file/edit_file/run_command), or finish.]`;
       }
       perTask.set(path, { lines: new Map(), totalLines: 0, condensedAtServe: condensedNow, listingText: result.output });
       return undefined;
@@ -1558,14 +1578,8 @@ export class AgentLoop {
     if (!path || typeof start !== 'number' || typeof end !== 'number' || typeof total !== 'number' || end < start) return undefined;
     const servedLines = parseNumberedLines(result.output);
     if (!servedLines) return undefined;
-    let record = perTask.get(path);
-    if (record && condensedNow > record.condensedAtServe) {
-      // Condensing dropped older tool results since the record was
-      // written; those lines may no longer be in context. Forget them.
-      record = { lines: new Map(), totalLines: total, condensedAtServe: condensedNow };
-      perTask.set(path, record);
-    }
-    if (record && record.condensedAtServe === condensedNow) {
+    const record = perTask.get(path);
+    if (record) {
       let allSame = true;
       for (let line = start; line <= end; line++) {
         if (record.lines.get(line) !== servedLines.get(line)) {
@@ -1574,16 +1588,26 @@ export class AgentLoop {
         }
       }
       if (allSame) {
-        return `[unchanged since your earlier read: ${path} lines ${start}–${end} of ${total} — the file has not changed and those lines are already in your context. Do not read them again; proceed with the change (edit_file/write_file/download_file), ask_user if blocked, or finish. For lines you have not seen, read a new range with offset/limit.]`;
+        // The record is NOT forgotten when condensing advances (the old
+        // behavior): forgetting re-served the whole file, the re-serve
+        // fattened history, condensing squeezed again — the tesvite
+        // loop's death spiral (3× a 268-line file, budget dead before any
+        // write). The stub stays truthful instead: after condensing it
+        // no longer claims the lines are in context, it says they were
+        // pushed out and steers to a narrow range or the actual write.
+        return condensedNow > record.condensedAtServe
+          ? `[already read earlier in this task: ${path} lines ${start}–${end} of ${total} — unchanged since, but the earlier copy has been pushed out of your visible context to save space. Do not re-read the whole file again; read a narrow range (offset/limit) only if you need exact lines. Otherwise proceed with the change (edit_file/write_file), ask_user if blocked, or finish.]`
+          : `[unchanged since your earlier read: ${path} lines ${start}–${end} of ${total} — the file has not changed and those lines are already in your context. Do not read them again; proceed with the change (edit_file/write_file/download_file), ask_user if blocked, or finish. For lines you have not seen, read a new range with offset/limit.]`;
       }
     }
-    if (!record) {
-      record = { lines: new Map(), totalLines: total, condensedAtServe: condensedNow };
-      perTask.set(path, record);
+    let mutable = record;
+    if (!mutable) {
+      mutable = { lines: new Map(), totalLines: total, condensedAtServe: condensedNow };
+      perTask.set(path, mutable);
     }
-    for (const [line, text] of servedLines) record.lines.set(line, text);
-    record.totalLines = total;
-    record.condensedAtServe = condensedNow;
+    for (const [line, text] of servedLines) mutable.lines.set(line, text);
+    mutable.totalLines = total;
+    mutable.condensedAtServe = condensedNow;
     return undefined;
   }
 
