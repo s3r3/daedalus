@@ -8,6 +8,44 @@ import type { Event } from "@daedalus/core";
  * parity, kept pure so both surfaces render identical numbers.
  */
 
+/**
+ * The one spinner glyph cycle — the same design token the Web reads
+ * from its motion-tokens (braille, ~50ms cadence, glyph painted with
+ * the working gradient primary → accent). CLI surfaces must use
+ * these frames, never a private cycle.
+ */
+export const SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
+
+/** Spinner frame for an animation tick (wraps; safe for any tick). */
+export function spinnerGlyph(tick: number): string {
+  return SPINNER_FRAMES[((tick % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) % SPINNER_FRAMES.length] ?? "";
+}
+
+/** Membership test for "is this char a spinner glyph" (screen colorizers). */
+export const SPINNER_FRAME_SET: ReadonlySet<string> = new Set(SPINNER_FRAMES);
+
+const SCRAMBLE_GLYPHS = "ABCDEFGHJKMNPQRSTUVWXYZ23456789#$%&*+=<>";
+
+/**
+ * Decode/scramble effect for the working label: characters resolve
+ * left-to-right over the first frames while unresolved positions
+ * cycle random letters and digits, then the label holds steady.
+ * Punctuation and spaces are never scrambled. Pure and injectable —
+ * pass a seeded rng in tests; the shell passes Math.random.
+ */
+export function scrambleText(target: string, frame: number, rng: () => number = Math.random): string {
+  let out = "";
+  for (let i = 0; i < target.length; i++) {
+    const char = target[i] ?? "";
+    if (!/[A-Za-z0-9]/.test(char) || frame > i + 1) {
+      out += char;
+    } else {
+      out += SCRAMBLE_GLYPHS[Math.floor(rng() * SCRAMBLE_GLYPHS.length)] ?? char;
+    }
+  }
+  return out;
+}
+
 /** Thousands-separated integer, matching the Web's token lines. */
 export function formatCount(value: number): string {
   return Math.round(value).toLocaleString("en-US");

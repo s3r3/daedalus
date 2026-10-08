@@ -69,10 +69,9 @@ function runSkillNames(value: string | undefined): string[] {
     .filter((name) => name.length > 0);
 }
 import { TrayManager } from "./tray.ts";
-import { DeltaSuffixTracker, formatCount, lspSidebarEntries, tokenSummary } from "./live-render.ts";
+import { DeltaSuffixTracker, SPINNER_FRAME_SET, formatCount, lspSidebarEntries, scrambleText, spinnerGlyph, tokenSummary } from "./live-render.ts";
 import { formatSkillsListing, installBundledSkills, listSkills, setSkillDisabledForWorkspace } from "./skills-bundled.ts";
 
-const SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 const SPINNER_INTERVAL_MS = 50;
 
 /**
@@ -430,12 +429,21 @@ export function formatEvent(event: Omit<Event, "seq" | "ts">): string {
   }
 }
 
-function colorizeScreen(screen: string): string {
+function colorizeScreen(screen: string, activityFrame = 0): string {
   if (!supportsColor()) return screen;
   return screen.split("\n").map((line) => {
     if (line.includes("› /")) return `\x1b[48;2;107;80;255m\x1b[97m${line}\x1b[0m`;
     // Transcript entry kinds, keyed by the formatter's prefixes.
     const trimmed = line.trimStart();
+    // The working line: spinner glyph in the working gradient
+    // (primary → accent, the Web's motion-working-grad), label dimmed.
+    const glyphIndex = [...trimmed].findIndex((char) => SPINNER_FRAME_SET.has(char));
+    if (glyphIndex === 0) {
+      const glyph = trimmed[0] ?? "";
+      const rest = trimmed.slice(glyph.length);
+      const indent = line.slice(0, line.length - trimmed.length);
+      return `${indent}${cyclingGradient(glyph, activityFrame, palette)}${dim(rest)}`;
+    }
     if (trimmed.startsWith("You ›")) return paint(palette.accent, line);
     if (trimmed.startsWith("Daedalus ›")) return paint(palette.primary, line);
     if (trimmed.startsWith("thinking ·")) return `${fg(palette.fgMostSubtle)}\x1b[2;3m${line}\x1b[0m`;
@@ -522,7 +530,7 @@ async function runFullscreenChat(options: {
     const sizeChanged = columns !== lastColumns || rows !== lastRows;
     lastColumns = columns;
     lastRows = rows;
-    const painted = colorizeScreen(screen).split("\n").map((line) => `${line}\x1b[K`).join("\r\n");
+    const painted = colorizeScreen(screen, session.activityFrame).split("\n").map((line) => `${line}\x1b[K`).join("\r\n");
     stdout.write(`${forceFullClear || sizeChanged ? "\x1b[2J" : ""}\x1b[H${painted}\x1b[J`);
     forceFullClear = false;
   };
@@ -593,6 +601,13 @@ async function runFullscreenChat(options: {
 
     running = true;
     session.setStatus("running");
+    // Working animation: advance the spinner/scramble tick and repaint
+    // while the task runs (the Web's 50ms cadence, relaxed to 80ms for
+    // full-frame terminal repaints). Events still draw on their own.
+    const activityTimer = setInterval(() => {
+      session.tickActivity();
+      draw();
+    }, 80);
     draw();
     try {
       const result = await runner.run({
@@ -649,6 +664,8 @@ async function runFullscreenChat(options: {
       session.setStatus("failed");
       session.addSystemLine(`Error: ${String(error)}`);
     } finally {
+      clearInterval(activityTimer);
+      session.stopActivity();
       running = false;
       pendingApproval = undefined;
       pendingQuestion = undefined;
@@ -1417,12 +1434,16 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
       const startSpinner = (label: string): void => {
         if (!tty || stopSpinner) return;
         let frame = 0;
+        const startedAt = Date.now();
         const tick = () => {
-          const glyph = SPINNER_FRAMES[frame % SPINNER_FRAMES.length] ?? "";
+          const glyph = spinnerGlyph(frame);
           const colored = supportsColor()
             ? cyclingGradient(glyph, frame, palette)
             : glyph;
-          process.stdout.write(`\r${colored} ${dim(label)}`);
+          // Same working line as the fullscreen chat: gradient glyph,
+          // the label decoding into place, then elapsed seconds.
+          const elapsed = Math.floor((Date.now() - startedAt) / 1000);
+          process.stdout.write(`\r${colored} ${dim(`${scrambleText(label.replace(/\.+$/, ""), frame)} · ${elapsed}s`)}`);
           frame++;
         };
         tick();

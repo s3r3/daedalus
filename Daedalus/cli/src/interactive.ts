@@ -18,6 +18,7 @@ import {
   type SlashCommand,
   type SlashCommandResult,
 } from '@daedalus/core';
+import { formatCount, scrambleText, spinnerGlyph } from './live-render.ts';
 
 export type InteractiveCallbacks = {
   runTask?: (goal: string) => Promise<string>;
@@ -130,6 +131,14 @@ export class InteractiveSession {
   #liveTurnText: string | undefined;
   /** A finished text-only turn awaiting its THOUGHT (or task end) before it joins the transcript as the reply. */
   #pendingReply: string | undefined;
+  /** Working phase of the running task ('thinking' | 'working' | 'validating'), undefined when idle. */
+  #activityLabel: string | undefined;
+  /** Animation tick for the spinner/scramble; advanced by the shell's timer, never by rendering. */
+  #activityFrame = 0;
+  /** When the running task started (elapsed display), ms epoch. */
+  #activityStartedAt: number | undefined;
+  /** Provider-reported tokens so far (status bar), accumulated from MODEL_REQUEST_FINISHED. */
+  #usageTotal = 0;
   /** Recent casual-chat exchanges (user/assistant), capped at 6 turns. */
   #chatHistory: Message[] = [];
   #modifiedFiles = new Map<string, ModifiedFile>();
@@ -431,6 +440,7 @@ export class InteractiveSession {
       `auto-approve ${this.autoApprove ? 'on' : 'off'}`,
       `thinking ${this.#thinking ? 'on' : 'off'}`,
       ...(this.#contextPercent !== undefined ? [`ctx ${this.#contextPercent}%`] : []),
+      ...(this.#usageTotal > 0 ? [`tokens ${formatCount(this.#usageTotal)}`] : []),
       ...(this.#rulesFiles.length ? [`rules ${this.#rulesFiles.join(', ')}`] : []),
       `attachments ${this.#attachments.length}`,
       `status ${this.#status}`,
@@ -504,6 +514,48 @@ export class InteractiveSession {
     return this.#liveTurnText;
   }
 
+  /** Current animation tick (the shell's colorizer gradients by it). */
+  get activityFrame(): number {
+    return this.#activityFrame;
+  }
+
+  /** Advance the working animation one tick; the shell timer owns the cadence. */
+  tickActivity(): void {
+    if (this.#activityLabel) this.#activityFrame += 1;
+  }
+
+  #setActivity(label: string): void {
+    if (this.#activityLabel !== label) {
+      this.#activityLabel = label;
+      this.#activityFrame = 0;
+    }
+    this.#activityStartedAt ??= Date.now();
+  }
+
+  #clearActivity(): void {
+    this.#activityLabel = undefined;
+    this.#activityFrame = 0;
+    this.#activityStartedAt = undefined;
+  }
+
+  /** Stop the working animation (shell calls this when a run ends without TASK_COMPLETED). */
+  stopActivity(): void {
+    this.#clearActivity();
+  }
+
+  /**
+   * The working line: spinner glyph (painted with the working
+   * gradient by the shell), the phase label scrambling into place,
+   * and elapsed seconds — e.g. "⠹ thinking · 12s". Present only
+   * while a task runs; the streamed text, when there is any, follows
+   * below it as the live preview.
+   */
+  #activityDisplayLine(): string[] {
+    if (!this.#activityLabel) return [];
+    const elapsed = this.#activityStartedAt ? Math.max(0, Math.floor((Date.now() - this.#activityStartedAt) / 1000)) : 0;
+    return [`${spinnerGlyph(this.#activityFrame)} ${scrambleText(this.#activityLabel, this.#activityFrame)} · ${elapsed}s`];
+  }
+
   #flushPendingReply(): void {
     if (!this.#pendingReply) return;
     this.addAssistantLine(this.#pendingReply);
@@ -511,6 +563,10 @@ export class InteractiveSession {
   }
 
   observeEvent(event: Event): void {
+    if (event.type === 'TASK_STARTED') this.#setActivity('thinking');
+    if (event.type === 'MODEL_REQUEST_STARTED') this.#setActivity('thinking');
+    if (event.type === 'TOOL_CALL_STARTED') this.#setActivity('working');
+    if (event.type === 'VALIDATION_STARTED') this.#setActivity('validating');
     if (event.type === 'MODEL_TEXT_DELTA') {
       // Cumulative streamed text: keep it as a live preview. It joins
       // the transcript only when the turn resolves as the reply.
@@ -522,15 +578,17 @@ export class InteractiveSession {
       // The streamed turn resolves here. Prose that accompanied tool
       // calls was a preamble — drop it. A text-only turn IS the reply:
       // stash it so this turn's THOUGHT still prints first.
-      const payload = event.payload as { message?: { tool_calls?: unknown[] } };
+      const payload = event.payload as { message?: { tool_calls?: unknown[] }; usage?: { total_tokens?: unknown } };
       if (this.#liveTurnText) {
         if (!payload.message?.tool_calls?.length) this.#pendingReply = this.#liveTurnText;
         this.#liveTurnText = undefined;
       }
+      if (typeof payload.usage?.total_tokens === 'number') this.#usageTotal += payload.usage.total_tokens;
     }
     if (event.type === 'TASK_COMPLETED') {
       this.#flushPendingReply();
       this.#liveTurnText = undefined;
+      this.#clearActivity();
     }
     if (event.type === 'MODEL_REQUEST_STARTED' || event.type === 'MODEL_REQUEST_FINISHED') {
       const payload = event.payload as { context_percent?: number };
@@ -648,6 +706,7 @@ export class InteractiveSession {
     const leftBase = [
       'Daedalus',
       ...(transcript.length ? transcript.slice(-18) : ['No messages yet. Type a goal, or / for commands.']),
+      ...this.#activityDisplayLine(),
       ...this.#liveDisplayLines(),
       '',
       `> ${options.input ?? ''}`,
@@ -1004,7 +1063,7 @@ export class InteractiveSession {
     const contentRows = Math.max(6, rows - footerLines.length);
     this.#lastContentRows = contentRows;
     const transcript = options.transcript ?? this.#transcript;
-    const displayTranscript = [...(transcript.length ? transcript : ['Type a goal below, or press / for commands.']), ...this.#liveDisplayLines()]
+    const displayTranscript = [...(transcript.length ? transcript : ['Type a goal below, or press / for commands.']), ...this.#activityDisplayLine(), ...this.#liveDisplayLines()]
       .map((line) => sanitizeTerminalText(line));
     const wrapped: string[] = [];
     for (const line of displayTranscript) {
