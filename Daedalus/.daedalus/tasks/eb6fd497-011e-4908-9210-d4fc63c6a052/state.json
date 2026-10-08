@@ -1,0 +1,26 @@
+{
+  "id": "eb6fd497-011e-4908-9210-d4fc63c6a052",
+  "goal": "udah dibuat project next js nya?",
+  "repo_path": "/home/xyconix11x/Ayid/xyconix11x/Skripsi/Daedalus",
+  "constraints": [],
+  "done_criteria": [],
+  "mode": "auto",
+  "auto_approve": false,
+  "thinking": true,
+  "intent": "conversational",
+  "provider_id": "nine-router",
+  "model": "my-free",
+  "conversation_id": "37a0e898-6715-4c41-acf0-9278b89013b6",
+  "attachments": [],
+  "created_at": "2026-10-07T03:19:50.872Z",
+  "plan": {
+    "id": "eb6fd497-011e-4908-9210-d4fc63c6a052-plan",
+    "task_id": "eb6fd497-011e-4908-9210-d4fc63c6a052",
+    "steps": [],
+    "version": 0,
+    "status": "draft"
+  },
+  "steps": [],
+  "status": "done",
+  "updated_at": "2026-10-07T03:19:59.036Z"
+}

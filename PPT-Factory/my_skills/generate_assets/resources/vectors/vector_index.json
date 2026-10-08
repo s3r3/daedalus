@@ -1,0 +1,468 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2026-01-25",
+  "categories": {
+    "icons": {
+      "description": "Common icons for UI and data visualization",
+      "items": [
+        {
+          "id": "chart-line",
+          "name": "Chart Line",
+          "tags": [
+            "chart",
+            "line"
+          ],
+          "source": "iconify",
+          "path": "icons/chart-line.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "chart-bar",
+          "name": "Chart Bar",
+          "tags": [
+            "chart",
+            "bar"
+          ],
+          "source": "iconify",
+          "path": "icons/chart-bar.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "chart-pie",
+          "name": "Chart Pie",
+          "tags": [
+            "chart",
+            "pie"
+          ],
+          "source": "iconify",
+          "path": "icons/chart-pie.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "chart-donut",
+          "name": "Chart Donut",
+          "tags": [
+            "chart",
+            "donut"
+          ],
+          "source": "iconify",
+          "path": "icons/chart-donut.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "trending-up",
+          "name": "Trending Up",
+          "tags": [
+            "trending",
+            "up"
+          ],
+          "source": "iconify",
+          "path": "icons/trending-up.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "trending-down",
+          "name": "Trending Down",
+          "tags": [
+            "trending",
+            "down"
+          ],
+          "source": "iconify",
+          "path": "icons/trending-down.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "briefcase",
+          "name": "Briefcase",
+          "tags": [
+            "briefcase"
+          ],
+          "source": "iconify",
+          "path": "icons/briefcase.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "calendar",
+          "name": "Calendar",
+          "tags": [
+            "calendar"
+          ],
+          "source": "iconify",
+          "path": "icons/calendar.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "clock",
+          "name": "Clock",
+          "tags": [
+            "clock"
+          ],
+          "source": "iconify",
+          "path": "icons/clock.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "email",
+          "name": "Email",
+          "tags": [
+            "email"
+          ],
+          "source": "iconify",
+          "path": "icons/email.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "phone",
+          "name": "Phone",
+          "tags": [
+            "phone"
+          ],
+          "source": "iconify",
+          "path": "icons/phone.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "account",
+          "name": "Account",
+          "tags": [
+            "account"
+          ],
+          "source": "iconify",
+          "path": "icons/account.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "account-group",
+          "name": "Account Group",
+          "tags": [
+            "account",
+            "group"
+          ],
+          "source": "iconify",
+          "path": "icons/account-group.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "account-circle",
+          "name": "Account Circle",
+          "tags": [
+            "account",
+            "circle"
+          ],
+          "source": "iconify",
+          "path": "icons/account-circle.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "check",
+          "name": "Check",
+          "tags": [
+            "check"
+          ],
+          "source": "iconify",
+          "path": "icons/check.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "close",
+          "name": "Close",
+          "tags": [
+            "close"
+          ],
+          "source": "iconify",
+          "path": "icons/close.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "arrow-right",
+          "name": "Arrow Right",
+          "tags": [
+            "arrow",
+            "right"
+          ],
+          "source": "iconify",
+          "path": "icons/arrow-right.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "arrow-left",
+          "name": "Arrow Left",
+          "tags": [
+            "arrow",
+            "left"
+          ],
+          "source": "iconify",
+          "path": "icons/arrow-left.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "arrow-up",
+          "name": "Arrow Up",
+          "tags": [
+            "arrow",
+            "up"
+          ],
+          "source": "iconify",
+          "path": "icons/arrow-up.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "arrow-down",
+          "name": "Arrow Down",
+          "tags": [
+            "arrow",
+            "down"
+          ],
+          "source": "iconify",
+          "path": "icons/arrow-down.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "lightbulb",
+          "name": "Lightbulb",
+          "tags": [
+            "lightbulb"
+          ],
+          "source": "iconify",
+          "path": "icons/lightbulb.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "rocket",
+          "name": "Rocket",
+          "tags": [
+            "rocket"
+          ],
+          "source": "iconify",
+          "path": "icons/rocket.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "target",
+          "name": "Target",
+          "tags": [
+            "target"
+          ],
+          "source": "iconify",
+          "path": "icons/target.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "star",
+          "name": "Star",
+          "tags": [
+            "star"
+          ],
+          "source": "iconify",
+          "path": "icons/star.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "laptop",
+          "name": "Laptop",
+          "tags": [
+            "laptop"
+          ],
+          "source": "iconify",
+          "path": "icons/laptop.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "cellphone",
+          "name": "Cellphone",
+          "tags": [
+            "cellphone"
+          ],
+          "source": "iconify",
+          "path": "icons/cellphone.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "cloud",
+          "name": "Cloud",
+          "tags": [
+            "cloud"
+          ],
+          "source": "iconify",
+          "path": "icons/cloud.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "database",
+          "name": "Database",
+          "tags": [
+            "database"
+          ],
+          "source": "iconify",
+          "path": "icons/database.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "map-marker",
+          "name": "Map Marker",
+          "tags": [
+            "map",
+            "marker"
+          ],
+          "source": "iconify",
+          "path": "icons/map-marker.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "home",
+          "name": "Home",
+          "tags": [
+            "home"
+          ],
+          "source": "iconify",
+          "path": "icons/home.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "office-building",
+          "name": "Office Building",
+          "tags": [
+            "office",
+            "building"
+          ],
+          "source": "iconify",
+          "path": "icons/office-building.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "file-document",
+          "name": "File Document",
+          "tags": [
+            "file",
+            "document"
+          ],
+          "source": "iconify",
+          "path": "icons/file-document.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "folder",
+          "name": "Folder",
+          "tags": [
+            "folder"
+          ],
+          "source": "iconify",
+          "path": "icons/folder.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "download",
+          "name": "Download",
+          "tags": [
+            "download"
+          ],
+          "source": "iconify",
+          "path": "icons/download.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "upload",
+          "name": "Upload",
+          "tags": [
+            "upload"
+          ],
+          "source": "iconify",
+          "path": "icons/upload.svg",
+          "color_customizable": true
+        }
+      ]
+    },
+    "illustrations": {
+      "description": "Full illustrations for visual storytelling",
+      "items": [
+        {
+          "id": "working",
+          "name": "Person Working",
+          "tags": [
+            "work",
+            "office",
+            "laptop",
+            "productivity"
+          ],
+          "source": "undraw",
+          "path": "illustrations/working.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "team-meeting",
+          "name": "Team Meeting",
+          "tags": [
+            "meeting",
+            "collaboration",
+            "team",
+            "discussion"
+          ],
+          "source": "undraw",
+          "path": "illustrations/team-meeting.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "data-analysis",
+          "name": "Data Analysis",
+          "tags": [
+            "data",
+            "analytics",
+            "charts",
+            "analysis"
+          ],
+          "source": "undraw",
+          "path": "illustrations/data-analysis.svg",
+          "color_customizable": true
+        }
+      ]
+    },
+    "patterns": {
+      "description": "Decorative background patterns",
+      "items": [
+        {
+          "id": "dots",
+          "name": "Dot Pattern",
+          "tags": [
+            "pattern",
+            "decoration",
+            "background",
+            "dots"
+          ],
+          "source": "custom",
+          "path": "patterns/dots.svg",
+          "color_customizable": true
+        },
+        {
+          "id": "waves",
+          "name": "Wave Pattern",
+          "tags": [
+            "pattern",
+            "decoration",
+            "background",
+            "waves"
+          ],
+          "source": "custom",
+          "path": "patterns/waves.svg",
+          "color_customizable": true
+        }
+      ]
+    }
+  },
+  "sources": {
+    "mdi": {
+      "name": "Material Design Icons",
+      "url": "https://api.iconify.design/mdi",
+      "license": "Apache 2.0"
+    },
+    "undraw": {
+      "name": "unDraw Illustrations",
+      "url": "https://undraw.co",
+      "license": "MIT"
+    },
+    "custom": {
+      "name": "Custom Generated",
+      "url": "internal",
+      "license": "MIT"
+    }
+  }
+}

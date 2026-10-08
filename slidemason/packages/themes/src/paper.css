@@ -1,0 +1,31 @@
+[data-theme="paper"] {
+  --sm-bg: #fffbeb;
+  --sm-surface: #ffffff;
+  --sm-text: #1c1917;
+  --sm-muted: #78716c;
+  --sm-primary: #1e3a5f;
+  --sm-secondary: #b91c1c;
+  --sm-accent: #047857;
+  --sm-border: #e7e5e4;
+  --sm-mono-font: 'JetBrains Mono', ui-monospace, monospace;
+  --sm-radius: 0.5rem;
+  --sm-shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+  --sm-shadow-md: 0 4px 6px rgba(0,0,0,0.07);
+  --sm-shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
+  --sm-success: #16a34a;
+  --sm-warning: #d97706;
+  --sm-danger: #dc2626;
+  --sm-gradient-start: #1e3a5f;
+  --sm-gradient-end: #b91c1c;
+  --sm-gradient-mesh-1: #1e3a5f;
+  --sm-gradient-mesh-2: #b91c1c;
+  --sm-gradient-mesh-3: #047857;
+  --sm-gradient-mesh-4: #fffbeb;
+  --sm-chart-1: #1e3a5f;
+  --sm-chart-2: #b91c1c;
+  --sm-chart-3: #047857;
+  --sm-chart-4: #d97706;
+  --sm-chart-5: #7c3aed;
+  --sm-chart-6: #0891b2;
+  --sm-glass-bg: rgba(255,251,235,0.85);
+}

@@ -1,0 +1,65 @@
+{
+  "id": "6043653e-1134-487c-9a46-1d961688d903",
+  "goal": "Buat website company profile PT Contoh dengan katalog produk l buat di folder jojo",
+  "repo_path": "/home/xyconix11x/Ayid/xyconix11x/Skripsi/Daedalus",
+  "constraints": [
+    "Earlier in this conversation (most recent last) — the user's follow-ups refer to this; continue from it instead of starting cold:\nUser: Buat website company profile PT Contoh dengan katalog produk l buat di folder jojo Child task: Make the code changes required by the goal\nDaedalus: Berhenti sebelum selesai. (Buat website company profile PT Contoh dengan katalog produk l buat di folder jojo Child task: Make the code changes required by the goal)"
+  ],
+  "done_criteria": [],
+  "created_at": "2026-10-06T19:19:43.314Z",
+  "mode": "orchestrator",
+  "attachments": [],
+  "provider_id": "nine-router",
+  "model": "my-free",
+  "thinking": true,
+  "conversation_id": "43f91c8f-1885-40d1-8550-bdcf2f6869c6",
+  "turns": 5,
+  "plan": {
+    "id": "8376595f-2ee2-4daf-9f4a-b22d71042675",
+    "task_id": "6043653e-1134-487c-9a46-1d961688d903",
+    "steps": [
+      {
+        "id": "6043653e-1134-487c-9a46-1d961688d903-step-1",
+        "intent": "Inspect the repository structure relevant to the goal",
+        "status": "active",
+        "evidence": []
+      },
+      {
+        "id": "6043653e-1134-487c-9a46-1d961688d903-step-2",
+        "intent": "Make the code changes required by the goal",
+        "status": "pending",
+        "evidence": []
+      },
+      {
+        "id": "6043653e-1134-487c-9a46-1d961688d903-step-3",
+        "intent": "Run the project validation checks",
+        "status": "pending",
+        "evidence": []
+      }
+    ],
+    "version": 1,
+    "status": "active"
+  },
+  "steps": [
+    {
+      "id": "6043653e-1134-487c-9a46-1d961688d903-step-1",
+      "intent": "Inspect the repository structure relevant to the goal",
+      "status": "active",
+      "evidence": []
+    },
+    {
+      "id": "6043653e-1134-487c-9a46-1d961688d903-step-2",
+      "intent": "Make the code changes required by the goal",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "6043653e-1134-487c-9a46-1d961688d903-step-3",
+      "intent": "Run the project validation checks",
+      "status": "pending",
+      "evidence": []
+    }
+  ],
+  "status": "failed",
+  "last_error": "max_errors"
+}

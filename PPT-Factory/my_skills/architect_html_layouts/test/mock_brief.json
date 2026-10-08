@@ -1,0 +1,22 @@
+{
+    "project_name": "Test Project Alpha",
+    "style_definition": {
+        "mood": "tech_dark"
+    },
+    "required_layouts": [
+        {
+            "type": "cover_branding",
+            "title": "NEURAL LINK V2",
+            "subtitle": "Direct Brain-Computer Interface"
+        },
+        {
+            "type": "grid_4_feature",
+            "features": [
+                "Ultra Low Latency",
+                "Bi-directional",
+                "Wireless Charging",
+                "AI Decoding"
+            ]
+        }
+    ]
+}

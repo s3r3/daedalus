@@ -1,0 +1,33 @@
+{
+  "name": "@slidemason/studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@mdx-js/react": "^3.1.1",
+    "@slidemason/renderer": "workspace:*",
+    "@slidemason/themes": "workspace:*",
+    "framer-motion": "^12.34.3",
+    "lucide-react": "^0.513.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "recharts": "^3.7.0"
+  },
+  "devDependencies": {
+    "@mdx-js/rollup": "^3.1.1",
+    "@slidemason/export": "workspace:*",
+    "@tailwindcss/vite": "^4.1.10",
+    "@types/busboy": "^1.5.4",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.4",
+    "busboy": "^1.6.0",
+    "tailwindcss": "^4.1.10",
+    "vite": "^7.3.1"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "task_id": "31b3e12c-afe4-470c-98b0-f1d439ef0720",
+  "outcome": "failed",
+  "diff": "",
+  "evidence": [],
+  "metrics": {
+    "turns": 17,
+    "tool_calls": 17,
+    "events": 87,
+    "commands": 3,
+    "files_changed": 0,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "duration_ms": 154849
+  }
+}

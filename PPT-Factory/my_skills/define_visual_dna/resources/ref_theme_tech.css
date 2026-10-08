@@ -1,0 +1,37 @@
+:root {
+    /* --- PPT Mapping Tokens --- */
+    
+    /* Backgrounds */
+    --ppt-bg-primary: #050505;
+    --ppt-bg-secondary: #111111;
+    
+    /* Text Colors */
+    --ppt-text-main: #FFFFFF;
+    --ppt-text-muted: #888888;
+    --ppt-text-accent: #00F0FF; /* Cyber Blue */
+
+    /* Fonts */
+    --ppt-font-family-primary: 'Inter';
+    --ppt-font-family-code: 'JetBrains Mono';
+
+    /* Font Sizes */
+    --ppt-fs-title: 40px;
+    --ppt-fs-subtitle: 24px;
+    --ppt-fs-body: 16px;
+    
+    /* Global Spacing */
+    --ppt-spacing-base: 8px;
+    --ppt-margin-slide: 40px;
+}
+
+/* Base Styles applied to the slide container */
+.slide {
+    background-color: var(--ppt-bg-primary);
+    color: var(--ppt-text-main);
+    font-family: var(--ppt-font-family-primary);
+    width: 1920px;
+    height: 1080px;
+    overflow: hidden;
+    position: relative;
+    box-sizing: border-box;
+}

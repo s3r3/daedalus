@@ -1,0 +1,207 @@
+{
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "properties": {
+        "project_name": {
+            "type": "string"
+        },
+        "style_definition": {
+            "type": "object",
+            "properties": {
+                "mood_keywords": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "color_preference": {
+                    "type": "string"
+                },
+                "theme_ref": {
+                    "type": "string"
+                },
+                "visual_density": {
+                    "type": "string",
+                    "enum": [
+                        "compact",
+                        "balanced",
+                        "spacious"
+                    ]
+                },
+                "target_audience": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "mood_keywords",
+                "theme_ref",
+                "visual_density"
+            ]
+        },
+        "design_system_spec": {
+            "type": "object",
+            "properties": {
+                "information_density": {
+                    "$ref": "#/definitions/DesignSpecItem"
+                },
+                "grid_system": {
+                    "$ref": "#/definitions/DesignSpecItem"
+                },
+                "data_visualization": {
+                    "$ref": "#/definitions/DesignSpecItem"
+                },
+                "typography": {
+                    "$ref": "#/definitions/DesignSpecItem"
+                },
+                "decorations": {
+                    "$ref": "#/definitions/DesignSpecItem"
+                },
+                "artistic_style": {
+                    "$ref": "#/definitions/DesignSpecItem"
+                }
+            },
+            "required": [
+                "information_density",
+                "grid_system",
+                "data_visualization",
+                "typography",
+                "decorations",
+                "artistic_style"
+            ]
+        },
+        "required_layouts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "type": {
+                        "type": "string",
+                        "enum": [
+                            "cover_branding",
+                            "agenda_list",
+                            "grid_2_col",
+                            "grid_3_col",
+                            "grid_4_feature",
+                            "team_gallery",
+                            "chart_bar_comparison",
+                            "timeline",
+                            "process_flow",
+                            "quote_highlight"
+                        ]
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "subtitle": {
+                        "type": "string"
+                    },
+                    "layout_intent": {
+                        "type": "string",
+                        "description": "Visual direction for the layout designer. E.g., 'Use glass cards to emphasize modernity.'"
+                    },
+                    "description": {
+                        "type": "string"
+                    },
+                    "content_items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "item_type": {
+                                    "type": "string",
+                                    "enum": [
+                                        "text",
+                                        "statistic",
+                                        "visual",
+                                        "concept"
+                                    ]
+                                },
+                                "headline": {
+                                    "type": "string"
+                                },
+                                "body": {
+                                    "type": "string"
+                                },
+                                "image_description": {
+                                    "type": "string"
+                                },
+                                "data_payload": {
+                                    "type": "object",
+                                    "properties": {
+                                        "value": {
+                                            "type": "string"
+                                        },
+                                        "unit": {
+                                            "type": "string"
+                                        },
+                                        "trend": {
+                                            "type": "string"
+                                        },
+                                        "context": {
+                                            "type": "string"
+                                        }
+                                    }
+                                },
+                                "visual_cues": {
+                                    "type": "object",
+                                    "properties": {
+                                        "status": {
+                                            "type": "string"
+                                        },
+                                        "badge": {
+                                            "type": "string"
+                                        },
+                                        "style_hint": {
+                                            "type": "string"
+                                        }
+                                    }
+                                },
+                                "sub_items": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/properties/design_system_spec/definitions/content_item_stub"
+                                    }
+                                }
+                            },
+                            "required": [
+                                "item_type",
+                                "headline"
+                            ]
+                        }
+                    }
+                },
+                "required": [
+                    "type",
+                    "title"
+                ]
+            }
+        }
+    },
+    "definitions": {
+        "DesignSpecItem": {
+            "type": "object",
+            "properties": {
+                "selection": {
+                    "type": "string"
+                },
+                "instruction_en": {
+                    "type": "string"
+                },
+                "instruction_zh": {
+                    "type": "string"
+                }
+            },
+            "required": [
+                "selection",
+                "instruction_en",
+                "instruction_zh"
+            ]
+        }
+    },
+    "required": [
+        "project_name",
+        "style_definition",
+        "design_system_spec",
+        "required_layouts"
+    ]
+}

@@ -1,0 +1,21 @@
+{
+  "task_id": "e40c4ff6-87fe-4e5d-9a93-0c41d830166d",
+  "outcome": "failed",
+  "diff": "",
+  "evidence": [],
+  "metrics": {
+    "turns": 22,
+    "tool_calls": 22,
+    "events": 84,
+    "commands": 0,
+    "files_changed": 0,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "review_findings": 0,
+    "review_blocking": 0,
+    "duration_ms": 360961
+  }
+}

@@ -1,0 +1,24 @@
+:root {
+    /* Medical Color Palette */
+    --ppt-color-bg: #FFFFFF;
+    --ppt-color-text-primary: #1E293B;
+    --ppt-color-text-secondary: #64748B;
+    --ppt-color-accent-1: #0EA5E9;
+    /* Sky Blue */
+    --ppt-color-accent-2: #10B981;
+    /* Emerald Green */
+
+    /* Typography */
+    --ppt-font-heading: 'Helvetica Neue', sans-serif;
+    --ppt-font-body: 'Arial', sans-serif;
+
+    /* Sizes */
+    --ppt-size-h1: 44px;
+    --ppt-size-h2: 32px;
+    --ppt-size-h3: 24px;
+    --ppt-size-body: 16px;
+    --ppt-size-caption: 12px;
+
+    /* Semantic */
+    --ppt-spacing-base: 20px;
+}

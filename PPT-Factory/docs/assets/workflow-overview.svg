@@ -1,0 +1,102 @@
+<svg width="1600" height="700" viewBox="0 0 1600 700" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">PPT-Factory workflow overview</title>
+  <desc id="desc">A local-first PPT workflow with structured inputs, a generation engine built around Visual DNA and HTML layout, and editable outputs.</desc>
+
+  <defs>
+    <linearGradient id="bg" x1="64" y1="48" x2="1536" y2="652" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FAFC"/>
+      <stop offset="1" stop-color="#EEF2FF"/>
+    </linearGradient>
+    <linearGradient id="inputs" x1="96" y1="206" x2="462" y2="548" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DBEAFE"/>
+      <stop offset="1" stop-color="#E0F2FE"/>
+    </linearGradient>
+    <linearGradient id="engine" x1="498" y1="176" x2="1102" y2="578" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DCFCE7"/>
+      <stop offset="0.55" stop-color="#ECFCCB"/>
+      <stop offset="1" stop-color="#FEF3C7"/>
+    </linearGradient>
+    <linearGradient id="outputs" x1="1138" y1="206" x2="1504" y2="548" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFEDD5"/>
+      <stop offset="1" stop-color="#FED7AA"/>
+    </linearGradient>
+    <filter id="shadow" x="0" y="0" width="1600" height="700" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="28" flood-color="#0F172A" flood-opacity="0.08"/>
+    </filter>
+    <filter id="cardShadow" x="0" y="0" width="1600" height="700" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="18" flood-color="#0F172A" flood-opacity="0.06"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="700" rx="28" fill="url(#bg)"/>
+  <rect x="28" y="28" width="1544" height="644" rx="28" fill="#FFFFFF" stroke="#E2E8F0" filter="url(#shadow)"/>
+
+  <text x="88" y="104" fill="#0F172A" font-family="Inter, Arial, sans-serif" font-size="40" font-weight="700">How PPT-Factory Works</text>
+  <text x="88" y="144" fill="#475569" font-family="Inter, Arial, sans-serif" font-size="20">Structured inputs in, inspectable HTML and editable PPTX out.</text>
+
+  <rect x="88" y="194" width="370" height="356" rx="30" fill="url(#inputs)" filter="url(#cardShadow)"/>
+  <rect x="494" y="166" width="612" height="446" rx="34" fill="url(#engine)" filter="url(#cardShadow)"/>
+  <rect x="1142" y="194" width="370" height="356" rx="30" fill="url(#outputs)" filter="url(#cardShadow)"/>
+
+  <text x="120" y="242" fill="#1D4ED8" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="1.4">INPUTS</text>
+  <text x="120" y="280" fill="#0F172A" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Project materials</text>
+  <text x="120" y="308" fill="#475569" font-family="Inter, Arial, sans-serif" font-size="16">
+    <tspan x="120" dy="0">The system starts from explicit project files,</tspan>
+    <tspan x="120" dy="20">not hidden app state.</tspan>
+  </text>
+
+  <rect x="120" y="344" width="306" height="74" rx="20" fill="#FFFFFF" stroke="#BFDBFE"/>
+  <text x="146" y="374" fill="#0F172A" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="600">Content Draft</text>
+  <text x="146" y="396" fill="#475569" font-family="Inter, Arial, sans-serif" font-size="14">Structured content plan for the deck.</text>
+
+  <rect x="120" y="430" width="306" height="74" rx="20" fill="#FFFFFF" stroke="#BFDBFE"/>
+  <text x="146" y="460" fill="#0F172A" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="600">Design Brief</text>
+  <text x="146" y="482" fill="#475569" font-family="Inter, Arial, sans-serif" font-size="14">Narrative direction and slide intent.</text>
+
+  <rect x="560" y="214" width="480" height="110" rx="24" fill="#FFFFFF" stroke="#BBF7D0"/>
+  <text x="592" y="256" fill="#047857" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="1.2">GENERATION ENGINE</text>
+  <text x="592" y="286" fill="#0F172A" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">Visual DNA</text>
+  <text x="592" y="310" fill="#475569" font-family="Inter, Arial, sans-serif" font-size="15">Define the presentation system: color, type, spacing, tone.</text>
+
+  <rect x="560" y="338" width="480" height="110" rx="24" fill="#FFFFFF" stroke="#D9F99D"/>
+  <text x="592" y="380" fill="#65A30D" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="1.2">GENERATION ENGINE</text>
+  <text x="592" y="410" fill="#0F172A" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">HTML Bricks</text>
+  <text x="592" y="434" fill="#475569" font-family="Inter, Arial, sans-serif" font-size="15">Generate reusable component patterns from the DNA.</text>
+
+  <rect x="560" y="462" width="480" height="118" rx="24" fill="#FFFFFF" stroke="#FDE68A"/>
+  <text x="592" y="498" fill="#B45309" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" letter-spacing="1.2">GENERATION ENGINE</text>
+  <text x="592" y="528" fill="#0F172A" font-family="Inter, Arial, sans-serif" font-size="24" font-weight="700">Layout Architect</text>
+  <text x="592" y="548" fill="#475569" font-family="Inter, Arial, sans-serif" font-size="15">
+    <tspan x="592" dy="0">Compose final slide HTML from content,</tspan>
+    <tspan x="592" dy="18">DNA, components, and local images.</tspan>
+  </text>
+
+  <text x="1174" y="242" fill="#C2410C" font-family="Inter, Arial, sans-serif" font-size="15" font-weight="700" letter-spacing="1.4">OUTPUTS</text>
+  <text x="1174" y="280" fill="#0F172A" font-family="Inter, Arial, sans-serif" font-size="30" font-weight="700">Editable artifacts</text>
+  <text x="1174" y="308" fill="#475569" font-family="Inter, Arial, sans-serif" font-size="16">
+    <tspan x="1174" dy="0">Every major stage stays visible,</tspan>
+    <tspan x="1174" dy="20">inspectable, and reusable on disk.</tspan>
+  </text>
+
+  <rect x="1174" y="344" width="306" height="90" rx="20" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="1200" y="374" fill="#0F172A" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="600">HTML Slides + Validation</text>
+  <text x="1200" y="398" fill="#475569" font-family="Inter, Arial, sans-serif" font-size="14">
+    <tspan x="1200" dy="0">Previewable slide HTML checked</tspan>
+    <tspan x="1200" dy="17">against PPT constraints.</tspan>
+  </text>
+
+  <rect x="1174" y="450" width="306" height="90" rx="20" fill="#FFFFFF" stroke="#FED7AA"/>
+  <text x="1200" y="480" fill="#0F172A" font-family="Inter, Arial, sans-serif" font-size="20" font-weight="600">PPTX Assembly</text>
+  <text x="1200" y="504" fill="#475569" font-family="Inter, Arial, sans-serif" font-size="14">
+    <tspan x="1200" dy="0">Final editable PowerPoint deck</tspan>
+    <tspan x="1200" dy="17">generated from verified HTML.</tspan>
+  </text>
+
+  <line x1="458" y1="372" x2="494" y2="372" stroke="#94A3B8" stroke-width="4" stroke-dasharray="8 8"/>
+  <polygon points="494,372 482,364 482,380" fill="#94A3B8"/>
+  <line x1="1106" y1="372" x2="1142" y2="372" stroke="#94A3B8" stroke-width="4" stroke-dasharray="8 8"/>
+  <polygon points="1142,372 1130,364 1130,380" fill="#94A3B8"/>
+
+  <rect x="88" y="606" width="1424" height="58" rx="22" fill="#0F172A"/>
+  <text x="112" y="642" fill="#CBD5E1" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">draft.json + brief.json + local images  →  theme.css + components.html + slide_*.html  →  output.pptx</text>
+</svg>

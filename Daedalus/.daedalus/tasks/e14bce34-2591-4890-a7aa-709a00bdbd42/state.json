@@ -1,0 +1,63 @@
+{
+  "id": "e14bce34-2591-4890-a7aa-709a00bdbd42",
+  "goal": "Buat website company profile PT Contoh dengan katalog produk l buat di folder jojo",
+  "repo_path": "/home/xyconix11x/Ayid/xyconix11x/Skripsi/Daedalus",
+  "constraints": [],
+  "done_criteria": [],
+  "created_at": "2026-10-06T19:34:49.949Z",
+  "mode": "auto",
+  "attachments": [],
+  "provider_id": "nine-router",
+  "model": "cx/gpt-5.5-review",
+  "thinking": true,
+  "conversation_id": "4bcb0c76-24e5-4343-902a-e2d7eb201a34",
+  "turns": 2,
+  "plan": {
+    "id": "5a8eb2ba-4b72-4faf-9baf-80996e42db5d",
+    "task_id": "e14bce34-2591-4890-a7aa-709a00bdbd42",
+    "steps": [
+      {
+        "id": "e14bce34-2591-4890-a7aa-709a00bdbd42-step-1",
+        "intent": "Inspect the repository structure relevant to the goal",
+        "status": "active",
+        "evidence": []
+      },
+      {
+        "id": "e14bce34-2591-4890-a7aa-709a00bdbd42-step-2",
+        "intent": "Make the code changes required by the goal",
+        "status": "pending",
+        "evidence": []
+      },
+      {
+        "id": "e14bce34-2591-4890-a7aa-709a00bdbd42-step-3",
+        "intent": "Run the project validation checks",
+        "status": "pending",
+        "evidence": []
+      }
+    ],
+    "version": 1,
+    "status": "active"
+  },
+  "steps": [
+    {
+      "id": "e14bce34-2591-4890-a7aa-709a00bdbd42-step-1",
+      "intent": "Inspect the repository structure relevant to the goal",
+      "status": "active",
+      "evidence": []
+    },
+    {
+      "id": "e14bce34-2591-4890-a7aa-709a00bdbd42-step-2",
+      "intent": "Make the code changes required by the goal",
+      "status": "pending",
+      "evidence": []
+    },
+    {
+      "id": "e14bce34-2591-4890-a7aa-709a00bdbd42-step-3",
+      "intent": "Run the project validation checks",
+      "status": "pending",
+      "evidence": []
+    }
+  ],
+  "status": "failed",
+  "last_error": "aborted"
+}

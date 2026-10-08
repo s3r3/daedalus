@@ -1,0 +1,84 @@
+{
+  "project_name": "MediCare Plus",
+  "style_definition": {
+    "mood_keywords": [
+      "trustworthy",
+      "professional",
+      "clean",
+      "healing"
+    ],
+    "color_preference": "teal_blue_white",
+    "theme_ref": "ref_theme_medical.css",
+    "visual_density": "balanced",
+    "target_audience": "Patients & Investors"
+  },
+  "design_system_spec": {
+    "information_density": {
+      "selection": "Dashboard Style",
+      "instruction_en": "Data-rich but clean.",
+      "instruction_zh": "数据丰富但整洁。"
+    },
+    "grid_system": {
+      "selection": "Split Screen",
+      "instruction_en": "Left text, right visuals.",
+      "instruction_zh": "左文右图。"
+    },
+    "data_visualization": {
+      "selection": "Medical Blue",
+      "instruction_en": "Blue for healthy, Grey for other.",
+      "instruction_zh": "蓝色代表健康，灰色代表其他。"
+    },
+    "typography": {
+      "selection": "Serif Headers",
+      "instruction_en": "Academic feel.",
+      "instruction_zh": "学术感。"
+    },
+    "decorations": {
+      "selection": "Organic Curves",
+      "instruction_en": "Soft biology shapes.",
+      "instruction_zh": "柔和生物形态。"
+    },
+    "artistic_style": {
+      "selection": "Medical Clean",
+      "instruction_en": "1. Art Style & Mood: Sterile. 2. Materials: Glass. 3. Light: Bright.",
+      "instruction_zh": "1. 美术风格和氛围: 无菌感。2. 材质: 玻璃。3. 光影: 明亮。"
+    }
+  },
+  "required_layouts": [
+    {
+      "type": "cover_branding",
+      "title": "MediCare Plus",
+      "subtitle": "Advanced Healthcare Solutions",
+      "description": "A doctor holding a digital tablet with a holographic heart."
+    },
+    {
+      "type": "agenda_list",
+      "title": "Our Services",
+      "items": [
+        "Telemedicine",
+        "AI Diagnostics",
+        "Patient Care",
+        "Research"
+      ]
+    },
+    {
+      "type": "grid_4_feature",
+      "title": "Core Innovations",
+      "features": [
+        "Smart Sensors",
+        "Cloud Data",
+        "24/7 Support",
+        "Secure Privacy"
+      ]
+    },
+    {
+      "type": "team_gallery",
+      "title": "Medical Board",
+      "members": [
+        "Dr. Smith (CMO)",
+        "Dr. Jones (Research)",
+        "Sarah (RN)"
+      ]
+    }
+  ]
+}

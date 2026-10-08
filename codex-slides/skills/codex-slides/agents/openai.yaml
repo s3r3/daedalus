@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Slides"
+  short_description: "Operate scenarios, Design Files, brand systems, and decks"
+  default_prompt: "Use $codex-slides to choose the right scenario, use my Design Files and brand system, create or edit the presentation, and show the result in the Codex Browser."

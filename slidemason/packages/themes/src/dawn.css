@@ -1,0 +1,31 @@
+[data-theme="dawn"] {
+  --sm-bg: #fef3c7;
+  --sm-surface: #ffffff;
+  --sm-text: #292524;
+  --sm-muted: #78716c;
+  --sm-primary: #c2410c;
+  --sm-secondary: #059669;
+  --sm-accent: #7c3aed;
+  --sm-border: #e7e5e4;
+  --sm-mono-font: 'JetBrains Mono', ui-monospace, monospace;
+  --sm-radius: 0.5rem;
+  --sm-shadow-sm: 0 1px 2px rgba(0,0,0,0.06);
+  --sm-shadow-md: 0 4px 6px rgba(0,0,0,0.08);
+  --sm-shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
+  --sm-success: #16a34a;
+  --sm-warning: #d97706;
+  --sm-danger: #dc2626;
+  --sm-gradient-start: #c2410c;
+  --sm-gradient-end: #059669;
+  --sm-gradient-mesh-1: #c2410c;
+  --sm-gradient-mesh-2: #059669;
+  --sm-gradient-mesh-3: #7c3aed;
+  --sm-gradient-mesh-4: #fef3c7;
+  --sm-chart-1: #c2410c;
+  --sm-chart-2: #059669;
+  --sm-chart-3: #7c3aed;
+  --sm-chart-4: #2563eb;
+  --sm-chart-5: #d97706;
+  --sm-chart-6: #dc2626;
+  --sm-glass-bg: rgba(255,247,237,0.85);
+}

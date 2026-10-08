@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a reproducible Codex Slides problem
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve Codex Slides. Do not attach private source files or credentials.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What went wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: "1. Open…\n2. Create…\n3. Observe…"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: surface
+    attributes:
+      label: Surface and version
+      placeholder: Codex app/CLI, browser, Node.js version
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Workflow stage
+      options:
+        - Home / create
+        - Clarification
+        - Research / outline
+        - Visual direction
+        - Rendering
+        - Editing
+        - Play / export
+        - Plugin / MCP
+        - Other
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Logs or screenshots
+      description: Redact confidential data before attaching evidence.

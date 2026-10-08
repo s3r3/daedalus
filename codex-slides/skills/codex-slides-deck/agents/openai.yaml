@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Slides Deck"
+  short_description: "Create and edit scenario- and brand-aware decks"
+  default_prompt: "Use $codex-slides:codex-slides-deck to create or edit my deck, then show the result in the Codex Browser."

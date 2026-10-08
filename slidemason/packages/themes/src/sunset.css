@@ -1,0 +1,31 @@
+[data-theme="sunset"] {
+  --sm-bg: #1e1b4b;
+  --sm-surface: #312e81;
+  --sm-text: #fef3c7;
+  --sm-muted: #a5b4fc;
+  --sm-primary: #f97316;
+  --sm-secondary: #ec4899;
+  --sm-accent: #fbbf24;
+  --sm-border: #3730a3;
+  --sm-mono-font: 'JetBrains Mono', ui-monospace, monospace;
+  --sm-radius: 0.5rem;
+  --sm-shadow-sm: 0 1px 2px rgba(0,0,0,0.35);
+  --sm-shadow-md: 0 4px 6px rgba(0,0,0,0.35);
+  --sm-shadow-lg: 0 10px 15px rgba(0,0,0,0.35);
+  --sm-success: #22c55e;
+  --sm-warning: #fbbf24;
+  --sm-danger: #ef4444;
+  --sm-gradient-start: #f97316;
+  --sm-gradient-end: #ec4899;
+  --sm-gradient-mesh-1: #f97316;
+  --sm-gradient-mesh-2: #ec4899;
+  --sm-gradient-mesh-3: #fbbf24;
+  --sm-gradient-mesh-4: #1e1b4b;
+  --sm-chart-1: #f97316;
+  --sm-chart-2: #ec4899;
+  --sm-chart-3: #fbbf24;
+  --sm-chart-4: #22d3ee;
+  --sm-chart-5: #a3e635;
+  --sm-chart-6: #a78bfa;
+  --sm-glass-bg: rgba(49,46,129,0.7);
+}

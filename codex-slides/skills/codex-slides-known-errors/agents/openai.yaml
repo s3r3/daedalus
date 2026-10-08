@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Slides Known Errors"
+  short_description: "Recover runtime, run, handoff, render, and export failures"
+  default_prompt: "Use $codex-slides:codex-slides-known-errors to diagnose this Codex Slides failure and recover the existing project safely."

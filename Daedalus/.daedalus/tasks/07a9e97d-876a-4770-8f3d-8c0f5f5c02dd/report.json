@@ -1,0 +1,33 @@
+{
+  "task_id": "07a9e97d-876a-4770-8f3d-8c0f5f5c02dd",
+  "outcome": "partial",
+  "diff": "",
+  "evidence": [
+    "target_dir: jojo",
+    "input token budget reached: 108931 input tokens spent on this task (budget 100000); stopped before burning more"
+  ],
+  "target_dir": "jojo",
+  "metrics": {
+    "turns": 10,
+    "tool_calls": 10,
+    "events": 53,
+    "commands": 1,
+    "files_changed": 0,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "child_tasks": 0,
+    "child_tasks_done": 0,
+    "child_tasks_failed": 0,
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "model_requests": 7,
+    "tokens_input": 108931,
+    "tokens_output": 1002,
+    "tokens_total": 109933,
+    "token_requests_reported": 7,
+    "review_findings": 0,
+    "review_blocking": 0,
+    "duration_ms": 77472
+  }
+}

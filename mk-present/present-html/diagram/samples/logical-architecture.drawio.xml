@@ -1,0 +1,157 @@
+<mxfile host="app.diagrams.net" agent="draw.io">
+  <diagram id="metadata-logical-architecture" name="Metadata Application Logical Architecture">
+    <mxGraphModel dx="1924" dy="968" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=20;fontColor=#1a1a1a;strokeColor=none;fillColor=none;" value="&lt;b&gt;Logical Architecture — Metadata Management Application&lt;/b&gt;" vertex="1">
+          <mxGeometry height="40" width="1000" x="350" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="cross-layer-bg" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#f3e5f5;strokeColor=#7b1fa2;strokeWidth=2;dashed=1;verticalAlign=top;" value="" vertex="1">
+          <mxGeometry height="670" width="150" x="60" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="cross-layer-label" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=14;fontColor=#7b1fa2;strokeColor=none;fillColor=none;" value="&lt;b&gt;Cross-Cutting&lt;br&gt;Concerns&lt;/b&gt;" vertex="1">
+          <mxGeometry height="50" width="130" x="70" y="95" as="geometry" />
+        </mxCell>
+        <mxCell id="cross-auth" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#7b1fa2;fontSize=9;" value="Authentication&#xa;SSO / MFA" vertex="1">
+          <mxGeometry height="35" width="110" x="80" y="167.5" as="geometry" />
+        </mxCell>
+        <mxCell id="cross-rbac" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#7b1fa2;fontSize=9;" value="Authorization&#xa;Role-Based Access" vertex="1">
+          <mxGeometry height="35" width="110" x="80" y="217.5" as="geometry" />
+        </mxCell>
+        <mxCell id="cross-audit" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#7b1fa2;fontSize=9;" value="Audit Logging&#xa;Immutable Trails" vertex="1">
+          <mxGeometry height="35" width="110" x="80" y="267.5" as="geometry" />
+        </mxCell>
+        <mxCell id="cross-encrypt" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#7b1fa2;fontSize=9;" value="Encryption&#xa;At-Rest / In-Transit" vertex="1">
+          <mxGeometry height="35" width="110" x="80" y="317.5" as="geometry" />
+        </mxCell>
+        <mxCell id="cross-monitor" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#7b1fa2;fontSize=9;" value="Monitoring&#xa;Health &amp; Performance" vertex="1">
+          <mxGeometry height="35" width="110" x="80" y="367.5" as="geometry" />
+        </mxCell>
+        <mxCell id="cross-sla" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#7b1fa2;fontSize=9;" value="SLA Mgmt&#xa;Availability Targets" vertex="1">
+          <mxGeometry height="35" width="110" x="80" y="417.5" as="geometry" />
+        </mxCell>
+        <mxCell id="cross-gdpr" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#7b1fa2;fontSize=9;" value="Data Lifecycle&#xa;Retention Policies" vertex="1">
+          <mxGeometry height="35" width="110" x="80" y="467.5" as="geometry" />
+        </mxCell>
+        <mxCell id="cross-ha" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#7b1fa2;fontSize=9;" value="High Availability&#xa;Multi-Region DR" vertex="1">
+          <mxGeometry height="35" width="110" x="80" y="517.5" as="geometry" />
+        </mxCell>
+        <mxCell id="consumer-layer-bg" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#fce4ec;strokeColor=#c62828;strokeWidth=2;dashed=1;verticalAlign=top;" value="" vertex="1">
+          <mxGeometry height="150" width="1410" x="250" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="consumer-layer-label" parent="1" style="text;html=1;align=left;verticalAlign=top;fontSize=14;fontColor=#c62828;strokeColor=none;fillColor=none;" value="&lt;b&gt;Target Consumers — Metadata Applications&lt;/b&gt;" vertex="1">
+          <mxGeometry height="25" width="380" x="265" y="100" as="geometry" />
+        </mxCell>
+        <mxCell id="consumer-catalog" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#c62828;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Data Catalog&#xa;Self-Service Discovery&#xa;Data Profiling" vertex="1">
+          <mxGeometry height="70" width="200" x="270" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="consumer-lineage-ui" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#c62828;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Lineage Visualization&#xa;Impact &amp; Root-Cause&#xa;Dependency Graphs" vertex="1">
+          <mxGeometry height="70" width="200" x="500" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="consumer-dq" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#c62828;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Data Quality Monitoring&#xa;Quality Scorecards&#xa;Anomaly Alerts" vertex="1">
+          <mxGeometry height="70" width="200" x="730" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="consumer-compliance" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#c62828;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Compliance &amp; Audit&#xa;Policy Reporting&#xa;Access Auditing" vertex="1">
+          <mxGeometry height="70" width="200" x="960" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="consumer-dataops" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#c62828;strokeWidth=1;verticalAlign=top;fontSize=10;" value="DataOps Automation&#xa;CI/CD Integration&#xa;Notification Channels" vertex="1">
+          <mxGeometry height="70" width="200" x="1190" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="consumer-thirdparty" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#c62828;strokeWidth=1;verticalAlign=top;fontSize=10;" value="External Integration&#xa;Federated Queries&#xa;Metadata Exchange" vertex="1">
+          <mxGeometry height="70" width="220" x="1420" y="140" as="geometry" />
+        </mxCell>
+        <mxCell id="core-layer-bg" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#fff3e0;strokeColor=#e65100;strokeWidth=2;dashed=1;verticalAlign=top;" value="" vertex="1">
+          <mxGeometry height="180" width="1410" x="250" y="270" as="geometry" />
+        </mxCell>
+        <mxCell id="core-layer-label" parent="1" style="text;html=1;align=left;verticalAlign=top;fontSize=14;fontColor=#e65100;strokeColor=none;fillColor=none;" value="&lt;b&gt;Core Metadata Platform&lt;/b&gt;" vertex="1">
+          <mxGeometry height="25" width="250" x="265" y="280" as="geometry" />
+        </mxCell>
+        <mxCell id="core-store" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#e65100;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Metadata Repository&#xa;Technical Metadata&#xa;Business Metadata&#xa;Operational Metadata" vertex="1">
+          <mxGeometry height="70" width="210" x="300" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="core-glossary" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#e65100;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Business Glossary&#xa;Terms · Definitions&#xa;Taxonomy · Synonyms" vertex="1">
+          <mxGeometry height="70" width="190" x="540" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="core-dictionary" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#e65100;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Data Dictionary&#xa;Schema Objects&#xa;Data Types · Constraints" vertex="1">
+          <mxGeometry height="70" width="190" x="760" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="core-lineage" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#e65100;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Lineage Management&#xa;Column / Table Level&#xa;Cross-System Mapping" vertex="1">
+          <mxGeometry height="70" width="190" x="980" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="core-classification" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#e65100;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Data Classification&#xa;Sensitivity Tiers&#xa;Auto-Tagging Rules" vertex="1">
+          <mxGeometry height="70" width="190" x="1200" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="core-search" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#e65100;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Search &amp; Discovery&#xa;Full-Text Indexing&#xa;Graph Navigation" vertex="1">
+          <mxGeometry height="70" width="190" x="1420" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="core-api" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffe0b2;strokeColor=#e65100;strokeWidth=2;fontSize=11;fontStyle=1;" value="Metadata Service APIs —  REST · GraphQL · Event Streams" vertex="1">
+          <mxGeometry height="35" width="600" x="655" y="400" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-core-consumer" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#c62828;strokeWidth=2;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="950" y="270" as="sourcePoint" />
+            <mxPoint x="950" y="240" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="ingest-layer-bg" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#e3f2fd;strokeColor=#1565c0;strokeWidth=2;dashed=1;verticalAlign=top;" value="" vertex="1">
+          <mxGeometry height="100" width="1410" x="250" y="480" as="geometry" />
+        </mxCell>
+        <mxCell id="ingest-layer-label" parent="1" style="text;html=1;align=left;verticalAlign=top;fontSize=14;fontColor=#1565c0;strokeColor=none;fillColor=none;" value="&lt;b&gt;Metadata Ingestion Layer&lt;/b&gt;" vertex="1">
+          <mxGeometry height="25" width="250" x="265" y="490" as="geometry" />
+        </mxCell>
+        <mxCell id="ingest-crawler" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#1565c0;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Metadata Crawling&#xa;Schema Extraction · Lineage Harvesting · Usage Collection" vertex="1">
+          <mxGeometry height="40" width="320" x="270" y="525" as="geometry" />
+        </mxCell>
+        <mxCell id="ingest-connector" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#1565c0;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Connector Abstraction&#xa;Protocol Adapters · Native Integration · File Parsing" vertex="1">
+          <mxGeometry height="40" width="320" x="630" y="525" as="geometry" />
+        </mxCell>
+        <mxCell id="ingest-pipeline" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#1565c0;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Ingestion Orchestration&#xa;Scheduling · Event-Driven Trigger · Incremental Sync" vertex="1">
+          <mxGeometry height="40" width="320" x="990" y="525" as="geometry" />
+        </mxCell>
+        <mxCell id="ingest-validation" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#1565c0;strokeWidth=1;fontSize=10;align=center;verticalAlign=top;fontFamily=Helvetica;fontColor=default;" value="Validation &amp; Normalization&#xa;Schema Validation · Deduplication · Enrichment" vertex="1">
+          <mxGeometry height="40" width="290" x="1350" y="525" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-ingest-core" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#e65100;strokeWidth=2;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="950" y="480" as="sourcePoint" />
+            <mxPoint x="950" y="450" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="source-layer-bg" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#e8f5e9;strokeColor=#2e7d32;strokeWidth=2;dashed=1;verticalAlign=top;" value="" vertex="1">
+          <mxGeometry height="150" width="1410" x="250" y="610" as="geometry" />
+        </mxCell>
+        <mxCell id="source-layer-label" parent="1" style="text;html=1;align=left;verticalAlign=top;fontSize=14;fontColor=#2e7d32;strokeColor=none;fillColor=none;" value="&lt;b&gt;Source Systems — Metadata Providers&lt;/b&gt;" vertex="1">
+          <mxGeometry height="25" width="350" x="265" y="620" as="geometry" />
+        </mxCell>
+        <mxCell id="src-dw" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#2e7d32;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Data Warehouses&#xa;Structured Analytics&#xa;Dimensional Models" vertex="1">
+          <mxGeometry height="75" width="180" x="270" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="src-lake" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#2e7d32;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Data Lakes&#xa;Raw / Curated Zones&#xa;Object Storage" vertex="1">
+          <mxGeometry height="75" width="180" x="480" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="src-db" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#2e7d32;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Transactional Databases&#xa;OLTP Schemas&#xa;Stored Procedures" vertex="1">
+          <mxGeometry height="75" width="190" x="690" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="src-etl" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#2e7d32;strokeWidth=1;verticalAlign=top;fontSize=10;" value="ETL / ELT Pipelines&#xa;Transformation Logic&#xa;Orchestration DAGs" vertex="1">
+          <mxGeometry height="75" width="190" x="910" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="src-bi" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#2e7d32;strokeWidth=1;verticalAlign=top;fontSize=10;" value="BI &amp; Analytics&#xa;Reports / Dashboards&#xa;Semantic Models" vertex="1">
+          <mxGeometry height="75" width="180" x="1130" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="src-stream" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#2e7d32;strokeWidth=1;verticalAlign=top;fontSize=10;" value="Streaming &amp; Events&#xa;Real-Time Topics&#xa;Event Schemas" vertex="1">
+          <mxGeometry height="75" width="150" x="1340" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="src-api" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#ffffff;strokeColor=#2e7d32;strokeWidth=1;verticalAlign=top;fontSize=10;" value="APIs &amp; Microservices&#xa;Service Contracts&#xa;API Specifications" vertex="1">
+          <mxGeometry height="75" width="120" x="1520" y="660" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-src-ingest" edge="1" parent="1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;strokeColor=#1565c0;strokeWidth=2;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="950" y="610" as="sourcePoint" />
+            <mxPoint x="950" y="580" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

@@ -1,0 +1,30 @@
+{
+  "name": "@slidemason/themes",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./slate.css": "./src/slate.css",
+    "./canvas.css": "./src/canvas.css",
+    "./signal.css": "./src/signal.css",
+    "./noir.css": "./src/noir.css",
+    "./dawn.css": "./src/dawn.css",
+    "./boardroom.css": "./src/boardroom.css",
+    "./neon.css": "./src/neon.css",
+    "./forest.css": "./src/forest.css",
+    "./glacier.css": "./src/glacier.css",
+    "./sunset.css": "./src/sunset.css",
+    "./paper.css": "./src/paper.css",
+    "./midnight.css": "./src/midnight.css"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "vitest run"
+  }
+}

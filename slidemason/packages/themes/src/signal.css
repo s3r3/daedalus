@@ -1,0 +1,31 @@
+[data-theme="signal"] {
+  --sm-bg: #020617;
+  --sm-surface: #0f172a;
+  --sm-text: #ffffff;
+  --sm-muted: #64748b;
+  --sm-primary: #e11d48;
+  --sm-secondary: #7c3aed;
+  --sm-accent: #f59e0b;
+  --sm-border: #1e293b;
+  --sm-mono-font: 'JetBrains Mono', ui-monospace, monospace;
+  --sm-radius: 0.5rem;
+  --sm-shadow-sm: 0 1px 2px rgba(0,0,0,0.4);
+  --sm-shadow-md: 0 4px 6px rgba(0,0,0,0.4);
+  --sm-shadow-lg: 0 10px 15px rgba(0,0,0,0.4);
+  --sm-success: #22c55e;
+  --sm-warning: #f59e0b;
+  --sm-danger: #ef4444;
+  --sm-gradient-start: #e11d48;
+  --sm-gradient-end: #7c3aed;
+  --sm-gradient-mesh-1: #e11d48;
+  --sm-gradient-mesh-2: #7c3aed;
+  --sm-gradient-mesh-3: #f59e0b;
+  --sm-gradient-mesh-4: #020617;
+  --sm-chart-1: #e11d48;
+  --sm-chart-2: #7c3aed;
+  --sm-chart-3: #f59e0b;
+  --sm-chart-4: #06b6d4;
+  --sm-chart-5: #22c55e;
+  --sm-chart-6: #3b82f6;
+  --sm-glass-bg: rgba(15,23,42,0.7);
+}

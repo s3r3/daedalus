@@ -1,0 +1,33 @@
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = [
+  "web",
+  "output",
+  "test_output",
+  "docs/assets",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+
+[tool.ruff.lint.per-file-ignores]
+"api/routes/*.py" = ["E402"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.coverage.run]
+branch = true
+source = ["api", "src"]
+omit = [
+  "tests/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 45

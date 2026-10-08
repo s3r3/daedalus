@@ -1,0 +1,25 @@
+{
+  "id": "c652064d-22ef-4348-a483-b9ec67506cfc",
+  "goal": "hai",
+  "repo_path": "/home/xyconix11x/Ayid/xyconix11x/Skripsi/Daedalus",
+  "constraints": [],
+  "done_criteria": [],
+  "mode": "auto",
+  "auto_approve": false,
+  "thinking": true,
+  "intent": "conversational",
+  "provider_id": "nine-router",
+  "model": "my-free",
+  "attachments": [],
+  "created_at": "2026-10-06T04:20:33.974Z",
+  "plan": {
+    "id": "c652064d-22ef-4348-a483-b9ec67506cfc-plan",
+    "task_id": "c652064d-22ef-4348-a483-b9ec67506cfc",
+    "steps": [],
+    "version": 0,
+    "status": "draft"
+  },
+  "steps": [],
+  "status": "done",
+  "updated_at": "2026-10-06T04:20:34.595Z"
+}

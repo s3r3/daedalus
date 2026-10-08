@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Logical Architecture — Metadata Management Application</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/theme/white.min.css" id="theme">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .reveal {
+      height: 100%;
+      width: 100%;
+    }
+    .reveal .slides {
+      text-align: center;
+    }
+    .arch-slide {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+      height: 100%;
+      background: #f8fafc;
+    }
+    .diagram-container {
+      position: relative;
+      width: 1700px;
+      height: 850px;
+      margin: 0 auto;
+      font-family: 'Segoe UI', Roboto, system-ui, -apple-system, sans-serif;
+      transform-origin: center center;
+    }
+
+    .layer-bg {
+      position: absolute;
+      box-sizing: border-box;
+      border-width: 2px;
+      border-style: dashed;
+      z-index: 1;
+    }
+
+    .card {
+      position: absolute;
+      box-sizing: border-box;
+      border-radius: 8px;
+      border-width: 1px;
+      border-style: solid;
+      background: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 10px;
+      font-weight: 500;
+      z-index: 3;
+      line-height: 1.4;
+    }
+
+    .connectors-svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    @media (max-width: 1750px) {
+      .diagram-container { transform: scale(0.78); }
+    }
+    @media (max-width: 1350px) {
+      .diagram-container { transform: scale(0.6); }
+    }
+    @media (max-width: 1000px) {
+      .diagram-container { transform: scale(0.45); }
+    }
+    .reveal .slides section {
+      height: 100%;
+      padding: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+      <section>
+        <div class="arch-slide">
+          <div class="diagram-container">
+
+            <!-- Title -->
+            <div style="position:absolute; left:350px; top:0; width:1000px; text-align:center; font-size:20px; font-weight:700; color:#1a1a1a; z-index:2;">
+              <b>Logical Architecture — Metadata Management Application</b>
+            </div>
+
+            <!-- ==================== CROSS-CUTTING CONCERNS (LEFT) ==================== -->
+            <div class="layer-bg" id="cross-layer" style="left:60px; top:70px; width:150px; height:670px; background:#f3e5f5; border-color:#7b1fa2;"></div>
+            <div style="position:absolute; left:70px; top:75px; width:130px; text-align:center; font-size:14px; font-weight:700; color:#7b1fa2; z-index:2;">
+              <b>Cross-Cutting<br>Concerns</b>
+            </div>
+
+            <div class="card" style="left:80px; top:147px; width:110px; height:35px; border-color:#7b1fa2; font-size:9px; flex-direction:column;">Authentication<br>SSO / MFA</div>
+            <div class="card" style="left:80px; top:197px; width:110px; height:35px; border-color:#7b1fa2; font-size:9px; flex-direction:column;">Authorization<br>Role-Based Access</div>
+            <div class="card" style="left:80px; top:247px; width:110px; height:35px; border-color:#7b1fa2; font-size:9px; flex-direction:column;">Audit Logging<br>Immutable Trails</div>
+            <div class="card" style="left:80px; top:297px; width:110px; height:35px; border-color:#7b1fa2; font-size:9px; flex-direction:column;">Encryption<br>At-Rest / In-Transit</div>
+            <div class="card" style="left:80px; top:347px; width:110px; height:35px; border-color:#7b1fa2; font-size:9px; flex-direction:column;">Monitoring<br>Health &amp; Performance</div>
+            <div class="card" style="left:80px; top:397px; width:110px; height:35px; border-color:#7b1fa2; font-size:9px; flex-direction:column;">SLA Mgmt<br>Availability Targets</div>
+            <div class="card" style="left:80px; top:447px; width:110px; height:35px; border-color:#7b1fa2; font-size:9px; flex-direction:column;">Data Lifecycle<br>Retention Policies</div>
+            <div class="card" style="left:80px; top:497px; width:110px; height:35px; border-color:#7b1fa2; font-size:9px; flex-direction:column;">High Availability<br>Multi-Region DR</div>
+
+            <!-- ==================== TARGET CONSUMERS (TOP) ==================== -->
+            <div class="layer-bg" id="consumer-layer" style="left:250px; top:70px; width:1410px; height:150px; background:#fce4ec; border-color:#c62828;"></div>
+            <div style="position:absolute; left:265px; top:78px; font-size:14px; font-weight:700; color:#c62828; z-index:2;"><b>Target Consumers — Metadata Applications</b></div>
+
+            <div class="card" id="consumer-catalog" style="left:270px; top:118px; width:200px; height:70px; border-color:#c62828; flex-direction:column; font-size:10px;">Data Catalog<br>Self-Service Discovery<br>Data Profiling</div>
+            <div class="card" id="consumer-lineage" style="left:500px; top:118px; width:200px; height:70px; border-color:#c62828; flex-direction:column; font-size:10px;">Lineage Visualization<br>Impact &amp; Root-Cause<br>Dependency Graphs</div>
+            <div class="card" id="consumer-dq" style="left:730px; top:118px; width:200px; height:70px; border-color:#c62828; flex-direction:column; font-size:10px;">Data Quality Monitoring<br>Quality Scorecards<br>Anomaly Alerts</div>
+            <div class="card" id="consumer-compliance" style="left:960px; top:118px; width:200px; height:70px; border-color:#c62828; flex-direction:column; font-size:10px;">Compliance &amp; Audit<br>Policy Reporting<br>Access Auditing</div>
+            <div class="card" id="consumer-dataops" style="left:1190px; top:118px; width:200px; height:70px; border-color:#c62828; flex-direction:column; font-size:10px;">DataOps Automation<br>CI/CD Integration<br>Notification Channels</div>
+            <div class="card" id="consumer-thirdparty" style="left:1420px; top:118px; width:220px; height:70px; border-color:#c62828; flex-direction:column; font-size:10px;">External Integration<br>Federated Queries<br>Metadata Exchange</div>
+
+            <!-- ==================== CORE METADATA PLATFORM (MIDDLE) ==================== -->
+            <div class="layer-bg" id="core-layer" style="left:250px; top:250px; width:1410px; height:180px; background:#fff3e0; border-color:#e65100;"></div>
+            <div style="position:absolute; left:265px; top:258px; font-size:14px; font-weight:700; color:#e65100; z-index:2;"><b>Core Metadata Platform</b></div>
+
+            <div class="card" id="core-store" style="left:300px; top:293px; width:210px; height:70px; border-color:#e65100; flex-direction:column; font-size:10px;">Metadata Repository<br>Technical Metadata<br>Business Metadata<br>Operational Metadata</div>
+            <div class="card" id="core-glossary" style="left:540px; top:293px; width:190px; height:70px; border-color:#e65100; flex-direction:column; font-size:10px;">Business Glossary<br>Terms · Definitions<br>Taxonomy · Synonyms</div>
+            <div class="card" id="core-dictionary" style="left:760px; top:293px; width:190px; height:70px; border-color:#e65100; flex-direction:column; font-size:10px;">Data Dictionary<br>Schema Objects<br>Data Types · Constraints</div>
+            <div class="card" id="core-lineage" style="left:980px; top:293px; width:190px; height:70px; border-color:#e65100; flex-direction:column; font-size:10px;">Lineage Management<br>Column / Table Level<br>Cross-System Mapping</div>
+            <div class="card" id="core-classification" style="left:1200px; top:293px; width:190px; height:70px; border-color:#e65100; flex-direction:column; font-size:10px;">Data Classification<br>Sensitivity Tiers<br>Auto-Tagging Rules</div>
+            <div class="card" id="core-search" style="left:1420px; top:293px; width:190px; height:70px; border-color:#e65100; flex-direction:column; font-size:10px;">Search &amp; Discovery<br>Full-Text Indexing<br>Graph Navigation</div>
+
+            <div class="card" id="core-api" style="left:655px; top:378px; width:600px; height:35px; background:#ffe0b2; border-color:#e65100; border-width:2px; font-size:11px; font-weight:700;">Metadata Service APIs — REST · GraphQL · Event Streams</div>
+
+            <!-- ==================== INGESTION LAYER ==================== -->
+            <div class="layer-bg" id="ingest-layer" style="left:250px; top:460px; width:1410px; height:100px; background:#e3f2fd; border-color:#1565c0;"></div>
+            <div style="position:absolute; left:265px; top:468px; font-size:14px; font-weight:700; color:#1565c0; z-index:2;"><b>Metadata Ingestion Layer</b></div>
+
+            <div class="card" id="ingest-crawler" style="left:270px; top:503px; width:320px; height:40px; border-color:#1565c0; font-size:10px;">Metadata Crawling<br>Schema Extraction · Lineage Harvesting · Usage Collection</div>
+            <div class="card" id="ingest-connector" style="left:630px; top:503px; width:320px; height:40px; border-color:#1565c0; font-size:10px;">Connector Abstraction<br>Protocol Adapters · Native Integration · File Parsing</div>
+            <div class="card" id="ingest-pipeline" style="left:990px; top:503px; width:320px; height:40px; border-color:#1565c0; font-size:10px;">Ingestion Orchestration<br>Scheduling · Event-Driven Trigger · Incremental Sync</div>
+            <div class="card" id="ingest-validation" style="left:1350px; top:503px; width:290px; height:40px; border-color:#1565c0; font-size:10px;">Validation &amp; Normalization<br>Schema Validation · Deduplication · Enrichment</div>
+
+            <!-- ==================== SOURCE SYSTEMS (BOTTOM) ==================== -->
+            <div class="layer-bg" id="source-layer" style="left:250px; top:590px; width:1410px; height:150px; background:#e8f5e9; border-color:#2e7d32;"></div>
+            <div style="position:absolute; left:265px; top:598px; font-size:14px; font-weight:700; color:#2e7d32; z-index:2;"><b>Source Systems — Metadata Providers</b></div>
+
+            <div class="card" id="src-dw" style="left:270px; top:638px; width:180px; height:75px; border-color:#2e7d32; flex-direction:column; font-size:10px;">Data Warehouses<br>Structured Analytics<br>Dimensional Models</div>
+            <div class="card" id="src-lake" style="left:480px; top:638px; width:180px; height:75px; border-color:#2e7d32; flex-direction:column; font-size:10px;">Data Lakes<br>Raw / Curated Zones<br>Object Storage</div>
+            <div class="card" id="src-db" style="left:690px; top:638px; width:190px; height:75px; border-color:#2e7d32; flex-direction:column; font-size:10px;">Transactional Databases<br>OLTP Schemas<br>Stored Procedures</div>
+            <div class="card" id="src-etl" style="left:910px; top:638px; width:190px; height:75px; border-color:#2e7d32; flex-direction:column; font-size:10px;">ETL / ELT Pipelines<br>Transformation Logic<br>Orchestration DAGs</div>
+            <div class="card" id="src-bi" style="left:1130px; top:638px; width:180px; height:75px; border-color:#2e7d32; flex-direction:column; font-size:10px;">BI &amp; Analytics<br>Reports / Dashboards<br>Semantic Models</div>
+            <div class="card" id="src-stream" style="left:1340px; top:638px; width:150px; height:75px; border-color:#2e7d32; flex-direction:column; font-size:10px;">Streaming &amp; Events<br>Real-Time Topics<br>Event Schemas</div>
+            <div class="card" id="src-api" style="left:1520px; top:638px; width:120px; height:75px; border-color:#2e7d32; flex-direction:column; font-size:10px;">APIs &amp; Microservices<br>Service Contracts<br>API Specifications</div>
+
+            <!-- ==================== SVG CONNECTORS ==================== -->
+            <svg class="connectors-svg" xmlns="http://www.w3.org/2000/svg" width="1700" height="850">
+              <defs>
+                <marker id="arrow-red" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+                  <polygon points="0,0 6,2.5 0,5" fill="#c62828" />
+                </marker>
+                <marker id="arrow-orange" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+                  <polygon points="0,0 6,2.5 0,5" fill="#e65100" />
+                </marker>
+                <marker id="arrow-blue" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+                  <polygon points="0,0 6,2.5 0,5" fill="#1565c0" />
+                </marker>
+              </defs>
+
+              <!-- Core → Consumer arrow (connects from core-layer top to consumer-layer bottom) -->
+              <!-- core-layer: top=250, consumer-layer: top=70, height=150 → bottom=220 -->
+              <line x1="950" y1="250" x2="950" y2="222" stroke="#c62828" stroke-width="2" marker-end="url(#arrow-red)" />
+
+              <!-- Ingestion → Core arrow (connects from ingest-layer top to core-layer bottom) -->
+              <!-- ingest-layer: top=460, core-layer: top=250, height=180 → bottom=430 -->
+              <line x1="950" y1="460" x2="950" y2="432" stroke="#e65100" stroke-width="2" marker-end="url(#arrow-orange)" />
+
+              <!-- Source → Ingestion arrow (connects from source-layer top to ingest-layer bottom) -->
+              <!-- source-layer: top=590, ingest-layer: top=460, height=100 → bottom=560 -->
+              <line x1="950" y1="590" x2="950" y2="562" stroke="#1565c0" stroke-width="2" marker-end="url(#arrow-blue)" />
+            </svg>
+
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.js"></script>
+  <script>
+    Reveal.initialize({
+      hash: true,
+      center: false,
+      width: '100%',
+      height: '100%',
+      margin: 0,
+      minScale: 0.2,
+      maxScale: 2.0,
+      transition: 'fade',
+      controls: true,
+      progress: true,
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+{
+  "task_id": "6a6e4a8c-ab86-4714-873c-9198465607f6",
+  "outcome": "failed",
+  "diff": "",
+  "evidence": [],
+  "metrics": {
+    "turns": 5,
+    "tool_calls": 5,
+    "events": 30,
+    "commands": 0,
+    "files_changed": 0,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "child_tasks": 0,
+    "child_tasks_done": 0,
+    "child_tasks_failed": 0,
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "model_requests": 4,
+    "tokens_input": 29246,
+    "tokens_output": 309,
+    "tokens_total": 29555,
+    "token_requests_reported": 4,
+    "review_findings": 0,
+    "review_blocking": 0,
+    "duration_ms": 404963
+  }
+}

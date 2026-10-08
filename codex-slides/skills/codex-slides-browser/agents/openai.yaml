@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Slides Browser"
+  short_description: "Open decks, scenarios, files, and brand UI in Browser"
+  default_prompt: "Use $codex-slides:codex-slides-browser to open Codex Slides in the in-editor Browser and operate it for me."

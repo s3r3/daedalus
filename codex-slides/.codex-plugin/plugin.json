@@ -1,0 +1,62 @@
+{
+  "name": "codex-slides",
+  "version": "0.1.0+codex.20260713",
+  "description": "Run a guided, Browser-first slide workflow in Codex, with durable projects, reusable project templates, Design Files, brand systems, desktop apps, editing, and export.",
+  "author": {
+    "name": "Codex Slides"
+  },
+  "keywords": [
+    "presentations",
+    "slides",
+    "image-generation",
+    "research",
+    "browser",
+    "scenarios",
+    "design-files",
+    "brand-system"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "Codex Slides",
+    "shortDescription": "Build decks step by step in a live Codex Browser workspace.",
+    "longDescription": "Codex Slides gives Codex a Browser-first slide workflow plus portable Agent Skills and 38 typed MCP tools. Codex opens the product before generation, creates a durable project, tracks navigation-independent runs, and keeps requirements, research, outline approval, visual direction, rendering, editing, verification, speaker notes, project templates, dual-window presenting, and export visible and steerable through exact Browser handoffs. The same local-first workspace ships for web, macOS, Windows, and Linux.",
+    "developerName": "Codex Slides",
+    "category": "Productivity",
+    "composerIcon": "./assets/codex-slides-composer-icon.png",
+    "logo": "./assets/codex-slides-logo.png",
+    "capabilities": [
+      "In-editor Browser workspace",
+      "Portable Agent Skill CLI",
+      "38 typed MCP tools",
+      "Guided project checkpoints",
+      "Durable run start, status, wait, and cancel",
+      "Exact Browser slide, panel, version, mode, and run handoffs",
+      "Structured intake, verification, and error recovery skills",
+      "24 scenario workflows",
+      "Project Design Files",
+      "Reusable project templates",
+      "Design File path copy and download",
+      "Design File @ references",
+      "Structured agent tool activity",
+      "Always-on brand design systems",
+      "Semantic source-file roles",
+      "AI slide generation",
+      "Deep research and outlines",
+      "Conversational and mark editing",
+      "Slide structure and transitions",
+      "AI-generated speaker notes",
+      "Dual-window presenter mode",
+      "PDF and PPTX export",
+      "Electron desktop apps for macOS, Windows, and Linux"
+    ],
+    "brandColor": "#6D5EF8",
+    "defaultPrompt": [
+      "Open Codex Slides in the Codex Browser and keep it visible while we create a project step by step.",
+      "Open the Codex Slides home screen, start a project from my request, and let me review the questions, outline, and style before rendering.",
+      "Show me the scenario catalog in the Browser and create the project through the live UI using my source files.",
+      "Open this deck's Design Files or brand design system and update it in the live workspace.",
+      "Edit my latest deck and verify the result in the Browser."
+    ]
+  }
+}

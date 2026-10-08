@@ -1,0 +1,24 @@
+{
+  "task_id": "4ea9e5e8-6944-4831-b81d-486ba8e8fd86",
+  "outcome": "success",
+  "diff": "",
+  "evidence": [
+    "validation skipped: changes are outside the project's packages (ayid)"
+  ],
+  "validation_source": "default",
+  "metrics": {
+    "turns": 6,
+    "tool_calls": 6,
+    "events": 36,
+    "commands": 0,
+    "files_changed": 0,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "review_findings": 0,
+    "review_blocking": 0,
+    "duration_ms": 24907
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "project_name": "Mock Project",
+  "style_definition": {
+    "mood_keywords": [
+      "professional",
+      "clean",
+      "mock"
+    ],
+    "color_preference": "blue_and_white",
+    "theme_ref": "ref_theme_tech.css"
+  },
+  "required_layouts": [
+    {
+      "type": "cover_branding",
+      "title": "Mock Presentation",
+      "subtitle": "Generated without LLM"
+    },
+    {
+      "type": "agenda_list",
+      "title": "Agenda",
+      "items": [
+        "Topic 1",
+        "Topic 2",
+        "Topic 3"
+      ]
+    },
+    {
+      "type": "grid_4_feature",
+      "title": "Key Features",
+      "features": [
+        "Feature A",
+        "Feature B",
+        "Feature C",
+        "Feature D"
+      ]
+    }
+  ]
+}

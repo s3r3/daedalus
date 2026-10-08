@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>MLOps Pipeline — End-to-End Machine Learning Workflow</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/theme/white.min.css" id="theme">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .reveal {
+      height: 100%;
+      width: 100%;
+    }
+    .reveal .slides {
+      text-align: center;
+    }
+    .arch-slide {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+      height: 100%;
+      background: #f8fafc;
+    }
+    .diagram-container {
+      position: relative;
+      width: 1560px;
+      height: 700px;
+      margin: 0 auto;
+      font-family: 'Segoe UI', Roboto, system-ui, -apple-system, sans-serif;
+      transform-origin: center center;
+    }
+
+    /* Phase panel boxes */
+    .phase-box {
+      position: absolute;
+      box-sizing: border-box;
+      border-width: 2px;
+      border-style: dashed;
+      z-index: 1;
+    }
+    .phase-label {
+      position: absolute;
+      font-size: 14px;
+      font-weight: 700;
+      z-index: 2;
+    }
+
+    /* Common card style */
+    .card {
+      position: absolute;
+      box-sizing: border-box;
+      border-width: 1px;
+      border-style: solid;
+      border-radius: 8px;
+      background: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 500;
+      color: #333;
+      z-index: 3;
+      padding: 8px 6px;
+      line-height: 1.4;
+    }
+    .card-small {
+      position: absolute;
+      box-sizing: border-box;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 10px;
+      font-weight: 500;
+      z-index: 3;
+    }
+
+    /* Infrastructure bar */
+    .infra-bar {
+      position: absolute;
+      background: #424242;
+      z-index: 2;
+    }
+    .infra-chip {
+      position: absolute;
+      background: #616161;
+      border: 1px solid #757575;
+      border-radius: 6px;
+      color: #ffffff;
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 3;
+    }
+
+    /* SVG connectors overlay */
+    .connectors-svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    @media (max-width: 1600px) {
+      .diagram-container { transform: scale(0.85); }
+    }
+    @media (max-width: 1300px) {
+      .diagram-container { transform: scale(0.68); }
+    }
+    @media (max-width: 1000px) {
+      .diagram-container { transform: scale(0.52); }
+    }
+    .reveal .slides section {
+      height: 100%;
+      padding: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+      <section>
+        <div class="arch-slide">
+          <div class="diagram-container">
+
+            <!-- Title -->
+            <div style="position:absolute; left:360px; top:0; width:800px; text-align:center; font-size:18px; font-weight:700; color:#1a1a1a; z-index:2;">
+              <b>MLOps Pipeline — End-to-End Machine Learning Workflow</b>
+            </div>
+
+            <!-- ============ PHASE 1: Data Engineering ============ -->
+            <div class="phase-box" id="phase1-box" style="left:0; top:60px; width:360px; height:420px; background:#e8f5e9; border-color:#2e7d32;"></div>
+            <div class="phase-label" style="left:15px; top:70px; color:#2e7d32;"><b>1. Data Engineering</b></div>
+
+            <div class="card" id="data-sources-box" style="left:20px; top:105px; width:320px; height:80px; border-color:#2e7d32; border-radius:8px; flex-direction:column; padding-top:4px;">
+              <b style="font-size:12px; color:#2e7d32;">Data Sources</b>
+              <div style="display:flex; gap:15px; margin-top:6px;">
+                <div class="card-small" style="position:static; width:130px; height:30px; background:#c8e6c9; border:1px solid #2e7d32;">Data Lake / Warehouse</div>
+                <div class="card-small" style="position:static; width:130px; height:30px; background:#c8e6c9; border:1px solid #2e7d32;">Streaming / APIs</div>
+              </div>
+            </div>
+
+            <div class="card" id="data-validation" style="left:70px; top:205px; width:220px; height:50px; border-color:#2e7d32;">Data Validation<br>Great Expectations / TFX</div>
+            <div class="card" id="data-transform" style="left:70px; top:275px; width:220px; height:50px; border-color:#2e7d32;">Data Transformation<br>Spark / Dataflow / dbt</div>
+            <div class="card" id="feature-store" style="left:70px; top:350px; width:220px; height:55px; border-color:#2e7d32;">Feature Store<br>Feast / Vertex AI Feature Store</div>
+
+            <!-- ============ PHASE 2: Model Development ============ -->
+            <div class="phase-box" id="phase2-box" style="left:400px; top:60px; width:360px; height:420px; background:#e3f2fd; border-color:#1565c0;"></div>
+            <div class="phase-label" style="left:415px; top:70px; color:#1565c0;"><b>2. Model Development</b></div>
+
+            <div class="card" id="experiment-tracking" style="left:470px; top:105px; width:220px; height:50px; border-color:#1565c0;">Experiment Tracking<br>MLflow / W&B / Vertex AI</div>
+            <div class="card" id="model-training" style="left:470px; top:180px; width:220px; height:50px; border-color:#1565c0;">Model Training<br>PyTorch / TF / XGBoost</div>
+            <div class="card" id="hpo" style="left:470px; top:255px; width:220px; height:50px; border-color:#1565c0;">Hyperparameter Tuning<br>Optuna / Katib / Vizier</div>
+            <div class="card" id="model-registry" style="left:470px; top:335px; width:220px; height:55px; border-color:#1565c0;">Model Registry<br>MLflow / Vertex AI Registry</div>
+
+            <!-- ============ PHASE 3: CI/CD & Deployment ============ -->
+            <div class="phase-box" id="phase3-box" style="left:800px; top:60px; width:360px; height:420px; background:#fff3e0; border-color:#e65100;"></div>
+            <div class="phase-label" style="left:815px; top:70px; color:#e65100;"><b>3. CI/CD &amp; Deployment</b></div>
+
+            <div class="card" id="cicd-pipeline" style="left:870px; top:105px; width:220px; height:50px; border-color:#e65100;">CI/CD Pipeline<br>Cloud Build / GitHub Actions</div>
+            <div class="card" id="model-eval" style="left:870px; top:180px; width:220px; height:50px; border-color:#e65100;">Model Evaluation<br>TFMA / Evidently AI</div>
+            <div class="card" id="model-serving" style="left:870px; top:255px; width:220px; height:50px; border-color:#e65100;">Model Serving<br>Vertex AI / KServe / Seldon</div>
+            <div class="card" id="ab-testing" style="left:870px; top:335px; width:220px; height:55px; border-color:#e65100;">A/B Testing &amp; Canary<br>Istio / Feature Flags</div>
+
+            <!-- ============ PHASE 4: Monitoring & Governance ============ -->
+            <div class="phase-box" id="phase4-box" style="left:1200px; top:60px; width:320px; height:420px; background:#fce4ec; border-color:#c62828;"></div>
+            <div class="phase-label" style="left:1215px; top:70px; color:#c62828;"><b>4. Monitoring &amp; Governance</b></div>
+
+            <div class="card" id="model-monitoring" style="left:1250px; top:110px; width:220px; height:50px; border-color:#c62828;">Model Monitoring<br>Drift / Performance / Fairness</div>
+            <div class="card" id="data-drift" style="left:1250px; top:185px; width:220px; height:50px; border-color:#c62828;">Data Drift Detection<br>Evidently / NannyML</div>
+            <div class="card" id="alerting" style="left:1250px; top:260px; width:220px; height:50px; border-color:#c62828;">Alerting &amp; Notification<br>Cloud Monitoring / PagerDuty</div>
+            <div class="card" id="retraining" style="left:1250px; top:340px; width:220px; height:55px; border-color:#c62828;">Retraining Trigger<br>Automated / Manual</div>
+
+            <!-- ============ INFRASTRUCTURE BAR ============ -->
+            <div class="infra-bar" style="left:0; top:560px; width:1520px; height:80px;"></div>
+            <div style="position:absolute; left:15px; top:568px; font-size:12px; font-weight:700; color:#ffffff; z-index:4;"><b>Infrastructure</b></div>
+
+            <div class="infra-chip" style="left:20px; top:595px; width:130px; height:30px;">Kubernetes (GKE)</div>
+            <div class="infra-chip" style="left:170px; top:595px; width:140px; height:30px;">Vertex AI Pipelines</div>
+            <div class="infra-chip" style="left:330px; top:595px; width:120px; height:30px;">Cloud Storage</div>
+            <div class="infra-chip" style="left:470px; top:595px; width:130px; height:30px;">Artifact Registry</div>
+            <div class="infra-chip" style="left:620px; top:595px; width:110px; height:30px;">Cloud Build</div>
+            <div class="infra-chip" style="left:750px; top:595px; width:100px; height:30px;">BigQuery</div>
+            <div class="infra-chip" style="left:870px; top:595px; width:140px; height:30px;">Cloud Monitoring</div>
+            <div class="infra-chip" style="left:1030px; top:595px; width:120px; height:30px;">IAM / Security</div>
+            <div class="infra-chip" style="left:1170px; top:595px; width:130px; height:30px;">Terraform / IaC</div>
+
+            <!-- ============ SVG CONNECTORS ============ -->
+            <svg class="connectors-svg" xmlns="http://www.w3.org/2000/svg" width="1560" height="700">
+              <defs>
+                <marker id="arrow-green" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+                  <polygon points="0,0 6,2.5 0,5" fill="#2e7d32" />
+                </marker>
+                <marker id="arrow-blue" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+                  <polygon points="0,0 6,2.5 0,5" fill="#1565c0" />
+                </marker>
+                <marker id="arrow-orange" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+                  <polygon points="0,0 6,2.5 0,5" fill="#e65100" />
+                </marker>
+                <marker id="arrow-red" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+                  <polygon points="0,0 6,2.5 0,5" fill="#c62828" />
+                </marker>
+                <marker id="arrow-gray" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+                  <polygon points="0,0 6,2.5 0,5" fill="#666666" />
+                </marker>
+              </defs>
+
+              <!-- Phase 1 internal arrows -->
+              <!-- Data Sources bottom (180,185) → Data Validation top (180,205) -->
+              <line x1="180" y1="185" x2="180" y2="203" stroke="#2e7d32" stroke-width="1.5" marker-end="url(#arrow-green)" />
+              <!-- Data Validation bottom (180,255) → Data Transform top (180,275) -->
+              <line x1="180" y1="255" x2="180" y2="273" stroke="#2e7d32" stroke-width="1.5" marker-end="url(#arrow-green)" />
+              <!-- Data Transform bottom (180,325) → Feature Store top (180,350) -->
+              <line x1="180" y1="325" x2="180" y2="348" stroke="#2e7d32" stroke-width="1.5" marker-end="url(#arrow-green)" />
+
+              <!-- Phase 2 internal arrows -->
+              <!-- Experiment Tracking bottom (580,155) → Model Training top (580,180) -->
+              <line x1="580" y1="155" x2="580" y2="178" stroke="#1565c0" stroke-width="1.5" marker-end="url(#arrow-blue)" />
+              <!-- Model Training bottom (580,230) → HPO top (580,255) -->
+              <line x1="580" y1="230" x2="580" y2="253" stroke="#1565c0" stroke-width="1.5" marker-end="url(#arrow-blue)" />
+              <!-- HPO bottom (580,305) → Model Registry top (580,335) -->
+              <line x1="580" y1="305" x2="580" y2="333" stroke="#1565c0" stroke-width="1.5" marker-end="url(#arrow-blue)" />
+
+              <!-- Phase 3 internal arrows -->
+              <!-- CI/CD Pipeline bottom (980,155) → Model Eval top (980,180) -->
+              <line x1="980" y1="155" x2="980" y2="178" stroke="#e65100" stroke-width="1.5" marker-end="url(#arrow-orange)" />
+              <!-- Model Eval bottom (980,230) → Model Serving top (980,255) -->
+              <line x1="980" y1="230" x2="980" y2="253" stroke="#e65100" stroke-width="1.5" marker-end="url(#arrow-orange)" />
+              <!-- Model Serving bottom (980,305) → A/B Testing top (980,335) -->
+              <line x1="980" y1="305" x2="980" y2="333" stroke="#e65100" stroke-width="1.5" marker-end="url(#arrow-orange)" />
+
+              <!-- Phase 4 internal arrows -->
+              <!-- Model Monitoring bottom (1360,160) → Data Drift top (1360,185) -->
+              <line x1="1360" y1="160" x2="1360" y2="183" stroke="#c62828" stroke-width="1.5" marker-end="url(#arrow-red)" />
+              <!-- Data Drift bottom (1360,235) → Alerting top (1360,260) -->
+              <line x1="1360" y1="235" x2="1360" y2="258" stroke="#c62828" stroke-width="1.5" marker-end="url(#arrow-red)" />
+              <!-- Alerting bottom (1360,310) → Retraining top (1360,340) -->
+              <line x1="1360" y1="310" x2="1360" y2="338" stroke="#c62828" stroke-width="1.5" marker-end="url(#arrow-red)" />
+
+              <!-- Cross-phase: Feature Store right edge (290,377) → Experiment Tracking left edge (470,130) -->
+              <polyline points="290,377 380,377 380,130 468,130" fill="none" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow-gray)" />
+
+              <!-- Cross-phase: Model Registry right edge (690,362) → CI/CD Pipeline left edge (870,130) -->
+              <polyline points="690,362 780,362 780,130 868,130" fill="none" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow-gray)" />
+
+              <!-- Cross-phase: A/B Testing right edge (1090,362) → Model Monitoring left edge (1250,135) -->
+              <polyline points="1090,362 1180,362 1180,135 1248,135" fill="none" stroke="#666666" stroke-width="1.5" marker-end="url(#arrow-gray)" />
+
+              <!-- Feedback Loop: Retraining bottom (1360,395) → back to Data Engineering -->
+              <polyline points="1360,395 1360,520 180,520 180,478" fill="none" stroke="#c62828" stroke-width="1.5" marker-end="url(#arrow-red)" />
+              <text x="770" y="512" fill="#c62828" font-size="10" font-weight="700" text-anchor="middle">Feedback Loop / Retraining</text>
+            </svg>
+
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.js"></script>
+  <script>
+    Reveal.initialize({
+      hash: true,
+      center: false,
+      width: '100%',
+      height: '100%',
+      margin: 0,
+      minScale: 0.2,
+      maxScale: 2.0,
+      transition: 'fade',
+      controls: true,
+      progress: true,
+    });
+  </script>
+</body>
+</html>

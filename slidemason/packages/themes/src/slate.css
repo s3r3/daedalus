@@ -1,0 +1,31 @@
+[data-theme="slate"] {
+  --sm-bg: #0f172a;
+  --sm-surface: #1e293b;
+  --sm-text: #f8fafc;
+  --sm-muted: #94a3b8;
+  --sm-primary: #3b82f6;
+  --sm-secondary: #8b5cf6;
+  --sm-accent: #06b6d4;
+  --sm-border: #334155;
+  --sm-mono-font: 'JetBrains Mono', ui-monospace, monospace;
+  --sm-radius: 0.5rem;
+  --sm-shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+  --sm-shadow-md: 0 4px 6px rgba(0,0,0,0.3);
+  --sm-shadow-lg: 0 10px 15px rgba(0,0,0,0.3);
+  --sm-success: #22c55e;
+  --sm-warning: #f59e0b;
+  --sm-danger: #ef4444;
+  --sm-gradient-start: #3b82f6;
+  --sm-gradient-end: #8b5cf6;
+  --sm-gradient-mesh-1: #3b82f6;
+  --sm-gradient-mesh-2: #8b5cf6;
+  --sm-gradient-mesh-3: #06b6d4;
+  --sm-gradient-mesh-4: #0f172a;
+  --sm-chart-1: #3b82f6;
+  --sm-chart-2: #8b5cf6;
+  --sm-chart-3: #06b6d4;
+  --sm-chart-4: #f59e0b;
+  --sm-chart-5: #22c55e;
+  --sm-chart-6: #ef4444;
+  --sm-glass-bg: rgba(30,41,59,0.7);
+}

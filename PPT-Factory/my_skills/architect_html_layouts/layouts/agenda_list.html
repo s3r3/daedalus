@@ -1,0 +1,28 @@
+<div class="layout-agenda" style="
+    padding: 60px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    z-index: 10;
+    position: relative;
+">
+    <h2 data-pptx-placeholder="title"
+        style="font-family: var(--ppt-font-heading); font-size: var(--ppt-size-h2); color: var(--ppt-color-accent-1); margin-bottom: 40px;">
+        {{ title }}
+    </h2>
+    <ul style="list-style: none; padding: 0;">
+        {% for item in items %}
+        <li style="
+            font-family: var(--ppt-font-body); 
+            font-size: var(--ppt-size-body); 
+            color: var(--ppt-color-text-primary); 
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+        ">
+            <span style="color: var(--ppt-color-accent-2); margin-right: 15px;">➜</span>
+            <p data-pptx-placeholder="body" style="margin: 0;">{{ item }}</p>
+        </li>
+        {% endfor %}
+    </ul>
+</div>

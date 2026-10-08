@@ -1,0 +1,25 @@
+{
+  "task_id": "4963f165-845b-4d34-ac68-bfccbf3e8712",
+  "outcome": "success",
+  "diff": "--- a/ayid/index.html\n+++ b/ayid/index.html\n@@ +36 -0 @@\n+<!doctype html>\n+<html lang=\"id\">\n+<head>\n+<meta charset=\"utf-8\">\n+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\n+<title>Ayid — Landing</title>\n+<style>\n+*{margin:0;box-sizing:border-box}\n+body{font-family:system-ui,-apple-system,sans-serif;line-height:1.6;color:#1a1a2e;background:#f8f9fa}\n+section{max-width:720px;margin:0 auto;padding:64px 20px}\n+h1{font-size:2.4rem;margin-bottom:.5rem}\n+h2{font-size:1.5rem;margin-bottom:.75rem}\n+p{margin-bottom:1rem;color:#444}\n+.btn{display:inline-block;padding:.6rem 1.4rem;background:#2563eb;color:#fff;border-radius:8px;text-decoration:none;font-weight:600}\n+.btn:hover{background:#1d4ed8}\n+footer{text-align:center;padding:24px;color:#888;font-size:.85rem}\n+</style>\n+</head>\n+<body>\n+<section>\n+<h1>Ayid</h1>\n+<p>Selamat datang. Deskripsi singkat produkmu di sini.</p>\n+<a href=\"#fitur\" class=\"btn\">Mulai</a>\n+</section>\n+<section id=\"fitur\">\n+<h2>Fitur</h2>\n+<ul style=\"margin-left:1.5rem;margin-bottom:1rem\">\n+<li>Cepat</li>\n+<li>Sederhana</li>\n+<li>Mudah dipakai</li>\n+</ul>\n+<a href=\"#\" class=\"btn\">Hubungi</a>\n+</section>\n+<footer>&copy; Ayid</footer>\n+</body>\n+</html>\n",
+  "evidence": [
+    "validation skipped: changes are outside the project's packages (ayid, ayid/index.html)",
+    "created ayid/index.html (+36/-0)"
+  ],
+  "validation_source": "default",
+  "metrics": {
+    "turns": 3,
+    "tool_calls": 3,
+    "events": 18,
+    "commands": 0,
+    "files_changed": 1,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "review_findings": 0,
+    "review_blocking": 0,
+    "duration_ms": 43011
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "task_id": "d5cbf7e2-8731-42de-b9fc-02ba8dfd5f22",
+  "outcome": "success",
+  "diff": "",
+  "evidence": [
+    "validation skipped: changes are outside the project's packages (ayid, /home/xyconix11x/Ayid/ayid)"
+  ],
+  "validation_source": "default",
+  "metrics": {
+    "turns": 7,
+    "tool_calls": 7,
+    "events": 42,
+    "commands": 0,
+    "files_changed": 0,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "review_findings": 0,
+    "review_blocking": 0,
+    "duration_ms": 18651
+  }
+}

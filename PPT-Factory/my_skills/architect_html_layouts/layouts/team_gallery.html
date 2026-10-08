@@ -1,0 +1,38 @@
+<div class="layout-team" style="
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    padding: 80px;
+    height: 100%;
+    box-sizing: border-box;
+    z-index: 10;
+    position: relative;
+">
+    <h2 data-pptx-placeholder="title" style="
+        position: absolute; 
+        top: 40px; 
+        width: 100%; 
+        text-align: center;
+        font-family: var(--ppt-font-heading);
+        font-size: var(--ppt-size-h2);
+        margin: 0;
+    ">
+        {{ title }}
+    </h2>
+
+    {% for member in members %}
+    <div class="member-card" style="text-align: center;">
+        <div style="
+            width: 150px; 
+            height: 150px; 
+            border-radius: 50%; 
+            background: var(--ppt-color-accent-2); 
+            margin: 0 auto 20px;
+        "></div>
+        <p data-pptx-placeholder="body"
+            style="font-family: var(--ppt-font-body); font-size: var(--ppt-size-body); margin: 0;">
+            {{ member }}
+        </p>
+    </div>
+    {% endfor %}
+</div>

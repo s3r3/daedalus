@@ -1,0 +1,24 @@
+{
+  "name": "present-html",
+  "displayName": "Present HTML 🦞",
+  "description": "AI-powered HTML presentations. 50+ styles, zero dependencies, bilingual. 你的下个 ppt，何必是 PPT",
+  "version": "0.1.0",
+  "kind": "skill",
+  "author": "Callum",
+  "homepage": "https://github.com/textboy/mk-present",
+  "instructions": "./SKILL.md",
+  "assets": [
+    "STYLE_PRESETS.md",
+    "SCENARIO_TEMPLATES.md",
+    "viewport-base.css",
+    "html-template.md",
+    "animation-patterns.md",
+    "style-gallery.html",
+    "styles/"
+  ],
+  "triggers": [
+    "presentation", "slides", "slide deck", "PPT", "演示", "做个slide", "present-html",
+    "markdown to slides"
+  ],
+  "tags": ["presentation", "design", "html", "bilingual"]
+}

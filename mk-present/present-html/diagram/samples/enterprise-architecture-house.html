@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Enterprise Architecture House — Data Governance Framework</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/theme/white.min.css" id="theme">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .reveal {
+      height: 100%;
+      width: 100%;
+    }
+    .reveal .slides {
+      text-align: center;
+    }
+    .arch-slide {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+      height: 100%;
+      background: #f8fafc;
+    }
+    .diagram-container {
+      position: relative;
+      width: 1400px;
+      height: 850px;
+      margin: 0 auto;
+      font-family: 'Segoe UI', Roboto, system-ui, -apple-system, sans-serif;
+      transform-origin: center center;
+    }
+
+    /* Triangle roof */
+    .roof-triangle {
+      position: absolute;
+      left: 100px;
+      top: 80px;
+      width: 0;
+      height: 0;
+      border-left: 600px solid transparent;
+      border-right: 600px solid transparent;
+      border-bottom: 100px solid #1565c0;
+      z-index: 2;
+    }
+    .roof-triangle-border {
+      position: absolute;
+      left: 97px;
+      top: 78px;
+      width: 0;
+      height: 0;
+      border-left: 604px solid transparent;
+      border-right: 604px solid transparent;
+      border-bottom: 104px solid #0d47a1;
+      z-index: 1;
+    }
+
+    /* Floor panels */
+    .floor {
+      position: absolute;
+      box-sizing: border-box;
+      border-width: 2px;
+      border-style: solid;
+      z-index: 2;
+    }
+
+    /* Card styles */
+    .card {
+      position: absolute;
+      box-sizing: border-box;
+      border-radius: 8px;
+      background: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 500;
+      z-index: 3;
+      line-height: 1.3;
+    }
+
+    /* Pillar styles */
+    .pillar {
+      position: absolute;
+      box-sizing: border-box;
+      border-width: 2px;
+      border-style: solid;
+      z-index: 2;
+    }
+
+    /* Foundation chips */
+    .foundation-chip {
+      position: absolute;
+      background: #616161;
+      border: 1px solid #757575;
+      border-radius: 6px;
+      color: #ffffff;
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 3;
+    }
+
+    @media (max-width: 1450px) {
+      .diagram-container { transform: scale(0.82); }
+    }
+    @media (max-width: 1150px) {
+      .diagram-container { transform: scale(0.65); }
+    }
+    @media (max-width: 900px) {
+      .diagram-container { transform: scale(0.5); }
+    }
+    .reveal .slides section {
+      height: 100%;
+      padding: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+      <section>
+        <div class="arch-slide">
+          <div class="diagram-container">
+
+            <!-- Title -->
+            <div style="position:absolute; left:250px; top:0; width:900px; text-align:center; font-size:20px; font-weight:700; color:#1a1a1a; z-index:3;">
+              <b>Enterprise Architecture House — Data Governance Framework</b>
+            </div>
+
+            <!-- ============ ROOF TRIANGLE ============ -->
+            <div class="roof-triangle-border"></div>
+            <div class="roof-triangle"></div>
+            <div style="position:absolute; left:370px; top:108px; width:700px; text-align:center; font-size:14px; font-weight:700; color:#ffffff; z-index:3;">
+              <b>Data Governance Strategy &amp; Vision</b><br>
+              <span style="font-size:12px; font-weight:400;">Executive Sponsorship · Policy Framework · Compliance Mandates</span>
+            </div>
+
+            <!-- ============ FLOOR 1: Data Governance Council ============ -->
+            <div class="floor" style="left:200px; top:180px; width:1000px; height:90px; background:#e3f2fd; border-color:#1565c0;"></div>
+            <div style="position:absolute; left:215px; top:186px; font-size:14px; font-weight:700; color:#0d47a1; z-index:3;"><b>Data Governance Council</b></div>
+
+            <div class="card" style="left:310px; top:220px; width:150px; height:30px; border:1px solid #1565c0;">Steering Committee</div>
+            <div class="card" style="left:480px; top:220px; width:130px; height:30px; border:1px solid #1565c0;">Data Owners</div>
+            <div class="card" style="left:630px; top:220px; width:130px; height:30px; border:1px solid #1565c0;">Data Stewards</div>
+            <div class="card" style="left:780px; top:220px; width:140px; height:30px; border:1px solid #1565c0;">Data Custodians</div>
+            <div class="card" style="left:940px; top:220px; width:150px; height:30px; border:1px solid #1565c0;">Compliance Officers</div>
+
+            <!-- ============ FLOOR 2: Core Governance Pillars ============ -->
+            <div class="floor" style="left:200px; top:270px; width:1000px; height:160px; background:#e8f5e9; border-color:#2e7d32;"></div>
+            <div style="position:absolute; left:215px; top:276px; font-size:14px; font-weight:700; color:#2e7d32; z-index:3;"><b>Core Governance Pillars</b></div>
+
+            <div class="card" style="left:220px; top:310px; width:170px; height:100px; border:1px solid #2e7d32; flex-direction:column; align-items:flex-start; justify-content:flex-start; padding-left:14px; padding-top:6px; font-size:10px; line-height:1.7;">
+              <b style="font-size:11px;">Data Quality</b>Profiling<br>Cleansing<br>Validation<br>Monitoring
+            </div>
+            <div class="card" style="left:410px; top:310px; width:170px; height:100px; border:1px solid #2e7d32; flex-direction:column; align-items:flex-start; justify-content:flex-start; padding-left:14px; padding-top:6px; font-size:10px; line-height:1.7;">
+              <b style="font-size:11px;">Data Security</b>Access Control<br>Encryption<br>Masking<br>Audit Logging
+            </div>
+            <div class="card" style="left:600px; top:310px; width:170px; height:100px; border:1px solid #2e7d32; flex-direction:column; align-items:flex-start; justify-content:flex-start; padding-left:14px; padding-top:6px; font-size:10px; line-height:1.7;">
+              <b style="font-size:11px;">Data Privacy</b>GDPR / CCPA<br>Consent Mgmt<br>Data Retention<br>Right to Erasure
+            </div>
+            <div class="card" style="left:790px; top:310px; width:170px; height:100px; border:1px solid #2e7d32; flex-direction:column; align-items:flex-start; justify-content:flex-start; padding-left:14px; padding-top:6px; font-size:10px; line-height:1.7;">
+              <b style="font-size:11px;">Data Lineage</b>Source Tracking<br>Transformation Log<br>Impact Analysis<br>Dependency Map
+            </div>
+            <div class="card" style="left:980px; top:310px; width:190px; height:100px; border:1px solid #2e7d32; flex-direction:column; align-items:flex-start; justify-content:flex-start; padding-left:14px; padding-top:6px; font-size:10px; line-height:1.7;">
+              <b style="font-size:11px;">Metadata Mgmt</b>Business Glossary<br>Data Dictionary<br>Classification<br>Tagging
+            </div>
+
+            <!-- ============ FLOOR 3: Technology & Tools ============ -->
+            <div class="floor" style="left:200px; top:430px; width:1000px; height:100px; background:#fff3e0; border-color:#e65100;"></div>
+            <div style="position:absolute; left:215px; top:436px; font-size:14px; font-weight:700; color:#e65100; z-index:3;"><b>Technology &amp; Tools</b></div>
+
+            <div class="card" style="left:220px; top:475px; width:140px; height:40px; border:1px solid #e65100; font-size:10px; flex-direction:column; line-height:1.4;">
+              <b>Data Catalog</b>Collibra / Alation
+            </div>
+            <div class="card" style="left:380px; top:475px; width:140px; height:40px; border:1px solid #e65100; font-size:10px; flex-direction:column; line-height:1.4;">
+              <b>Data Quality</b>Great Expectations
+            </div>
+            <div class="card" style="left:540px; top:475px; width:150px; height:40px; border:1px solid #e65100; font-size:10px; flex-direction:column; line-height:1.4;">
+              <b>Data Lineage</b>Apache Atlas / Marquez
+            </div>
+            <div class="card" style="left:710px; top:475px; width:140px; height:40px; border:1px solid #e65100; font-size:10px; flex-direction:column; line-height:1.4;">
+              <b>Access Control</b>Apache Ranger
+            </div>
+            <div class="card" style="left:870px; top:475px; width:140px; height:40px; border:1px solid #e65100; font-size:10px; flex-direction:column; line-height:1.4;">
+              <b>Monitoring</b>Datadog / Grafana
+            </div>
+            <div class="card" style="left:1030px; top:475px; width:140px; height:40px; border:1px solid #e65100; font-size:10px; flex-direction:column; line-height:1.4;">
+              <b>Audit &amp; Compliance</b>Splunk / ELK
+            </div>
+
+            <!-- ============ FLOOR 4: Data Domains ============ -->
+            <div class="floor" style="left:200px; top:530px; width:1000px; height:110px; background:#fce4ec; border-color:#c62828;"></div>
+            <div style="position:absolute; left:215px; top:536px; font-size:14px; font-weight:700; color:#c62828; z-index:3;"><b>Data Domains</b></div>
+
+            <div class="card" style="left:220px; top:575px; width:120px; height:50px; border:1px solid #c62828; font-size:11px; font-weight:700;">Customer<br>Data</div>
+            <div class="card" style="left:360px; top:575px; width:120px; height:50px; border:1px solid #c62828; font-size:11px; font-weight:700;">Product<br>Data</div>
+            <div class="card" style="left:500px; top:575px; width:120px; height:50px; border:1px solid #c62828; font-size:11px; font-weight:700;">Financial<br>Data</div>
+            <div class="card" style="left:640px; top:575px; width:120px; height:50px; border:1px solid #c62828; font-size:11px; font-weight:700;">Employee<br>Data</div>
+            <div class="card" style="left:780px; top:575px; width:120px; height:50px; border:1px solid #c62828; font-size:11px; font-weight:700;">Supplier<br>Data</div>
+            <div class="card" style="left:920px; top:575px; width:120px; height:50px; border:1px solid #c62828; font-size:11px; font-weight:700;">Reference<br>Data</div>
+            <div class="card" style="left:1060px; top:575px; width:110px; height:50px; border:1px solid #c62828; font-size:11px; font-weight:700;">Audit<br>Data</div>
+
+            <!-- ============ FOUNDATION ============ -->
+            <div class="floor" style="left:200px; top:640px; width:1000px; height:80px; background:#424242; border-color:#212121;"></div>
+            <div style="position:absolute; left:450px; top:648px; width:500px; text-align:center; font-size:13px; font-weight:700; color:#ffffff; z-index:3;"><b>Foundation — Infrastructure &amp; Platforms</b></div>
+
+            <div class="foundation-chip" style="left:260px; top:680px; width:100px; height:28px;">Data Lake</div>
+            <div class="foundation-chip" style="left:380px; top:680px; width:110px; height:28px;">Data Warehouse</div>
+            <div class="foundation-chip" style="left:510px; top:680px; width:90px; height:28px;">ETL / ELT</div>
+            <div class="foundation-chip" style="left:620px; top:680px; width:110px; height:28px;">CDC Pipelines</div>
+            <div class="foundation-chip" style="left:750px; top:680px; width:100px; height:28px;">Kubernetes</div>
+            <div class="foundation-chip" style="left:870px; top:680px; width:100px; height:28px;">Cloud Storage</div>
+            <div class="foundation-chip" style="left:990px; top:680px; width:100px; height:28px;">IAM / RBAC</div>
+
+            <!-- ============ LEFT PILLAR: Standards (flexbox vertical centering) ============ -->
+            <div class="pillar" style="left:100px; top:180px; width:100px; height:540px; background:#f3e5f5; border-color:#7b1fa2; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+              <div style="font-size:9px; color:#6a1b9a; text-align:center; line-height:1.8; z-index:3;">
+                ISO 8000<br>DAMA-DMBOK<br>DCAM<br>GDPR<br>CCPA<br>SOX<br>HIPAA
+              </div>
+              <div style="font-size:14px; font-weight:700; color:#6a1b9a; text-align:center; line-height:1.4; margin-top:30px; z-index:3;">
+                <b>S<br>t<br>a<br>n<br>d<br>a<br>r<br>d<br>s</b>
+              </div>
+            </div>
+
+            <!-- ============ RIGHT PILLAR: Metrics (flexbox vertical centering) ============ -->
+            <div class="pillar" style="left:1200px; top:180px; width:100px; height:540px; background:#f3e5f5; border-color:#7b1fa2; display:flex; flex-direction:column; align-items:center; justify-content:center;">
+              <div style="font-size:9px; color:#6a1b9a; text-align:center; line-height:1.8; z-index:3;">
+                Data Quality<br>Score<br>Policy<br>Compliance<br>Coverage<br>SLA<br>Adherence
+              </div>
+              <div style="font-size:14px; font-weight:700; color:#6a1b9a; text-align:center; line-height:1.4; margin-top:30px; z-index:3;">
+                <b>M<br>e<br>t<br>r<br>i<br>c<br>s</b>
+              </div>
+            </div>
+
+            <!-- ============ CONTINUOUS IMPROVEMENT ============ -->
+            <div class="floor" style="left:100px; top:740px; width:1200px; height:50px; background:#e0e0e0; border-color:#9e9e9e;"></div>
+            <div style="position:absolute; left:350px; top:750px; width:700px; text-align:center; font-size:13px; font-weight:700; color:#424242; z-index:3;">
+              <b>Continuous Improvement Cycle</b> — Assess → Plan → Implement → Monitor → Refine
+            </div>
+
+            <!-- ============ SVG CONNECTORS ============ -->
+            <svg class="connectors-svg" xmlns="http://www.w3.org/2000/svg" width="1400" height="850">
+              <defs>
+                <marker id="arrow-gray" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+                  <polygon points="0,0 6,2.5 0,5" fill="#9e9e9e" />
+                </marker>
+              </defs>
+
+              <!-- Feedback Loop curved arrow along right side -->
+              <path d="M 1300,765 C 1370,765 1370,220 1310,210" fill="none" stroke="#9e9e9e" stroke-width="2" marker-end="url(#arrow-gray)" />
+              <text x="1365" y="490" fill="#757575" font-size="9" font-weight="700" transform="rotate(90,1365,490)">
+                <b>Feedback Loop</b>
+              </text>
+            </svg>
+
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.js"></script>
+  <script>
+    Reveal.initialize({
+      hash: true,
+      center: false,
+      width: '100%',
+      height: '100%',
+      margin: 0,
+      minScale: 0.2,
+      maxScale: 2.0,
+      transition: 'fade',
+      controls: true,
+      progress: true,
+    });
+  </script>
+</body>
+</html>

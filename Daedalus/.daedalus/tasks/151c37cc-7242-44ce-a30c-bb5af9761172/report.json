@@ -1,0 +1,31 @@
+{
+  "task_id": "151c37cc-7242-44ce-a30c-bb5af9761172",
+  "outcome": "partial",
+  "diff": "",
+  "evidence": [
+    "input token budget reached: 108196 input tokens spent on this task (budget 100000); stopped before burning more"
+  ],
+  "metrics": {
+    "turns": 14,
+    "tool_calls": 14,
+    "events": 72,
+    "commands": 0,
+    "files_changed": 0,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "child_tasks": 0,
+    "child_tasks_done": 0,
+    "child_tasks_failed": 0,
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "model_requests": 11,
+    "tokens_input": 108196,
+    "tokens_output": 1129,
+    "tokens_total": 109325,
+    "token_requests_reported": 11,
+    "review_findings": 0,
+    "review_blocking": 0,
+    "duration_ms": 76947
+  }
+}

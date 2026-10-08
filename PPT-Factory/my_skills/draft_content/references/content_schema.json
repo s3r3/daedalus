@@ -1,0 +1,229 @@
+{
+    "type": "object",
+    "definitions": {
+        "content_item": {
+            "type": "object",
+            "Description": "A discrete unit of information on the slide.",
+            "properties": {
+                "item_type": {
+                    "type": "string",
+                    "enum": [
+                        "text",
+                        "statistic",
+                        "visual",
+                        "chart",
+                        "concept"
+                    ],
+                    "description": "The semantic nature of this item. 'visual' is for images/photos; 'chart' is for data visualizations (bar, pie, etc)."
+                },
+                "headline": {
+                    "type": "string",
+                    "description": "Primary text or title of this item."
+                },
+                "content_role": {
+                    "type": "string",
+                    "enum": [
+                        "primary",
+                        "supporting",
+                        "branding",
+                        "evidence",
+                        "atmosphere",
+                        "navigation"
+                    ],
+                    "description": "The layout role this item should play on the slide. Use this to align images, text, charts, and stats under one shared placement logic."
+                },
+                "body": {
+                    "type": "string",
+                    "description": "The visible body text."
+                },
+                "image_description": {
+                    "type": "string",
+                    "description": "For 'visual' items, describe how the uploaded local image should be used on the slide. For 'chart' items, describe the intended visual style. NOT displayed."
+                },
+                "image_file_name": {
+                    "type": "string",
+                    "description": "For 'visual' items, the exact uploaded local image file name from the project image library, such as 'factory-floor-team.jpg'."
+                },
+                "image_asset_path": {
+                    "type": "string",
+                    "description": "Optional local project image path for a visual item, typically 'input/images/<file-name>'."
+                },
+                "image_width": {
+                    "type": "number",
+                    "description": "Width of the uploaded local image in pixels."
+                },
+                "image_height": {
+                    "type": "number",
+                    "description": "Height of the uploaded local image in pixels."
+                },
+                "image_aspect_ratio": {
+                    "type": "number",
+                    "description": "Width divided by height for the uploaded local image."
+                },
+                "image_orientation": {
+                    "type": "string",
+                    "enum": [
+                        "landscape",
+                        "portrait",
+                        "square",
+                        "unknown"
+                    ],
+                    "description": "Orientation hint derived from the uploaded image dimensions."
+                },
+                "data_payload": {
+                    "type": "object",
+                    "description": "Structured data. For 'statistic', it's a single key metric (Big Number). For 'chart', it's the primary data point or summary. Use 'body' for narrative metrics.",
+                    "properties": {
+                        "value": {
+                            "type": "string"
+                        },
+                        "unit": {
+                            "type": "string"
+                        },
+                        "trend": {
+                            "type": "string",
+                            "enum": [
+                                "up",
+                                "down",
+                                "neutral",
+                                "none"
+                            ]
+                        },
+                        "context": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "visual_cues": {
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "enum": [
+                                "positive",
+                                "negative",
+                                "neutral",
+                                "critical",
+                                "new"
+                            ]
+                        },
+                        "badge": {
+                            "type": "string"
+                        },
+                        "style_hint": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "sub_items": {
+                    "type": "array",
+                    "description": "Nested child items for multi-layer hierarchy (e.g. sub-points, breakdown).",
+                    "items": {
+                        "$ref": "#/definitions/content_item"
+                    }
+                }
+            },
+            "required": [
+                "item_type",
+                "headline"
+            ]
+        }
+    },
+    "properties": {
+        "project_title": {
+            "type": "string",
+            "description": "The overall title of the presentation."
+        },
+        "presentation_goal": {
+            "type": "string",
+            "description": "The inferred goal (e.g., Pitch, Report, Education)."
+        },
+        "target_audience": {
+            "type": "string",
+            "description": "The inferred audience."
+        },
+        "slides": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string"
+                    },
+                    "semantic_type": {
+                        "type": "string",
+                        "enum": [
+                            "Cover",
+                            "Agenda",
+                            "Problem",
+                            "Solution",
+                            "Benefit",
+                            "Data",
+                            "Timeline",
+                            "Team",
+                            "Conclusion",
+                            "Generic"
+                        ]
+                    },
+                    "title": {
+                        "type": "string"
+                    },
+                    "subtitle": {
+                        "type": "string"
+                    },
+                    "core_message": {
+                        "type": "string"
+                    },
+                    "suggested_layout": {
+                        "type": "string",
+                        "enum": [
+                            "TextHeavy",
+                            "BulletList",
+                            "Grid",
+                            "Timeline",
+                            "ProcessSteps",
+                            "ComparisonTable",
+                            "TeamGrid",
+                            "DataChart",
+                            "BigNumber",
+                            "SplitConstraint",
+                            "QuoteHero"
+                        ]
+                    },
+                    "conceptual_metaphor": {
+                        "type": [
+                            "string",
+                            "null"
+                        ],
+                        "enum": [
+                            "TrafficLight",
+                            "Funnel",
+                            "Pyramid",
+                            "Iceberg",
+                            "Puzzle",
+                            "TargetBoard",
+                            "Bridge",
+                            "null"
+                        ]
+                    },
+                    "content_items": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/content_item"
+                        }
+                    }
+                },
+                "required": [
+                    "id",
+                    "semantic_type",
+                    "title",
+                    "content_items"
+                ]
+            }
+        }
+    },
+    "required": [
+        "project_title",
+        "slides"
+    ]
+}

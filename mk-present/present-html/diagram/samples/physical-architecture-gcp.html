@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Physical Architecture · Google Cloud GKE Multi-Tenant</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/theme/white.min.css" id="theme">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .reveal {
+      height: 100%;
+      width: 100%;
+    }
+    .reveal .slides {
+      text-align: center;
+    }
+    .arch-slide {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+      height: 100%;
+      background: #f8fafc;
+    }
+    .diagram-container {
+      position: relative;
+      width: 870px;
+      height: 780px;
+      margin: 0 auto;
+      font-family: 'Segoe UI', Roboto, system-ui, -apple-system, sans-serif;
+      transform-origin: center center;
+    }
+
+    /* Cluster project dashed box */
+    .cluster-project-box {
+      position: absolute;
+      left: 0;
+      top: 170px;
+      width: 830px;
+      height: 570px;
+      background: #e3f2fd;
+      border: 2px dashed #1565c0;
+      box-sizing: border-box;
+      z-index: 1;
+    }
+    .cluster-project-label {
+      position: absolute;
+      left: 10px;
+      top: 180px;
+      font-size: 14px;
+      font-weight: 700;
+      color: #0d47a1;
+      z-index: 2;
+    }
+
+    /* GKE Cluster icon + label */
+    .gke-cluster-icon {
+      position: absolute;
+      left: 740px;
+      top: 197px;
+      width: 60px;
+      height: 60px;
+      z-index: 3;
+    }
+    .gke-cluster-label {
+      position: absolute;
+      left: 720px;
+      top: 262px;
+      width: 100px;
+      text-align: center;
+      font-size: 12px;
+      font-weight: 700;
+      color: #1565c0;
+      z-index: 3;
+    }
+
+    /* Region boxes */
+    .region-box {
+      position: absolute;
+      background: #ffffff;
+      border: 1px solid #1565c0;
+      box-sizing: border-box;
+      z-index: 2;
+    }
+    .region-label {
+      position: absolute;
+      top: 8px;
+      left: 10px;
+      font-size: 12px;
+      font-weight: 700;
+      color: #0d47a1;
+    }
+
+    /* GKE cluster inner boxes */
+    .gke-inner-box {
+      position: absolute;
+      background: #ffffff;
+      border: 1px solid #1565c0;
+      box-sizing: border-box;
+      z-index: 3;
+    }
+    .gke-inner-label {
+      position: absolute;
+      width: 100%;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+      color: #1565c0;
+      top: 5px;
+    }
+
+    /* Namespace boxes */
+    .namespace-box {
+      position: absolute;
+      background: #e3f2fd;
+      border: 1px solid #1565c0;
+      box-sizing: border-box;
+      font-size: 10px;
+      font-weight: 700;
+      color: #1565c0;
+      z-index: 4;
+      padding: 6px 8px;
+    }
+
+    /* K8s engine icon cards */
+    .k8s-card {
+      position: absolute;
+      background: #ffffff;
+      border: 1px solid #dddddd;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+      display: flex;
+      align-items: center;
+      padding-left: 14px;
+      box-sizing: border-box;
+      z-index: 5;
+    }
+    .k8s-icon {
+      width: 24px;
+      height: 24px;
+      margin-right: 10px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .k8s-label {
+      font-size: 10px;
+      font-weight: 600;
+      color: #333;
+      line-height: 1.3;
+    }
+
+    /* Load balancer card */
+    .lb-card {
+      position: absolute;
+      background: #ffffff;
+      border: 1px solid #dddddd;
+      border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+      display: flex;
+      align-items: center;
+      padding-left: 12px;
+      box-sizing: border-box;
+      z-index: 5;
+    }
+    .lb-icon {
+      width: 28px;
+      height: 28px;
+      margin-right: 8px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* User icon */
+    .user-icon {
+      position: absolute;
+      z-index: 6;
+    }
+
+    /* SVG connectors overlay */
+    .connectors-svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    @media (max-width: 1100px) {
+      .diagram-container { transform: scale(0.78); }
+    }
+    @media (max-width: 800px) {
+      .diagram-container { transform: scale(0.58); }
+    }
+    .reveal .slides section {
+      height: 100%;
+      padding: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+      <section>
+        <div class="arch-slide">
+          <div class="diagram-container">
+
+            <!-- Title -->
+            <div style="position:absolute; left:15px; top:0; width:800px; text-align:center; font-size:20px; font-weight:700; color:#1a1a1a; z-index:2;">
+              Physical Architecture — Google Cloud GKE Multi-Tenant
+            </div>
+
+            <!-- Cluster project box -->
+            <div class="cluster-project-box"></div>
+            <div class="cluster-project-label">Cluster project</div>
+
+            <!-- GKE Cluster icon (SVG) -->
+            <div class="gke-cluster-icon">
+              <svg width="60" height="60" viewBox="0 0 24 24">
+                <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2zm0 18c-4.4 0-8-3.6-8-8s3.6-8 8-8 8 3.6 8 8-3.6 8-8 8z" fill="#4285F4"/>
+                <path d="M12 4c-2.2 0-4 1.8-4 4s1.8 4 4 4 4-1.8 4-4-1.8-4-4-4zm0 6c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2zm6 6c0-2.2-1.8-4-4-4h-4c-2.2 0-4 1.8-4 4v2h12v-2z" fill="#4285F4"/>
+              </svg>
+            </div>
+            <div class="gke-cluster-label">GKE Cluster</div>
+
+            <!-- Region 1 -->
+            <div class="region-box" style="left:90px; top:319px; width:290px; height:391px;">
+              <div class="region-label">Region 1</div>
+            </div>
+
+            <!-- Region 2 -->
+            <div class="region-box" style="left:430px; top:319px; width:290px; height:391px;">
+              <div class="region-label">Region 2</div>
+            </div>
+
+            <!-- Region 1 - GKE cluster inner box -->
+            <div class="gke-inner-box" style="left:110px; top:358px; width:250px; height:332px;">
+              <div class="gke-inner-label"><b>GKE cluster</b></div>
+            </div>
+
+            <!-- Region 2 - GKE cluster inner box -->
+            <div class="gke-inner-box" style="left:450px; top:358px; width:250px; height:332px;">
+              <div class="gke-inner-label"><b>GKE cluster</b></div>
+            </div>
+
+            <!-- Region 1 - Namespace 1 -->
+            <div class="namespace-box" id="ns1-r1" style="left:130px; top:394px; width:210px; height:126px;">
+              Namespace 1
+            </div>
+            <!-- Region 1 - K8s card in Namespace 1 -->
+            <div class="k8s-card" id="k8s-r1-ns1" style="left:145px; top:430px; width:180px; height:60px;">
+              <div class="k8s-icon" style="height:100%; display:flex; align-items:center;">
+                <svg width="24" height="24" viewBox="0 0 87.29 100.09">
+                  <path d="M43.75 0L0 25.47v2.59 46.92l43.75 25.12 43.54-25.12V25.47zm2.44 11.85l32.1 18.78v38.14L43.74 89.71 9 69.76V30.64l32.19-18.74v14.15L24.5 36.15l19.17 11.5 18.89-11.55-16.37-10.02z" fill="#aecbfa"/>
+                  <path d="M22.03 40.5l.16 19.14-13.25 7.33v2.74l2.64 1.51 12.65-7 16.96 10.6V51.99z" fill="#669df6"/>
+                  <path d="M65.34 40.26L46.19 51.98v22.85l16.9-10.58 12.54 6.97 2.61-1.5v-2.77l-12.78-7.11z" fill="#4285f4"/>
+                </svg>
+              </div>
+              <div class="k8s-label">Name<br>Kubernetes Engine</div>
+            </div>
+
+            <!-- Region 1 - Namespace 2 -->
+            <div class="namespace-box" id="ns2-r1" style="left:130px; top:550px; width:210px; height:126px;">
+              Namespace 2
+            </div>
+            <!-- Region 1 - K8s card in Namespace 2 -->
+            <div class="k8s-card" id="k8s-r1-ns2" style="left:145px; top:586px; width:180px; height:60px;">
+              <div class="k8s-icon" style="height:100%; display:flex; align-items:center;">
+                <svg width="24" height="24" viewBox="0 0 87.29 100.09">
+                  <path d="M43.75 0L0 25.47v2.59 46.92l43.75 25.12 43.54-25.12V25.47zm2.44 11.85l32.1 18.78v38.14L43.74 89.71 9 69.76V30.64l32.19-18.74v14.15L24.5 36.15l19.17 11.5 18.89-11.55-16.37-10.02z" fill="#aecbfa"/>
+                  <path d="M22.03 40.5l.16 19.14-13.25 7.33v2.74l2.64 1.51 12.65-7 16.96 10.6V51.99z" fill="#669df6"/>
+                  <path d="M65.34 40.26L46.19 51.98v22.85l16.9-10.58 12.54 6.97 2.61-1.5v-2.77l-12.78-7.11z" fill="#4285f4"/>
+                </svg>
+              </div>
+              <div class="k8s-label">Name<br>Kubernetes Engine</div>
+            </div>
+
+            <!-- Region 2 - Namespace 1 -->
+            <div class="namespace-box" id="ns1-r2" style="left:470px; top:394px; width:210px; height:126px;">
+              Namespace 1
+            </div>
+            <!-- Region 2 - K8s card in Namespace 1 -->
+            <div class="k8s-card" id="k8s-r2-ns1" style="left:485px; top:430px; width:180px; height:60px;">
+              <div class="k8s-icon" style="height:100%; display:flex; align-items:center;">
+                <svg width="24" height="24" viewBox="0 0 87.29 100.09">
+                  <path d="M43.75 0L0 25.47v2.59 46.92l43.75 25.12 43.54-25.12V25.47zm2.44 11.85l32.1 18.78v38.14L43.74 89.71 9 69.76V30.64l32.19-18.74v14.15L24.5 36.15l19.17 11.5 18.89-11.55-16.37-10.02z" fill="#aecbfa"/>
+                  <path d="M22.03 40.5l.16 19.14-13.25 7.33v2.74l2.64 1.51 12.65-7 16.96 10.6V51.99z" fill="#669df6"/>
+                  <path d="M65.34 40.26L46.19 51.98v22.85l16.9-10.58 12.54 6.97 2.61-1.5v-2.77l-12.78-7.11z" fill="#4285f4"/>
+                </svg>
+              </div>
+              <div class="k8s-label">Name<br>Kubernetes Engine</div>
+            </div>
+
+            <!-- Region 2 - Namespace 2 -->
+            <div class="namespace-box" id="ns2-r2" style="left:470px; top:550px; width:210px; height:126px;">
+              Namespace 2
+            </div>
+            <!-- Region 2 - K8s card in Namespace 2 -->
+            <div class="k8s-card" id="k8s-r2-ns2" style="left:485px; top:586px; width:180px; height:60px;">
+              <div class="k8s-icon" style="height:100%; display:flex; align-items:center;">
+                <svg width="24" height="24" viewBox="0 0 87.29 100.09">
+                  <path d="M43.75 0L0 25.47v2.59 46.92l43.75 25.12 43.54-25.12V25.47zm2.44 11.85l32.1 18.78v38.14L43.74 89.71 9 69.76V30.64l32.19-18.74v14.15L24.5 36.15l19.17 11.5 18.89-11.55-16.37-10.02z" fill="#aecbfa"/>
+                  <path d="M22.03 40.5l.16 19.14-13.25 7.33v2.74l2.64 1.51 12.65-7 16.96 10.6V51.99z" fill="#669df6"/>
+                  <path d="M65.34 40.26L46.19 51.98v22.85l16.9-10.58 12.54 6.97 2.61-1.5v-2.77l-12.78-7.11z" fill="#4285f4"/>
+                </svg>
+              </div>
+              <div class="k8s-label">Name<br>Kubernetes Engine</div>
+            </div>
+
+            <!-- Load Balancer card -->
+            <div class="lb-card" id="lb-card" style="left:304px; top:210px; width:200px; height:60px;">
+              <div class="lb-icon" style="height:100%; display:flex; align-items:center;">
+                <svg width="28" height="28" viewBox="0 0 20 20">
+                  <path d="M16 10h2v4h-2zm-7 0h2v4H9zm-7 0h2v4H2z" fill="#669df6"/>
+                  <path d="M9 5h2v4H9z" fill="#4285f4"/>
+                  <path d="M2 9h16v2H2z" fill="#669df6"/>
+                  <path d="M4 0h12v5H4z" fill="#aecbfa"/>
+                  <path d="M10 0h6v5h-6z" fill="#669df6"/>
+                  <path d="M14 14h6v6h-6zM0 14h6v6H0z" fill="#aecbfa"/>
+                  <path d="M3 14h3v6H3z" fill="#669df6"/>
+                  <path d="M7 14h6v6H7z" fill="#aecbfa"/>
+                  <path d="M10 14h3v6h-3zm7 0h3v6h-3z" fill="#669df6"/>
+                </svg>
+              </div>
+              <div class="k8s-label">Name<br>Cloud Load Balancing</div>
+            </div>
+
+            <!-- User icon -->
+            <div class="user-icon" style="left:379px; top:70px; width:50px; height:45px;">
+              <svg width="50" height="45" viewBox="0 0 24 24" fill="#282828">
+                <circle cx="12" cy="8" r="4" fill="#282828"/>
+                <path d="M12 14c-4.42 0-8 1.79-8 4v2h16v-2c0-2.21-3.58-4-8-4z" fill="#282828"/>
+              </svg>
+            </div>
+
+            <!-- SVG Connectors -->
+            <svg class="connectors-svg" xmlns="http://www.w3.org/2000/svg" width="870" height="780">
+              <defs>
+                <marker id="arrow-green" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+                  <polygon points="0,0 6,2.5 0,5" fill="#2D7600" />
+                </marker>
+                <marker id="arrow-green-reverse" markerWidth="6" markerHeight="5" refX="1" refY="2.5" orient="auto">
+                  <polygon points="6,0 0,2.5 6,5" fill="#2D7600" />
+                </marker>
+                <marker id="arrow-blue" markerWidth="6" markerHeight="5" refX="5" refY="2.5" orient="auto">
+                  <polygon points="0,0 6,2.5 0,5" fill="#1565c0" />
+                </marker>
+                <marker id="arrow-blue-reverse" markerWidth="6" markerHeight="5" refX="1" refY="2.5" orient="auto">
+                  <polygon points="6,0 0,2.5 6,5" fill="#1565c0" />
+                </marker>
+              </defs>
+
+              <!-- Arrow from User to LB -->
+              <line x1="404" y1="115" x2="404" y2="202" stroke="#666666" stroke-width="1.5" />
+
+              <!-- Arrow from LB to K8s Region1 (to RIGHT side of k8s-r1-ns1) -->
+              <line x1="354" y1="270" x2="325" y2="460" stroke="#2D7600" stroke-width="1.5" marker-end="url(#arrow-green)" />
+
+              <!-- Arrow from LB to K8s Region2 (to LEFT side of k8s-r2-ns1) -->
+              <line x1="454" y1="270" x2="485" y2="460" stroke="#2D7600" stroke-width="1.5" marker-end="url(#arrow-green)" />
+
+              <!-- Bidirectional arrow between Namespace1 and Namespace2 in Region1 -->
+              <line x1="235" y1="520" x2="235" y2="546" stroke="#1565c0" stroke-width="1.5" marker-start="url(#arrow-blue-reverse)" marker-end="url(#arrow-blue)" />
+
+              <!-- Bidirectional arrow between Namespace1 and Namespace2 in Region2 -->
+              <line x1="575" y1="520" x2="575" y2="546" stroke="#1565c0" stroke-width="1.5" marker-start="url(#arrow-blue-reverse)" marker-end="url(#arrow-blue)" />
+            </svg>
+
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.js"></script>
+  <script>
+    Reveal.initialize({
+      hash: true,
+      center: false,
+      width: '100%',
+      height: '100%',
+      margin: 0,
+      minScale: 0.2,
+      maxScale: 2.0,
+      transition: 'fade',
+      controls: true,
+      progress: true,
+    });
+  </script>
+</body>
+</html>

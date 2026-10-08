@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>System Architecture · Google Cloud Serverless CDP</title>
+  <!-- Reveal.js core CSS -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/theme/white.min.css" id="theme">
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      overflow: hidden;
+      background: #ffffff;
+    }
+    .reveal {
+      height: 100%;
+      width: 100%;
+    }
+    .reveal .slides {
+      text-align: center;
+    }
+    .arch-slide {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: 100%;
+      height: 100%;
+      background: #f8fafc;
+    }
+    .diagram-container {
+      position: relative;
+      width: 1280px;
+      height: 700px;
+      margin: 0 auto;
+      font-family: 'Segoe UI', Roboto, system-ui, -apple-system, sans-serif;
+      transform-origin: center center;
+    }
+
+    /* ---- Background Panels ---- */
+    .panel {
+      position: absolute;
+      box-sizing: border-box;
+      opacity: 0.8;
+      border-radius: 4px;
+      z-index: 1;
+    }
+    .left-panel {
+      background: #e8f5e9;
+      border: 3px solid #2e7d32;
+      width: 240px;
+      height: 460px;
+      left: -80px;
+      top: 60px;
+    }
+    .center-panel {
+      background: #f0f7ff;
+      border: 3px solid #1565c0;
+      width: 640px;
+      height: 460px;
+      left: 200px;
+      top: 60px;
+    }
+    .right-panel {
+      background: #fff0f0;
+      border: 3px solid #c62828;
+      width: 320px;
+      height: 460px;
+      left: 880px;
+      top: 60px;
+    }
+
+    /* Section titles */
+    .section-title {
+      position: absolute;
+      font-weight: 700;
+      font-size: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      z-index: 2;
+    }
+    .title-left {
+      width: 240px;
+      height: 30px;
+      left: -80px;
+      top: 30px;
+      color: #2e7d32;
+      font-weight: 700;
+    }
+    .title-center {
+      width: 360px;
+      height: 35px;
+      left: 340px;
+      top: 25px;
+      font-size: 18px;
+      font-weight: 700;
+      color: #0d47a1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
+    .title-right {
+      width: 320px;
+      height: 30px;
+      left: 880px;
+      top: 30px;
+      color: #b71c1c;
+      font-weight: 700;
+      font-size: 15px;
+    }
+
+    /* Subtitles inside center panel */
+    .sub-label {
+      position: absolute;
+      font-weight: 700;
+      font-size: 13px;
+      color: #0d47a1;
+      top: 85px;
+      z-index: 2;
+    }
+
+    /* Left source boxes */
+    .source-group {
+      position: absolute;
+      background: #ffffff;
+      border: 1px solid #2e7d32;
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      box-sizing: border-box;
+      font-weight: 700;
+      font-size: 14px;
+      color: #2e7d32;
+      padding-top: 8px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.04);
+      z-index: 2;
+    }
+    .streaming-group {
+      width: 200px;
+      height: 110px;
+      left: -60px;
+      top: 80px;
+    }
+    .batch-group {
+      width: 200px;
+      height: 210px;
+      left: -60px;
+      top: 240px;
+    }
+    .source-chip {
+      width: 170px;
+      height: 28px;
+      background: #f5f5f5;
+      border: 1px solid #888888;
+      border-radius: 6px;
+      margin: 4px 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 500;
+      color: #222;
+    }
+
+    /* GCP service cards */
+    .gcp-card {
+      position: absolute;
+      background: white;
+      border: 1px solid #dddddd;
+      border-radius: 10px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+      display: flex;
+      align-items: center;
+      padding-left: 12px;
+      box-sizing: border-box;
+      height: 60px;
+      z-index: 2;
+    }
+    .gcp-icon {
+      width: 32px;
+      height: 32px;
+      margin-right: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .gcp-icon img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+    }
+    .gcp-label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #1e1e1e;
+      line-height: 1.4;
+    }
+
+    /* Medallion box */
+    .medallion-box {
+      position: absolute;
+      background: #e3f2fd;
+      border: 2px dashed #1565c0;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 13px;
+      color: #0d47a1;
+      left: 340px;
+      top: 317px;
+      width: 360px;
+      height: 55px;
+      z-index: 2;
+    }
+
+    /* Right CDP modules */
+    .cdp-module {
+      position: absolute;
+      background: #ffffff;
+      border: 1px solid #c62828;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 13px;
+      color: #b71c1c;
+      left: 900px;
+      width: 280px;
+      height: 55px;
+      z-index: 2;
+    }
+
+    /* Stage pills */
+    .stage {
+      position: absolute;
+      width: 120px;
+      height: 40px;
+      background: #1565c0;
+      color: white;
+      font-weight: 700;
+      font-size: 14px;
+      border-radius: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      top: 560px;
+      z-index: 2;
+    }
+
+    /* Footer bar */
+    .footer-bar {
+      position: absolute;
+      width: 1280px;
+      height: 45px;
+      left: -80px;
+      top: 640px;
+      background: #424242;
+      color: white;
+      font-weight: 700;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      letter-spacing: 0.3px;
+      z-index: 2;
+    }
+
+    /* SVG connector overlay - ON TOP of everything */
+    .connectors-svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 20;
+    }
+
+    @media (max-width: 1320px) {
+      .diagram-container { transform: scale(0.82); }
+    }
+    @media (max-width: 1050px) {
+      .diagram-container { transform: scale(0.68); }
+    }
+    .reveal .slides section {
+      height: 100%;
+      padding: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="reveal">
+    <div class="slides">
+      <section>
+        <div class="arch-slide">
+          <div class="diagram-container">
+
+            <!-- Background regions (z-index:1) -->
+            <div class="panel left-panel"></div>
+            <div class="panel center-panel"></div>
+            <div class="panel right-panel"></div>
+
+            <!-- Titles -->
+            <div class="section-title title-left">Data Sources</div>
+            <div class="section-title title-center">
+              <img src="https://raw.githubusercontent.com/AwesomeLogos/google-cloud-icons/main/docs/images/cloud_functions.svg" 
+                   alt="GCP" style="width:26px; height:26px; flex-shrink:0;" 
+                   onerror="this.style.display='none'">
+              Google Cloud Serverless
+            </div>
+            <div class="section-title title-right">Modular CDP Components</div>
+
+            <!-- Subtitles -->
+            <div class="sub-label" style="left: 262px;">Ingest</div>
+            <div class="sub-label" style="left: 466px;">Pipelines</div>
+            <div class="sub-label" style="left: 656px;">Storage</div>
+
+            <!-- LEFT: Data Sources -->
+            <div class="source-group streaming-group" id="streaming-box">
+              <span>Streaming</span>
+              <div class="source-chip" id="webapp-chip">Web &amp; App</div>
+              <div class="source-chip">Stock</div>
+            </div>
+            <div class="source-group batch-group" id="batch-box">
+              <span>Batch</span>
+              <div class="source-chip">Content metadata</div>
+              <div class="source-chip">CDP logs</div>
+              <div class="source-chip">ERP &amp; Shipment</div>
+              <div class="source-chip">Marketing &amp; Adserver logs</div>
+            </div>
+
+            <!-- CENTER: GCP Services -->
+            <div class="gcp-card" id="pubsub-card" style="left:240px; top:129px; width:147px;">
+              <div class="gcp-icon">
+                <img src="https://raw.githubusercontent.com/AwesomeLogos/google-cloud-icons/main/docs/images/pubsub.svg" 
+                     alt="Pub/Sub"
+                     onerror="this.parentElement.innerHTML='<svg width=&quot;26&quot; height=&quot;26&quot; viewBox=&quot;0 0 18.32 20&quot;><circle cx=&quot;16.13&quot; cy=&quot;6.21&quot; r=&quot;1.72&quot; fill=&quot;#669df6&quot;/><circle cx=&quot;2.19&quot; cy=&quot;6.21&quot; r=&quot;1.72&quot; fill=&quot;#669df6&quot;/><circle cx=&quot;9.16&quot; cy=&quot;18.28&quot; r=&quot;1.72&quot; fill=&quot;#669df6&quot;/><path d=&quot;M11.2 4.19h1.59v8.04H11.2z&quot; fill=&quot;#4285f4&quot;/><circle cx=&quot;9.16&quot; cy=&quot;10.23&quot; r=&quot;2.78&quot; fill=&quot;#aecbfa&quot;/><circle cx=&quot;2.19&quot; cy=&quot;14.25&quot; r=&quot;2.19&quot; fill=&quot;#aecbfa&quot;/><circle cx=&quot;16.13&quot; cy=&quot;14.25&quot; r=&quot;2.19&quot; fill=&quot;#aecbfa&quot;/><circle cx=&quot;9.16&quot; cy=&quot;2.19&quot; r=&quot;2.19&quot; fill=&quot;#aecbfa&quot;/></svg>'">
+              </div>
+              <div class="gcp-label">Ingestion<br>Pub/Sub</div>
+            </div>
+
+            <div class="gcp-card" id="storage-card" style="left:240px; top:215px; width:147px;">
+              <div class="gcp-icon">
+                <img src="https://raw.githubusercontent.com/AwesomeLogos/google-cloud-icons/main/docs/images/cloud_storage.svg" 
+                     alt="Cloud Storage"
+                     onerror="this.parentElement.innerHTML='<svg width=&quot;24&quot; height=&quot;20&quot; viewBox=&quot;0 0 20 16&quot;><path d=&quot;M0 0h20v7H0z&quot; fill=&quot;#aecbfa&quot;/><path d=&quot;M18 0h2v7h-2z&quot; fill=&quot;#669df6&quot;/><path d=&quot;M0 9h20v7H0z&quot; fill=&quot;#aecbfa&quot;/><path d=&quot;M18 9h2v7h-2z&quot; fill=&quot;#669df6&quot;/><rect x=&quot;13&quot; y=&quot;2&quot; width=&quot;3&quot; height=&quot;3&quot; rx=&quot;1.5&quot; fill=&quot;#fff&quot;/><rect x=&quot;13&quot; y=&quot;11&quot; width=&quot;3&quot; height=&quot;3&quot; rx=&quot;1.5&quot; fill=&quot;#fff&quot;/></svg>'">
+              </div>
+              <div class="gcp-label">Name<br>Cloud Storage</div>
+            </div>
+
+            <div class="gcp-card" id="dataproc-card" style="left:450px; top:129px; width:130px;">
+              <div class="gcp-icon">
+                <img src="https://raw.githubusercontent.com/AwesomeLogos/google-cloud-icons/main/docs/images/dataproc.svg" 
+                     alt="Dataproc"
+                     onerror="this.parentElement.innerHTML='<svg width=&quot;24&quot; height=&quot;22&quot; viewBox=&quot;0 0 19.36 17.98&quot;><path d=&quot;M4.69 16.4l10.19-5.89.97 1.69-10.18 5.88z&quot; fill=&quot;#aecbfa&quot;/><path d=&quot;M7.5 4.4v10.35l-1.87 1.41V4.4z&quot; fill=&quot;#aecbfa&quot;/><path d=&quot;M17.49 11.2l-.97 1.68-8.96-5.19-.26-2.36z&quot; fill=&quot;#aecbfa&quot;/><path d=&quot;M12.39 8.26L7.3 5.33l.26 2.36 1.51.86a4 4 0 003.32-.29z&quot; fill=&quot;#4285f4&quot;/><circle cx=&quot;9.4&quot; cy=&quot;4.4&quot; r=&quot;3.78&quot; fill=&quot;#669df6&quot;/></svg>'">
+              </div>
+              <div class="gcp-label">Name<br>Dataproc</div>
+            </div>
+
+            <div class="gcp-card" id="bigquery-card" style="left:642px; top:129px; width:147px;">
+              <div class="gcp-icon">
+                <img src="https://raw.githubusercontent.com/AwesomeLogos/google-cloud-icons/main/docs/images/bigquery.svg" 
+                     alt="BigQuery"
+                     onerror="this.parentElement.innerHTML='<svg width=&quot;26&quot; height=&quot;26&quot; viewBox=&quot;0 0 20 20&quot;><path d=&quot;M4.73 8.83v2.63a4.91 4.91 0 001.71 1.74V8.83z&quot; fill=&quot;#aecbfa&quot;/><path d=&quot;M7.89 6.41v7.53A7.62 7.62 0 009 14a8 8 0 001 0V6.41z&quot; fill=&quot;#669df6&quot;/><path d=&quot;M11.64 9.86v3.29a5 5 0 001.7-1.82V9.86z&quot; fill=&quot;#aecbfa&quot;/><path d=&quot;M15.74 14.32l-1.42 1.42a.42.42 0 000 .6l3.54 3.54a.42.42 0 00.59 0l1.43-1.43a.42.42 0 000-.59l-3.54-3.54a.42.42 0 00-.6 0&quot; fill=&quot;#4285f4&quot;/><circle cx=&quot;9&quot; cy=&quot;9&quot; r=&quot;6.68&quot; fill=&quot;#669df6&quot;/></svg>'">
+              </div>
+              <div class="gcp-label">Name<br>BigQuery</div>
+            </div>
+
+            <!-- Medallion architecture -->
+            <div class="medallion-box">Raw data → Clean data → Curated data</div>
+
+            <!-- RIGHT: CDP Modules -->
+            <div class="cdp-module" id="cdp1" style="top:96px;">Identity Resolution &amp; Privacy</div>
+            <div class="cdp-module" id="cdp2" style="top:166px;">Campaign &amp; Delivery</div>
+            <div class="cdp-module" id="cdp3" style="top:236px;">Personalization &amp; Modelling</div>
+            <div class="cdp-module" id="cdp4" style="top:306px;">Insights</div>
+            <div class="cdp-module" id="cdp5" style="top:376px; height:95px;">Messaging</div>
+
+            <!-- Stages -->
+            <div class="stage" style="left:310px;">Collect</div>
+            <div class="stage" style="left:460px;">Process</div>
+            <div class="stage" style="left:610px;">Store</div>
+
+            <!-- Footer -->
+            <div class="footer-bar">Orchestration - Cataloging - Governance - Security - Monitoring &amp; Alerting</div>
+
+            <!-- SVG Connectors with arrowheads - ON TOP (z-index:20) -->
+            <svg class="connectors-svg" xmlns="http://www.w3.org/2000/svg" width="1280" height="700">
+              <defs>
+                <!-- Triangle arrowhead matching drawio block style -->
+                <marker id="arrow-block" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+                  <polygon points="0,0 8,3 0,6" fill="#1565c0" />
+                </marker>
+              </defs>
+              
+              <!-- ARROW 1: webapp-chip → pubsub-card -->
+              <line x1="125" y1="126" x2="240" y2="159" stroke="#1565c0" stroke-width="2" marker-end="url(#arrow-block)" />
+              
+              <!-- ARROW 2: batch-box → storage-card -->
+              <line x1="140" y1="345" x2="240" y2="245" stroke="#1565c0" stroke-width="2" marker-end="url(#arrow-block)" />
+              
+              <!-- ARROW 3: pubsub-card → dataproc-card -->
+              <line x1="387" y1="159" x2="450" y2="159" stroke="#1565c0" stroke-width="2" marker-end="url(#arrow-block)" />
+              
+              <!-- ARROW 4: dataproc-card → bigquery-card -->
+              <line x1="580" y1="159" x2="643" y2="159" stroke="#1565c0" stroke-width="2" marker-end="url(#arrow-block)" />
+              
+              <!-- ARROW 5: bigquery-card → distribution trunk -->
+              <line x1="790" y1="159" x2="860" y2="159" stroke="#1565c0" stroke-width="2" />
+              
+              <!-- Vertical trunk: (860,159) → (860,424) COMPLETE -->
+              <line x1="860" y1="124" x2="860" y2="424" stroke="#1565c0" stroke-width="2" />
+              
+              <!-- Branches from trunk to CDP modules WITH arrows -->
+              <line x1="860" y1="124" x2="900" y2="124" stroke="#1565c0" stroke-width="2" marker-end="url(#arrow-block)" />
+              <line x1="860" y1="194" x2="900" y2="194" stroke="#1565c0" stroke-width="2" marker-end="url(#arrow-block)" />
+              <line x1="860" y1="264" x2="900" y2="264" stroke="#1565c0" stroke-width="2" marker-end="url(#arrow-block)" />
+              <line x1="860" y1="334" x2="900" y2="334" stroke="#1565c0" stroke-width="2" marker-end="url(#arrow-block)" />
+              <line x1="860" y1="424" x2="900" y2="424" stroke="#1565c0" stroke-width="2" marker-end="url(#arrow-block)" />
+            </svg>
+
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/reveal.js/5.1.0/reveal.js"></script>
+  <script>
+    Reveal.initialize({
+      hash: true,
+      center: false,
+      width: '100%',
+      height: '100%',
+      margin: 0,
+      minScale: 0.2,
+      maxScale: 2.0,
+      transition: 'fade',
+      controls: true,
+      progress: true,
+    });
+  </script>
+</body>
+</html>

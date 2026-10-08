@@ -1,0 +1,128 @@
+<mxfile host="app.diagrams.net" agent="draw.io">
+  <diagram id="devops-flowchart" name="DevOps CI/CD Flowchart">
+    <mxGraphModel dx="1603" dy="807" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1100" pageHeight="850" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=18;fontColor=#1a1a1a;strokeColor=none;fillColor=none;" value="&lt;b&gt;DevOps CI/CD Pipeline Flowchart&lt;/b&gt;" vertex="1">
+          <mxGeometry height="40" width="500" x="250" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="start" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#2e7d32;strokeWidth=2;fontSize=13;fontColor=#2e7d32;" value="&lt;b&gt;Start&lt;/b&gt;" vertex="1">
+          <mxGeometry height="50" width="120" x="424" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-start-input" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=1;strokeColor=#333333;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="484" y="130" as="sourcePoint" />
+            <mxPoint x="484" y="160" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="input-commit" parent="1" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#e3f2fd;strokeColor=#1565c0;strokeWidth=2;fontSize=11;fontColor=#0d47a1;" value="&lt;b&gt;Developer Code Commit&lt;/b&gt;&lt;br&gt;Git Push to Repository" vertex="1">
+          <mxGeometry height="60" width="240" x="364" y="160" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-input-build" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=1;strokeColor=#333333;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="484" y="220" as="sourcePoint" />
+            <mxPoint x="484" y="250" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="process-build" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#e65100;strokeWidth=2;fontSize=11;fontColor=#bf360c;" value="&lt;b&gt;Build &amp; Compile&lt;/b&gt;&lt;br&gt;Docker Image Creation" vertex="1">
+          <mxGeometry height="60" width="240" x="364" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-build-test" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=1;strokeColor=#333333;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="484" y="310" as="sourcePoint" />
+            <mxPoint x="484" y="340" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="process-test" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#e65100;strokeWidth=2;fontSize=11;fontColor=#bf360c;" value="&lt;b&gt;Automated Testing&lt;/b&gt;&lt;br&gt;Unit · Integration · Security" vertex="1">
+          <mxGeometry height="60" width="240" x="364" y="340" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-test-decision" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=1;strokeColor=#333333;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="484" y="400" as="sourcePoint" />
+            <mxPoint x="484" y="445" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="decision-tests" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fce4ec;strokeColor=#c62828;strokeWidth=2;fontSize=12;fontColor=#b71c1c;" value="&lt;b&gt;All Tests&lt;br&gt;Passed?&lt;/b&gt;" vertex="1">
+          <mxGeometry height="100" width="170" x="399" y="445" as="geometry" />
+        </mxCell>
+        <mxCell id="output-deploy" parent="1" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#2e7d32;strokeWidth=2;fontSize=11;fontColor=#1b5e20;" value="&lt;b&gt;Deploy to Production&lt;/b&gt;&lt;br&gt;Kubernetes / Cloud Run" vertex="1">
+          <mxGeometry height="60" width="240" x="364" y="590" as="geometry" />
+        </mxCell>
+        <mxCell id="end" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#fce4ec;strokeColor=#c62828;strokeWidth=2;fontSize=13;fontColor=#c62828;" value="&lt;b&gt;End&lt;/b&gt;" vertex="1">
+          <mxGeometry height="50" width="120" x="424" y="690" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-decision-deploy" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=1;strokeColor=#2e7d32;" value="&lt;b&gt;Yes&lt;/b&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="484" y="545" as="sourcePoint" />
+            <mxPoint x="484" y="590" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="arrow-deploy-end" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=1;strokeColor=#333333;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="484" y="650" as="sourcePoint" />
+            <mxPoint x="484" y="690" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="arrow-decision-no" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=1;strokeColor=#c62828;curved=1;arcSize=50;" value="&lt;b&gt;No — Fix Issues&lt;/b&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="320" y="495" />
+              <mxPoint x="320" y="280" />
+            </Array>
+            <mxPoint x="399" y="495" as="sourcePoint" />
+            <mxPoint x="364" y="280" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="output-notify" parent="1" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#e3f2fd;strokeColor=#1565c0;strokeWidth=2;fontSize=11;fontColor=#0d47a1;" value="&lt;b&gt;Send Notifications&lt;/b&gt;&lt;br&gt;Slack · Email · PagerDuty" vertex="1">
+          <mxGeometry height="60" width="220" x="694" y="590" as="geometry" />
+        </mxCell>
+        <mxCell id="arrow-deploy-notify" edge="1" parent="1" source="output-deploy" style="endArrow=block;endFill=1;html=1;strokeWidth=1;strokeColor=#333333;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" target="output-notify" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="604" y="620" as="sourcePoint" />
+            <mxPoint x="694" y="620" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend-box" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#fafafa;strokeColor=#999999;strokeWidth=1;verticalAlign=top;" value="" vertex="1">
+          <mxGeometry height="60" width="730" x="185" y="770" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-label" parent="1" style="text;html=1;align=left;verticalAlign=top;fontSize=11;fontColor=#333333;" value="&lt;b&gt;Legend&lt;/b&gt;" vertex="1">
+          <mxGeometry height="18" width="60" x="200" y="778" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-oval" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#2e7d32;strokeWidth=1;fontSize=9;" value="" vertex="1">
+          <mxGeometry height="22" width="50" x="200" y="798" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-oval-label" parent="1" style="text;html=1;fontSize=10;fontColor=#333333;" value="Start / End" vertex="1">
+          <mxGeometry height="18" width="70" x="260" y="800" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-para" parent="1" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fillColor=#e3f2fd;strokeColor=#1565c0;strokeWidth=1;fontSize=9;" value="" vertex="1">
+          <mxGeometry height="22" width="60" x="340" y="798" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-para-label" parent="1" style="text;html=1;fontSize=10;fontColor=#333333;" value="Input / Output" vertex="1">
+          <mxGeometry height="18" width="90" x="410" y="800" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-rect" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#e65100;strokeWidth=1;fontSize=9;" value="" vertex="1">
+          <mxGeometry height="22" width="60" x="510" y="798" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-rect-label" parent="1" style="text;html=1;fontSize=10;fontColor=#333333;" value="Process" vertex="1">
+          <mxGeometry height="18" width="50" x="580" y="800" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-diamond" parent="1" style="rhombus;whiteSpace=wrap;html=1;fillColor=#fce4ec;strokeColor=#c62828;strokeWidth=1;fontSize=9;" value="" vertex="1">
+          <mxGeometry height="32" width="32" x="640" y="793" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-diamond-label" parent="1" style="text;html=1;fontSize=10;fontColor=#333333;" value="Decision" vertex="1">
+          <mxGeometry height="18" width="60" x="682" y="800" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-arrow" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=1;strokeColor=#333333;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="750" y="809" as="sourcePoint" />
+            <mxPoint x="805" y="809" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend-arrow-label" parent="1" style="text;html=1;fontSize=10;fontColor=#333333;" value="Flow Direction" vertex="1">
+          <mxGeometry height="18" width="90" x="815" y="800" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

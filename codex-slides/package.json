@@ -1,0 +1,83 @@
+{
+  "name": "codex-slides-web",
+  "productName": "Codex Slides",
+  "version": "0.2.1",
+  "private": true,
+  "main": "electron/main.cjs",
+  "description": "Codex Slides — the open-source AI slide studio inside Codex, with durable projects, image-native decks, visual editing, and PDF/PPTX export.",
+  "license": "MIT",
+  "author": "Nexu and Codex Slides contributors",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nexu-io/codex-slides.git"
+  },
+  "homepage": "https://github.com/nexu-io/codex-slides#readme",
+  "bugs": {
+    "url": "https://github.com/nexu-io/codex-slides/issues"
+  },
+  "keywords": [
+    "codex",
+    "codex-slides",
+    "codex-plugin",
+    "presentations",
+    "slides",
+    "ai-slides",
+    "powerpoint",
+    "pptx",
+    "mcp",
+    "agent-skills",
+    "image-generation",
+    "deep-research"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node electron/dev.cjs",
+    "dev:web": "node electron/dev.cjs web",
+    "dev:desktop": "node electron/dev.cjs desktop",
+    "dev:start": "node electron/dev.cjs start",
+    "dev:stop": "node electron/dev.cjs stop",
+    "dev:restart": "node electron/dev.cjs restart",
+    "dev:status": "node electron/dev.cjs status",
+    "dev:logs": "node electron/dev.cjs logs",
+    "build": "next build",
+    "build:desktop": "node scripts/build-desktop.mjs",
+    "start": "next start -p 4311",
+    "test": "node --test src/lib/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "check:i18n": "node scripts/check-i18n.mjs",
+    "check:project-sync": "node scripts/check-project-sync.mjs",
+    "check:project-sync:live": "node scripts/check-project-sync.mjs --live",
+    "check:browser-first": "node scripts/check-browser-first-contract.mjs",
+    "check:skill": "node --check skills/codex-slides/scripts/codex-slides.mjs && node --check skills/codex-slides/scripts/probe.mjs && node skills/codex-slides/scripts/probe.mjs && node scripts/check-browser-first-contract.mjs",
+    "check:skill:live": "node skills/codex-slides/scripts/probe.mjs --live",
+    "check:mcp": "node --check scripts/start-mcp.mjs && node --check mcp/server.mjs && node scripts/probe-mcp.mjs",
+    "check:mcp:live": "node scripts/probe-mcp.mjs --live",
+    "electron:dev": "node electron/dev.cjs desktop",
+    "electron:check": "node --check electron/main.cjs && node --check electron/preload.cjs && node --check electron/dev.cjs && node scripts/check-electron.mjs",
+    "electron:pack": "node scripts/build-desktop.mjs && electron-builder --dir",
+    "electron:dist": "node scripts/build-desktop.mjs && electron-builder",
+    "smoke:standalone": "node scripts/smoke-server.mjs",
+    "smoke:packaged": "node scripts/smoke-server.mjs --packaged",
+    "release": "node scripts/release.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@phosphor-icons/react": "^2.1.10",
+    "next": "14.2.35",
+    "pdf-lib": "^1.17.1",
+    "pptxgenjs": "^3.12.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "18.3.3",
+    "@types/react-dom": "18.3.0",
+    "electron": "43.1.0",
+    "electron-builder": "26.5.0",
+    "typescript": "^5.5.0"
+  }
+}

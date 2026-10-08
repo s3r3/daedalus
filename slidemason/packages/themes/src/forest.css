@@ -1,0 +1,31 @@
+[data-theme="forest"] {
+  --sm-bg: #052e16;
+  --sm-surface: #14532d;
+  --sm-text: #f0fdf4;
+  --sm-muted: #86efac;
+  --sm-primary: #4ade80;
+  --sm-secondary: #fbbf24;
+  --sm-accent: #f9a8d4;
+  --sm-border: #166534;
+  --sm-mono-font: 'JetBrains Mono', ui-monospace, monospace;
+  --sm-radius: 0.5rem;
+  --sm-shadow-sm: 0 1px 2px rgba(0,0,0,0.35);
+  --sm-shadow-md: 0 4px 6px rgba(0,0,0,0.35);
+  --sm-shadow-lg: 0 10px 15px rgba(0,0,0,0.35);
+  --sm-success: #4ade80;
+  --sm-warning: #fbbf24;
+  --sm-danger: #ef4444;
+  --sm-gradient-start: #86efac;
+  --sm-gradient-end: #fbbf24;
+  --sm-gradient-mesh-1: #86efac;
+  --sm-gradient-mesh-2: #fbbf24;
+  --sm-gradient-mesh-3: #f9a8d4;
+  --sm-gradient-mesh-4: #052e16;
+  --sm-chart-1: #86efac;
+  --sm-chart-2: #fbbf24;
+  --sm-chart-3: #f9a8d4;
+  --sm-chart-4: #38bdf8;
+  --sm-chart-5: #a78bfa;
+  --sm-chart-6: #fb923c;
+  --sm-glass-bg: rgba(20,83,45,0.7);
+}

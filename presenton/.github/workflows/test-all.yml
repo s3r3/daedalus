@@ -1,0 +1,111 @@
+name: Test All Applications
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-repository-tools:
+    name: Test repository tooling
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run repository tests
+        run: npm test
+
+      - name: Install presentation export runtime
+        run: npm run sync:presentation-export
+
+      - name: Verify presentation export runtime
+        run: npm run check:presentation-export
+
+  test-fastapi:
+    name: Test FastAPI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: servers/fastapi
+    env:
+      APP_DATA_DIRECTORY: /tmp/presenton-app-data
+      TEMP_DIRECTORY: /tmp/presenton-temp
+      DATABASE_URL: sqlite+aiosqlite:////tmp/presenton-test.db
+      DISABLE_ANONYMOUS_TRACKING: "true"
+      DISABLE_IMAGE_GENERATION: "true"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: servers/fastapi/uv.lock
+
+      - name: Install locked dependencies
+        run: uv sync --locked --dev
+
+      - name: Create test directories
+        run: mkdir -p "$APP_DATA_DIRECTORY" "$TEMP_DIRECTORY"
+
+      - name: Run all pytest tests
+        run: uv run --locked python -m pytest --verbose --tb=short
+
+  test-nextjs:
+    name: Test Next.js
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: servers/nextjs
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: servers/nextjs/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run Node.js tests
+        run: npm test
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Build application
+        env:
+          NEXT_PUBLIC_FAST_API: http://localhost:8000
+          NEXT_PUBLIC_URL: http://localhost:3000
+        run: npm run build
+
+      - name: Run Cypress component tests
+        run: npx cypress run --component --browser electron

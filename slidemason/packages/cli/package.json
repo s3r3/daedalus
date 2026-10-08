@@ -1,0 +1,29 @@
+{
+  "name": "@slidemason/cli",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "slidemason": "./dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@slidemason/core": "workspace:*",
+    "@slidemason/export": "workspace:*",
+    "citty": "^0.2.1",
+    "consola": "^3.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.2"
+  }
+}

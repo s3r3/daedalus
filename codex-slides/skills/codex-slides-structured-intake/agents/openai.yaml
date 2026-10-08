@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Slides Structured Intake"
+  short_description: "Collect scenario, source, format, and visual requirements"
+  default_prompt: "Use $codex-slides:codex-slides-structured-intake to collect and persist the right presentation requirements in the live Codex Slides Browser project."

@@ -1,0 +1,40 @@
+<div class="layout-grid-4" style="
+    display: grid; 
+    grid-template-columns: 1fr 1fr; 
+    grid-template-rows: 1fr 1fr; 
+    gap: 40px;
+    padding: 80px;
+    height: 100%;
+    box-sizing: border-box;
+    z-index: 10;
+    position: relative;
+">
+    <!-- Title overlay -->
+    <h2 data-pptx-placeholder="title" style="
+        position: absolute; 
+        top: 20px; 
+        left: 80px; 
+        font-family: var(--ppt-font-heading);
+        font-size: var(--ppt-size-h2); 
+        color: var(--ppt-color-text-primary);
+        margin: 0;
+    ">
+        {{ title }}
+    </h2>
+
+    {% for feature in features %}
+    <div class="card" style="
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid var(--ppt-color-accent-1);
+        padding: 20px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: var(--ppt-font-body);
+        color: var(--ppt-color-text-primary);
+        font-size: var(--ppt-size-h3);
+    ">
+        <p data-pptx-placeholder="body" style="margin: 0;">{{ feature }}</p>
+    </div>
+    {% endfor %}
+</div>

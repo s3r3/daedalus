@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <style>
+        html {
+            background: #ffffff;
+        }
+
+        body {
+            width: 720pt;
+            height: 405pt;
+            margin: 0;
+            padding: 0;
+            background: #f5f5f5;
+            font-family: Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .slide-content {
+            width: 90%;
+            max-width: 650pt;
+            padding: 40pt;
+            background: #ffffff;
+            border-radius: 8pt;
+            box-shadow: 2px 2px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        h1 {
+            color: #2d3748;
+            font-size: 36pt;
+            margin: 0 0 20pt 0;
+            text-align: center;
+        }
+
+        h2 {
+            color: #4a5568;
+            font-size: 24pt;
+            margin: 20pt 0 10pt 0;
+        }
+
+        p {
+            color: #2d3748;
+            font-size: 14pt;
+            line-height: 1.6;
+            margin: 10pt 0;
+        }
+
+        ul {
+            color: #2d3748;
+            font-size: 14pt;
+            line-height: 1.8;
+            padding-left: 30pt;
+        }
+
+        .feature-box {
+            background: #edf2f7;
+            padding: 15pt;
+            border-left: 4pt solid #4299e1;
+            margin: 15pt 0;
+            border-radius: 4pt;
+        }
+
+        .highlight {
+            background: #fbd38d;
+            padding: 2pt 6pt;
+            border-radius: 3pt;
+        }
+
+        /* Placeholder for chart */
+        .placeholder {
+            background: #e2e8f0;
+            border: 2px dashed #a0aec0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #718096;
+            font-size: 12pt;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="slide-content">
+        <h1>HTML to PPTX Conversion Test</h1>
+
+        <h2>Key Features</h2>
+        <ul>
+            <li><b>Text formatting:</b> Bold, <i>italic</i>, and <u>underline</u></li>
+            <li><b>Colors:</b> <span style="color: #e53e3e;">Red text</span> and <span style="color: #38a169;">green
+                    text</span></li>
+            <li><b>Shapes:</b> Boxes with backgrounds and borders</li>
+        </ul>
+
+        <div class="feature-box">
+            <p><b>Important Note:</b> This box has a background color and a left border.</p>
+        </div>
+
+        <p>This is a test paragraph with <span class="highlight">highlighted text</span> to verify inline styling.</p>
+
+        <h2>Chart Area (Placeholder)</h2>
+        <div id="chart-area" class="placeholder" style="width: 500pt; height: 180pt;">
+            <p>Chart will be inserted here</p>
+        </div>
+    </div>
+</body>
+
+</html>

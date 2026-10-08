@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/core" },
+    { "path": "packages/primitives" },
+    { "path": "packages/themes" },
+    { "path": "packages/renderer" },
+    { "path": "packages/cli" },
+    { "path": "packages/export" },
+    { "path": "apps/studio" }
+  ]
+}

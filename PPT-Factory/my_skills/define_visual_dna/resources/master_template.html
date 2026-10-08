@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PPT Master Template</title>
+    <!-- The theme.css will be injected or linked here -->
+    <link rel="stylesheet" href="theme.css">
+    <style>
+        /* Base Reset & Layout */
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: #333;
+            /* Workspace background */
+        }
+
+        /* The Slide Canvas */
+        .ppt-slide {
+            width: 1280px;
+            /* Standard 16:9 */
+            height: 720px;
+            position: relative;
+            background-color: var(--ppt-color-bg-main, #ffffff);
+            font-family: var(--ppt-font-family, sans-serif);
+            color: var(--ppt-color-text-main, #000000);
+            overflow: hidden;
+            box-shadow: 0 0 50px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Master Elements */
+        .ppt-master-bg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 0;
+            /* Allow CSS to inject images or gradients via vars */
+            background-image: var(--ppt-bg-image, none);
+            background-size: cover;
+        }
+
+        .ppt-header-accent {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: var(--ppt-header-height, 0px);
+            background: var(--ppt-color-accent, transparent);
+            z-index: 10;
+        }
+
+        .ppt-footer {
+            position: absolute;
+            bottom: 20px;
+            left: 40px;
+            right: 40px;
+            height: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.8rem;
+            color: var(--ppt-color-text-muted, gray);
+            border-top: 1px solid var(--ppt-color-border, transparent);
+            z-index: 10;
+        }
+
+        .ppt-slide-number::after {
+            content: attr(data-slide-num);
+        }
+
+        /* Content Area (Safe Zone) */
+        .ppt-content {
+            position: absolute;
+            top: 80px;
+            bottom: 60px;
+            left: 60px;
+            right: 60px;
+            z-index: 5;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- Mock Slide Instance for Visualization -->
+    <div class="ppt-slide">
+        <div class="ppt-master-bg"></div>
+        <div class="ppt-header-accent"></div>
+
+        <div class="ppt-content">
+            <!-- Content Injected Here -->
+            <h1>Master Title Placeholder</h1>
+            <p>This is where slide content goes.</p>
+            <div class="ppt-card" style="padding: 20px; margin-top: 20px;">
+                I am a Component reacting to Visual DNA.
+            </div>
+        </div>
+
+        <div class="ppt-footer">
+            <span class="ppt-confidential">Confidential</span>
+            <span class="ppt-slide-number" data-slide-num="1"></span>
+        </div>
+    </div>
+
+</body>
+
+</html>

@@ -1,0 +1,23 @@
+{
+  "task_id": "2e8149a1-d548-4362-a38a-d36df51eb54e",
+  "outcome": "failed",
+  "diff": "",
+  "evidence": [
+    "model failure: Model my-free failed (LLMError: LLM request failed). Tried 1 model (my-free). Stopped after 5 consecutive model request failures (error limit 5)."
+  ],
+  "metrics": {
+    "turns": 0,
+    "tool_calls": 0,
+    "events": 13,
+    "commands": 0,
+    "files_changed": 0,
+    "recoveries": 0,
+    "replans": 0,
+    "approvals": 0,
+    "checks_passed": 0,
+    "checks_failed": 0,
+    "review_findings": 0,
+    "review_blocking": 0,
+    "duration_ms": 67408
+  }
+}

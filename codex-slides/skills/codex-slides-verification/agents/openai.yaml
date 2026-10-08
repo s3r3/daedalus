@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Slides Verification"
+  short_description: "Verify project state and the exact visible Browser result"
+  default_prompt: "Use $codex-slides:codex-slides-verification to verify this deck change in canonical project state and the exact Codex Browser surface."

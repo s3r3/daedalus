@@ -1,0 +1,262 @@
+<mxfile host="app.diagrams.net" agent="draw.io">
+  <diagram id="api-sequence" name="API Sequence Diagram">
+    <mxGraphModel dx="1204" dy="726" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;align=center;verticalAlign=middle;fontSize=18;fontColor=#1a1a1a;strokeColor=none;fillColor=none;" value="&lt;b&gt;API Sequence Diagram — User Authentication &amp; Data Retrieval&lt;/b&gt;" vertex="1">
+          <mxGeometry height="40" width="800" x="300" y="20" as="geometry" />
+        </mxCell>
+        <mxCell id="client-header" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#e3f2fd;strokeColor=#1565c0;strokeWidth=2;fontSize=12;" value="Client&#xa;Mobile / Web App" vertex="1">
+          <mxGeometry height="50" width="140" x="60" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="client-lifeline" edge="1" parent="1" style="endArrow=none;html=1;strokeWidth=2;strokeColor=#1565c0;dashed=1;dashPattern=8 4;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="130" y="140" as="sourcePoint" />
+            <mxPoint x="130" y="750" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="gateway-header" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#fff3e0;strokeColor=#e65100;strokeWidth=2;fontSize=12;" value="API Gateway&#xa;Kong / Apigee" vertex="1">
+          <mxGeometry height="50" width="140" x="280" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="gateway-lifeline" edge="1" parent="1" style="endArrow=none;html=1;strokeWidth=2;strokeColor=#e65100;dashed=1;dashPattern=8 4;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="140" as="sourcePoint" />
+            <mxPoint x="350" y="750" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="auth-header" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#e8f5e9;strokeColor=#2e7d32;strokeWidth=2;fontSize=12;" value="Auth Service&#xa;OAuth 2.0 / JWT" vertex="1">
+          <mxGeometry height="50" width="140" x="510" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="auth-lifeline" edge="1" parent="1" style="endArrow=none;html=1;strokeWidth=2;strokeColor=#2e7d32;dashed=1;dashPattern=8 4;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="580" y="140" as="sourcePoint" />
+            <mxPoint x="580" y="750" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="user-header" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#fce4ec;strokeColor=#c62828;strokeWidth=2;fontSize=12;" value="User Service&#xa;REST / gRPC" vertex="1">
+          <mxGeometry height="50" width="140" x="740" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="user-lifeline" edge="1" parent="1" style="endArrow=none;html=1;strokeWidth=2;strokeColor=#c62828;dashed=1;dashPattern=8 4;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="810" y="140" as="sourcePoint" />
+            <mxPoint x="810" y="750" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="db-header" parent="1" style="shape=cylinder3;whiteSpace=wrap;fillColor=#f3e5f5;strokeColor=#7b1fa2;strokeWidth=2;fontSize=12;size=10;" value="Database&#xa;PostgreSQL / Redis" vertex="1">
+          <mxGeometry height="60" width="140" x="970" y="85" as="geometry" />
+        </mxCell>
+        <mxCell id="db-lifeline" edge="1" parent="1" style="endArrow=none;html=1;strokeWidth=2;strokeColor=#7b1fa2;dashed=1;dashPattern=8 4;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1040" y="145" as="sourcePoint" />
+            <mxPoint x="1040" y="750" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="cache-header" parent="1" style="shape=cylinder3;whiteSpace=wrap;fillColor=#fff9c4;strokeColor=#f57f17;strokeWidth=2;fontSize=12;size=10;" value="Cache&#xa;Redis" vertex="1">
+          <mxGeometry height="60" width="120" x="1180" y="85" as="geometry" />
+        </mxCell>
+        <mxCell id="cache-lifeline" edge="1" parent="1" style="endArrow=none;html=1;strokeWidth=2;strokeColor=#f57f17;dashed=1;dashPattern=8 4;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1240" y="145" as="sourcePoint" />
+            <mxPoint x="1240" y="750" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg1" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#1565c0;fontColor=#333333;fontSize=10;" value="&lt;b&gt;1. POST /auth/login&lt;/b&gt;&lt;br&gt;{ username, password }">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="130" y="180" as="sourcePoint" />
+            <mxPoint x="350" y="180" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg2" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#e65100;fontColor=#333333;fontSize=10;" value="&lt;b&gt;2. validateCredentials()&lt;/b&gt;&lt;br&gt;{ username, password }">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="220" as="sourcePoint" />
+            <mxPoint x="580" y="220" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg3" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#2e7d32;fontColor=#333333;fontSize=10;" value="&lt;b&gt;3. SELECT user&lt;/b&gt;&lt;br&gt;WHERE username = ?">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="580" y="260" as="sourcePoint" />
+            <mxPoint x="1040" y="260" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg4" edge="1" parent="1" style="endArrow=open;endFill=0;html=1;strokeWidth=2;strokeColor=#7b1fa2;fontColor=#333333;fontSize=10;dashed=1;" value="&lt;b&gt;4. Return user record&lt;/b&gt;&lt;br&gt;{ id, username, password_hash }">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1040" y="300" as="sourcePoint" />
+            <mxPoint x="580" y="300" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg5" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#2e7d32;fontColor=#333333;fontSize=10;curved=1;arcSize=20;" value="&lt;b&gt;5. verifyPassword()&lt;/b&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="620" y="340" />
+              <mxPoint x="620" y="380" />
+            </Array>
+            <mxPoint x="590" y="340" as="sourcePoint" />
+            <mxPoint x="590" y="380" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg6" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#2e7d32;fontColor=#333333;fontSize=10;curved=1;arcSize=20;" value="&lt;b&gt;6. generateJWT()&lt;/b&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="620" y="410" />
+              <mxPoint x="620" y="450" />
+            </Array>
+            <mxPoint x="590" y="410" as="sourcePoint" />
+            <mxPoint x="590" y="450" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg7" edge="1" parent="1" style="endArrow=open;endFill=0;html=1;strokeWidth=2;strokeColor=#2e7d32;fontColor=#333333;fontSize=10;dashed=1;" value="&lt;b&gt;7. Return JWT Token&lt;/b&gt;&lt;br&gt;{ access_token, expires_in }">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="580" y="490" as="sourcePoint" />
+            <mxPoint x="350" y="490" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg8" edge="1" parent="1" style="endArrow=open;endFill=0;html=1;strokeWidth=2;strokeColor=#e65100;fontColor=#333333;fontSize=10;dashed=1;" value="&lt;b&gt;8. 200 OK&lt;/b&gt;&lt;br&gt;{ access_token, refresh_token }">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="530" as="sourcePoint" />
+            <mxPoint x="130" y="530" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg9" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#1565c0;fontColor=#333333;fontSize=10;" value="&lt;b&gt;9. GET /users/profile&lt;/b&gt;&lt;br&gt;Authorization: Bearer &lt;JWT&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="130" y="580" as="sourcePoint" />
+            <mxPoint x="350" y="580" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg10" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#e65100;fontColor=#333333;fontSize=10;" value="&lt;b&gt;10. verifyToken()&lt;/b&gt;&lt;br&gt;{ access_token }">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="620" as="sourcePoint" />
+            <mxPoint x="580" y="620" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg11" edge="1" parent="1" style="endArrow=open;endFill=0;html=1;strokeWidth=2;strokeColor=#2e7d32;fontColor=#333333;fontSize=10;dashed=1;" value="&lt;b&gt;11. Token Valid&lt;/b&gt;&lt;br&gt;{ user_id, scope }">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="580" y="660" as="sourcePoint" />
+            <mxPoint x="350" y="660" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg12" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#e65100;fontColor=#333333;fontSize=10;" value="&lt;b&gt;12. getUserProfile()&lt;/b&gt;&lt;br&gt;{ user_id }">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="700" as="sourcePoint" />
+            <mxPoint x="810" y="700" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg13" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#c62828;fontColor=#333333;fontSize=10;" value="&lt;b&gt;13. GET user:{id}&lt;/b&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="810" y="740" as="sourcePoint" />
+            <mxPoint x="1240" y="740" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg14" edge="1" parent="1" style="endArrow=open;endFill=0;html=1;strokeWidth=2;strokeColor=#f57f17;fontColor=#333333;fontSize=10;dashed=1;" value="&lt;b&gt;14. Cache Miss&lt;/b&gt;">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1240" y="780" as="sourcePoint" />
+            <mxPoint x="810" y="780" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg15" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#c62828;fontColor=#333333;fontSize=10;" value="&lt;b&gt;15. SELECT profile&lt;/b&gt;&lt;br&gt;WHERE user_id = ?">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="810" y="820" as="sourcePoint" />
+            <mxPoint x="1040" y="820" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg16" edge="1" parent="1" style="endArrow=open;endFill=0;html=1;strokeWidth=2;strokeColor=#7b1fa2;fontColor=#333333;fontSize=10;dashed=1;" value="&lt;b&gt;16. Return profile data&lt;/b&gt;&lt;br&gt;{ name, email, avatar }">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1040" y="860" as="sourcePoint" />
+            <mxPoint x="810" y="860" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg17" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#c62828;fontColor=#333333;fontSize=10;" value="&lt;b&gt;17. SET user:{id}&lt;/b&gt;&lt;br&gt;{ profile data }">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="810" y="900" as="sourcePoint" />
+            <mxPoint x="1240" y="900" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg18" edge="1" parent="1" style="endArrow=open;endFill=0;html=1;strokeWidth=2;strokeColor=#c62828;fontColor=#333333;fontSize=10;dashed=1;" value="&lt;b&gt;18. Return profile&lt;/b&gt;&lt;br&gt;{ name, email, avatar }">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="810" y="940" as="sourcePoint" />
+            <mxPoint x="350" y="940" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="msg19" edge="1" parent="1" style="endArrow=open;endFill=0;html=1;strokeWidth=2;strokeColor=#e65100;fontColor=#333333;fontSize=10;dashed=1;" value="&lt;b&gt;19. 200 OK&lt;/b&gt;&lt;br&gt;{ profile data }">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="350" y="980" as="sourcePoint" />
+            <mxPoint x="130" y="980" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="client-activation" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#1565c0;strokeColor=none;opacity=30;" value="" vertex="1">
+          <mxGeometry height="405" width="20" x="120" y="175" as="geometry" />
+        </mxCell>
+        <mxCell id="client-activation2" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#1565c0;strokeColor=none;opacity=30;" value="" vertex="1">
+          <mxGeometry height="410" width="20" x="120" y="575" as="geometry" />
+        </mxCell>
+        <mxCell id="gateway-activation" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#e65100;strokeColor=none;opacity=30;" value="" vertex="1">
+          <mxGeometry height="355" width="20" x="340" y="175" as="geometry" />
+        </mxCell>
+        <mxCell id="gateway-activation2" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#e65100;strokeColor=none;opacity=30;" value="" vertex="1">
+          <mxGeometry height="410" width="20" x="340" y="575" as="geometry" />
+        </mxCell>
+        <mxCell id="auth-activation" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#2e7d32;strokeColor=none;opacity=30;" value="" vertex="1">
+          <mxGeometry height="275" width="20" x="570" y="215" as="geometry" />
+        </mxCell>
+        <mxCell id="auth-activation2" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#2e7d32;strokeColor=none;opacity=30;" value="" vertex="1">
+          <mxGeometry height="50" width="20" x="570" y="615" as="geometry" />
+        </mxCell>
+        <mxCell id="user-activation" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#c62828;strokeColor=none;opacity=30;" value="" vertex="1">
+          <mxGeometry height="250" width="20" x="800" y="695" as="geometry" />
+        </mxCell>
+        <mxCell id="db-activation" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#7b1fa2;strokeColor=none;opacity=30;" value="" vertex="1">
+          <mxGeometry height="45" width="20" x="1030" y="255" as="geometry" />
+        </mxCell>
+        <mxCell id="db-activation2" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#7b1fa2;strokeColor=none;opacity=30;" value="" vertex="1">
+          <mxGeometry height="45" width="20" x="1030" y="815" as="geometry" />
+        </mxCell>
+        <mxCell id="cache-activation" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#f57f17;strokeColor=none;opacity=30;" value="" vertex="1">
+          <mxGeometry height="170" width="20" x="1230" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-box" parent="1" style="rounded=1;whiteSpace=wrap;fillColor=#fafafa;strokeColor=#999999;strokeWidth=1;verticalAlign=top;" value="" vertex="1">
+          <mxGeometry height="70" width="1260" x="60" y="1020" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-label" parent="1" style="text;html=1;align=left;verticalAlign=top;fontSize=11;fontColor=#333333;" value="&lt;b&gt;Legend&lt;/b&gt;" vertex="1">
+          <mxGeometry height="18" width="60" x="75" y="1028" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-solid" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#333333;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="75" y="1055" as="sourcePoint" />
+            <mxPoint x="145" y="1055" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend-solid-label" parent="1" style="text;html=1;fontSize=10;fontColor=#333333;" value="Synchronous Request" vertex="1">
+          <mxGeometry height="18" width="130" x="155" y="1046" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-dashed" edge="1" parent="1" style="endArrow=open;endFill=0;html=1;strokeWidth=2;strokeColor=#333333;dashed=1;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="300" y="1055" as="sourcePoint" />
+            <mxPoint x="370" y="1055" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend-dashed-label" parent="1" style="text;html=1;fontSize=10;fontColor=#333333;" value="Response / Return" vertex="1">
+          <mxGeometry height="18" width="120" x="380" y="1046" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-activation" parent="1" style="rounded=0;whiteSpace=wrap;fillColor=#1565c0;strokeColor=none;opacity=30;" value="" vertex="1">
+          <mxGeometry height="10" width="20" x="520" y="1050" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-activation-label" parent="1" style="text;html=1;fontSize=10;fontColor=#333333;" value="Activation Box" vertex="1">
+          <mxGeometry height="18" width="100" x="550" y="1046" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-self" edge="1" parent="1" style="endArrow=block;endFill=1;html=1;strokeWidth=2;strokeColor=#333333;curved=1;arcSize=20;" value="">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="690" y="1045" />
+              <mxPoint x="720" y="1045" />
+            </Array>
+            <mxPoint x="670" y="1055" as="sourcePoint" />
+            <mxPoint x="740" y="1055" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="legend-self-label" parent="1" style="text;html=1;fontSize=10;fontColor=#333333;" value="Self-loop" vertex="1">
+          <mxGeometry height="18" width="80" x="750" y="1046" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

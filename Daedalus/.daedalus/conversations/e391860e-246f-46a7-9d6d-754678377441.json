@@ -1,0 +1,70 @@
+{
+  "id": "e391860e-246f-46a7-9d6d-754678377441",
+  "root": "/home/xyconix11x/Ayid/xyconix11x/Skripsi/Daedalus",
+  "created_at": "2026-10-06T19:36:58.497Z",
+  "turns": [
+    {
+      "role": "user",
+      "text": "Buat website company profile PT Contoh dengan katalog produk l buat di folder jojo",
+      "task_id": "d7183e6c-6c0f-4320-b271-fd752d8e0e4a",
+      "mode": "auto",
+      "ts": "2026-10-06T19:37:28.826Z"
+    },
+    {
+      "role": "user",
+      "text": "hai",
+      "task_id": "4b435b15-8c92-47d8-8237-b276425a5508",
+      "mode": "auto",
+      "ts": "2026-10-06T19:38:38.984Z"
+    },
+    {
+      "role": "assistant",
+      "text": "Maaf, saya lagi nggak bisa nyambung ke model barusan. Coba lagi sebentar, atau jelaskan tugas coding-nya langsung.",
+      "task_id": "4b435b15-8c92-47d8-8237-b276425a5508",
+      "mode": "auto",
+      "ts": "2026-10-06T19:38:53.396Z"
+    },
+    {
+      "role": "user",
+      "text": "hai",
+      "task_id": "74bff18a-00ee-4e79-affd-654fd890b0a4",
+      "mode": "auto",
+      "ts": "2026-10-06T19:39:14.771Z"
+    },
+    {
+      "role": "assistant",
+      "text": "Maaf, saya lagi nggak bisa nyambung ke model barusan. Coba lagi sebentar, atau jelaskan tugas coding-nya langsung.",
+      "task_id": "74bff18a-00ee-4e79-affd-654fd890b0a4",
+      "mode": "auto",
+      "ts": "2026-10-06T19:39:28.376Z"
+    },
+    {
+      "role": "user",
+      "text": "hai",
+      "task_id": "04e3d5a5-dd20-4d0c-8560-ef48f01f4188",
+      "mode": "auto",
+      "ts": "2026-10-06T19:39:58.670Z"
+    },
+    {
+      "role": "assistant",
+      "text": "Maaf, saya lagi nggak bisa nyambung ke model barusan. Coba lagi sebentar, atau jelaskan tugas coding-nya langsung.",
+      "task_id": "04e3d5a5-dd20-4d0c-8560-ef48f01f4188",
+      "mode": "auto",
+      "ts": "2026-10-06T19:40:12.505Z"
+    },
+    {
+      "role": "user",
+      "text": "hai",
+      "task_id": "010bb78f-da7c-4c96-9609-0699d250ca4b",
+      "mode": "auto",
+      "ts": "2026-10-06T19:44:40.418Z"
+    },
+    {
+      "role": "assistant",
+      "text": "Maaf, saya lagi nggak bisa nyambung ke model barusan. Coba lagi sebentar, atau jelaskan tugas coding-nya langsung.",
+      "task_id": "010bb78f-da7c-4c96-9609-0699d250ca4b",
+      "mode": "auto",
+      "ts": "2026-10-06T19:44:54.711Z"
+    }
+  ]
+}

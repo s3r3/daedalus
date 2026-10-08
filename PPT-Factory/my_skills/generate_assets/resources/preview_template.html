@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>PPT Component Arsenal Preview</title>
+    <style>
+        :root {
+            --bg-neutral: #f4f6f8;
+            --bg-white: #ffffff;
+            --border-color: #e1e4e8;
+            --accent-color: #6366f1;
+            /* Indigo */
+        }
+
+        /* Global Reset */
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            /* Use theme background globally */
+            background: var(--ppt-color-bg-main, #f4f6f8);
+            margin: 0;
+            padding: 40px;
+            /* Use theme text color if available */
+            color: var(--ppt-color-text-main, #333);
+            overflow-y: auto;
+        }
+
+        /* 
+           Wrapper to contain the components.
+           We remove strict slide dimensions here. 
+           The Python script will replace 'html, body' in theme.css with '.slide-canvas',
+           so we use this class to apply theme variables, but we override layout constraints.
+        */
+        .slide-canvas {
+            width: 100% !important;
+            max-width: 1200px !important;
+            /* Increased from 1000px */
+            margin: 0 auto !important;
+            height: auto !important;
+            min-height: auto !important;
+            /* Removed background: transparent !important to allow theme background to show */
+            box-shadow: none !important;
+            transform: none !important;
+            overflow: visible !important;
+            padding: 0 !important;
+
+            /* Ensure theme fonts/colors update this scope */
+            font-family: var(--ppt-font-family, sans-serif);
+            color: var(--ppt-color-text-main, #000);
+        }
+
+        .header-title {
+            max-width: 1200px;
+            margin: 0 auto 60px auto;
+            font-size: 2.5rem;
+            font-weight: 800;
+            color: inherit;
+            opacity: 0.9;
+            /* Removed border-bottom */
+            padding-bottom: 20px;
+        }
+
+        /* Vertical Stack Layout */
+        .component-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 80px;
+            width: 100%;
+        }
+
+        /* Category Sections */
+        .component-category {
+            display: flex;
+            flex-direction: column;
+            gap: 40px;
+            width: 100%;
+            padding-top: 40px;
+            border-top: 1px dashed rgba(128, 128, 128, 0.3);
+        }
+
+        /* First category shouldn't have top border */
+        .component-category:first-of-type {
+            border-top: none;
+            padding-top: 0;
+        }
+
+        .component-category>h3 {
+            font-size: 1.5rem;
+            color: inherit;
+            opacity: 0.7;
+            /* Removed border-left */
+            margin: 0 0 20px 0;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        /* Individual Component Block - "Separate Block" */
+        .component-wrapper {
+            position: relative;
+            /* Removed fixed white background/color to allow Theme CSS to control it via .slide-canvas scope */
+            background: transparent;
+            padding: 60px;
+            /* Spacious internal padding */
+            border-radius: 16px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            /* Semi-transparent border for dark/light compatibility */
+            border: 1px solid rgba(128, 128, 128, 0.2);
+
+            width: 100%;
+            box-sizing: border-box;
+            display: block;
+            /* Ensure block level */
+        }
+
+        /* Label for the component */
+        .component-wrapper::before {
+            content: attr(data-name);
+            display: inline-block;
+            margin-bottom: 30px;
+            font-size: 0.8rem;
+            color: #fff;
+            /* Semi-transparent dark badge */
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(4px);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+    </style>
+    <!-- Placeholder for Theme CSS Injection -->
+    {{ style_block }}
+</head>
+
+<body>
+    <div class="header-title">PPT Component Arsenal</div>
+
+    <main class="slide-canvas">
+        <div class="component-grid">
+            <!-- INJECTED GENERATED COMPONENTS -->
+            {{ components_html }}
+        </div>
+    </main>
+
+</body>
+
+</html>

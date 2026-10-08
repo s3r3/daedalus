@@ -1,0 +1,31 @@
+[data-theme="neon"] {
+  --sm-bg: #0a0a0a;
+  --sm-surface: #171717;
+  --sm-text: #ffffff;
+  --sm-muted: #737373;
+  --sm-primary: #ec4899;
+  --sm-secondary: #22d3ee;
+  --sm-accent: #a3e635;
+  --sm-border: #262626;
+  --sm-mono-font: 'JetBrains Mono', ui-monospace, monospace;
+  --sm-radius: 0.5rem;
+  --sm-shadow-sm: 0 1px 2px rgba(0,0,0,0.5);
+  --sm-shadow-md: 0 4px 6px rgba(0,0,0,0.5);
+  --sm-shadow-lg: 0 10px 15px rgba(0,0,0,0.5);
+  --sm-success: #22c55e;
+  --sm-warning: #f59e0b;
+  --sm-danger: #ef4444;
+  --sm-gradient-start: #ec4899;
+  --sm-gradient-end: #22d3ee;
+  --sm-gradient-mesh-1: #ec4899;
+  --sm-gradient-mesh-2: #22d3ee;
+  --sm-gradient-mesh-3: #a3e635;
+  --sm-gradient-mesh-4: #0a0a0a;
+  --sm-chart-1: #ec4899;
+  --sm-chart-2: #22d3ee;
+  --sm-chart-3: #a3e635;
+  --sm-chart-4: #f59e0b;
+  --sm-chart-5: #8b5cf6;
+  --sm-chart-6: #3b82f6;
+  --sm-glass-bg: rgba(23,23,23,0.7);
+}
