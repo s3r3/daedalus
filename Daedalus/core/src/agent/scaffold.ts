@@ -876,6 +876,8 @@ export function renderScaffoldPlaybook(match: ScaffoldMatch, probes: ToolchainPr
     `  ${generator.display}`,
     '',
     `- Non-interactive only: the flags above answer every prompt (CI=true semantics; npx runs with -y). If the generator still asks a question, stop and report it instead of waiting for input that will never come.`,
+    `- The generator only writes into a folder that does not exist yet or is COMPLETELY EMPTY: do not create_dir and do not write any file inside \`${targetDir}/\` before the generator has succeeded — create-vite and its peers cancel ("Operation cancelled") on a non-empty folder, which leaves no project behind at all.`,
+    `- If the generator fails, read the tail of its output before doing anything else — it names the cause. Sanctioned recovery for a not-empty cancellation: when every file inside \`${targetDir}/\` is one you created during THIS task, delete those files and run the generator once more; when the folder holds anything you did not create, stop and quote the generator's error line in your report. Never hand-write a skeleton to fake the marker.`,
     ...(recipe.generatorInstallsDependencies
       ? [
           `- Installing is not a separate step for this recipe: ${recipe.installHint.replace('${dir}', targetDir)}.`,
@@ -970,7 +972,25 @@ export type CreationCompletionEvidence = {
   commandsSucceeded: number;
   /** True when this task delegated to subagents (their ledgers count via the runtime layer). */
   delegated: boolean;
+  /** One-line summary of the most recent failed run_command, when any. */
+  lastCommandFailure?: string;
 };
+
+/**
+ * One-line "command — error tail" summary for failure evidence. Bounded:
+ * the last two non-empty output lines, capped, so a report names the
+ * cause (a cancelled generator, an engine warning) without quoting a log.
+ */
+export function summarizeCommandFailure(command: string, output: string): string {
+  const tail = output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(-2)
+    .join(' ')
+    .slice(0, 240);
+  return tail ? `\`${command}\` — ${tail}` : `\`${command}\` failed with no output`;
+}
 
 export type CreationRefusal = { reason: string; detail: string } | undefined;
 
@@ -998,14 +1018,14 @@ export function creationCompletionRefusal(
     if (markerPresent) return undefined;
     return {
       reason: 'no_files_created',
-      detail: `the scaffold marker ${goal.scaffold.recipe.marker.path} was not found under ${goal.scaffold.targetDir}/, so no ${goal.scaffold.recipe.framework} project exists on disk`,
+      detail: `the scaffold marker ${goal.scaffold.recipe.marker.path} was not found under ${goal.scaffold.targetDir}/, so no ${goal.scaffold.recipe.framework} project exists on disk${evidence.lastCommandFailure ? `; the last failed command shows why: ${evidence.lastCommandFailure}` : ''}`,
     };
   }
   if (evidence.filesChanged > 0) return undefined;
   if (evidence.commandsSucceeded > 0) return undefined;
   return {
     reason: 'no_files_created',
-    detail: 'no files were created or changed (no write/edit/create and no successful command produced anything)',
+    detail: `no files were created or changed (no write/edit/create and no successful command produced anything)${evidence.lastCommandFailure ? `; the last failed command shows why: ${evidence.lastCommandFailure}` : ''}`,
   };
 }
 

@@ -32,6 +32,7 @@ export {
   scaffoldApprovalChain,
   scaffoldChainStepFor,
   scaffoldMarkerPresent,
+  summarizeCommandFailure,
   workspaceRelativePath,
   type CreationCompletionEvidence,
   type CreationGoal,

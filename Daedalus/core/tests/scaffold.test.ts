@@ -19,6 +19,8 @@ import {
   TaskStore,
   clampCallTimeoutMs,
   createDefaultRegistry,
+  creationCompletionRefusal,
+  summarizeCommandFailure,
   detectCreationGoal,
   detectScaffoldRequest,
   detectUnsupportedFramework,
@@ -226,6 +228,40 @@ describe('creation-goal classification (completion gate surface)', () => {
   });
 });
 
+describe('creation completion gate failure evidence', () => {
+  const goal = detectCreationGoal('buat folder jojo disitu buat project vite buat halaman website tentang biodata presiden putin dari russia yang lengkap');
+
+  test('summarizeCommandFailure keeps the bounded error tail', () => {
+    const summary = summarizeCommandFailure('npm create vite@latest jojo', 'noise line\n\n> create-vite jojo\n└  Operation cancelled\n');
+    expect(summary).toContain('`npm create vite@latest jojo`');
+    expect(summary).toContain('Operation cancelled');
+    expect(summarizeCommandFailure('npm install', '')).toBe('`npm install` failed with no output');
+  });
+
+  test('a missing scaffold marker refusal names the last failed command when known', () => {
+    const refusal = creationCompletionRefusal(
+      goal,
+      {
+        filesChanged: 7,
+        commandsSucceeded: 0,
+        delegated: false,
+        lastCommandFailure: summarizeCommandFailure('npm create vite@latest jojo -- --template react-ts --no-interactive', '└  Operation cancelled'),
+      },
+      false,
+    );
+    expect(refusal?.reason).toBe('no_files_created');
+    expect(refusal?.detail).toContain('scaffold marker package.json was not found under jojo/');
+    expect(refusal?.detail).toContain('the last failed command shows why');
+    expect(refusal?.detail).toContain('Operation cancelled');
+  });
+
+  test('without a recorded failure the refusal stays the plain marker message', () => {
+    const refusal = creationCompletionRefusal(goal, { filesChanged: 0, commandsSucceeded: 0, delegated: false }, false);
+    expect(refusal?.detail).toContain('scaffold marker package.json was not found under jojo/');
+    expect(refusal?.detail).not.toContain('last failed command');
+  });
+});
+
 describe('scaffold playbook rendering + preflight', () => {
   const nextjs = detectScaffoldRequest('di folder jojo itu buat project next js')!;
 
@@ -240,6 +276,19 @@ describe('scaffold playbook rendering + preflight', () => {
     expect(text).toContain('separate steps');
     expect(text).toContain('Toolchains on this machine: node v20.11.0; npm 10.2.3; npx 10.2.3');
     expect(text).not.toContain('MISSING');
+  });
+
+  test('playbook warns the generator needs an empty folder and names the cancelled-run recovery', () => {
+    const vite = detectScaffoldRequest('buat folder jojo disitu buat project vite')!;
+    const text = renderScaffoldPlaybook(vite, [
+      { tool: 'node', ok: true, version: 'v24.0.0' },
+      { tool: 'npm', ok: true, version: '10.9.4' },
+    ]);
+    expect(text).toContain('COMPLETELY EMPTY');
+    expect(text).toContain('do not write any file inside `jojo/`');
+    expect(text).toContain('Operation cancelled');
+    expect(text).toContain('run the generator once more');
+    expect(text).toContain('Never hand-write a skeleton to fake the marker');
   });
 
   test('a missing toolchain turns the playbook into a plain stop instruction', () => {

@@ -482,6 +482,7 @@ export {
   scaffoldChainStepFor,
   scaffoldMarkerPresent,
   scaffoldPlanSteps,
+  summarizeCommandFailure,
   workspaceRelativePath,
   contextMeter,
   createPlan,
