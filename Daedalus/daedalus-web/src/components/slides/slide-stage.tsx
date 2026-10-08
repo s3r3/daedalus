@@ -1,22 +1,51 @@
-import { ChevronLeft, ChevronRight, Presentation, RefreshCw } from 'lucide-react'
+import { useState } from 'react'
+import { ChevronLeft, ChevronRight, FileDown, Pencil, Presentation, RefreshCw } from 'lucide-react'
 import { getLayout } from '@daedalus/core/slides/layouts'
 import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
+import { api, type DeckExportResult } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useDeck } from './useDeck'
 import { SlideRenderer } from './slide-renderer'
+import { SlideEditor } from './slide-editor'
 
 /**
  * Slide canvas (domain Slide): the deck rendered on a 16:9 stage with a
  * filmstrip underneath. The deck itself lives in the workspace
  * (`deck/deck.json`) and is produced through chat like any other artifact;
- * this surface only reads it — Refresh re-reads the file on demand.
+ * the Edit toggle opens the in-canvas editor and Export runs core's
+ * native PPTX exporter — the canvas is a working surface, not a preview.
  */
 export function SlideStage() {
   const { deck, loading, error, refresh, slide, slideCount, safeIndex, root } = useDeck()
   const setSlideIndex = useDaedalusStore((state) => state.setSlideIndex)
+  const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
+  const [editing, setEditing] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [exported, setExported] = useState<DeckExportResult | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
 
   const go = (index: number): void => setSlideIndex(Math.min(Math.max(0, index), Math.max(0, slideCount - 1)))
+
+  const onDeckChanged = (): void => {
+    refresh()
+    bumpWorkspaceRevision()
+  }
+
+  const exportDeck = async (): Promise<void> => {
+    if (!root) return
+    setExporting(true)
+    setExportError(null)
+    try {
+      const result = await api.deckExport(root)
+      setExported(result)
+      bumpWorkspaceRevision()
+    } catch (exportErr: unknown) {
+      setExportError(exportErr instanceof Error ? exportErr.message : String(exportErr))
+    } finally {
+      setExporting(false)
+    }
+  }
 
   return (
     <div data-testid="slide-stage" className="flex h-full min-h-0 flex-col gap-2 p-3">
@@ -53,8 +82,33 @@ export function SlideStage() {
             <RefreshCw className={loading ? 'animate-spin' : undefined} />
             Refresh
           </Button>
+          <Button
+            variant={editing ? 'default' : 'outline'}
+            size="sm"
+            onClick={() => setEditing((value) => !value)}
+            disabled={!deck || !slide}
+            aria-pressed={editing}
+            data-testid="slide-edit-toggle"
+          >
+            <Pencil />
+            Edit
+          </Button>
+          <Button size="sm" onClick={() => void exportDeck()} disabled={!deck || exporting} data-testid="slide-export">
+            <FileDown />
+            {exporting ? ' mengekspor…' : ' Export .pptx'}
+          </Button>
         </div>
       </div>
+
+      {exported ? (
+        <p data-testid="slide-exported" className="text-[11px] text-muted">
+          Terekspor: {exported.path} ({Math.max(1, Math.round(exported.bytes / 1024))} KB, {exported.slides} slide) —{' '}
+          <a className="text-primary underline" href={api.deckDownloadUrl(exported.root, exported.path)} download>
+            unduh .pptx
+          </a>
+        </p>
+      ) : null}
+      {exportError ? <p className="text-[11px] text-error">{exportError}</p> : null}
 
       {!root ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 px-3 py-6 text-center text-muted">
@@ -101,6 +155,8 @@ export function SlideStage() {
               )
             })}
           </div>
+
+          {editing && root ? <SlideEditor root={root} deck={deck} slide={slide} index={safeIndex} onChanged={onDeckChanged} /> : null}
         </>
       ) : (
         <div className="flex flex-1 items-center justify-center text-xs text-muted">Deck tidak punya slide.</div>

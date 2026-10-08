@@ -40,6 +40,17 @@ export type ComposerState = {
   error: string | null
 }
 
+/** Slide composer choices (Agentic Slide v2): explicit controls replace ask_user questions for count/language. */
+export type SlideOptions = {
+  generation: 'standard' | 'smart'
+  /** Target slide count; null lets the agent decide (Presenton's "Auto"). */
+  slideCount: number | null
+  /** Content language label sent to the agent ('' = follow the prompt). */
+  language: string
+  /** Bundled template pre-picked for the next task; null = let the outline checkpoint ask. */
+  templateId: string | null
+}
+
 export type TerminalState = {
   sessions: TerminalSession[]
   /** session id → accumulated output (server buffer is the authority; this mirrors it live). */
@@ -73,6 +84,8 @@ export type DaedalusState = {
   domain: WebDomain
   /** Selected slide in the open deck (clamped by the deck hook when read). */
   slideIndex: number
+  /** Slide composer choices (Agentic Slide v2): generation flow, target count (null = auto), content language ('' = auto), pre-picked template. */
+  slideOptions: SlideOptions
   openFilePath: string | null
   error: string | null
 
@@ -102,6 +115,7 @@ export type DaedalusState = {
   setTheme: (theme: 'daedalus-dark' | 'daedalus-light') => void
   setDomain: (domain: WebDomain) => void
   setSlideIndex: (index: number) => void
+  setSlideOptions: (patch: Partial<SlideOptions>) => void
   setOpenFile: (path: string | null) => void
   setError: (error: string | null) => void
   reset: () => void
@@ -161,6 +175,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   theme: 'daedalus-dark',
   domain: initialDomain(),
   slideIndex: 0,
+  slideOptions: { generation: 'standard', slideCount: null, language: '', templateId: null },
   openFilePath: null,
   error: null,
 
@@ -290,6 +305,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   setTheme: (theme) => set({ theme }),
   setDomain: (domain) => set({ domain }),
   setSlideIndex: (slideIndex) => set({ slideIndex: Number.isFinite(slideIndex) ? Math.max(0, Math.floor(slideIndex)) : 0 }),
+  setSlideOptions: (patch) => set((state) => ({ slideOptions: { ...state.slideOptions, ...patch } })),
   setOpenFile: (openFilePath) => set({ openFilePath }),
   setError: (error) => set({ error }),
   reset: () =>
@@ -313,6 +329,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
       workspaceRevision: 0,
       domain: initialDomain(),
       slideIndex: 0,
+      slideOptions: { generation: 'standard', slideCount: null, language: '', templateId: null },
       openFilePath: null,
       error: null,
     })),

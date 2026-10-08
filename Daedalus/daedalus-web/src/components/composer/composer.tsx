@@ -13,6 +13,7 @@ import { api } from '../../api/client'
 import type { Conversation, ConversationTurn, ExtensionStatus, WorkspaceFileEntry } from '../../api/types'
 import { saveActiveConversationId } from '../../state/prefs'
 import { ModelPicker } from './model-picker'
+import { SlideComposerControls } from './slide-controls'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 
 type UploadKind = 'file' | 'folder' | 'image' | 'zip'
@@ -25,6 +26,7 @@ type UploadKind = 'file' | 'folder' | 'image' | 'zip'
 export function Composer() {
   const composer = useDaedalusStore((state) => state.composer)
   const domain = useDaedalusStore((state) => state.domain)
+  const slideOptions = useDaedalusStore((state) => state.slideOptions)
   const workspaceRoot = useDaedalusStore((state) => state.workspace.root)
   const activeTaskId = useDaedalusStore((state) => state.taskId)
   const models = useDaedalusStore((state) => state.models)
@@ -628,6 +630,16 @@ export function Composer() {
         ...(pool.length > 1 ? { model_strategy: composer.modelStrategy } : {}),
         attachments: attachmentsForTask,
         ...(skillNames.length ? { skills: skillNames } : {}),
+        ...(domain === 'slide'
+          ? {
+              slide: {
+                generation: slideOptions.generation,
+                ...(slideOptions.slideCount ? { slide_count: slideOptions.slideCount } : {}),
+                ...(slideOptions.language ? { language: slideOptions.language } : {}),
+                ...(slideOptions.templateId ? { template_id: slideOptions.templateId } : {}),
+              },
+            }
+          : {}),
         ...(planTaskId ? { plan_task_id: planTaskId } : {}),
         ...(activeConversation ? { conversation_id: activeConversation.id } : {}),
       })
@@ -769,33 +781,39 @@ export function Composer() {
       data-testid="composer"
     >
       <div className="flex flex-wrap items-center gap-2">
-        <span
-          className="inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
-          style={{ borderColor: modeCssVar(composer.mode), color: modeCssVar(composer.mode) }}
-          data-testid="mode-badge"
-          data-mode={composer.mode}
-          title="Shift+Tab cycles Ask → Manual → Auto → Plan"
-        >
-          {MODE_LABELS[composer.mode]}
-        </span>
-        <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
-          mode
-          <select
-            aria-label="agent mode"
-            data-testid="mode-select"
-            className="h-6 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
-            style={{ borderColor: modeCssVar(composer.mode) }}
-            value={composer.mode}
-            onChange={(event) => onModeSelect(event.target.value as AgentMode)}
-          >
-            {AGENT_MODE_ORDER.map((mode) => (
-              <option key={mode} value={mode}>
-                {MODE_LABELS[mode]}
-              </option>
-            ))}
-          </select>
-        </label>
-        <span className="text-[10px] text-muted">Shift+Tab switches mode at the next turn boundary · Enter sends · Shift+Enter = new line</span>
+        {domain === 'slide' ? (
+          <SlideComposerControls />
+        ) : (
+          <>
+            <span
+              className="inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide"
+              style={{ borderColor: modeCssVar(composer.mode), color: modeCssVar(composer.mode) }}
+              data-testid="mode-badge"
+              data-mode={composer.mode}
+              title="Shift+Tab cycles Ask → Manual → Auto → Plan"
+            >
+              {MODE_LABELS[composer.mode]}
+            </span>
+            <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+              mode
+              <select
+                aria-label="agent mode"
+                data-testid="mode-select"
+                className="h-6 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
+                style={{ borderColor: modeCssVar(composer.mode) }}
+                value={composer.mode}
+                onChange={(event) => onModeSelect(event.target.value as AgentMode)}
+              >
+                {AGENT_MODE_ORDER.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {MODE_LABELS[mode]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <span className="text-[10px] text-muted">Shift+Tab switches mode at the next turn boundary · Enter sends · Shift+Enter = new line</span>
+          </>
+        )}
         <span className="ml-auto text-[10px] text-muted" data-testid="composer-session-summary">
           {providers.length ? `${providers.filter((provider) => provider.enabled).length} providers · ` : ''}
           {models.length ? `${models.length} models` : 'models load from settings'}

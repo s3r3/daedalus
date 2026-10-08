@@ -4,7 +4,7 @@ import type { ContentBlock, Message, ToolDefinition } from '../providers/llm/typ
 import type { Attachment, PromptFamily, TaskDomain, TaskState } from '../contracts.ts';
 import { buildPrompt, estimateTokens, systemMessage, userMessage } from '../providers/index.ts';
 import { modePromptContract } from '../interaction/modes.ts';
-import { MAX_SKILLS_IN_PROMPT, dedupeSkillsByName, formatSkillOrigin, isPresentationSkill, type SkillInfo, type SkillOrigin } from '../skills/index.ts';
+import { MAX_SKILLS_IN_PROMPT, dedupeSkillsByName, formatSkillOrigin, type SkillInfo, type SkillOrigin } from '../skills/index.ts';
 import { walkTreeLines } from '../tools/filesystem/index.ts';
 import { promptFamilyFragment } from './prompt-dialects.ts';
 import { resolveMentionSection } from './mentions.ts';

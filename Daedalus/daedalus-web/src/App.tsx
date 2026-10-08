@@ -18,6 +18,8 @@ import { AttachmentsPanel, ChildTasksPanel, FinalReportView } from './components
 import { ScrollArea } from './components/ui/scroll-area'
 import { SlideStage } from './components/slides/slide-stage'
 import { DeckOutlinePanel } from './components/slides/deck-outline'
+import { SlideTemplatesPanel } from './components/slides/slide-templates'
+import { SlideWorkspacePanel } from './components/slides/slide-workspace'
 import { useEventStream } from './api/useEventStream'
 import { api } from './api/client'
 import { readStoredTheme, applyPaletteVars } from './theme/theme'
@@ -290,31 +292,41 @@ export function App() {
             and scrolls internally — the workspace panel used to sit at its
             natural (content) height and push this scroll region to zero. */}
         <aside className="flex min-h-0 flex-col gap-2 lg:overflow-hidden">
-          <WorkspacePanel
-            className={workspacePanelHeight > 0 ? 'min-h-0 shrink-0' : 'min-h-0 lg:flex-1'}
-            style={workspacePanelHeight > 0 ? { height: `${workspacePanelHeight}px` } : undefined}
-          />
-          <div
-            role="separator"
-            aria-orientation="horizontal"
-            aria-label="resize workspace panel"
-            aria-valuemin={WORKSPACE_PANEL_HEIGHT.min}
-            aria-valuemax={WORKSPACE_PANEL_HEIGHT.max}
-            aria-valuenow={workspacePanelHeight > 0 ? workspacePanelHeight : undefined}
-            tabIndex={0}
-            data-testid="workspace-resize-handle"
-            onPointerDown={startWorkspacePanelResize}
-            onDoubleClick={resetWorkspacePanelHeight}
-            onKeyDown={onWorkspacePanelResizeKeyDown}
-            className="group flex h-2 shrink-0 cursor-ns-resize touch-none items-center justify-center rounded hover:bg-primary/20 focus:bg-primary/20 focus:outline-none"
-            title="Drag to resize the workspace panel (double-click resets, arrow keys work too)"
-          >
-            <span className="h-0.5 w-10 rounded bg-line group-hover:bg-primary" />
-          </div>
+          {domain === 'slide' ? (
+            <SlideWorkspacePanel
+              className={workspacePanelHeight > 0 ? 'min-h-0 shrink-0' : 'min-h-0 lg:flex-1'}
+              style={workspacePanelHeight > 0 ? { height: `${workspacePanelHeight}px` } : undefined}
+            />
+          ) : (
+            <WorkspacePanel
+              className={workspacePanelHeight > 0 ? 'min-h-0 shrink-0' : 'min-h-0 lg:flex-1'}
+              style={workspacePanelHeight > 0 ? { height: `${workspacePanelHeight}px` } : undefined}
+            />
+          )}
+          {domain === 'slide' ? null : (
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="resize workspace panel"
+              aria-valuemin={WORKSPACE_PANEL_HEIGHT.min}
+              aria-valuemax={WORKSPACE_PANEL_HEIGHT.max}
+              aria-valuenow={workspacePanelHeight > 0 ? workspacePanelHeight : undefined}
+              tabIndex={0}
+              data-testid="workspace-resize-handle"
+              onPointerDown={startWorkspacePanelResize}
+              onDoubleClick={resetWorkspacePanelHeight}
+              onKeyDown={onWorkspacePanelResizeKeyDown}
+              className="group flex h-2 shrink-0 cursor-ns-resize touch-none items-center justify-center rounded hover:bg-primary/20 focus:bg-primary/20 focus:outline-none"
+              title="Drag to resize the workspace panel (double-click resets, arrow keys work too)"
+            >
+              <span className="h-0.5 w-10 rounded bg-line group-hover:bg-primary" />
+            </div>
+          )}
           <ScrollArea className="min-h-[240px] lg:min-h-0 lg:flex-1">
             <div className="flex flex-col gap-2 pr-1">
               {domain === 'slide' ? <DeckOutlinePanel /> : null}
-              <ExtensionsPanel />
+              {domain === 'slide' ? <SlideTemplatesPanel /> : null}
+              {domain === 'slide' ? null : <ExtensionsPanel />}
               <PlanPanel />
               <ActivityTimeline />
               <ValidationPanel />

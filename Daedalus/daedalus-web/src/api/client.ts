@@ -98,7 +98,19 @@ export type CreateTaskInput = {
   conversation_id?: string
   /** Skill names explicitly invoked for this task (composer `/skill <name>`); the server validates them and core force-loads their bodies. */
   skills?: string[]
+  /** Slide composer parameters (Agentic Slide v2); only sent in the slide domain, validated by the server. */
+  slide?: { generation?: 'smart' | 'standard'; slide_count?: number; language?: string; template_id?: string }
 }
+
+/** One bundled slide template (design direction) from GET /slides/templates. */
+export type SlideTemplateInfo = {
+  id: string
+  name: string
+  description: string
+  theme: { accent?: string; dark?: boolean; background?: string; surface?: string; text?: string; muted?: string; headingFont?: string; bodyFont?: string; templateId?: string }
+}
+
+export type DeckExportResult = { root: string; path: string; bytes: number; slides: number }
 
 export const api = {
   health: () => request<{ status: string; service: string; active_tasks: number }>('/health'),
@@ -168,6 +180,50 @@ export const api = {
   task: (taskId: string) => request<TaskSnapshot>(`/tasks/${encodeURIComponent(taskId)}`),
 
   taskEvents: (taskId: string) => request<{ events: Event[]; count: number; task: TaskSummary }>(`/tasks/${encodeURIComponent(taskId)}/events`),
+
+  /** Bundled slide templates (design directions) shipped with the install. */
+  slideTemplates: () => request<{ templates: SlideTemplateInfo[] }>('/slides/templates'),
+
+  /** The workspace deck via the core-gated slide API (404 when no deck exists). */
+  deck: (root: string) => request<{ root: string; deck: import('@daedalus/core').DeckSpec }>(`/slides/deck${query({ root })}`),
+
+  /** Apply a bundled template (or accent/dark) to the open deck; the server validates and returns the fresh deck. */
+  deckTheme: (root: string, input: { template_id?: string; accent?: string; dark?: boolean }) =>
+    request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/theme', {
+      method: 'POST',
+      body: JSON.stringify({ root, ...input }),
+    }),
+
+  deckAddSlide: (root: string, input: { layout: string; content?: Record<string, unknown>; index?: number }) =>
+    request<{ root: string; deck: import('@daedalus/core').DeckSpec; slide_id: string }>('/slides/deck/slide/add', {
+      method: 'POST',
+      body: JSON.stringify({ root, ...input }),
+    }),
+
+  deckUpdateSlide: (root: string, slideId: string, input: { content: Record<string, unknown>; layout?: string }) =>
+    request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/slide/update', {
+      method: 'POST',
+      body: JSON.stringify({ root, slide_id: slideId, ...input }),
+    }),
+
+  deckDeleteSlide: (root: string, slideId: string) =>
+    request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/slide/delete', {
+      method: 'POST',
+      body: JSON.stringify({ root, slide_id: slideId }),
+    }),
+
+  deckMoveSlide: (root: string, slideId: string, toIndex: number) =>
+    request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/slide/move', {
+      method: 'POST',
+      body: JSON.stringify({ root, slide_id: slideId, to_index: toIndex }),
+    }),
+
+  /** Export the open deck to .pptx through core's native exporter. */
+  deckExport: (root: string) =>
+    request<DeckExportResult>('/slides/deck/export', { method: 'POST', body: JSON.stringify({ root }) }),
+
+  /** Direct download URL for an exported deck file (deck/*.pptx). */
+  deckDownloadUrl: (root: string, path: string) => `/slides/deck/download${query({ root, path })}`,
 
   extensionsStatus: (root: string) => request<ExtensionStatus>(`/extensions/status${query({ root })}`),
 

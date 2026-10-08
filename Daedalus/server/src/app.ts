@@ -1310,6 +1310,12 @@ export function createApp(ctx: AppContext) {
           // un-skilled task. A valid invocation always takes the task
           // path (the fast answer paths have no skill context).
           const skillNames = stringList(parsed.skills).map((name) => name.trim()).filter(Boolean);
+          if (domain === "slide" && skillNames.length > 0) {
+            // Slide mode is a locked surface (deck tools + ask_user); a
+            // /skill invocation there gets a named refusal, not a silent drop.
+            sendJson(res, 400, { error: "skills_not_in_slide_domain", request_id: requestId });
+            return;
+          }
           if (skillNames.length > 0) {
             const skillConfig = await loadSkillConfig(repoPath);
             const inventory = await loadSkillInventory(resolveSkillSearchDirs(repoPath), { disabledNames: skillConfig.disabled });
@@ -1865,6 +1871,33 @@ export function createApp(ctx: AppContext) {
             return;
           }
           sendJson(res, 200, { root, deck });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/slides/deck/download") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const rel = url.searchParams.get("path") || "";
+          // Only exported decks are downloadable: a deck/*.pptx path that
+          // cannot escape the workspace.
+          if (!rel.startsWith("deck/") || !rel.toLowerCase().endsWith(".pptx") || rel.includes("..")) {
+            sendJson(res, 400, { error: "invalid_download_path", request_id: requestId });
+            return;
+          }
+          const absolute = resolveInside(root, rel);
+          const data = readFileSync(absolute);
+          res.writeHead(200, {
+            "content-type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "content-length": data.length,
+            "content-disposition": `attachment; filename="${basename(rel)}"`,
+            ...CORS_HEADERS,
+          });
+          res.end(data);
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
