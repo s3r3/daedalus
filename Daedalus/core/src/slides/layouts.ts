@@ -341,6 +341,323 @@ export const LAYOUTS: LayoutDef[] = [
     },
   },
   {
+    id: 'agenda-toc', label: 'Agenda', category: 'opener',
+    schema: schema(['title', 'items'], {
+      title: s(),
+      items: { type: 'array', minItems: 3, maxItems: 7, items: obj(['label'], { label: s(), page: s() }) },
+    }),
+    defaults: {
+      title: 'Agenda Sesi: Membaca Deck Ini dalam Enam Bab',
+      items: [
+        { label: 'Konteks dan Urgensi Masalah', page: '02' },
+        { label: 'Bukti Lapangan dan Temuan Kunci', page: '05' },
+        { label: 'Usulan Desain dan Alur Kerja', page: '09' },
+        { label: 'Kelayakan Teknis dan Biaya', page: '13' },
+        { label: 'Rencana Uji dan Kriteria Sukses', page: '17' },
+        { label: 'Keputusan yang Diminta Hari Ini', page: '21' },
+      ],
+    },
+  },
+  {
+    id: 'kpi-band', label: 'KPI band', category: 'data',
+    schema: schema(['kpis'], {
+      title: s(),
+      kpis: { type: 'array', minItems: 3, maxItems: 4, items: obj(['value', 'label'], { value: s(), label: s(), delta: s(), deltaUp: { type: 'boolean' } }) },
+    }),
+    defaults: {
+      title: 'Kinerja Kuartal Ini dalam Empat Angka',
+      kpis: [
+        { value: '92,4%', label: 'Tugas selesai tanpa eskalasi ulang', delta: '+6,1 pt', deltaUp: true },
+        { value: '31 mnt', label: 'Median waktu dari prompt ke hasil', delta: '-8 mnt', deltaUp: true },
+        { value: '4,7/5', label: 'Kepuasan presenter atas hasil akhir', delta: '+0,3', deltaUp: true },
+        { value: '2,1%', label: 'Slide ditolak validator kepadatan', delta: '+0,4 pt', deltaUp: false },
+      ],
+    },
+  },
+  {
+    id: 'funnel', label: 'Funnel', category: 'visual',
+    schema: schema(['title', 'stages'], {
+      title: s(),
+      stages: { type: 'array', minItems: 3, maxItems: 4, items: obj(['label'], { label: s(), value: n(), desc: s() }) },
+    }),
+    defaults: {
+      title: 'Dari Prompt Kasar Menjadi Deck Siap Presentasi',
+      stages: [
+        { label: 'Prompt masuk', value: 100, desc: 'Semua permintaan diterima apa adanya' },
+        { label: 'Outline terstruktur', value: 78, desc: 'Topik dipecah ke slide bernomor' },
+        { label: 'Konten tervalidasi', value: 54, desc: 'Kepadatan dan skema lolos pemeriksa' },
+        { label: 'PPTX terkirim', value: 41, desc: 'Berkas final diunduh presenter' },
+      ],
+    },
+  },
+  {
+    id: 'gantt-bars', label: 'Gantt bars', category: 'visual',
+    schema: schema(['title', 'bars'], {
+      title: s(), startLabel: s(), endLabel: s(),
+      bars: { type: 'array', minItems: 3, maxItems: 6, items: obj(['label'], { label: s(), start: n(), span: n(), note: s() }) },
+    }),
+    defaults: {
+      title: 'Jadwal Satu Semester: Lima Lini Berjalan Berurutan',
+      startLabel: 'Minggu 1',
+      endLabel: 'Minggu 16',
+      bars: [
+        { label: 'Riset & outline', start: 0, span: 25, note: 'bab 1–2' },
+        { label: 'Implementasi inti', start: 15, span: 38, note: 'mesin slide' },
+        { label: 'Perpustakaan layout', start: 40, span: 30, note: '50 layout' },
+        { label: 'Uji pengguna', start: 62, span: 22, note: '5 responden' },
+        { label: 'Penulisan laporan', start: 74, span: 26, note: 'bab 3–5' },
+      ],
+    },
+  },
+  {
+    id: 'org-chart', label: 'Org chart', category: 'visual',
+    schema: schema(['title', 'root', 'reports'], {
+      title: s(),
+      root: obj(['name', 'role'], { name: s(), role: s() }),
+      reports: { type: 'array', minItems: 2, maxItems: 4, items: obj(['name', 'role'], { name: s(), role: s(), members: stringArray(0, 4) }) },
+    }),
+    defaults: {
+      title: 'Struktur Tim di Balik Deck Ini',
+      root: { name: 'Andini Prameswari', role: 'Ketua proyek & penanggung jawab mutu' },
+      reports: [
+        { name: 'Bagas Nugraha', role: 'Mesin & pipeline', members: ['Raka', 'Sinta'] },
+        { name: 'Citra Lestari', role: 'Desain & layout', members: ['Dewi', 'Eko', 'Fajar'] },
+        { name: 'Fajar Ramadhan', role: 'Uji & validasi', members: ['Gita'] },
+      ],
+    },
+  },
+  {
+    id: 'pros-cons', label: 'Pros & cons', category: 'visual',
+    schema: schema(['title', 'pros', 'cons'], { title: s(), pros: namedColumnSchema(), cons: namedColumnSchema() }),
+    defaults: {
+      title: 'Menimbang: Mesin Slide Terpisah dari Loop Coding',
+      pros: {
+        title: 'Keuntungan terukur',
+        points: [
+          'Kegagalan terisolasi: error slide tidak merusak sesi coding',
+          'Validator kepadatan menegakkan kerapian sejak outline',
+          'Ekspor PPTX deterministik, mudah diuji regresinya',
+        ],
+      },
+      cons: {
+        title: 'Biaya yang harus dibayar',
+        points: [
+          'Dua mesin perlu dirawat: loop agen dan engine slide',
+          'Fitur lintas domain harus ditulis dua kali',
+          'Onboarding kontributor lebih panjang di awal',
+        ],
+      },
+    },
+  },
+  {
+    id: 'pricing-tiers', label: 'Pricing tiers', category: 'data',
+    schema: schema(['title', 'tiers'], {
+      title: s(), note: s(),
+      tiers: {
+        type: 'array', minItems: 3, maxItems: 3,
+        items: obj(['name', 'price'], { name: s(), price: s(), period: s(), features: stringArray(2, 6), featured: { type: 'boolean' } }),
+      },
+    }),
+    defaults: {
+      title: 'Tiga Paket Layanan Pembuatan Deck untuk Tim',
+      note: 'Semua paket termasuk ekspor PPTX dan satu putaran revisi layout.',
+      tiers: [
+        { name: 'Dasar', price: 'Rp0', period: 'untuk uji coba', features: ['12 layout inti', '1 tema bawaan', 'Ekspor PPTX standar'] },
+        { name: 'Tim', price: 'Rp149rb', period: 'per pengguna / bulan', featured: true, features: ['50 layout lengkap', '5 tema bawaan', 'Upload gambar placeholder', 'Validator kepadatan'] },
+        { name: 'Institusi', price: 'Hubungi kami', period: 'lisensi tahunan', features: ['Semua fitur Tim', 'Tema kustom kampus', 'Dukungan prioritas'] },
+      ],
+    },
+  },
+  {
+    id: 'faq', label: 'FAQ', category: 'content',
+    schema: schema(['title', 'items'], {
+      title: s(),
+      items: { type: 'array', minItems: 3, maxItems: 5, items: obj(['q', 'a'], { q: s(), a: s() }) },
+    }),
+    defaults: {
+      title: 'Pertanyaan yang Paling Sering Diajukan Penguji',
+      items: [
+        { q: 'Mengapa slide dipisah dari agen coding?', a: 'Agar kegagalan format terisolasi dan setiap keluaran slide lolos validator yang sama.' },
+        { q: 'Apa yang terjadi saat model memberi konten berlebih?', a: 'Validator menolak slide sebelum tampil; mesin meminta perbaikan terbatas, bukan menebak.' },
+        { q: 'Bisakah presenter mengganti gambar placeholder?', a: 'Bisa. Klik placeholder di mode Edit, unggah berkas, dan gambar asli ikut terekspor ke PPTX.' },
+        { q: 'Tema apa saja yang tersedia?', a: 'Lima tema bawaan: General, Midnight Scholar, Documentary, Mono Luxe, dan Ocean.' },
+      ],
+    },
+  },
+  {
+    id: 'steps-cards', label: 'Steps cards', category: 'visual',
+    schema: schema(['title', 'steps'], {
+      title: s(),
+      steps: { type: 'array', minItems: 3, maxItems: 4, items: obj(['title'], { icon: s(), title: s(), desc: s() }) },
+    }),
+    defaults: {
+      title: 'Empat Langkah dari Prompt ke PPTX',
+      steps: [
+        { icon: 'pen-line', title: 'Tulis prompt', desc: 'Topik, jumlah slide, dan bahasa dipilih eksplisit' },
+        { icon: 'list-tree', title: 'Tinjau outline', desc: 'Kerangka tampil di panel sebelum dibuat' },
+        { icon: 'layout-grid', title: 'Pilih tema', desc: 'Satu dari lima arah desain bawaan' },
+        { icon: 'download', title: 'Unduh PPTX', desc: 'Hasil tervalidasi siap dipresentasikan' },
+      ],
+    },
+  },
+  {
+    id: 'split-visual-quote', label: 'Visual quote', category: 'visual',
+    schema: schema(['quote'], {
+      quote: s(), author: s(), role: s(), image: s(), alt: s(),
+      side: { type: 'string', enum: ['left', 'right'] },
+    }),
+    defaults: {
+      quote: 'Deck yang rapi bukan soal dekorasi — ia membuat argumen bisa diperiksa sebelum dipresentasikan.',
+      author: 'Dr. Ratna Wulandari',
+      role: 'Pembimbing skripsi, Universitas Contoh',
+      alt: 'Foto sesi bimbingan di ruang seminar',
+    },
+  },
+  {
+    id: 'banner-cta', label: 'CTA banner', category: 'closing',
+    schema: schema(['title', 'primary'], { title: s(), subtitle: s(), primary: s(), secondary: s(), note: s() }),
+    defaults: {
+      title: 'Siap Mencoba Membuat Deck Pertama Anda?',
+      subtitle: 'Tulis satu prompt, tinjau outline-nya, dan unduh PPTX dalam waktu kurang dari lima menit.',
+      primary: 'Mulai Buat Deck',
+      secondary: 'Lihat Contoh Hasil',
+      note: 'Tanpa kartu kredit. Berkas tersimpan lokal di workspace Anda.',
+    },
+  },
+  {
+    id: 'logo-wall', label: 'Logo wall', category: 'visual',
+    schema: schema(['logos'], {
+      title: s(),
+      logos: { type: 'array', minItems: 6, maxItems: 8, items: obj(['name'], { name: s() }) },
+    }),
+    defaults: {
+      title: 'Dipercaya Tim Kecil di Berbagai Kampus',
+      logos: [
+        { name: 'Lab Sistem Cerdas' }, { name: 'Himpunan Informatika' }, { name: 'Unit Kegiatan Film' },
+        { name: 'Klinik Bahasa' }, { name: 'Pusat Karier' }, { name: 'Perpustakaan Digital' },
+        { name: 'Komunitas Data' }, { name: 'Studio Desain' },
+      ],
+    },
+  },
+  {
+    id: 'year-markers', label: 'Year markers', category: 'visual',
+    schema: schema(['years'], {
+      title: s(),
+      years: { type: 'array', minItems: 3, maxItems: 5, items: obj(['year', 'label'], { year: s(), label: s(), desc: s() }) },
+    }),
+    defaults: {
+      title: 'Tiga Tahun Membangun Mesin Presentasi',
+      years: [
+        { year: '2024', label: 'Fondasi agen', desc: 'Loop coding dan registry alat pertama' },
+        { year: '2025', label: 'Canvas web', desc: 'Editor slide seret-lepas di peramban' },
+        { year: '2026', label: 'Perpustakaan 50', desc: 'Lima puluh layout dan lima tema bawaan' },
+      ],
+    },
+  },
+  {
+    id: 'stat-duel', label: 'Stat duel', category: 'data',
+    schema: schema(['left', 'right', 'delta'], {
+      title: s(), note: s(), delta: s(),
+      left: obj(['value', 'label'], { value: s(), label: s() }),
+      right: obj(['value', 'label'], { value: s(), label: s() }),
+    }),
+    defaults: {
+      title: 'Sebelum dan Sesudah Validator Kepadatan',
+      left: { value: '38%', label: 'Slide rapi pada percobaan pertama (sebelum)' },
+      right: { value: '94%', label: 'Slide rapi pada percobaan pertama (sesudah)' },
+      delta: '+56 pt',
+      note: 'Diukur pada 214 deck uji dengan konten Indonesia padat, validator aktif sejak outline.',
+    },
+  },
+  {
+    id: 'waterfall-steps', label: 'Waterfall steps', category: 'visual',
+    schema: schema(['title', 'steps'], {
+      title: s(),
+      steps: { type: 'array', minItems: 3, maxItems: 4, items: obj(['label'], { label: s(), desc: s() }) },
+    }),
+    defaults: {
+      title: 'Keputusan Menyempit di Setiap Tahap Tinjauan',
+      steps: [
+        { label: 'Topik diterima', desc: 'Semua usulan masuk tanpa saringan' },
+        { label: 'Outline disetujui', desc: 'Kerangka disesuaikan dengan audiens' },
+        { label: 'Konten tervalidasi', desc: 'Slide padat ditolak sebelum tampil' },
+        { label: 'Deck final', desc: 'Satu versi yang siap dipertahankan' },
+      ],
+    },
+  },
+  {
+    id: 'feature-highlight', label: 'Feature highlight', category: 'content',
+    schema: schema(['title', 'checks'], { title: s(), icon: s(), lead: s(), checks: stringArray(3, 6) }),
+    defaults: {
+      title: 'Validator Kepadatan: Penjaga Kerapian Otomatis',
+      icon: 'shield-check',
+      lead: 'Setiap slide diperiksa sebelum tampil — jumlah poin, panjang teks, dan aset gambar diverifikasi terhadap skema layout-nya.',
+      checks: [
+        'Menolak poin berlebih sebelum merusak tata letak',
+        'Peringatan teks panjang tidak memblokir ekspor',
+        'Aset gambar hilang menjadi error yang jujur',
+        'Posisi seret-lepas editor ikut divalidasi',
+      ],
+    },
+  },
+  {
+    id: 'callout', label: 'Callout', category: 'content',
+    schema: schema(['title', 'body'], {
+      title: s(), body: s(), icon: s(),
+      tone: { type: 'string', enum: ['info', 'success', 'warning'] },
+      points: stringArray(0, 4),
+    }),
+    defaults: {
+      title: 'Perhatian: Ekspor Memerlukan Aset yang Benar-Benar Ada',
+      body: 'Slide bergambar yang asetnya hilang akan gagal validasi, bukan diam-diam tampil kosong. Unggah gambar lewat placeholder di editor, atau hapus bidang gambarnya.',
+      icon: 'triangle-alert',
+      tone: 'warning',
+      points: ['Format didukung: PNG, JPG, GIF, WebP', 'Batas berkas 10 MB per gambar'],
+    },
+  },
+  {
+    id: 'ranking-list', label: 'Ranking list', category: 'data',
+    schema: schema(['title', 'entries'], {
+      title: s(),
+      entries: { type: 'array', minItems: 3, maxItems: 5, items: obj(['label', 'value'], { label: s(), value: n(), note: s() }) },
+    }),
+    defaults: {
+      title: 'Layout Paling Sering Dipilih Presenter Uji',
+      entries: [
+        { label: 'Pembuka judul', value: 96, note: 'hampir selalu dipakai' },
+        { label: 'Poin berurutan', value: 88, note: 'isi utama argumen' },
+        { label: 'Diagram alur', value: 74, note: 'proses dan sebab-akibat' },
+        { label: 'Grafik batang', value: 63, note: 'bukti kuantitatif' },
+        { label: 'Kutipan tunggal', value: 41, note: 'penekanan naratif' },
+      ],
+    },
+  },
+  {
+    id: 'hero-image-caption', label: 'Hero image', category: 'visual',
+    schema: schema(['image', 'title'], { image: s(), alt: s(), title: s(), caption: s() }),
+    defaults: {
+      image: 'hero-workshop.png',
+      alt: 'Suasana lokakarya penyusunan deck',
+      title: 'Lokakarya Perdana: Dua Puluh Presenter, Satu Prompt',
+      caption: 'Setiap peserta membawa pulang PPTX yang lolos validasi pada percobaan pertama.',
+    },
+  },
+  {
+    id: 'quote-wall', label: 'Quote wall', category: 'content',
+    schema: schema(['quotes'], {
+      title: s(),
+      quotes: { type: 'array', minItems: 3, maxItems: 3, items: obj(['text', 'name'], { text: s(), name: s(), role: s() }) },
+    }),
+    defaults: {
+      title: 'Kata Mereka Setelah Mencoba',
+      quotes: [
+        { text: 'Outline yang bisa ditinjau dulu membuat saya berani memberi prompt yang lebih spesifik.', name: 'Sari Melati', role: 'Asisten dosen' },
+        { text: 'Validator menolak slide saya yang kepenuhan — dan hasilnya memang jauh lebih rapi.', name: 'Raka Pradana', role: 'Mahasiswa tingkat akhir' },
+        { text: 'Klik placeholder, unggah foto, selesai. Gambar ikut masuk ke berkas PPTX-nya.', name: 'Gita Savitri', role: 'Staf perpustakaan' },
+      ],
+    },
+  },
+  {
     id: 'closing', label: 'Closing', category: 'closing',
     schema: schema(['title'], { title: s(), cta: s() }),
     defaults: { title: 'Thank you', cta: '' },
@@ -400,6 +717,26 @@ export function layoutBlockKeys(layoutId: string, content: Record<string, unknow
     case 'table': return ['title', 'table'];
     case 'stats': return ['title', ...indexedKeys(content.stats, 'stat')];
     case 'icon-grid': return ['title', ...indexedKeys(content.items, 'item')];
+    case 'agenda-toc': return ['title', ...indexedKeys(content.items, 'item')];
+    case 'kpi-band': return ['title', ...indexedKeys(content.kpis, 'kpi')];
+    case 'funnel': return ['title', ...indexedKeys(content.stages, 'stage')];
+    case 'gantt-bars': return ['title', ...indexedKeys(content.bars, 'bar')];
+    case 'org-chart': return ['title', 'root', ...indexedKeys(content.reports, 'person')];
+    case 'pros-cons': return ['title', 'pros', 'cons'];
+    case 'pricing-tiers': return ['title', ...indexedKeys(content.tiers, 'tier'), 'note'];
+    case 'faq': return ['title', ...indexedKeys(content.items, 'item')];
+    case 'steps-cards': return ['title', ...indexedKeys(content.steps, 'step')];
+    case 'split-visual-quote': return ['quote', 'author', 'image'];
+    case 'banner-cta': return ['title', 'subtitle', 'actions', 'note'];
+    case 'logo-wall': return ['title', ...indexedKeys(content.logos, 'logo')];
+    case 'year-markers': return ['title', ...indexedKeys(content.years, 'year')];
+    case 'stat-duel': return ['title', 'left', 'delta', 'right', 'note'];
+    case 'waterfall-steps': return ['title', ...indexedKeys(content.steps, 'step')];
+    case 'feature-highlight': return ['title', 'icon', 'checks'];
+    case 'callout': return ['title', 'body', 'points'];
+    case 'ranking-list': return ['title', ...indexedKeys(content.entries, 'entry')];
+    case 'hero-image-caption': return ['image', 'title', 'caption'];
+    case 'quote-wall': return ['title', ...indexedKeys(content.quotes, 'quote')];
     default: return [];
   }
 }
