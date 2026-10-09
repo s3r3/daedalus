@@ -871,8 +871,18 @@ export class AgentLoop {
       const canMutate = turnMode === 'auto' || turnMode === 'manual' || turnMode === 'orchestrator';
       const attempts = (this.#invalidActions.get(state.id) ?? 0) + 1;
       this.#invalidActions.set(state.id, attempts);
-      if (canMutate && attempts < this.#stopPolicy.max_errors) {
-        const directive = 'Invalid model response: the previous reply was not a tool call, done:, replan:, or stop:. Call a concrete tool next (for implementation work use write_file, edit_file, create_dir, or run_command); read-only inspection alone does not complete an implementation step.';
+      // Read-only modes (ask/plan) get the same bounded repair as mutating
+      // modes, with a directive naming the moves those modes actually have.
+      // Without it the FIRST prose reply failed the task invalid_action, so
+      // a correct answer sitting in chat still ended with status failed.
+      // The budget is the shared max_errors cap; past it the task fails
+      // honestly below, exactly like the mutating path.
+      if (attempts < this.#stopPolicy.max_errors) {
+        const directive = canMutate
+          ? 'Invalid model response: the previous reply was not a tool call, done:, replan:, or stop:. Call a concrete tool next (for implementation work use write_file, edit_file, create_dir, or run_command); read-only inspection alone does not complete an implementation step.'
+          : turnMode === 'plan'
+            ? 'Invalid model response: the previous reply was plain prose, which is neither an action nor a finished plan. In Plan mode, either call a tool next (read tools to explore, ask_user to interview, or write_file/edit_file/create_dir to write your plan documents under .daedalus/plans/), or — once the plan document set is written — reply starting with "done: " naming the plan folder and restating the plan, or "replan: <reason>" if the plan itself must change. Do not resend the summary as unprefixed prose.'
+            : 'Invalid model response: the previous reply was plain prose, which is neither an action nor a recorded answer. In Ask mode, either call a read tool next (read_file, list_dir, grep, glob, git_status, git_diff) if you still need information from the workspace, or reply with your final answer starting with "done: " — the answer itself follows the prefix. Do not resend the answer as unprefixed prose.';
         const updated = { ...successfulState, turns: (state.turns ?? 0) + 1, last_error: undefined, last_observation: directive };
         this.#store.saveState(state.id, updated);
         return updated;
