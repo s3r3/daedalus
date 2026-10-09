@@ -710,6 +710,27 @@ export {
 export { exportDeckToPptx } from "./slides/export-pptx.ts";
 
 export {
+  generateDeckOutlineStage,
+  fillDeckSlidesStage,
+  generateDeckFullStage,
+  regenerateSlideStage,
+  normalizeBrief,
+  SlidePipelineError,
+  type DeckBrief,
+  type OutlineItem,
+  type FillStageResult,
+  type ExportInfo,
+} from "./slides/pipeline.ts";
+
+export {
+  SlideEngine,
+  applyDeckOps,
+  type SlideEngineDeps,
+  type SlideEngineOutcome,
+  type SlideEngineRunResult,
+} from "./slides/engine.ts";
+
+export {
   SLIDE_TEMPLATES,
   getSlideTemplate,
   listSlideTemplates,

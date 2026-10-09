@@ -118,7 +118,7 @@ type Verdict<T> = { ok: true; value: T } | { ok: false; issues: string[] };
  * model, owns correctness. Throws SlidePipelineError after the last
  * attempt; never invents a fallback value.
  */
-async function structuredCall<T>(
+export async function structuredCall<T>(
   provider: LLMProvider,
   system: string,
   user: string,
@@ -377,6 +377,47 @@ export async function fillDeckSlidesStage(
     }
   }
   return { deck, filledNow, failures, deckIssues, ...(exported ? { exported } : {}), ...(exportError ? { exportError } : {}) };
+}
+
+/* ------------------------------------------------------ regenerate */
+
+export type RegenerateSlideResult = {
+  deck: DeckSpec;
+  slide: Slide;
+  deckIssues: DeckIssue[];
+};
+
+/**
+ * Regenerate ONE slide with fresh content (the editor's per-slide
+ * variant): a single fill call for exactly that slide id, instructed to
+ * take a different approach, validated against the layout schema before
+ * anything is written. Every other slide and the theme are untouched.
+ * The deck on disk changes only when the new content is valid.
+ */
+export async function regenerateSlideStage(
+  provider: LLMProvider,
+  root: string,
+  slideId: string,
+  options: { language?: string; signal?: AbortSignal } = {},
+): Promise<RegenerateSlideResult> {
+  const deck = await readDeck(root);
+  if (!deck) {
+    throw new SlidePipelineError('no deck yet: nothing to regenerate (deck/deck.json does not exist)');
+  }
+  const slide = deck.slides.find((entry) => entry.id === slideId);
+  if (!slide) {
+    throw new SlidePipelineError(`slide "${slideId}" not found in this deck (${deck.slides.length} slides) — refresh the deck and pick an existing slide`);
+  }
+  const layout = getLayout(slide.layout);
+  if (!layout) {
+    throw new SlidePipelineError(`slide "${slideId}" uses unknown layout "${slide.layout}" — change its layout before regenerating`);
+  }
+  const user = `${fillUser(deck, slide, options.language)}\nThis is a REGENERATION: produce a fresh, different take on this slide (different angle, wording, and structure) — do not repeat the current content.`;
+  const content = await structuredCall(provider, fillSystem(layout), user, validateFill(layout), options.signal);
+  slide.content = content;
+  slide.status = 'filled';
+  await writeDeck(root, deck);
+  return { deck, slide, deckIssues: validateDeck(deck, { root }) };
 }
 
 /* --------------------------------------------------------- combined */
