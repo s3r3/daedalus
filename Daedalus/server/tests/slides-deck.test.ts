@@ -176,6 +176,77 @@ describe('/slides deck endpoints', () => {
   })
 })
 
+describe('/slides deck asset endpoints (placeholder upload)', () => {
+  async function uploadAsset(base: string, root: string, filename: string, bytes: Uint8Array, contentType: string): Promise<{ status: number; body: Record<string, unknown> }> {
+    const form = new FormData()
+    form.set('root', root)
+    form.set('file', new Blob([bytes as BlobPart], { type: contentType }), filename)
+    const res = await fetch(new URL('/slides/deck/asset', base), { method: 'POST', body: form })
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> }
+  }
+
+  const PNG_BYTES = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4])
+
+  test('upload saves under deck/assets, serves the bytes back, and never overwrites', async () => {
+    const { base, root } = await listen()
+
+    const first = await uploadAsset(base, root, 'Foto Kelas.PNG', PNG_BYTES, 'image/png')
+    expect(first.status).toBe(200)
+    expect(first.body.name).toBe('Foto-Kelas.png')
+    expect(first.body.path).toBe('deck/assets/Foto-Kelas.png')
+    expect(first.body.size).toBe(PNG_BYTES.length)
+    expect(existsSync(join(root, 'deck', 'assets', 'Foto-Kelas.png'))).toBe(true)
+
+    const second = await uploadAsset(base, root, 'Foto Kelas.PNG', PNG_BYTES, 'image/png')
+    expect(second.status).toBe(200)
+    expect(second.body.name).toBe('Foto-Kelas-2.png')
+    expect(existsSync(join(root, 'deck', 'assets', 'Foto-Kelas-2.png'))).toBe(true)
+
+    const served = await fetch(new URL(`/slides/deck/asset?root=${encodeURIComponent(root)}&name=${encodeURIComponent('Foto-Kelas.png')}`, base))
+    expect(served.status).toBe(200)
+    expect(served.headers.get('content-type')).toBe('image/png')
+    expect(new Uint8Array(await served.arrayBuffer())).toEqual(PNG_BYTES)
+
+    const missing = await fetch(new URL(`/slides/deck/asset?root=${encodeURIComponent(root)}&name=nope.png`, base))
+    expect(missing.status).toBe(404)
+
+    const traversal = await fetch(new URL(`/slides/deck/asset?root=${encodeURIComponent(root)}&name=${encodeURIComponent('../deck.json')}`, base))
+    expect(traversal.status).toBe(400)
+  })
+
+  test('non-image uploads are refused honestly and nothing is written', async () => {
+    const { base, root } = await listen()
+    const refused = await uploadAsset(base, root, 'catatan.txt', new TextEncoder().encode('halo'), 'text/plain')
+    expect(refused.status).toBe(400)
+    expect(refused.body.error).toBe('unsupported_image_type')
+    expect(existsSync(join(root, 'deck', 'assets', 'catatan.txt'))).toBe(false)
+
+    const disguised = await uploadAsset(base, root, 'palsu.png', new TextEncoder().encode('bukan gambar'), 'text/plain')
+    expect(disguised.status).toBe(400)
+    expect(disguised.body.error).toBe('unsupported_image_type')
+  })
+
+  test('an uploaded asset satisfies image-side validation through the slide update flow', async () => {
+    const { base, root } = await listen()
+    await seedDeck(root)
+
+    const blocked = await req(base, 'POST', '/slides/deck/slide/add', {
+      root, layout: 'image-side',
+      content: { title: 'Bergambar', points: ['satu'], image: 'foto-kelas.png' },
+    })
+    expect(blocked.status).toBe(422)
+
+    const uploaded = await uploadAsset(base, root, 'foto-kelas.png', PNG_BYTES, 'image/png')
+    expect(uploaded.status).toBe(200)
+
+    const added = await req(base, 'POST', '/slides/deck/slide/add', {
+      root, layout: 'image-side',
+      content: { title: 'Bergambar', points: ['satu'], image: String(uploaded.body.name) },
+    })
+    expect(added.status).toBe(200)
+  })
+})
+
 describe('POST /tasks slide params', () => {
   test('valid slide params are accepted and stored', async () => {
     const { base } = await listen()

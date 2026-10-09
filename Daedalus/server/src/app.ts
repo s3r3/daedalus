@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { mkdir, rename, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, extname, join, resolve, sep } from "node:path";
@@ -33,6 +33,7 @@ import {
   unstagedDiff,
   workspaceAgentsDir,
   resolveSkillSearchDirs,
+  deckPaths,
   exportDeckToPptx,
   getSlideTemplate,
   listSlideTemplates,
@@ -1907,6 +1908,87 @@ export function createApp(ctx: AppContext) {
             ...CORS_HEADERS,
           });
           res.end(data);
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Deck asset download for the canvas: <root>/deck/assets/<name>,
+    // the same directory the PPTX exporter embeds from. Deck-scoped on
+    // purpose — the web renderer only ever asks for asset basenames.
+    if (method === "GET" && url.pathname === "/slides/deck/asset") {
+      try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+        const name = url.searchParams.get("name") || "";
+        if (!name || name.includes("/") || name.includes("\\") || name.includes("..")) {
+          sendJson(res, 400, { error: "invalid_asset_name", request_id: requestId });
+          return;
+        }
+        const absolute = join(deckPaths(root).assetsDir, name);
+        if (!existsSync(absolute) || !statSync(absolute).isFile()) {
+          sendJson(res, 404, { error: "asset_not_found", request_id: requestId });
+          return;
+        }
+        const data = readFileSync(absolute);
+        res.writeHead(200, {
+          "content-type": guessMimeType(name),
+          "content-length": data.length,
+          ...CORS_HEADERS,
+        });
+        res.end(data);
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    // Deck asset upload (clickable image placeholders): the file lands
+    // under <root>/deck/assets/, the only directory the PPTX exporter
+    // resolves slide images from; the client then points the slide's
+    // content at the returned name through the ordinary slide-update
+    // endpoint (validateDeck-gated). Non-images and oversize files are
+    // refused honestly; existing assets are never overwritten
+    // (collision suffixes -2, -3, ...).
+    if (method === "POST" && url.pathname === "/slides/deck/asset") {
+      void (async () => {
+        try {
+          const contentType = req.headers["content-type"] ?? "";
+          if (!contentType.includes("multipart/form-data")) {
+            sendJson(res, 400, { error: "multipart_required", request_id: requestId });
+            return;
+          }
+          const body = await readRawBody(req);
+          const parts = parseMultipart(body, contentType);
+          const filePart = parts.find((part) => part.filename !== undefined && part.filename.length > 0);
+          if (!filePart) {
+            sendJson(res, 400, { error: "file_required", request_id: requestId });
+            return;
+          }
+          const rootField = parts.find((part) => part.name === "root" && part.filename === undefined)?.data.toString("utf8");
+          const root = resolveAllowedRoot(ctx, rootField || url.searchParams.get("root") || ctx.cwd);
+          const rawName = basename((filePart.filename ?? "image").replace(/\\+/g, "/"));
+          const dot = rawName.lastIndexOf(".");
+          const ext = dot > 0 ? rawName.slice(dot).toLowerCase() : "";
+          const imageExtensions = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp"]);
+          if (!imageExtensions.has(ext) || !(filePart.contentType ?? "").startsWith("image/")) {
+            sendJson(res, 400, { error: "unsupported_image_type", message: "Hanya berkas gambar (PNG, JPG, GIF, WebP) yang bisa diunggah ke placeholder.", request_id: requestId });
+            return;
+          }
+          if (filePart.data.length > UPLOAD_LIMITS.maxFileBytes) {
+            sendJson(res, 413, { error: "image_too_large", message: `Berkas gambar melebihi batas ${Math.round(UPLOAD_LIMITS.maxFileBytes / (1024 * 1024))} MB.`, request_id: requestId });
+            return;
+          }
+          const stem = (dot > 0 ? rawName.slice(0, dot) : rawName).replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^\.+/, "") || "image";
+          const assetsDir = deckPaths(root).assetsDir;
+          await mkdir(assetsDir, { recursive: true });
+          let name = `${stem}${ext}`;
+          for (let suffix = 2; existsSync(join(assetsDir, name)); suffix += 1) {
+            name = `${stem}-${suffix}${ext}`;
+          }
+          await writeFile(join(assetsDir, name), filePart.data);
+          sendJson(res, 200, { root, name, path: `deck/assets/${name}`, size: filePart.data.length });
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
