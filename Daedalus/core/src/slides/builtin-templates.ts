@@ -341,6 +341,7 @@ export function pageChipRect(chip: NonNullable<FurnitureSpec['pageChip']>): { x:
 export function assignBuiltinLayouts<T extends { layoutId: string }>(items: readonly T[], template: BuiltinTemplate): string[] {
   const used = new Map<string, number>();
   const chosen: string[] = [];
+  const kinds = items.map((item) => builtinKindOfLayout(item.layoutId));
   const leastUsed = (pool: string[], exclude?: string): string => {
     let best: string | undefined;
     for (const id of pool) {
@@ -349,9 +350,8 @@ export function assignBuiltinLayouts<T extends { layoutId: string }>(items: read
     }
     return best ?? pool[0]!;
   };
-  return items.map((item) => {
-    const kind = builtinKindOfLayout(item.layoutId);
-    const pool = template.design[kind].length > 0 ? template.design[kind] : template.design.content;
+  items.forEach((item, index) => {
+    const pool = template.design[kinds[index]!].length > 0 ? template.design[kinds[index]!] : template.design.content;
     let pick = pool.includes(item.layoutId) ? item.layoutId : leastUsed(pool);
     // Rhythm: a third identical slide in a row breaks to the
     // least-used alternative of the same kind.
@@ -360,8 +360,33 @@ export function assignBuiltinLayouts<T extends { layoutId: string }>(items: read
     }
     used.set(pick, (used.get(pick) ?? 0) + 1);
     chosen.push(pick);
-    return pick;
   });
+  // Image rotation: in a long run of content slides, the fifth content
+  // slide in a row without a picture rotates to the least-used image
+  // layout of the template's visual pool (when it has one). The picture
+  // slot stays empty — the canvas shows the click-to-upload placeholder
+  // and the AI never fills images. Diagram/visual picks the model made
+  // itself already count as pictured slides.
+  const imagePool = template.design.visual.filter((id) => IMAGE_LAYOUT_IDS.includes(id));
+  if (imagePool.length > 0) {
+    let contentSinceImage = 0;
+    for (let i = 0; i < chosen.length; i += 1) {
+      if (kinds[i] !== 'content') continue;
+      if (IMAGE_LAYOUT_IDS.includes(chosen[i]!)) {
+        contentSinceImage = 0;
+        continue;
+      }
+      contentSinceImage += 1;
+      if (contentSinceImage >= 5) {
+        const pick = leastUsed(imagePool);
+        used.set(chosen[i]!, Math.max(0, (used.get(chosen[i]!) ?? 1) - 1));
+        used.set(pick, (used.get(pick) ?? 0) + 1);
+        chosen[i] = pick;
+        contentSinceImage = 0;
+      }
+    }
+  }
+  return chosen;
 }
 
 /**
