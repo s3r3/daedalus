@@ -115,7 +115,6 @@ export const CODING_SLIDE_GOAL_CONTRACT = [
  * explicitly that the image bytes were not sent.
  */
 export class DefaultContextManager implements ContextManager {
-  readonly #domain?: TaskDomain;
   readonly #budget: number;
   readonly #workspaceRoot?: string;
   readonly #visionEnabled: boolean;
@@ -133,7 +132,6 @@ export class DefaultContextManager implements ContextManager {
 
   constructor(options: number | ContextManagerOptions = 16_000) {
     const resolved = typeof options === 'number' ? { budget: options } : options;
-    this.#domain = resolved.domain;
     this.#budget = resolved.budget ?? 16_000;
     this.#workspaceRoot = resolved.workspaceRoot;
     this.#visionEnabled = resolved.visionEnabled === true;

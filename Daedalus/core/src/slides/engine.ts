@@ -17,7 +17,6 @@ import {
   structuredCall,
   SlidePipelineError,
   type DeckBrief,
-  type FillStageResult,
   type OutlineItem,
 } from './pipeline.ts';
 
