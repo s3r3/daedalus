@@ -15,6 +15,7 @@ const fileMock = vi.fn()
 const slideTemplatesMock = vi.fn()
 const deckThemeMock = vi.fn()
 const deckUpdateSlideMock = vi.fn()
+const deckAddSlideMock = vi.fn()
 const deckExportMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
@@ -23,7 +24,7 @@ vi.mock('../../api/client', () => ({
     slideTemplates: (...args: unknown[]) => slideTemplatesMock(...args),
     deckTheme: (...args: unknown[]) => deckThemeMock(...args),
     deckUpdateSlide: (...args: unknown[]) => deckUpdateSlideMock(...args),
-    deckAddSlide: vi.fn(async () => ({ root: '/ws', deck: { version: 1, id: 'd', title: 't', theme: {}, slides: [] }, slide_id: 'baru' })),
+    deckAddSlide: (...args: unknown[]) => deckAddSlideMock(...args),
     deckDeleteSlide: vi.fn(async () => ({ root: '/ws', deck: { version: 1, id: 'd', title: 't', theme: {}, slides: [] } })),
     deckMoveSlide: vi.fn(async () => ({ root: '/ws', deck: { version: 1, id: 'd', title: 't', theme: {}, slides: [] } })),
     deckExport: (...args: unknown[]) => deckExportMock(...args),
@@ -88,6 +89,8 @@ beforeEach(() => {
   deckThemeMock.mockResolvedValue({ root: '/ws', deck: fixtureDeck })
   deckUpdateSlideMock.mockReset()
   deckUpdateSlideMock.mockResolvedValue({ root: '/ws', deck: fixtureDeck })
+  deckAddSlideMock.mockReset()
+  deckAddSlideMock.mockResolvedValue({ root: '/ws', deck: fixtureDeck, slide_id: 's-copy' })
   deckExportMock.mockReset()
   deckExportMock.mockResolvedValue({ root: '/ws', path: 'deck/deck-uji.pptx', bytes: 2048, slides: 3 })
   useDaedalusStore.getState().reset()
@@ -248,6 +251,24 @@ describe('SlideStage editing', () => {
     const [, slideId, payload] = deckUpdateSlideMock.mock.calls[0] as [string, string, { content: Record<string, unknown>; layout?: string }]
     expect(slideId).toBe('s1')
     expect(payload.content.title).toBe('Judul Baru')
+  })
+
+  test('duplicate copies the current slide right after itself and selects the copy', async () => {
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-edit-toggle'))
+    await user.click(screen.getByTestId('slide-duplicate'))
+
+    expect(deckAddSlideMock).toHaveBeenCalledTimes(1)
+    const [, payload] = deckAddSlideMock.mock.calls[0] as [string, { layout: string; content: Record<string, unknown>; index?: number }]
+    expect(payload.layout).toBe('title')
+    expect(payload.content).toEqual(fixtureDeck.slides[0]?.content)
+    expect(payload.content).not.toBe(fixtureDeck.slides[0]?.content)
+    expect(payload.index).toBe(1)
+    expect(useDaedalusStore.getState().slideIndex).toBe(1)
   })
 
   test('Export calls the deck export endpoint and offers the download', async () => {

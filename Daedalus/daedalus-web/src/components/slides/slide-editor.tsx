@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Plus, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Copy, Plus, Sparkles, Trash2 } from 'lucide-react'
 import { LAYOUTS } from '@daedalus/core/slides/layouts'
 import type { DeckSpec, Slide } from '@daedalus/core'
 import { Button } from '../ui/button'
@@ -13,7 +13,7 @@ function messageOf(error: unknown): string {
 /**
  * In-canvas slide editor (Slide domain): the deck is editable by hand,
  * not preview-only — layout, title, points and the full content JSON of
- * the selected slide, plus add/delete/move and a per-slide variant task.
+ * the selected slide, plus add/duplicate/delete/move and a per-slide variant task.
  * Every write goes through the server's core gate (validateDeck), so an
  * edit that would corrupt the deck is refused with the issues shown.
  * The JSON box is the source of truth; the quick fields write into it.
@@ -81,6 +81,18 @@ export function SlideEditor({ root, deck, slide, index, onChanged }: {
     void run(() => api.deckUpdateSlide(root, slide.id, { content: parsed, layout }), 'Slide tersimpan.')
   }
 
+  const duplicate = (): void => {
+    // Same server-gated add path as a new slide, seeded with a deep copy
+    // of this slide's content; the copy lands right after the original
+    // and becomes the selection.
+    const content = JSON.parse(JSON.stringify(slide.content)) as Record<string, unknown>
+    void run(async () => {
+      const result = await api.deckAddSlide(root, { layout: slide.layout, content, index: index + 1 })
+      setSlideIndex(index + 1)
+      return result
+    }, 'Slide diduplikasi.')
+  }
+
   const addSlide = (): void => {
     const def = LAYOUTS.find((entry) => entry.id === newLayout)
     void run(async () => {
@@ -117,6 +129,9 @@ export function SlideEditor({ root, deck, slide, index, onChanged }: {
           </Button>
           <Button variant="outline" size="sm" disabled={busy} onClick={variant} data-testid="slide-variant">
             <Sparkles /> Varian via AI
+          </Button>
+          <Button variant="outline" size="sm" disabled={busy} onClick={duplicate} data-testid="slide-duplicate">
+            <Copy /> Duplikat
           </Button>
           <Button variant="outline" size="sm" disabled={busy} onClick={() => void run(() => api.deckDeleteSlide(root, slide.id), 'Slide dihapus.')} data-testid="slide-delete">
             <Trash2 /> Hapus

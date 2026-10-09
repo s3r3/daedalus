@@ -148,6 +148,20 @@ export function validateDeck(deck: DeckSpec, opts: ValidateDeckOptions = {}): De
   const root = opts.root;
   const assetExists = opts.assetExists ?? (root ? (name: string) => existsSync(join(deckPaths(root).assetsDir, basename(name))) : undefined);
 
+  // Slide identity integrity: every later lookup (update/move/delete by
+  // id, the editor, the exporter) assumes ids exist and are unique, so a
+  // duplicated or missing id is deck corruption, not a style issue.
+  const seenIds = new Set<string>();
+  for (const slide of deck.slides as Slide[]) {
+    if (typeof slide.id !== 'string' || slide.id.trim().length === 0) {
+      issues.push({ slideId: slide.id, layout: slide.layout, code: 'missing-slide-id', message: `slide with layout "${slide.layout}" has no usable id — every slide needs a unique id`, severity: 'error' });
+    } else if (seenIds.has(slide.id)) {
+      issues.push({ slideId: slide.id, layout: slide.layout, code: 'duplicate-slide-id', message: `slide id "${slide.id}" appears more than once — ids must be unique or edits will hit the wrong slide`, severity: 'error' });
+    } else {
+      seenIds.add(slide.id);
+    }
+  }
+
   for (const slide of deck.slides as Slide[]) {
     const layout = getLayout(slide.layout);
     if (!layout) {
