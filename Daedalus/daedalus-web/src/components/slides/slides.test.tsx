@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { DeckSpec } from '@daedalus/core'
 import { useDaedalusStore } from '../../state/taskStore'
@@ -391,6 +391,105 @@ describe('SlideStage editing', () => {
     expect(deckRegenerateSlideMock.mock.calls[0]?.[1]).toBe('s1')
     // The run settles: the button is usable again and no error is shown.
     expect((screen.getByTestId('slide-variant') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  test('drag & drop canon: variant sends the composer model and provider', async () => {
+    // The Missing-model fix: regenerate carries the same selection a
+    // task run would send, because dynamic providers (9Router) store no
+    // model list for the server-side fallback chain to find.
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    useDaedalusStore.getState().setComposer({ providerId: 'nine-router', model: 'kr/claude-sonnet-4.5' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-edit-toggle'))
+    await user.click(screen.getByTestId('slide-variant'))
+
+    expect(deckRegenerateSlideMock).toHaveBeenCalledTimes(1)
+    expect(deckRegenerateSlideMock.mock.calls[0]?.[2]).toEqual({ model: 'kr/claude-sonnet-4.5', provider_id: 'nine-router' })
+  })
+
+  test('drag & drop canon: a positioned block renders at its stored fractions', async () => {
+    const positioned: DeckSpec = {
+      ...fixtureDeck,
+      slides: fixtureDeck.slides.map((slide) =>
+        slide.id === 's2' ? { ...slide, positions: { title: { x: 0.34, y: 0.4, w: 0.3, h: 0.12 } } } : slide,
+      ),
+    }
+    fileMock.mockResolvedValue(deckFile(positioned))
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    // s1 is selected first; jump to s2 via its filmstrip thumbnail.
+    const user = userEvent.setup()
+    await user.click(screen.getByTestId('slide-thumb-1'))
+    const stage = screen.getByTestId('slide-preview')
+    const placed = await within(stage).findByTestId('slide-block-title')
+    expect(placed.style.left).toBe('34%')
+    expect(placed.style.top).toBe('40%')
+    expect(placed.style.width).toBe('30%')
+  })
+
+  test('drag & drop canon: dragging a block in edit mode persists its new fractions', async () => {
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-thumb-1'))
+    await user.click(screen.getByTestId('slide-edit-toggle'))
+
+    // jsdom has no layout engine: fake the slide box at 1000x562.5 and
+    // the title block at (60, 40) sized 500x60.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      const rect = (left: number, top: number, width: number, height: number) =>
+        ({ left, top, width, height, right: left + width, bottom: top + height, x: left, y: top, toJSON: () => ({}) }) as DOMRect
+      if (this.dataset?.testid === 'slide-renderer') return rect(0, 0, 1000, 562.5)
+      if (this.dataset?.blockKey) return rect(60, 40, 500, 60)
+      return rect(0, 0, 0, 0)
+    })
+    try {
+      const stage = screen.getByTestId('slide-preview')
+      const wrapper = stage.querySelector('[data-block-key="title"]')
+      expect(wrapper).not.toBeNull()
+      // userEvent delivers a real primary-button pointerdown (jsdom's
+      // fireEvent cannot fill PointerEvent fields); the window-level
+      // move/up listeners then receive the same events a browser sends.
+      await user.pointer({ keys: '[MouseLeft>]', target: wrapper!, coords: { x: 100, y: 50 } })
+      window.dispatchEvent(new MouseEvent('pointermove', { clientX: 260, clientY: 50 }))
+      window.dispatchEvent(new MouseEvent('pointerup', {}))
+      await waitFor(() => expect(deckUpdateSlideMock).toHaveBeenCalled())
+      const call = deckUpdateSlideMock.mock.calls.at(-1)
+      expect(call?.[0]).toBe('/ws')
+      expect(call?.[1]).toBe('s2')
+      const positions = (call?.[2] as { positions: Record<string, { x: number; y: number }> }).positions
+      expect(positions.title?.x).toBeCloseTo(0.22, 3)
+      expect(positions.title?.y).toBeCloseTo(40 / 562.5, 3)
+    } finally {
+      vi.restoreAllMocks()
+    }
+  })
+
+  test('drag & drop canon: Reset posisi clears the slide positions through the update endpoint', async () => {
+    const positioned: DeckSpec = {
+      ...fixtureDeck,
+      slides: fixtureDeck.slides.map((slide) =>
+        slide.id === 's2' ? { ...slide, positions: { title: { x: 0.3, y: 0.4 } } } : slide,
+      ),
+    }
+    fileMock.mockResolvedValue(deckFile(positioned))
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-thumb-1'))
+    await user.click(screen.getByTestId('slide-edit-toggle'))
+    await user.click(await screen.findByTestId('slide-reset-positions'))
+
+    expect(deckUpdateSlideMock).toHaveBeenCalledWith('/ws', 's2', { positions: null })
   })
 
   test('duplicate copies the current slide right after itself and selects the copy', async () => {

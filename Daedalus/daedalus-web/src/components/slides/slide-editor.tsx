@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, ArrowRight, Copy, Plus, Sparkles, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Copy, Plus, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
 import { LAYOUTS } from '@daedalus/core/slides/layouts'
 import type { DeckSpec, Slide } from '@daedalus/core'
 import { Button } from '../ui/button'
@@ -104,8 +104,24 @@ export function SlideEditor({ root, deck, slide, index, onChanged }: {
   const variant = (): void => {
     // Engine endpoint, not a task: the slide engine regenerates this one
     // slide in place and the fresh deck comes back in the response.
-    void run(() => api.deckRegenerateSlide(root, slide.id), 'Slide diganti dengan varian baru.')
+    // Send the composer's current selection — the same model/provider a
+    // task run would use. Without it the resolution chain comes up
+    // empty for dynamic-model providers (9Router stores no model list)
+    // and the request dies upstream with a bare "Missing model".
+    const composer = useDaedalusStore.getState().composer
+    const pool = composer.modelPool.split(',').map((entry) => entry.trim()).filter(Boolean)
+    const model = composer.model || pool[0] || undefined
+    void run(
+      () =>
+        api.deckRegenerateSlide(root, slide.id, {
+          ...(model ? { model } : {}),
+          ...(composer.providerId ? { provider_id: composer.providerId } : {}),
+        }),
+      'Slide diganti dengan varian baru.',
+    )
   }
+
+  const positionCount = slide.positions ? Object.keys(slide.positions).length : 0
 
   return (
     <div data-testid="slide-editor" className="flex flex-col gap-2 rounded-md border border-line bg-surface-base p-3">
@@ -127,6 +143,17 @@ export function SlideEditor({ root, deck, slide, index, onChanged }: {
           <Button variant="outline" size="sm" disabled={busy} onClick={() => void run(() => api.deckDeleteSlide(root, slide.id), 'Slide dihapus.')} data-testid="slide-delete">
             <Trash2 /> Hapus
           </Button>
+          {positionCount > 0 ? (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => void run(() => api.deckUpdateSlide(root, slide.id, { positions: null }), 'Posisi blok direset ke layout.')}
+              data-testid="slide-reset-positions"
+            >
+              <RotateCcw /> Reset posisi ({positionCount})
+            </Button>
+          ) : null}
         </div>
       </div>
 

@@ -1,7 +1,8 @@
-import type { CSSProperties, ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import * as lucideIcons from 'lucide-react'
 import { Image as ImageIcon, Quote as QuoteIcon, Sparkles } from 'lucide-react'
-import type { DeckSpec, Slide } from '@daedalus/core'
+import type { BlockPosition, DeckSpec, Slide } from '@daedalus/core'
 import { getLayout } from '@daedalus/core/slides/layouts'
 import { getPalette } from '@daedalus/core/palette'
 
@@ -96,6 +97,63 @@ function ColumnPanel({ heading, points, ctx }: { heading: string; points: string
   )
 }
 
+/* ------------------------------------------------------------ blocks */
+
+/**
+ * One named, placeable piece of a slide (`layoutBlockKeys` in core names
+ * them). In layout flow a Block is invisible (`display: contents`, the
+ * layout arranges its children as today). Once the slide carries a
+ * position for the key — stored by dragging, or already in deck.json —
+ * the block renders absolutely at those slide fractions in an overlay
+ * layer shared by the stage and the filmstrip. In edit mode blocks are
+ * grabbable: pointer-down measures the block, moves update a live
+ * override, and pointer-up persists through `onPositionsChange` — the
+ * layout stays in charge until the user actually drags something.
+ */
+type BlockCtxValue = {
+  positions: Record<string, BlockPosition>
+  editable: boolean
+  overlayEl: HTMLElement | null
+  onDragStart: (key: string, event: ReactPointerEvent) => void
+}
+
+const BlockCtx = createContext<BlockCtxValue>({ positions: {}, editable: false, overlayEl: null, onDragStart: () => {} })
+
+function Block({ blockKey, children }: { blockKey: string; children: ReactNode }) {
+  const ctx = useContext(BlockCtx)
+  const pos = ctx.positions[blockKey]
+  if (pos) {
+    const inner = (
+      <div
+        data-block-key={blockKey}
+        data-testid={`slide-block-${blockKey}`}
+        className={ctx.editable ? 'pointer-events-auto absolute cursor-grab touch-none select-none' : 'pointer-events-auto absolute'}
+        style={{
+          left: `${pos.x * 100}%`,
+          top: `${pos.y * 100}%`,
+          ...(pos.w !== undefined ? { width: `${pos.w * 100}%` } : {}),
+          ...(pos.h !== undefined ? { height: `${pos.h * 100}%` } : {}),
+          ...(ctx.editable ? { outline: '1px dashed var(--daedalus-accent)', outlineOffset: 2 } : {}),
+        }}
+        onPointerDown={ctx.editable ? (event) => ctx.onDragStart(blockKey, event) : undefined}
+      >
+        <div className="h-full w-full [&>*]:h-full [&>*]:w-full">{children}</div>
+      </div>
+    )
+    return ctx.overlayEl ? createPortal(inner, ctx.overlayEl) : null
+  }
+  return (
+    <div
+      data-block-key={blockKey}
+      className="contents"
+      style={ctx.editable ? { cursor: 'grab' } : undefined}
+      onPointerDown={ctx.editable ? (event) => ctx.onDragStart(blockKey, event) : undefined}
+    >
+      {children}
+    </div>
+  )
+}
+
 type LucideComponent = typeof Sparkles
 
 function iconFor(name: string): LucideComponent {
@@ -122,11 +180,15 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col justify-center" style={{ gap: '1.6cqw' }}>
           <AccentBar accent={ctx.accent} width="9cqw" />
-          <div className="font-bold tracking-tight" style={{ fontSize: '6.6cqw', lineHeight: 1.05 }}>
-            {str(c.title) || 'Untitled presentation'}
-          </div>
+          <Block blockKey="title">
+            <div className="font-bold tracking-tight" style={{ fontSize: '6.6cqw', lineHeight: 1.05 }}>
+              {str(c.title) || 'Untitled presentation'}
+            </div>
+          </Block>
           {str(c.subtitle) ? (
-            <div style={{ fontSize: '2.3cqw', color: ctx.muted, lineHeight: 1.35 }}>{str(c.subtitle)}</div>
+            <Block blockKey="subtitle">
+              <div style={{ fontSize: '2.3cqw', color: ctx.muted, lineHeight: 1.35 }}>{str(c.subtitle)}</div>
+            </Block>
           ) : null}
         </div>
       )
@@ -134,19 +196,23 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
     case 'section': {
       return (
         <div className="relative flex flex-1 flex-col justify-center" style={{ gap: '1.4cqw' }}>
-          <div
-            aria-hidden
-            className="absolute font-bold"
-            style={{ right: 0, top: '-2cqw', fontSize: '15cqw', lineHeight: 1, color: ctx.accent, opacity: 0.14 }}
-          >
-            {str(c.number)}
-          </div>
+          <Block blockKey="number">
+            <div
+              aria-hidden
+              className="absolute font-bold"
+              style={{ right: 0, top: '-2cqw', fontSize: '15cqw', lineHeight: 1, color: ctx.accent, opacity: 0.14 }}
+            >
+              {str(c.number)}
+            </div>
+          </Block>
           <div style={{ fontSize: '1.6cqw', letterSpacing: '0.25em', textTransform: 'uppercase', color: ctx.accent }}>
             {str(c.number) ? `Bagian ${str(c.number)}` : 'Bagian'}
           </div>
-          <div className="font-bold tracking-tight" style={{ fontSize: '5cqw', lineHeight: 1.1 }}>
-            {str(c.title)}
-          </div>
+          <Block blockKey="title">
+            <div className="font-bold tracking-tight" style={{ fontSize: '5cqw', lineHeight: 1.1 }}>
+              {str(c.title)}
+            </div>
+          </Block>
           <AccentBar accent={ctx.accent} />
         </div>
       )
@@ -155,16 +221,20 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col items-center justify-center text-center" style={{ gap: '1.8cqw' }}>
           <AccentBar accent={ctx.accent} width="9cqw" />
-          <div className="font-bold tracking-tight" style={{ fontSize: '5.6cqw', lineHeight: 1.1 }}>
-            {str(c.title)}
-          </div>
+          <Block blockKey="title">
+            <div className="font-bold tracking-tight" style={{ fontSize: '5.6cqw', lineHeight: 1.1 }}>
+              {str(c.title)}
+            </div>
+          </Block>
           {str(c.cta) ? (
-            <span
-              className="rounded-full border font-semibold"
-              style={{ borderColor: ctx.accent, color: ctx.accent, fontSize: '1.7cqw', padding: '0.7cqw 2cqw' }}
-            >
-              {str(c.cta)}
-            </span>
+            <Block blockKey="cta">
+              <span
+                className="rounded-full border font-semibold"
+                style={{ borderColor: ctx.accent, color: ctx.accent, fontSize: '1.7cqw', padding: '0.7cqw 2cqw' }}
+              >
+                {str(c.cta)}
+              </span>
+            </Block>
           ) : null}
         </div>
       )
@@ -172,18 +242,30 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
     case 'quote': {
       return (
         <div className="flex flex-1 flex-col items-center justify-center text-center" style={{ gap: '1.6cqw', padding: '0 4cqw' }}>
-          <QuoteIcon aria-hidden style={{ width: '4cqw', height: '4cqw', color: ctx.accent }} />
-          <div style={{ fontSize: '3.4cqw', lineHeight: 1.3, fontStyle: 'italic' }}>{str(c.text)}</div>
-          {str(c.author) ? <div style={{ fontSize: '1.6cqw', color: ctx.muted }}>— {str(c.author)}</div> : null}
+          <Block blockKey="text">
+            <div className="flex flex-col items-center" style={{ gap: '1.6cqw' }}>
+              <QuoteIcon aria-hidden style={{ width: '4cqw', height: '4cqw', color: ctx.accent }} />
+              <div style={{ fontSize: '3.4cqw', lineHeight: 1.3, fontStyle: 'italic' }}>{str(c.text)}</div>
+            </div>
+          </Block>
+          {str(c.author) ? (
+            <Block blockKey="author">
+              <div style={{ fontSize: '1.6cqw', color: ctx.muted }}>— {str(c.author)}</div>
+            </Block>
+          ) : null}
         </div>
       )
     }
     case 'bullets': {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.8cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
           <AccentBar accent={ctx.accent} width="5cqw" />
-          <Points items={strList(c.points)} ctx={ctx} />
+          <Block blockKey="points">
+            <Points items={strList(c.points)} ctx={ctx} />
+          </Block>
         </div>
       )
     }
@@ -192,10 +274,16 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       const right = obj(c.right)
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
           <div className="flex min-h-0 flex-1" style={{ gap: '1.6cqw' }}>
-            <ColumnPanel heading={str(left.heading)} points={strList(left.points)} ctx={ctx} />
-            <ColumnPanel heading={str(right.heading)} points={strList(right.points)} ctx={ctx} />
+            <Block blockKey="left">
+              <ColumnPanel heading={str(left.heading)} points={strList(left.points)} ctx={ctx} />
+            </Block>
+            <Block blockKey="right">
+              <ColumnPanel heading={str(right.heading)} points={strList(right.points)} ctx={ctx} />
+            </Block>
           </div>
         </div>
       )
@@ -205,18 +293,26 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       const right = obj(c.right)
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.4cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
           <div className="flex min-h-0 flex-1" style={{ gap: '1.6cqw' }}>
-            <ColumnPanel heading={str(left.title)} points={strList(left.points)} ctx={ctx} />
-            <ColumnPanel heading={str(right.title)} points={strList(right.points)} ctx={ctx} />
+            <Block blockKey="left">
+              <ColumnPanel heading={str(left.title)} points={strList(left.points)} ctx={ctx} />
+            </Block>
+            <Block blockKey="right">
+              <ColumnPanel heading={str(right.title)} points={strList(right.points)} ctx={ctx} />
+            </Block>
           </div>
           {str(c.verdict) ? (
-            <div
-              className="rounded-md border text-center font-semibold"
-              style={{ borderColor: ctx.accent, color: ctx.accent, fontSize: '1.5cqw', padding: '0.9cqw' }}
-            >
-              {str(c.verdict)}
-            </div>
+            <Block blockKey="verdict">
+              <div
+                className="rounded-md border text-center font-semibold"
+                style={{ borderColor: ctx.accent, color: ctx.accent, fontSize: '1.5cqw', padding: '0.9cqw' }}
+              >
+                {str(c.verdict)}
+              </div>
+            </Block>
           ) : null}
         </div>
       )
@@ -244,21 +340,25 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       )
       const textCol = (
         <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '1.6cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
-          <Points items={strList(c.points)} ctx={ctx} size="1.4cqw" />
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <Block blockKey="points">
+            <Points items={strList(c.points)} ctx={ctx} size="1.4cqw" />
+          </Block>
         </div>
       )
       return (
         <div className="flex min-h-0 flex-1" style={{ gap: '2cqw' }}>
           {c.side === 'left' ? (
             <>
-              {imageBox}
+              <Block blockKey="image">{imageBox}</Block>
               {textCol}
             </>
           ) : (
             <>
               {textCol}
-              {imageBox}
+              <Block blockKey="image">{imageBox}</Block>
             </>
           )}
         </div>
@@ -268,25 +368,29 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       const steps = objList(c.steps)
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.8cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
           <div className="flex flex-1 items-stretch" style={{ gap: '0.6cqw' }}>
             {steps.map((step, index) => (
-              <div key={index} className="flex min-w-0 flex-1 items-stretch" style={{ gap: '0.6cqw' }}>
-                <div
-                  className="flex min-w-0 flex-1 flex-col justify-center rounded-md border"
-                  style={{ gap: '0.6cqw', padding: '1.2cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
-                >
-                  <div className="font-semibold" style={{ fontSize: '1.55cqw', color: ctx.accent }}>
-                    {index + 1}. {str(step.title)}
+              <Block key={index} blockKey={`step-${index}`}>
+                <div className="flex min-w-0 flex-1 items-stretch" style={{ gap: '0.6cqw' }}>
+                  <div
+                    className="flex min-w-0 flex-1 flex-col justify-center overflow-hidden rounded-md border"
+                    style={{ gap: '0.6cqw', padding: '1.2cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+                  >
+                    <div className="font-semibold" style={{ fontSize: '1.55cqw', color: ctx.accent }}>
+                      {index + 1}. {str(step.title)}
+                    </div>
+                    {str(step.desc) ? <div className="line-clamp-4" style={{ fontSize: '1.15cqw', color: ctx.muted, lineHeight: 1.4 }}>{str(step.desc)}</div> : null}
                   </div>
-                  {str(step.desc) ? <div style={{ fontSize: '1.15cqw', color: ctx.muted, lineHeight: 1.4 }}>{str(step.desc)}</div> : null}
+                  {index < steps.length - 1 ? (
+                    <span aria-hidden className="flex items-center font-bold" style={{ fontSize: '2.4cqw', color: ctx.accent }}>
+                      ›
+                    </span>
+                  ) : null}
                 </div>
-                {index < steps.length - 1 ? (
-                  <span aria-hidden className="flex items-center font-bold" style={{ fontSize: '2.4cqw', color: ctx.accent }}>
-                    ›
-                  </span>
-                ) : null}
-              </div>
+              </Block>
             ))}
           </div>
         </div>
@@ -302,7 +406,9 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       ]
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.4cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
           <div className="relative flex-1" style={{ margin: '0 6cqw' }}>
             <svg aria-hidden className="absolute inset-0 h-full w-full" viewBox="0 0 400 220">
               <circle cx="200" cy="110" r="82" fill="none" strokeDasharray="7 9" strokeWidth="2.5" style={{ stroke: ctx.accent }} />
@@ -312,20 +418,21 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
               <polygon points="108,110 124,118 124,102" style={{ fill: ctx.accent }} />
             </svg>
             {nodes.map((node, index) => (
-              <div
-                key={index}
-                className="absolute rounded-full border text-center font-semibold"
-                style={{
-                  ...positions[index],
-                  borderColor: ctx.accent,
-                  backgroundColor: ctx.panelBg,
-                  fontSize: '1.35cqw',
-                  padding: '0.8cqw 1.4cqw',
-                  maxWidth: '34%',
-                }}
-              >
-                {node}
-              </div>
+              <span key={index} className="absolute" style={{ ...positions[index], maxWidth: '34%' }}>
+                <Block blockKey={`node-${index}`}>
+                  <span
+                    className="block rounded-full border text-center font-semibold"
+                    style={{
+                      borderColor: ctx.accent,
+                      backgroundColor: ctx.panelBg,
+                      fontSize: '1.35cqw',
+                      padding: '0.8cqw 1.4cqw',
+                    }}
+                  >
+                    {node}
+                  </span>
+                </Block>
+              </span>
             ))}
           </div>
         </div>
@@ -336,30 +443,52 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col items-center" style={{ gap: 0 }}>
           <div className="self-start">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <Block blockKey="title">
+              <SlideTitle>{str(c.title)}</SlideTitle>
+            </Block>
           </div>
-          <div
-            className="rounded-md border text-center font-bold"
-            style={{ borderColor: ctx.accent, backgroundColor: ctx.panelBg, fontSize: '1.7cqw', padding: '0.9cqw 2.2cqw', marginTop: '1.4cqw' }}
-          >
-            {str(c.root)}
-          </div>
+          <Block blockKey="root">
+            <div
+              className="rounded-md border text-center font-bold"
+              style={{ borderColor: ctx.accent, backgroundColor: ctx.panelBg, fontSize: '1.7cqw', padding: '0.9cqw 2.2cqw', marginTop: '1.4cqw' }}
+            >
+              {str(c.root)}
+            </div>
+          </Block>
           <div style={{ width: 2, height: '1.6cqw', backgroundColor: ctx.line }} />
-          <div style={{ height: 2, width: `${Math.max(0, (groups.length - 1) * 24)}%`, backgroundColor: ctx.line }} />
-          <div className="flex w-full" style={{ gap: '1.4cqw' }}>
+          <div className="relative flex w-full" style={{ gap: '1.4cqw' }}>
+            {groups.length > 1 ? (
+              <div
+                aria-hidden
+                className="absolute"
+                style={{
+                  top: 0,
+                  height: 2,
+                  // Span exactly the first..last group centers: with even
+                  // flex columns, group i centers at (i + 0.5) / n of the
+                  // row (the old (n-1)*24% bar drifted off-center for
+                  // every group count except 4).
+                  left: `${50 / groups.length}%`,
+                  width: `${(100 * (groups.length - 1)) / groups.length}%`,
+                  backgroundColor: ctx.line,
+                }}
+              />
+            ) : null}
             {groups.map((group, index) => (
-              <div key={index} className="flex min-w-0 flex-1 flex-col items-center">
-                <div style={{ width: 2, height: '1.2cqw', backgroundColor: ctx.line }} />
-                <div
-                  className="flex w-full flex-col rounded-md border"
-                  style={{ gap: '0.7cqw', padding: '1.1cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
-                >
-                  <div className="font-semibold" style={{ fontSize: '1.45cqw', color: ctx.accent }}>
-                    {str(group.label)}
+              <Block key={index} blockKey={`group-${index}`}>
+                <div className="flex min-w-0 flex-1 flex-col items-center">
+                  <div style={{ width: 2, height: '1.2cqw', backgroundColor: ctx.line }} />
+                  <div
+                    className="flex w-full flex-col overflow-hidden rounded-md border"
+                    style={{ gap: '0.7cqw', padding: '1.1cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+                  >
+                    <div className="font-semibold" style={{ fontSize: '1.45cqw', color: ctx.accent }}>
+                      {str(group.label)}
+                    </div>
+                    <Points items={strList(group.items)} ctx={ctx} size="1.15cqw" />
                   </div>
-                  <Points items={strList(group.items)} ctx={ctx} size="1.15cqw" />
                 </div>
-              </div>
+              </Block>
             ))}
           </div>
         </div>
@@ -369,20 +498,24 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       const events = objList(c.events)
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '2cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
           <div className="relative flex flex-1 items-start" style={{ paddingTop: '0.4cqw' }}>
             <div aria-hidden className="absolute" style={{ left: 0, right: 0, top: '1.05cqw', height: 2, backgroundColor: ctx.accent, opacity: 0.45 }} />
             {events.map((event, index) => (
-              <div key={index} className="relative flex min-w-0 flex-1 flex-col" style={{ gap: '0.55cqw', paddingRight: '1cqw' }}>
-                <span className="rounded-full" style={{ width: '1.5cqw', height: '1.5cqw', backgroundColor: ctx.accent }} />
-                <div className="font-bold" style={{ fontSize: '1.35cqw', color: ctx.accent }}>
-                  {str(event.when)}
+              <Block key={index} blockKey={`event-${index}`}>
+                <div className="relative flex min-w-0 flex-1 flex-col" style={{ gap: '0.55cqw', paddingRight: '1cqw' }}>
+                  <span className="rounded-full" style={{ width: '1.5cqw', height: '1.5cqw', backgroundColor: ctx.accent }} />
+                  <div className="font-bold" style={{ fontSize: '1.35cqw', color: ctx.accent }}>
+                    {str(event.when)}
+                  </div>
+                  <div className="font-semibold" style={{ fontSize: '1.45cqw', lineHeight: 1.3 }}>
+                    {str(event.title)}
+                  </div>
+                  {str(event.desc) ? <div className="line-clamp-4" style={{ fontSize: '1.12cqw', color: ctx.muted, lineHeight: 1.4 }}>{str(event.desc)}</div> : null}
                 </div>
-                <div className="font-semibold" style={{ fontSize: '1.45cqw', lineHeight: 1.3 }}>
-                  {str(event.title)}
-                </div>
-                {str(event.desc) ? <div style={{ fontSize: '1.12cqw', color: ctx.muted, lineHeight: 1.4 }}>{str(event.desc)}</div> : null}
-              </div>
+              </Block>
             ))}
           </div>
         </div>
@@ -401,7 +534,10 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       const slot = data.length > 0 ? plotW / data.length : plotW
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.2cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <Block blockKey="chart">
           <svg viewBox={`0 0 ${W} ${H}`} className="w-full flex-1" role="img" aria-label={str(c.title)}>
             <line x1={padL} y1={padT + plotH} x2={W - 12} y2={padT + plotH} strokeWidth="1.5" style={{ stroke: ctx.line }} />
             {data.map((d, index) => {
@@ -423,6 +559,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
               )
             })}
           </svg>
+          </Block>
         </div>
       )
     }
@@ -444,7 +581,10 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       const yAt = (v: number): number => pad + plotH - ((v - min) / span) * plotH
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <Block blockKey="chart">
           <svg viewBox={`0 0 ${W} ${H}`} className="w-full flex-1" role="img" aria-label={str(c.title)}>
             <line x1={pad} y1={pad + plotH} x2={W - pad} y2={pad + plotH} strokeWidth="1.5" style={{ stroke: ctx.line }} />
             <line x1={pad} y1={pad} x2={pad} y2={pad + plotH} strokeWidth="1.5" style={{ stroke: ctx.line }} />
@@ -464,15 +604,18 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
               </g>
             ))}
           </svg>
-          <div className="flex flex-wrap" style={{ gap: '1.6cqw' }}>
-            {series.map((s, si) => (
-              <span key={si} className="inline-flex items-center" style={{ gap: '0.5cqw', fontSize: '1.2cqw' }}>
-                <span aria-hidden style={{ width: '1.4cqw', height: '0.45cqw', borderRadius: 999, backgroundColor: seriesColor(si, ctx.accent) }} />
-                {s.name}
-                {str(c.unit) ? <span style={{ color: ctx.muted }}>({str(c.unit)})</span> : null}
-              </span>
-            ))}
-          </div>
+          </Block>
+          <Block blockKey="legend">
+            <div className="flex flex-wrap" style={{ gap: '1.6cqw' }}>
+              {series.map((s, si) => (
+                <span key={si} className="inline-flex items-center" style={{ gap: '0.5cqw', fontSize: '1.2cqw' }}>
+                  <span aria-hidden style={{ width: '1.4cqw', height: '0.45cqw', borderRadius: 999, backgroundColor: seriesColor(si, ctx.accent) }} />
+                  {s.name}
+                  {str(c.unit) ? <span style={{ color: ctx.muted }}>({str(c.unit)})</span> : null}
+                </span>
+              ))}
+            </div>
+          </Block>
         </div>
       )
     }
@@ -484,8 +627,11 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       let acc = 0
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.2cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
           <div className="flex flex-1 items-center" style={{ gap: '3cqw' }}>
+            <Block blockKey="chart">
             <svg viewBox="0 0 220 220" style={{ width: '26cqw', height: '26cqw' }} role="img" aria-label={str(c.title)}>
               <g transform="rotate(-90 110 110)">
                 {slices.map((slice, index) => {
@@ -513,19 +659,22 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                 {str(c.unit)}
               </text>
             </svg>
-            <ul className="flex flex-col" style={{ gap: '0.9cqw' }}>
-              {slices.map((slice, index) => (
-                <li key={index} className="flex items-center" style={{ gap: '0.7cqw', fontSize: '1.35cqw' }}>
-                  <span aria-hidden className="rounded-sm" style={{ width: '1.3cqw', height: '1.3cqw', backgroundColor: seriesColor(index, ctx.accent) }} />
-                  <span>{slice.label}</span>
-                  <strong>
-                    {slice.value}
-                    {str(c.unit)}
-                  </strong>
-                  <span style={{ color: ctx.muted }}>{Math.round((slice.value / total) * 100)}%</span>
-                </li>
-              ))}
-            </ul>
+            </Block>
+            <Block blockKey="legend">
+              <ul className="flex flex-col" style={{ gap: '0.9cqw' }}>
+                {slices.map((slice, index) => (
+                  <li key={index} className="flex items-center" style={{ gap: '0.7cqw', fontSize: '1.35cqw' }}>
+                    <span aria-hidden className="rounded-sm" style={{ width: '1.3cqw', height: '1.3cqw', backgroundColor: seriesColor(index, ctx.accent) }} />
+                    <span>{slice.label}</span>
+                    <strong>
+                      {slice.value}
+                      {str(c.unit)}
+                    </strong>
+                    <span style={{ color: ctx.muted }}>{Math.round((slice.value / total) * 100)}%</span>
+                  </li>
+                ))}
+              </ul>
+            </Block>
           </div>
         </div>
       )
@@ -535,7 +684,10 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       const rows = Array.isArray(c.rows) ? c.rows.map((row) => (Array.isArray(row) ? row.map((cell) => str(cell)) : [])) : []
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <Block blockKey="table">
           <div className="overflow-hidden rounded-md border" style={{ borderColor: ctx.line }}>
             <table className="w-full" style={{ borderCollapse: 'collapse', fontSize: '1.3cqw' }}>
               <thead>
@@ -560,6 +712,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
               </tbody>
             </table>
           </div>
+          </Block>
         </div>
       )
     }
@@ -567,17 +720,21 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       const stats = objList(c.stats)
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '2cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
           <div className="grid flex-1 items-center" style={{ gridTemplateColumns: `repeat(${Math.max(1, stats.length)}, minmax(0, 1fr))`, gap: '1.6cqw' }}>
             {stats.map((stat, index) => (
-              <div key={index} className="flex flex-col items-center text-center" style={{ gap: '0.6cqw' }}>
-                <div className="font-bold" style={{ fontSize: '5.2cqw', color: ctx.accent, lineHeight: 1 }}>
-                  {str(stat.value)}
+              <Block key={index} blockKey={`stat-${index}`}>
+                <div className="flex flex-col items-center text-center" style={{ gap: '0.6cqw' }}>
+                  <div className="font-bold" style={{ fontSize: '5.2cqw', color: ctx.accent, lineHeight: 1 }}>
+                    {str(stat.value)}
+                  </div>
+                  <div className="line-clamp-2 uppercase" style={{ fontSize: '1.25cqw', letterSpacing: '0.14em', color: ctx.muted }}>
+                    {str(stat.label)}
+                  </div>
                 </div>
-                <div className="uppercase" style={{ fontSize: '1.25cqw', letterSpacing: '0.14em', color: ctx.muted }}>
-                  {str(stat.label)}
-                </div>
-              </div>
+              </Block>
             ))}
           </div>
         </div>
@@ -587,22 +744,25 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       const items = objList(c.items)
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.7cqw' }}>
-          <SlideTitle>{str(c.title)}</SlideTitle>
-          <div className="grid flex-1" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: '1.4cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="grid flex-1" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gridAutoRows: '1fr', gap: '1.4cqw' }}>
             {items.map((item, index) => {
               const Icon = iconFor(str(item.icon))
               return (
-                <div
-                  key={index}
-                  className="flex flex-col rounded-md border"
-                  style={{ gap: '0.7cqw', padding: '1.4cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
-                >
-                  <Icon aria-hidden style={{ width: '3cqw', height: '3cqw', color: ctx.accent }} />
-                  <div className="font-semibold" style={{ fontSize: '1.55cqw' }}>
-                    {str(item.title)}
+                <Block key={index} blockKey={`item-${index}`}>
+                  <div
+                    className="flex flex-col overflow-hidden rounded-md border"
+                    style={{ gap: '0.7cqw', padding: '1.4cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+                  >
+                    <Icon aria-hidden style={{ width: '3cqw', height: '3cqw', color: ctx.accent }} />
+                    <div className="font-semibold" style={{ fontSize: '1.55cqw' }}>
+                      {str(item.title)}
+                    </div>
+                    {str(item.desc) ? <div className="line-clamp-3" style={{ fontSize: '1.15cqw', color: ctx.muted, lineHeight: 1.4 }}>{str(item.desc)}</div> : null}
                   </div>
-                  {str(item.desc) ? <div style={{ fontSize: '1.15cqw', color: ctx.muted, lineHeight: 1.4 }}>{str(item.desc)}</div> : null}
-                </div>
+                </Block>
               )
             })}
           </div>
@@ -620,7 +780,24 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
   }
 }
 
-export function SlideRenderer({ slide, theme }: { slide: Slide; theme?: DeckSpec['theme'] }) {
+type DragSession = {
+  key: string
+  startX: number
+  startY: number
+  boxW: number
+  boxH: number
+  origin: BlockPosition
+  last: BlockPosition
+  moved: boolean
+}
+
+export function SlideRenderer({ slide, theme, editable = false, onPositionsChange }: {
+  slide: Slide
+  theme?: DeckSpec['theme']
+  /** Edit mode: blocks become grabbable; drags persist via onPositionsChange. */
+  editable?: boolean
+  onPositionsChange?: (slideId: string, positions: Record<string, BlockPosition>) => void
+}) {
   const isLight = theme?.dark === false
   const light = getPalette('light')
   const accent = typeof theme?.accent === 'string' && theme.accent.trim() !== '' ? theme.accent : 'var(--daedalus-accent)'
@@ -639,11 +816,93 @@ export function SlideRenderer({ slide, theme }: { slide: Slide; theme?: DeckSpec
     ...(theme?.bodyFont ? { fontFamily: theme.bodyFont } : {}),
   }
 
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const [overlayEl, setOverlayEl] = useState<HTMLElement | null>(null)
+  const [dragPos, setDragPos] = useState<{ key: string; pos: BlockPosition } | null>(null)
+  const dragRef = useRef<DragSession | null>(null)
+
+  const mergedPositions: Record<string, BlockPosition> = {
+    ...(slide.positions ?? {}),
+    ...(dragPos ? { [dragPos.key]: dragPos.pos } : {}),
+  }
+
+  const onDragStart = useCallback((key: string, event: ReactPointerEvent) => {
+    if ((event.button ?? 0) !== 0) return
+    const box = boxRef.current
+    if (!box) return
+    const boxRect = box.getBoundingClientRect()
+    if (boxRect.width <= 0 || boxRect.height <= 0) return
+    // Measure the block's current on-screen rect: the positioned overlay
+    // div itself, or (in layout flow, where the Block wrapper is
+    // display:contents and has no box) its first rendered descendant.
+    const target = event.currentTarget as HTMLElement
+    let rect = target.getBoundingClientRect()
+    if (rect.width <= 0 || rect.height <= 0) {
+      const inner = target.firstElementChild as HTMLElement | null
+      if (inner) rect = inner.getBoundingClientRect()
+    }
+    if (rect.width <= 0 || rect.height <= 0) return
+    const origin: BlockPosition = {
+      x: (rect.left - boxRect.left) / boxRect.width,
+      y: (rect.top - boxRect.top) / boxRect.height,
+      w: rect.width / boxRect.width,
+      h: rect.height / boxRect.height,
+    }
+    dragRef.current = {
+      key,
+      startX: event.clientX,
+      startY: event.clientY,
+      boxW: boxRect.width,
+      boxH: boxRect.height,
+      origin,
+      last: origin,
+      moved: false,
+    }
+    setDragPos({ key, pos: origin })
+    event.preventDefault()
+  }, [])
+
+  useEffect(() => {
+    if (!editable) return
+    const move = (event: PointerEvent): void => {
+      const session = dragRef.current
+      if (!session) return
+      if (Math.abs(event.clientX - session.startX) + Math.abs(event.clientY - session.startY) > 2) session.moved = true
+      const w = session.origin.w ?? 0
+      const h = session.origin.h ?? 0
+      const pos: BlockPosition = {
+        x: Math.min(Math.max(0, session.origin.x + (event.clientX - session.startX) / session.boxW), Math.max(0, 1 - w)),
+        y: Math.min(Math.max(0, session.origin.y + (event.clientY - session.startY) / session.boxH), Math.max(0, 1 - h)),
+        w: session.origin.w,
+        h: session.origin.h,
+      }
+      session.last = pos
+      setDragPos({ key: session.key, pos })
+    }
+    const up = (): void => {
+      const session = dragRef.current
+      dragRef.current = null
+      setDragPos(null)
+      if (session && session.moved && onPositionsChange) {
+        onPositionsChange(slide.id, { ...(slide.positions ?? {}), [session.key]: session.last })
+      }
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up)
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+  }, [editable, onPositionsChange, slide.id, slide.positions])
+
   return (
-    <div data-testid="slide-renderer" data-layout={slide.layout} className="relative flex h-full w-full flex-col overflow-hidden" style={rootStyle}>
-      <div className="flex min-h-0 flex-1 flex-col" style={{ padding: '3cqw' }}>
-        {renderBody(slide, ctx)}
-      </div>
+    <div ref={boxRef} data-testid="slide-renderer" data-layout={slide.layout} className="relative flex h-full w-full flex-col overflow-hidden" style={rootStyle}>
+      <BlockCtx.Provider value={{ positions: mergedPositions, editable, overlayEl, onDragStart }}>
+        <div className="flex min-h-0 flex-1 flex-col" style={{ padding: '3cqw' }}>
+          {renderBody(slide, ctx)}
+        </div>
+        <div ref={setOverlayEl} data-testid="slide-overlay" className="pointer-events-none absolute inset-0" style={{ zIndex: 4 }} />
+      </BlockCtx.Provider>
       <div className="flex items-center justify-between" style={{ gap: '1cqw', padding: '0 1.6cqw 1.1cqw', fontSize: '1cqw', color: ctx.muted }}>
         <span>{getLayout(slide.layout)?.label ?? slide.layout}</span>
         {slide.notes ? <span className="truncate italic">{slide.notes}</span> : <span className="truncate">{slide.id}</span>}

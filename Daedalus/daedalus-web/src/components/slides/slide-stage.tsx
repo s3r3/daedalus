@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { ChevronLeft, ChevronRight, FileDown, Pencil, Presentation, RefreshCw } from 'lucide-react'
+import type { BlockPosition } from '@daedalus/core'
 import { getLayout } from '@daedalus/core/slides/layouts'
 import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
@@ -30,6 +31,23 @@ export function SlideStage() {
   const onDeckChanged = (): void => {
     refresh()
     bumpWorkspaceRevision()
+  }
+
+  const [dragError, setDragError] = useState<string | null>(null)
+
+  // A finished canvas drag persists the slide's whole position map
+  // through the same core-gated update endpoint as form edits; the deck
+  // refresh then re-renders from disk, so what the user sees after the
+  // drop is exactly what was stored (and what the exporter will draw).
+  const persistPositions = async (slideId: string, positions: Record<string, BlockPosition>): Promise<void> => {
+    if (!root) return
+    setDragError(null)
+    try {
+      await api.deckUpdateSlide(root, slideId, { positions })
+      onDeckChanged()
+    } catch (dragErr: unknown) {
+      setDragError(`Posisi tidak tersimpan: ${dragErr instanceof Error ? dragErr.message : String(dragErr)}`)
+    }
   }
 
   const exportDeck = async (): Promise<void> => {
@@ -109,6 +127,11 @@ export function SlideStage() {
         </p>
       ) : null}
       {exportError ? <p className="text-[11px] text-error">{exportError}</p> : null}
+      {dragError ? (
+        <p data-testid="slide-drag-error" className="text-[11px] text-error">
+          {dragError}
+        </p>
+      ) : null}
 
       {!root ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 px-3 py-6 text-center text-muted">
@@ -128,7 +151,7 @@ export function SlideStage() {
             className={`flex items-center justify-center [container-type:size] ${editing ? 'min-h-48 shrink-0' : 'min-h-0 flex-1'}`}
           >
             <div className="aspect-video w-[min(1100px,100%,177.78cqh)] overflow-hidden rounded-md border border-line [container-type:inline-size]">
-              <SlideRenderer slide={slide} theme={deck.theme} />
+              <SlideRenderer slide={slide} theme={deck.theme} editable={editing} onPositionsChange={(id, positions) => void persistPositions(id, positions)} />
             </div>
           </div>
 
