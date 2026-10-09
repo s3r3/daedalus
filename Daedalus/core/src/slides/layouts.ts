@@ -72,9 +72,35 @@ export const LAYOUTS: LayoutDef[] = [
     defaults: { title: 'Key points', points: ['First point'] },
   },
   {
+    id: 'numbered-steps', label: 'Numbered steps', category: 'content',
+    schema: schema(['title', 'steps'], {
+      title: s(),
+      steps: { type: 'array', minItems: 2, maxItems: 6, items: obj(['title'], { title: s(), desc: s() }) },
+    }),
+    defaults: {
+      title: 'Langkah kerja',
+      steps: [
+        { title: 'Siapkan konteks', desc: 'Kumpulkan bahan dan batasan masalah' },
+        { title: 'Susun rencana', desc: 'Pecah tujuan menjadi langkah terukur' },
+        { title: 'Eksekusi bertahap', desc: 'Kerjakan satu langkah dalam satu waktu' },
+        { title: 'Validasi hasil', desc: 'Periksa keluaran terhadap kriteria selesai' },
+      ],
+    },
+  },
+  {
     id: 'two-column', label: 'Two column', category: 'content',
     schema: schema(['title', 'left', 'right'], { title: s(), left: columnSchema(), right: columnSchema() }),
     defaults: { title: 'Two columns', left: { heading: 'Left', points: ['Point'] }, right: { heading: 'Right', points: ['Point'] } },
+  },
+  {
+    id: 'code-focus', label: 'Code focus', category: 'content',
+    schema: schema(['title', 'code'], { title: s(), code: s(), language: s(), points: stringArray(0, 5) }),
+    defaults: {
+      title: 'Inti implementasi',
+      language: 'ts',
+      code: 'function sapa(nama: string): string {\n  return `Halo, ${nama}!`;\n}',
+      points: ['Fungsi murni tanpa efek samping', 'Mudah diuji secara terisolasi'],
+    },
   },
   {
     id: 'image-side', label: 'Image side', category: 'visual',
@@ -103,6 +129,33 @@ export const LAYOUTS: LayoutDef[] = [
     defaults: { title: 'Structure', root: 'Root', groups: [{ label: 'Group', items: ['Item'] }] },
   },
   {
+    id: 'chevron-process', label: 'Chevron process', category: 'visual',
+    schema: schema(['title', 'steps'], {
+      title: s(),
+      steps: { type: 'array', minItems: 3, maxItems: 6, items: obj(['title'], { title: s(), desc: s() }) },
+    }),
+    defaults: {
+      title: 'Alur persetujuan',
+      steps: [{ title: 'Pengajuan', desc: 'Usulan masuk dari pemohon' }, { title: 'Telaah', desc: 'Tim memeriksa kelayakan' }, { title: 'Revisi', desc: 'Perbaikan sesuai catatan' }, { title: 'Pengesahan', desc: 'Keputusan resmi diterbitkan' }],
+    },
+  },
+  {
+    id: 'diagram-pyramid', label: 'Pyramid diagram', category: 'visual',
+    schema: schema(['title', 'tiers'], {
+      title: s(),
+      tiers: { type: 'array', minItems: 3, maxItems: 4, items: obj(['label'], { label: s(), desc: s() }) },
+    }),
+    defaults: {
+      title: 'Tingkatan kebutuhan',
+      tiers: [
+        { label: 'Visi', desc: 'Alasan keberadaan sistem' },
+        { label: 'Strategi', desc: 'Pilihan arah dan prioritas' },
+        { label: 'Taktik', desc: 'Program kerja tahunan' },
+        { label: 'Operasi', desc: 'Eksekusi harian terukur' },
+      ],
+    },
+  },
+  {
     id: 'timeline', label: 'Timeline', category: 'visual',
     schema: schema(['title', 'events'], {
       title: s(),
@@ -111,9 +164,53 @@ export const LAYOUTS: LayoutDef[] = [
     defaults: { title: 'Timeline', events: [{ when: '2024', title: 'Start' }, { when: '2025', title: 'Launch' }] },
   },
   {
+    id: 'roadmap', label: 'Roadmap', category: 'visual',
+    schema: schema(['title', 'phases'], {
+      title: s(),
+      phases: { type: 'array', minItems: 3, maxItems: 4, items: obj(['label'], { label: s(), items: stringArray(1, 5) }) },
+    }),
+    defaults: {
+      title: 'Peta jalan produk',
+      phases: [
+        { label: 'Fase 1 — Fondasi', items: ['Riset pengguna', 'Prototipe awal'] },
+        { label: 'Fase 2 — Bangun', items: ['Fitur inti', 'Uji internal'] },
+        { label: 'Fase 3 — Rilis', items: ['Beta publik', 'Dokumentasi'] },
+        { label: 'Fase 4 — Tumbuh', items: ['Iterasi fitur', 'Skala infrastruktur'] },
+      ],
+    },
+  },
+  {
     id: 'comparison', label: 'Comparison', category: 'visual',
     schema: schema(['title', 'left', 'right'], { title: s(), left: namedColumnSchema(), right: namedColumnSchema(), verdict: s() }),
     defaults: { title: 'Comparison', left: { title: 'Option A', points: ['Pro'] }, right: { title: 'Option B', points: ['Pro'] } },
+  },
+  {
+    id: 'versus', label: 'Versus', category: 'visual',
+    schema: schema(['title', 'left', 'right'], { title: s(), left: namedColumnSchema(), right: namedColumnSchema(), verdict: s() }),
+    defaults: {
+      title: 'Head to head',
+      left: { title: 'Opsi A', points: ['Unggul di kecepatan'] },
+      right: { title: 'Opsi B', points: ['Unggul di biaya'] },
+      verdict: '',
+    },
+  },
+  {
+    id: 'matrix-quadrant', label: 'Quadrant matrix', category: 'visual',
+    schema: schema(['title', 'xAxis', 'yAxis', 'quadrants'], {
+      title: s(), xAxis: s(), yAxis: s(),
+      quadrants: { type: 'array', minItems: 4, maxItems: 4, items: obj(['label'], { label: s(), items: stringArray(1, 4) }) },
+    }),
+    defaults: {
+      title: 'Matriks prioritas',
+      xAxis: 'Dampak →',
+      yAxis: 'Upaya →',
+      quadrants: [
+        { label: 'Kerjakan dulu', items: ['Perbaikan kritis'] },
+        { label: 'Jadwalkan', items: ['Fitur besar terencana'] },
+        { label: 'Delegasikan', items: ['Tugas rutin berulang'] },
+        { label: 'Singkirkan', items: ['Eksperimen tak terpakai'] },
+      ],
+    },
   },
   {
     id: 'chart-bar', label: 'Bar chart', category: 'data',
@@ -160,9 +257,32 @@ export const LAYOUTS: LayoutDef[] = [
     defaults: { title: 'Highlights', stats: [{ value: '100%', label: 'Coverage' }, { value: '2x', label: 'Faster' }] },
   },
   {
+    id: 'big-stat', label: 'Big number', category: 'data',
+    schema: schema(['value', 'label'], { title: s(), value: s(), label: s(), points: stringArray(0, 3) }),
+    defaults: {
+      title: 'Hasil utama',
+      value: '92%',
+      label: 'Tugas selesai tanpa retry',
+      points: ['Naik dari 71% pada kuartal sebelumnya', 'Diukur pada 1.250 tugas terakhir'],
+    },
+  },
+  {
     id: 'quote', label: 'Quote', category: 'content',
     schema: schema(['text'], { text: s(), author: s() }),
     defaults: { text: 'A memorable quote.', author: '' },
+  },
+  {
+    id: 'testimonial', label: 'Testimonial', category: 'content',
+    schema: schema(['text', 'name'], {
+      text: s(), name: s(), role: s(),
+      metrics: { type: 'array', minItems: 0, maxItems: 3, items: obj(['value', 'label'], { value: s(), label: s() }) },
+    }),
+    defaults: {
+      text: 'Sejak memakai alur ini, pekerjaan yang dulu memakan waktu seharian selesai sebelum makan siang.',
+      name: 'Pengguna Percontohan',
+      role: 'Ketua tim',
+      metrics: [{ value: '3x', label: 'Lebih cepat' }],
+    },
   },
   {
     id: 'icon-grid', label: 'Icon grid', category: 'visual',
@@ -171,6 +291,54 @@ export const LAYOUTS: LayoutDef[] = [
       items: { type: 'array', minItems: 3, maxItems: 6, items: obj(['icon', 'title'], { icon: s(), title: s(), desc: s() }) },
     }),
     defaults: { title: 'Features', items: [{ icon: 'zap', title: 'Fast' }, { icon: 'shield', title: 'Safe' }, { icon: 'heart', title: 'Loved' }] },
+  },
+  {
+    id: 'profile-cards', label: 'Profile cards', category: 'content',
+    schema: schema(['title', 'people'], {
+      title: s(),
+      people: { type: 'array', minItems: 3, maxItems: 4, items: obj(['name', 'role'], { name: s(), role: s(), note: s() }) },
+    }),
+    defaults: {
+      title: 'Tim inti',
+      people: [
+        { name: 'Andini Prameswari', role: 'Ketua Tim', note: 'Menjaga arah dan keputusan akhir' },
+        { name: 'Bagas Nugraha', role: 'Insinyur Inti', note: 'Memegang mesin eksekusi agent' },
+        { name: 'Citra Lestari', role: 'Desainer Sistem', note: 'Merancang permukaan dan alur' },
+      ],
+    },
+  },
+  {
+    id: 'glossary', label: 'Glossary', category: 'content',
+    schema: schema(['title', 'terms'], {
+      title: s(),
+      terms: { type: 'array', minItems: 4, maxItems: 6, items: obj(['term', 'definition'], { term: s(), definition: s() }) },
+    }),
+    defaults: {
+      title: 'Glosarium',
+      terms: [
+        { term: 'Agent', definition: 'Sistem yang menjalankan langkah kerja menuju tujuan' },
+        { term: 'Prompt', definition: 'Instruksi bahasa alami dari pengguna' },
+        { term: 'Workspace', definition: 'Folder kerja yang menjadi konteks bersama' },
+        { term: 'Artefak', definition: 'Hasil akhir yang dihasilkan dan tervalidasi' },
+      ],
+    },
+  },
+  {
+    id: 'mosaic', label: 'Mosaic', category: 'visual',
+    schema: schema(['tiles'], {
+      title: s(), caption: s(),
+      tiles: { type: 'array', minItems: 4, maxItems: 4, items: obj(['image'], { image: s(), alt: s(), caption: s() }) },
+    }),
+    defaults: {
+      title: 'Galeri',
+      caption: '',
+      tiles: [
+        { image: 'galeri-utama.png', alt: 'Tampilan utama' },
+        { image: 'galeri-detail.png', alt: 'Detail permukaan' },
+        { image: 'galeri-proses.png', alt: 'Proses berjalan' },
+        { image: 'galeri-hasil.png', alt: 'Hasil akhir' },
+      ],
+    },
   },
   {
     id: 'closing', label: 'Closing', category: 'closing',
@@ -207,8 +375,20 @@ export function layoutBlockKeys(layoutId: string, content: Record<string, unknow
     case 'closing': return ['title', 'cta'];
     case 'quote': return ['text', 'author'];
     case 'bullets': return ['title', 'points'];
+    case 'numbered-steps': return ['title', ...indexedKeys(content.steps, 'step')];
     case 'two-column': return ['title', 'left', 'right'];
+    case 'code-focus': return ['title', 'code', 'points'];
     case 'comparison': return ['title', 'left', 'right', 'verdict'];
+    case 'versus': return ['title', 'left', 'right', 'badge', 'verdict'];
+    case 'chevron-process': return ['title', ...indexedKeys(content.steps, 'step')];
+    case 'diagram-pyramid': return ['title', ...indexedKeys(content.tiers, 'tier')];
+    case 'roadmap': return ['title', ...indexedKeys(content.phases, 'phase')];
+    case 'matrix-quadrant': return ['title', ...indexedKeys(content.quadrants, 'quadrant', 4)];
+    case 'big-stat': return ['title', 'value', 'label', 'points'];
+    case 'testimonial': return ['text', 'person', 'metrics'];
+    case 'profile-cards': return ['title', ...indexedKeys(content.people, 'person')];
+    case 'glossary': return ['title', ...indexedKeys(content.terms, 'term')];
+    case 'mosaic': return ['title', ...indexedKeys(content.tiles, 'tile', 4), 'caption'];
     case 'image-side': return ['title', 'points', 'image'];
     case 'diagram-flow': return ['title', ...indexedKeys(content.steps, 'step')];
     case 'diagram-cycle': return ['title', ...indexedKeys(content.nodes, 'node', 4)];

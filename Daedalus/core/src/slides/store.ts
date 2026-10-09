@@ -92,9 +92,20 @@ const DENSITY_CAPS: Record<string, number> = {
   'diagram-cycle': 6,
   'diagram-hierarchy': 6,
   comparison: 5,
+  versus: 5,
   'chart-bar': 8,
   'chart-line': 8,
   'chart-donut': 6,
+  'numbered-steps': 6,
+  'chevron-process': 6,
+  'diagram-pyramid': 4,
+  roadmap: 4,
+  'matrix-quadrant': 4,
+  'profile-cards': 4,
+  glossary: 6,
+  mosaic: 4,
+  'big-stat': 3,
+  'code-focus': 5,
 };
 
 function densityIssues(slide: Slide): DeckIssue[] {
@@ -102,7 +113,7 @@ function densityIssues(slide: Slide): DeckIssue[] {
   const cap = DENSITY_CAPS[slide.layout] ?? 8;
   const lists: Array<{ field: string; items: unknown[] }> = [];
   const content = slide.content ?? {};
-  for (const field of ['points', 'items', 'steps', 'events', 'stats', 'cards']) {
+  for (const field of ['points', 'items', 'steps', 'events', 'stats', 'cards', 'tiers', 'people', 'phases', 'terms', 'quadrants', 'tiles']) {
     if (Array.isArray(content[field])) lists.push({ field, items: content[field] as unknown[] });
   }
   for (const side of ['left', 'right'] as const) {
