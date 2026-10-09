@@ -346,3 +346,100 @@ describe('AgentLoop (fake provider + fake tool)', () => {
     cleanup();
   });
 });
+
+describe('AgentLoop ask/plan prose repair', () => {
+  // The incident shape: a weak model answers in plain prose (no tool call,
+  // no "done:" prefix). Mutating modes always got a bounded repair turn;
+  // ask/plan used to fail invalid_action on that first reply, so a correct
+  // answer visible in chat still ended with status failed.
+  test('ask mode repairs a prose reply instead of failing, then completes', async () => {
+    const { store, cleanup } = tmpStore();
+    const bus = new EventBus();
+    const requests: string[] = [];
+    let calls = 0;
+    const provider: LLMProvider = {
+      name: 'ask-prose-then-done',
+      async chat(messages) {
+        calls++;
+        requests.push(messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n'));
+        if (calls === 1) return { message: { role: 'assistant', content: 'The answer is 42, stated plainly.' } };
+        if (calls === 2) return { message: { role: 'assistant', content: 'done: The answer is 42.' } };
+        return { message: { role: 'assistant', content: '', tool_calls: [{ id: `c${calls}`, type: 'function' as const, function: { name: 'list_dir', arguments: '{}' } }] } };
+      },
+      async *stream() {},
+    };
+    const loop = new AgentLoop({
+      provider,
+      bus,
+      store,
+      mode: 'ask',
+      stopPolicy: { max_iterations: 10, max_errors: 5 },
+      executeTool: async (call) => ({ call_id: call.id, status: 'ok', output: 'notes.md', truncated: false, meta: {} }),
+    });
+    const state = await loop.run('What is the answer?\ndone: answer given');
+    cleanup();
+    expect(state.status).toBe('done');
+    expect(calls).toBe(3);
+    // The turn after the prose reply carried the Ask-mode repair directive.
+    expect(requests[1]).toContain('In Ask mode, either call a read tool next');
+  });
+
+  test('ask mode still fails invalid_action once the repair budget is spent', async () => {
+    const { store, cleanup } = tmpStore();
+    const bus = new EventBus();
+    let calls = 0;
+    const provider: LLMProvider = {
+      name: 'ask-always-prose',
+      async chat() {
+        calls++;
+        return { message: { role: 'assistant', content: 'just prose, again' } };
+      },
+      async *stream() {},
+    };
+    const loop = new AgentLoop({
+      provider,
+      bus,
+      store,
+      mode: 'ask',
+      stopPolicy: { max_iterations: 10, max_errors: 2 },
+      executeTool: async (call) => ({ call_id: call.id, status: 'ok', output: 'notes.md', truncated: false, meta: {} }),
+    });
+    const state = await loop.run('What is the answer?\ndone: answer given');
+    cleanup();
+    expect(state.status).toBe('failed');
+    expect(state.last_error).toContain('invalid_action');
+    // First reply plus repairs bounded by the shared max_errors budget.
+    expect(calls).toBe(2);
+  });
+
+  test('plan mode repairs a prose reply, then the plan write completes the task', async () => {
+    const { store, cleanup } = tmpStore();
+    const bus = new EventBus();
+    const requests: string[] = [];
+    let calls = 0;
+    const provider: LLMProvider = {
+      name: 'plan-prose-then-write',
+      async chat(messages) {
+        calls++;
+        requests.push(messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n'));
+        if (calls === 1) return { message: { role: 'assistant', content: 'Here is roughly what I would plan, in prose.' } };
+        return { message: { role: 'assistant', content: '', tool_calls: [{ id: `c${calls}`, type: 'function' as const, function: { name: 'write_file', arguments: JSON.stringify({ path: '.daedalus/plans/probe/plan.md', content: '# Plan\n' }) } }] } };
+      },
+      async *stream() {},
+    };
+    const loop = new AgentLoop({
+      provider,
+      bus,
+      store,
+      mode: 'plan',
+      stopPolicy: { max_iterations: 10, max_errors: 3 },
+      executeTool: async (call) => ({ call_id: call.id, status: 'ok', output: 'written', truncated: false, meta: { mutating: true } }),
+    });
+    const state = await loop.run('Plan the probe feature\ndone: plan documented');
+    cleanup();
+    expect(state.status).toBe('done');
+    expect(calls).toBe(2);
+    // The turn after the prose reply carried the Plan-mode repair directive.
+    expect(requests[1]).toContain('In Plan mode, either call a tool next');
+  });
+});
