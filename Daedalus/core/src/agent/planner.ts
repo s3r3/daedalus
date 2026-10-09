@@ -51,27 +51,18 @@ export function isDefaultPipeline(intents: string[]): boolean {
   return intents.length > 0 && intents.every((intent) => DEFAULT_STEPS.includes(intent));
 }
 
-/** The Slide domain's canned pipeline (used when a slide goal carries no done-criteria). */
-export const SLIDE_PLAN_STEPS = [
-  'Generate the deck outline with the slide pipeline (skeleton deck persisted)',
-  'Confirm the outline and design direction with the user (Standard checkpoint)',
-  'Fill every slide with the pipeline (resumable per slide)',
-  'Validate the deck and export the .pptx',
-];
-
 /** Planner: TaskSpec -> ordered, amendable checklist (PLAN.md §3.1). */
 export async function createPlan(spec: TaskSpec): Promise<Plan> {
   // A scaffold goal with no explicit criteria narrates the recipe's own
   // sequence (generate → install → write → build) instead of the canned
   // pipeline — see scaffoldPlanSteps. Explicit done-criteria always win.
+  // (Slide-domain tasks are planned by the SlideEngine, never here.)
   const scaffold = spec.done_criteria.length === 0 ? detectCreationGoal(spec.goal, spec.done_criteria).scaffold : undefined;
   const intents = spec.done_criteria.length > 0
     ? spec.done_criteria.map((c) => `Satisfy: ${c}`)
-    : spec.domain === 'slide'
-      ? SLIDE_PLAN_STEPS
-      : scaffold
-        ? scaffoldPlanSteps(scaffold)
-        : DEFAULT_STEPS;
+    : scaffold
+      ? scaffoldPlanSteps(scaffold)
+      : DEFAULT_STEPS;
   const steps: PlanStep[] = intents.map((intent, index) => ({
     id: `${spec.id}-step-${index + 1}`,
     intent,

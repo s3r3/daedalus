@@ -10,7 +10,7 @@ import { guardEditedFile } from './agent/edit-guard.ts';
 import { loadHooksConfig, runPostToolHooks, runPreToolHooks, type HooksConfig } from './agent/hooks.ts';
 import { loadAgents, workspaceAgentsDir, type AgentDefinition } from './agents/index.ts';
 import { createTaskWorktree, worktreeChangedFiles } from './worktree.ts';
-import { createDefaultRegistry, createSlideRegistry, editSearchReplaceTool } from './tools/index.ts';
+import { createDefaultRegistry, editSearchReplaceTool } from './tools/index.ts';
 import { pathInWorkspace } from './tools/filesystem/index.ts';
 import type { ToolDefinition } from './tools/registry.ts';
 import { existsSync } from 'node:fs';
@@ -20,13 +20,9 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { changedLineCounts, diffLines, renderPatch } from './tools/filesystem/diff.ts';
 import { ApprovalBroker, ExecutionHarness, commandLineOf, resolveApprovalTimeoutMs, type ApprovalDecision, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
 import { CommandValidator, type ValidationCommand, type Validator } from './validation/index.ts';
-import { DeckValidator } from './slides/deck-validator.ts';
 import { SlideEngine } from './slides/engine.ts';
 import { regenerateSlideStage } from './slides/pipeline.ts';
 import type { DeckSpec, Slide } from './slides/deck.ts';
-
-/** Slide tasks validate their deck, never the workspace's coding checks. */
-const deckValidator = new DeckValidator();
 import { createProviderFromSettings } from './providers/index.ts';
 import { OpenAICompatProvider } from './providers/llm/openai-compat.ts';
 import { ModelPoolProvider, asModelController, normalizeModelList } from './providers/llm/model-pool.ts';
@@ -1000,7 +996,6 @@ export class TaskRunner {
         visionEnabled,
         skills: extensions.skills.list(),
         ...(options.domain ? { domain: options.domain } : {}),
-        ...(options.slide ? { slide: options.slide } : {}),
         ...(invokedSkills.length > 0 ? { invokedSkills } : {}),
         rules: rules.text ? rules.text : undefined,
         rulesFiles: rules.files,

@@ -81,38 +81,12 @@ import { fetchUrlTool, webSearchTool } from './web/index.ts';
 import { screenshotTool, viewImageTool } from './media/index.ts';
 import { downloadFileTool, searchImagesTool } from './images/index.ts';
 import { createDeckTool, readDeckTool, addSlideTool, updateSlideTool, moveSlideTool, deleteSlideTool, setDeckThemeTool, validateDeckTool, exportDeckTool, SLIDE_TOOLS } from './slides.ts';
-import { createSlidePipelineTools } from './slide-pipeline.ts';
-import type { LLMProvider } from '../providers/llm/types.ts';
 import { ToolRegistry, type ToolDefinition } from './registry.ts';
-
-export { createSlidePipelineTools } from './slide-pipeline.ts';
 
 export const DEFAULT_TOOLS: ToolDefinition[] = [readFileTool, writeFileTool, editFileTool, createDirTool, listDirTool, grepTool, globTool, runCommandTool, commandStatusTool, commandKillTool, gitDiffTool, gitStatusTool, fetchUrlTool, webSearchTool, viewImageTool, screenshotTool, searchImagesTool, downloadFileTool, createDeckTool, readDeckTool, addSlideTool, updateSlideTool, moveSlideTool, deleteSlideTool, setDeckThemeTool, validateDeckTool, exportDeckTool];
 
 export function createDefaultRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
   for (const tool of DEFAULT_TOOLS) registry.register(tool);
-  return registry;
-}
-
-/**
- * The Slide domain's locked registry: deck tools ONLY. Coding tools are
- * not merely hidden from the prompt — they are not registered, so they
- * cannot execute in a slide task (the structural fix for the markdown /
- * python-pptx detours: there is no other road to take).
- *
- * When the host binds the run's LLM provider (the runtime does, per
- * run), the registry also gains the three generation-pipeline tools:
- * they call the model themselves through the code-sequenced slide
- * pipeline, so they belong exclusively to this registry — the coding
- * registry must never gain model-calling tools.
- */
-export function createSlideRegistry(provider?: LLMProvider | (() => LLMProvider | undefined)): ToolRegistry {
-  const registry = new ToolRegistry();
-  for (const tool of SLIDE_TOOLS) registry.register(tool);
-  if (provider) {
-    const getProvider: () => LLMProvider | undefined = typeof provider === 'function' ? provider : () => provider;
-    for (const tool of createSlidePipelineTools(getProvider)) registry.register(tool);
-  }
   return registry;
 }
