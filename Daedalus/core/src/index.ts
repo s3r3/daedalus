@@ -708,7 +708,13 @@ export {
   type ValidateDeckOptions,
 } from "./slides/store.ts";
 
-export { exportDeckToPptx } from "./slides/export-pptx.ts";
+export { exportDeckToPptx, type PptxExportResult } from "./slides/export-pptx.ts";
+export {
+  exportTemplateDeckToPptx,
+  rewriteTemplateSlideText,
+  TemplateCloneError,
+  type TemplateCloneExportResult,
+} from "./slides/export-template.ts";
 
 export {
   generateDeckOutlineStage,
@@ -750,6 +756,7 @@ export {
   listPptxTemplates,
   getPptxTemplate,
   readPptxTemplateBackground,
+  readPptxTemplateSource,
   readPptxTemplateSync,
   readPptxTemplateAsset,
   deletePptxTemplate,
@@ -762,6 +769,9 @@ export {
 
 export {
   extractPptxPages,
+  extractPptxPageAddresses,
+  listPptxSlideParts,
+  matchPageAddresses,
   prefixPageAssets,
   pptxTemplateAssetFiles,
   templatePageTextSlots,
@@ -775,6 +785,9 @@ export {
   type PptxImageSlot,
   type PptxSlotRect,
   type PptxPagesExtract,
+  type PptxDecorShape,
+  type PptxTemplatePageAddress,
+  type PptxTemplateSlotAddress,
 } from "./slides/pptx-pages.ts";
 
 export {

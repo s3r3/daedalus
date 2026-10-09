@@ -400,7 +400,7 @@ export class SlideEngine {
 
     if (fill.exported) {
       ctx.setStep('export', 'done');
-      const summary = `done: ${fill.exported.slides} slide selesai dan ter-export ke ${fill.exported.path} (${Math.round(fill.exported.bytes / 1024)} KB) — deck valid, file .pptx bisa diunduh dari deck workspace.`;
+      const summary = `done: ${fill.exported.slides} slide selesai dan ter-export ke ${fill.exported.path} (${Math.round(fill.exported.bytes / 1024)} KB) — deck valid, file .pptx bisa diunduh dari deck workspace.${fill.exported.note ? ` ${fill.exported.note}` : ''}`;
       this.#emit('THOUGHT', { text: summary });
       return { state: { status: 'done' }, outcome: 'success', reason: 'completed', summary, validation, exported: fill.exported };
     }
@@ -509,8 +509,8 @@ export class SlideEngine {
         const fresh = (await readDeck(root)) ?? next.deck;
         const result = await exportDeckToPptx(fresh, root);
         ctx.setStep('export', 'done');
-        const exported = { path: result.relativePath, bytes: result.bytes, slides: result.slideCount };
-        const summary = `done: perubahan diterapkan (${next.opsApplied} operasi) dan deck ter-export ke ${exported.path} (${exported.slides} slide).`;
+        const exported = { path: result.relativePath, bytes: result.bytes, slides: result.slideCount, ...(result.note ? { note: result.note } : {}) };
+        const summary = `done: perubahan diterapkan (${next.opsApplied} operasi) dan deck ter-export ke ${exported.path} (${exported.slides} slide).${result.note ? ` ${result.note}` : ''}`;
         this.#emit('THOUGHT', { text: summary });
         return { state: { status: 'done' }, outcome: 'success', reason: 'completed', summary, validation, exported };
       } catch (error) {

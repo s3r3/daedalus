@@ -32,6 +32,7 @@ interface PptxInstance {
 type PptxCtor = new () => PptxInstance;
 const PptxGenJS = ((PptxGenJSModule as unknown as { default?: unknown }).default ?? PptxGenJSModule) as unknown as PptxCtor;
 import { deckPaths, slugifyTitle, type DeckSpec, type Slide } from './deck.ts';
+import { exportTemplateDeckToPptx } from './export-template.ts';
 import { pptxTemplatesDir, readPptxTemplateSync } from './pptx-template.ts';
 
 const W = 13.333;
@@ -990,11 +991,55 @@ function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root:
   void deck;
 }
 
-export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<{ relativePath: string; bytes: number; slideCount: number }> {
+export interface PptxExportResult {
+  relativePath: string;
+  bytes: number;
+  slideCount: number;
+  /**
+   * Honest export-path note, set when template slides were rendered via
+   * the approximation path below instead of the clone-and-rewrite export
+   * (export-template.ts). The engine surfaces it in its summary so the
+   * fidelity gap is never silent.
+   */
+  note?: string;
+}
+
+export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<PptxExportResult> {
   // An empty deck is not a presentation: never emit a placeholder-title
   // .pptx that completion checks would mistake for generated slides.
   if (!deck.slides || deck.slides.length === 0) {
     throw new Error('cannot export an empty deck: add at least one slide (add_slide) before exporting');
+  }
+  // Template fidelity (v3): when EVERY slide references the SAME imported
+  // template that kept its source .pptx, the output clones that package
+  // and rewrites only slot words/clicked images — the template's
+  // decorative shapes, charts, and tables survive untouched. Anything
+  // else with template slides falls back to the pptxgenjs redraw below
+  // (background + slot boxes), which approximates the design; the result
+  // note says so plainly.
+  let templateNote: string | undefined;
+  const refs = deck.slides.map((s) => s.templateRef);
+  if (refs.every((ref) => ref !== undefined)) {
+    const templateIds = new Set(refs.map((ref) => ref!.templateId));
+    if (templateIds.size === 1) {
+      const templateId = refs[0]!.templateId;
+      const template = readPptxTemplateSync(root, templateId);
+      if (template?.sourceFileName) {
+        try {
+          return await exportTemplateDeckToPptx(deck, root, template);
+        } catch (error) {
+          templateNote = `Ekspor fidelitas penuh gagal (${error instanceof Error ? error.message : String(error)}); slide template digambar ulang via ekspor aproksimasi.`;
+        }
+      } else if (template) {
+        templateNote = 'Template PPT ini diimpor sebelum ekspor fidelitas penuh tersedia; slide digambar ulang via ekspor aproksimasi — impor ulang berkas .pptx-nya agar hasil ekspor mempertahankan seluruh elemen desainnya.';
+      } else {
+        templateNote = `Template PPT "${templateId}" tidak ditemukan di workspace; slide template digambar via ekspor aproksimasi.`;
+      }
+    } else {
+      templateNote = 'Deck ini memakai lebih dari satu template PPT; slide template digambar via ekspor aproksimasi.';
+    }
+  } else if (refs.some((ref) => ref !== undefined)) {
+    templateNote = 'Sebagian slide memakai template PPT dan sebagian tidak; slide template digambar via ekspor aproksimasi (desain template tidak dipertahankan penuh).';
   }
   const paths = deckPaths(root);
   await mkdir(paths.dir, { recursive: true });
@@ -1029,5 +1074,5 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<{ 
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
   await writeFile(outPath, buf);
   const info = await stat(outPath);
-  return { relativePath: `deck/${fileName}`, bytes: info.size, slideCount: deck.slides.length };
+  return { relativePath: `deck/${fileName}`, bytes: info.size, slideCount: deck.slides.length, ...(templateNote ? { note: templateNote } : {}) };
 }

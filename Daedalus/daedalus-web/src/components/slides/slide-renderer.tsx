@@ -2257,6 +2257,58 @@ function TemplateSlots({ slide, page, assetSrc, editable, onImagePick, imageSrc,
   const slots = obj(slide.content.slots)
   return (
     <div className="absolute inset-0" style={{ zIndex: 2 }} data-testid="template-slide" data-page-kind={page.kind}>
+      {/* Decorative shapes of the template page, in paint order behind
+          the slots (v3 preview honesty). The canvas approximates the
+          design; the exported .pptx is exact — it clones the template's
+          original slide instead of redrawing it. */}
+      {(page.shapes ?? []).map((shape, index) => {
+        const rectStyle: CSSProperties = {
+          left: `${shape.rect.x * 100}%`,
+          top: `${shape.rect.y * 100}%`,
+          width: `${shape.rect.w * 100}%`,
+          height: `${shape.rect.h * 100}%`,
+        }
+        if (shape.type === 'image') {
+          return (
+            <img
+              key={`decor-${index}`}
+              data-testid="template-decor-image"
+              src={assetSrc(shape.imageFile)}
+              alt=""
+              className="absolute object-cover"
+              style={{ ...rectStyle, pointerEvents: 'none' }}
+            />
+          )
+        }
+        if (shape.type === 'path') {
+          return (
+            <svg
+              key={`decor-${index}`}
+              data-testid="template-decor-path"
+              viewBox={`0 0 ${shape.box.w} ${shape.box.h}`}
+              preserveAspectRatio="none"
+              className="absolute"
+              style={{ ...rectStyle, pointerEvents: 'none' }}
+              aria-hidden
+            >
+              <path d={shape.d} fill={shape.fill} />
+            </svg>
+          )
+        }
+        return (
+          <div
+            key={`decor-${index}`}
+            data-testid="template-decor-shape"
+            className="absolute"
+            style={{
+              ...rectStyle,
+              backgroundColor: shape.fill,
+              borderRadius: shape.geom === 'ellipse' ? '50%' : shape.geom === 'roundRect' ? '12%' : undefined,
+              pointerEvents: 'none',
+            }}
+          />
+        )
+      })}
       {page.slots.map((slot) => {
         const rectStyle: CSSProperties = {
           left: `${slot.rect.x * 100}%`,

@@ -258,7 +258,7 @@ export function SlidePptTemplatesPanel() {
         })}
       </div>
       <p className="px-1 pt-1.5 text-[10px] text-muted">
-        Pakai template PPT: font, warna, dan layout halaman ikut template — AI hanya mengganti kata-katanya. Slot gambar tidak diisi AI: klik placeholder gambar di canvas (mode Edit) untuk menggantinya. Tanpa template PPT, Warna &amp; Font bawaan tetap pilihan bawaan.
+        Pakai template PPT: font, warna, dan layout halaman ikut template — AI hanya mengganti kata-katanya. Slot gambar tidak diisi AI: klik placeholder gambar di canvas (mode Edit) untuk menggantinya. File .pptx hasil Export mempertahankan seluruh elemen desain template (bentuk vektor, grafik, tabel) persis seperti aslinya; tampilan canvas hanya perkiraan. Tanpa template PPT, Warna &amp; Font bawaan tetap pilihan bawaan.
       </p>
     </Panel>
   )
