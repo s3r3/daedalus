@@ -39,10 +39,14 @@ import {
   deckPaths,
   deletePptxTemplate,
   exportDeckToPptx,
+  getBuiltinTemplate,
   getPptxTemplate,
   getSlideTemplate,
+  builtinDeckTheme,
+  listBuiltinTemplates,
   listPptxTemplates,
   listSlideTemplates,
+  pourDeckIntoTemplate,
   readPptxTemplateAsset,
   readPptxTemplateBackground,
   savePptxTemplate,
@@ -1296,6 +1300,12 @@ export function createApp(ctx: AppContext) {
               sendJson(res, 400, { error: "unknown_slide_template", request_id: requestId });
               return;
             }
+            const designRaw = raw.design_id ?? raw.designId;
+            const designId = typeof designRaw === "string" && designRaw.trim() ? designRaw.trim() : undefined;
+            if (designId && !getBuiltinTemplate(designId)) {
+              sendJson(res, 400, { error: "unknown_slide_design", request_id: requestId });
+              return;
+            }
             const customRaw = raw.custom_template_id ?? raw.customTemplateId;
             const customTemplateId = typeof customRaw === "string" && customRaw.trim() ? customRaw.trim() : undefined;
             if (templateId && customTemplateId) {
@@ -1304,11 +1314,19 @@ export function createApp(ctx: AppContext) {
               sendJson(res, 400, { error: "slide_template_conflict", request_id: requestId });
               return;
             }
+            if (designId && customTemplateId) {
+              // A built-in design template and an imported PPT template
+              // are both full design sources — never both on one deck.
+              // (A Warna & Font skin may still layer over a design.)
+              sendJson(res, 400, { error: "slide_template_conflict", request_id: requestId });
+              return;
+            }
             const parsed2: SlideTaskParams = {
               ...(generation ? { generation } : {}),
               ...(slideCount ? { slideCount } : {}),
               ...(language ? { language } : {}),
               ...(templateId ? { templateId } : {}),
+              ...(designId ? { designId } : {}),
               ...(customTemplateId ? { customTemplateId } : {}),
             };
             slide = Object.keys(parsed2).length > 0 ? parsed2 : undefined;
@@ -1948,6 +1966,15 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
+    // Built-in design templates ("Template bawaan"): Daedalus-born
+    // design sets (layout pools, furniture, typography, base skin) from
+    // core's registry. The gallery renders its card previews from the
+    // same data the canvas and exporter resolve.
+    if (method === "GET" && url.pathname === "/slides/builtin-templates") {
+      sendJson(res, 200, { templates: listBuiltinTemplates() });
+      return;
+    }
+
     // Imported PPT templates ("Template dari PPT"): designs extracted
     // from uploaded .pptx files, stored per workspace under
     // .daedalus/slide-templates/ by core. The bundled templates above
@@ -2238,9 +2265,16 @@ export function createApp(ctx: AppContext) {
             sendJson(res, 400, { error: "unknown_slide_template", request_id: requestId });
             return;
           }
+          const designRaw = parsed.design_id ?? parsed.designId;
+          const designId = typeof designRaw === "string" && designRaw.trim() ? designRaw.trim() : undefined;
+          if (designId && !getBuiltinTemplate(designId)) {
+            sendJson(res, 400, { error: "unknown_slide_design", request_id: requestId });
+            return;
+          }
           await ensureProvidersLoaded(ctx);
           const input = {
             ...(templateId ? { templateId } : {}),
+            ...(designId ? { designId } : {}),
             ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
             ...(typeof parsed.provider_id === "string" ? { providerId: parsed.provider_id } : {}),
           };
@@ -2379,8 +2413,19 @@ export function createApp(ctx: AppContext) {
             // extracted theme wholesale is what makes the last applied pick
             // win over a bundled template, and vice versa.
             const customTemplateId = typeof parsed.custom_template_id === "string" ? parsed.custom_template_id : typeof parsed.customTemplateId === "string" ? parsed.customTemplateId : undefined;
+            // Built-in design template ("Template bawaan"): stamps its
+            // tokens + designId; a Warna & Font skin in the same call (or a
+            // later skin-only call) re-skins over it without clearing the
+            // design — the two layers are how the panel separates
+            // "desain" from "warna & font".
+            const designId = typeof parsed.design_id === "string" ? parsed.design_id : typeof parsed.designId === "string" ? parsed.designId : undefined;
+            const design = designId !== undefined ? getBuiltinTemplate(designId) : undefined;
+            if (designId !== undefined && !design) {
+              badDeck(400, "unknown_slide_design");
+              return;
+            }
             if (customTemplateId !== undefined) {
-              if (parsed.template_id !== undefined || parsed.templateId !== undefined) {
+              if (parsed.template_id !== undefined || parsed.templateId !== undefined || designId !== undefined) {
                 badDeck(400, "conflicting_template");
                 return;
               }
@@ -2410,11 +2455,22 @@ export function createApp(ctx: AppContext) {
               badDeck(400, "invalid_dark");
               return;
             }
-            if (!template && accent === undefined && parsed.dark === undefined) {
+            if (!template && !design && accent === undefined && parsed.dark === undefined) {
               badDeck(400, "nothing_to_apply");
               return;
             }
-            const next: DeckSpec = { ...deck, theme: { ...(template ? { ...template.theme, templateId: template.id } : deck.theme) } };
+            // Layer order: design tokens first, then the skin pick (whose
+            // colors/fonts win while the design survives), or — a skin-only
+            // call on a designed deck — the same story for this deck.
+            const base = design
+              ? builtinDeckTheme(design)
+              : template
+                ? { ...template.theme, templateId: template.id, ...(deck.theme.designId ? { designId: deck.theme.designId } : {}) }
+                : deck.theme;
+            const layered = design && template
+              ? { ...template.theme, templateId: template.id, designId: design.id }
+              : base;
+            const next: DeckSpec = { ...deck, theme: { ...layered } };
             if (typeof accent === "string") next.theme = { ...next.theme, accent };
             if (typeof parsed.dark === "boolean") next.theme = { ...next.theme, dark: parsed.dark };
             await commit(next);
@@ -2434,8 +2490,68 @@ export function createApp(ctx: AppContext) {
               });
               return;
             }
+            // Export picker (stage menu): export wearing a DIFFERENT
+            // design than the deck was made with. The deck on disk never
+            // changes; the output file carries the design's suffix.
+            // Built-in: re-dress (skin + furniture + typography over the
+            // deck's own layouts/words). Imported with pages: the deck's
+            // words are poured into the template's page designs and
+            // exported through the clone path; skin-only imports re-skin.
+            const exportDesignId = typeof parsed.design_id === "string" ? parsed.design_id : typeof parsed.designId === "string" ? parsed.designId : undefined;
+            const exportCustomId = typeof parsed.custom_template_id === "string" ? parsed.custom_template_id : typeof parsed.customTemplateId === "string" ? parsed.customTemplateId : undefined;
+            if (exportDesignId !== undefined && exportCustomId !== undefined) {
+              badDeck(400, "conflicting_template");
+              return;
+            }
+            const sendExport = (result: { relativePath: string; bytes: number; slideCount: number; note?: string }, extraNote?: string): void => {
+              const note = [result.note, extraNote].filter((part): part is string => typeof part === "string" && part.length > 0).join(" ");
+              sendJson(res, 200, { root, path: result.relativePath, bytes: result.bytes, slides: result.slideCount, ...(note ? { note } : {}) });
+            };
+            if (exportDesignId !== undefined) {
+              const design = getBuiltinTemplate(exportDesignId);
+              if (!design) {
+                badDeck(400, "unknown_slide_design");
+                return;
+              }
+              const result = await exportDeckToPptx(deck, root, { themeOverride: builtinDeckTheme(design), fileSuffix: design.id });
+              sendExport(result, `Diekspor dengan template bawaan "${design.name}": warna, font, dan ornamen desainnya memakai deck ini apa adanya (layout & isi tidak berubah); deck di disk tidak diubah.`);
+              return;
+            }
+            if (exportCustomId !== undefined) {
+              const template = await getPptxTemplate(root, exportCustomId).catch(() => undefined);
+              if (!template) {
+                badDeck(404, "ppt_template_not_found", { message: `template PPT "${exportCustomId}" tidak ditemukan di workspace ini` });
+                return;
+              }
+              if (template.pages && template.pages.length > 0) {
+                try {
+                  const poured = pourDeckIntoTemplate(deck, template);
+                  const result = await exportDeckToPptx(poured.deck, root, { fileSuffix: template.id });
+                  const pourNotes = [
+                    poured.truncatedSlots > 0 ? `${poured.truncatedSlots} kotak teks dipotong agar muat di kotak template.` : "",
+                    poured.droppedLines > 0 ? `${poured.droppedLines} baris teks tidak mendapat kotak di template.` : "",
+                  ].filter((part) => part.length > 0).join(" ");
+                  sendExport(result, `Kata-kata deck dituangkan ke desain halaman template "${template.name}" untuk ekspor ini; deck di disk tidak diubah.${pourNotes ? ` ${pourNotes}` : ""}`);
+                } catch (error) {
+                  badDeck(422, "export_failed", { message: error instanceof Error ? error.message : String(error) });
+                }
+                return;
+              }
+              try {
+                const applied = await applyPptxTemplateTheme(root, exportCustomId);
+                const result = await exportDeckToPptx(deck, root, { themeOverride: applied.theme, fileSuffix: template.id });
+                sendExport(result, `Diekspor dengan kulit template impor "${template.name}" (palet & font-nya; template ini tidak menyimpan desain halaman); deck di disk tidak diubah.`);
+              } catch (error) {
+                if (error instanceof PptxTemplateError) {
+                  badDeck(error.code === "ppt_template_not_found" ? 404 : 400, error.code, { message: error.message });
+                  return;
+                }
+                throw error;
+              }
+              return;
+            }
             const result = await exportDeckToPptx(deck, root);
-            sendJson(res, 200, { root, path: result.relativePath, bytes: result.bytes, slides: result.slideCount });
+            sendExport(result);
             return;
           }
 
