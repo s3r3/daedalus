@@ -326,7 +326,7 @@ function isUntouchedSkeleton(slide: Slide): boolean {
 export async function fillDeckSlidesStage(
   provider: LLMProvider,
   root: string,
-  options: { language?: string; templateId?: string; signal?: AbortSignal } = {},
+  options: { language?: string; templateId?: string; signal?: AbortSignal; stagedGenerate?: boolean } = {},
 ): Promise<FillStageResult> {
   const deck = await readDeck(root);
   if (!deck) {
@@ -337,6 +337,25 @@ export async function fillDeckSlidesStage(
     if (!template) throw new SlidePipelineError(`unknown templateId "${options.templateId}" — bundled templates: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
     deck.theme = { ...template.theme, templateId: template.id };
     await writeDeck(root, deck);
+  }
+
+  if (options.stagedGenerate) {
+    // Staged generate (the Outline panel's Buat button): a skeleton the
+    // user already edited in the panel is theirs. Hand-written content
+    // that satisfies its (possibly changed) layout is adopted as-is —
+    // marked filled, never overwritten by the model; only untouched
+    // skeletons and schema-failing slides go through the fill below.
+    let adopted = false;
+    for (const slide of deck.slides) {
+      if (slide.status !== 'skeleton' || isUntouchedSkeleton(slide)) continue;
+      const layout = getLayout(slide.layout);
+      if (!layout) continue;
+      if (validateSlideContent(layout, slide.content).every((issue) => issue.severity !== 'error')) {
+        slide.status = 'filled';
+        adopted = true;
+      }
+    }
+    if (adopted) await writeDeck(root, deck);
   }
 
   const filledNow: string[] = [];
