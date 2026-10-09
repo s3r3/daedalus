@@ -1979,6 +1979,31 @@ export function createApp(ctx: AppContext) {
           const slideId = typeof parsed.slide_id === "string" ? parsed.slide_id : typeof parsed.slideId === "string" ? parsed.slideId : undefined;
           const index = deck.slides.findIndex((slide) => slide.id === slideId);
 
+          if (url.pathname === "/slides/deck/regenerate") {
+            // Slide engine seam, not a task: regenerate this one slide
+            // with fresh content in place. The deck on disk changes only
+            // when the new content validates; failure keeps the old
+            // slide and the error says why.
+            if (!slideId || index < 0) {
+              badDeck(404, "slide_not_found");
+              return;
+            }
+            await ensureProvidersLoaded(ctx);
+            const runner = new TaskRunner({
+              workspaceRoot: root,
+              bus: ctx.bus,
+              store: ctx.store,
+              settings: ctx.settings,
+              providerRegistry: ctx.providerStore.registry,
+            });
+            const regenerated = await runner.regenerateSlide(root, slideId, {
+              ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
+              ...(typeof parsed.provider_id === "string" ? { providerId: parsed.provider_id } : {}),
+            });
+            sendJson(res, 200, { root, deck: regenerated.deck, slide_id: slideId });
+            return;
+          }
+
           if (url.pathname === "/slides/deck/slide/add") {
             const layout = typeof parsed.layout === "string" ? parsed.layout : "";
             if (!layout) {
