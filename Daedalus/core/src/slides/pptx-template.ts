@@ -1,0 +1,426 @@
+import JSZip from 'jszip';
+import { existsSync } from 'node:fs';
+import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { basename, extname, join } from 'node:path';
+import { deckPaths, slugifyTitle, type DeckTheme } from './deck.ts';
+
+/**
+ * Templates imported from a downloaded .pptx (Farid's "Template dari PPT"
+ * panel): the file's design skin — theme color scheme, font scheme, slide
+ * size, and the slide-master background — is extracted once and stored as
+ * theme-token data under `<workspace>/.daedalus/slide-templates/`, so it
+ * can be applied to any deck exactly like the bundled templates in
+ * slides/templates.ts (which stay the default). The source file's slide
+ * geometry is NOT cloned: layouts remain Daedalus' own 50; only the
+ * palette, fonts, and master background transfer.
+ *
+ * Extraction is deliberately per-field honest: a missing color or font
+ * falls back to the bundled General tokens for that field, never a crash.
+ * Only a file that is not a real PPTX at all (not a zip, or no
+ * ppt/presentation.xml inside) is rejected outright.
+ */
+export class PptxTemplateError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = 'PptxTemplateError';
+    this.code = code;
+  }
+}
+
+export type PptxSlideSize = {
+  /** Raw EMU dimensions from <p:sldSz> (914400 EMU = 1 inch). */
+  cx: number;
+  cy: number;
+  /** Human label: "16:9", "4:3", or the inch size for anything else. */
+  label: string;
+};
+
+export type PptxTemplate = {
+  /** Slug id (also the JSON filename stem under the template store). */
+  id: string;
+  /** Display name: the uploaded file's stem. */
+  name: string;
+  /** Original uploaded filename. */
+  sourceFile: string;
+  createdAt: string;
+  /** Extracted design tokens in the DeckTheme shape renderers consume (without the apply-time stamps). */
+  theme: DeckTheme;
+  slideSize?: PptxSlideSize;
+  /** Stored background image filename beside the JSON, when the master background is an image. */
+  backgroundImageFile?: string;
+};
+
+export const PPT_TEMPLATES_DIR = '.daedalus/slide-templates';
+/** Upload cap for one .pptx (the server enforces the same number on the wire). */
+export const MAX_PPTX_TEMPLATE_BYTES = 25 * 1024 * 1024;
+
+export function pptxTemplatesDir(root: string): string {
+  return join(root, PPT_TEMPLATES_DIR);
+}
+
+const ID_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+
+function assertTemplateId(id: string): void {
+  if (!ID_PATTERN.test(id)) {
+    throw new PptxTemplateError('invalid_template_id', `invalid slide template id "${id}"`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// XML scraping (no XML dependency in core: theme/master parts are small and
+// their attribute shapes stable across PowerPoint-compatible producers).
+// ---------------------------------------------------------------------------
+
+function attr(tag: string, name: string): string | undefined {
+  const match = new RegExp(`\\b${name}="([^"]*)"`).exec(tag);
+  return match?.[1];
+}
+
+function schemeColor(block: string, name: string): string | undefined {
+  const entry = new RegExp(`<a:${name}\\b[^>]*>([\\s\\S]*?)</a:${name}>`).exec(block);
+  const inner = entry?.[1];
+  if (!inner) return undefined;
+  const srgb = /<a:srgbClr\s+val="([0-9A-Fa-f]{6})"/.exec(inner)?.[1];
+  if (srgb) return `#${srgb.toLowerCase()}`;
+  const sys = /<a:sysClr\b[^>]*\blastClr="([0-9A-Fa-f]{6})"/.exec(inner)?.[1];
+  if (sys) return `#${sys.toLowerCase()}`;
+  return undefined;
+}
+
+function schemeFont(block: string, part: 'majorFont' | 'minorFont'): string | undefined {
+  const entry = new RegExp(`<a:${part}\\b[^>]*>\\s*<a:latin\\s+typeface="([^"]*)"`).exec(block);
+  const value = entry?.[1]?.trim();
+  return value ? value : undefined;
+}
+
+/** Resolve a relationship target (e.g. "../media/image1.png") against the part that owns the .rels file. */
+function resolvePartPath(fromDir: string, target: string): string {
+  if (target.startsWith('/')) return target.slice(1);
+  const parts = fromDir.split('/').filter(Boolean);
+  for (const segment of target.split('/')) {
+    if (segment === '..') parts.pop();
+    else if (segment !== '.' && segment !== '') parts.push(segment);
+  }
+  return parts.join('/');
+}
+
+function relTarget(relsXml: string, id: string): string | undefined {
+  for (const match of relsXml.matchAll(/<Relationship\b[^>]*>/g)) {
+    if (attr(match[0], 'Id') === id) return attr(match[0], 'Target');
+  }
+  return undefined;
+}
+
+function firstPart(paths: string[], pattern: RegExp): string | undefined {
+  return paths.filter((p) => pattern.test(p)).sort()[0];
+}
+
+// ---------------------------------------------------------------------------
+// Color math for the two derived tokens (surface/muted): deterministic
+// mixes toward the opposite pole, labelled approximations in the panel copy.
+// ---------------------------------------------------------------------------
+
+function hexToRgb(hex: string): [number, number, number] {
+  const raw = hex.replace(/^#/, '');
+  return [parseInt(raw.slice(0, 2), 16), parseInt(raw.slice(2, 4), 16), parseInt(raw.slice(4, 6), 16)];
+}
+
+function rgbToHex([r, g, b]: [number, number, number]): string {
+  const clamp = (v: number) => Math.max(0, Math.min(255, Math.round(v)));
+  return `#${[r, g, b].map((v) => clamp(v).toString(16).padStart(2, '0')).join('')}`;
+}
+
+function mixHex(a: string, b: string, t: number): string {
+  const ca = hexToRgb(a);
+  const cb = hexToRgb(b);
+  return rgbToHex([ca[0] + (cb[0] - ca[0]) * t, ca[1] + (cb[1] - ca[1]) * t, ca[2] + (cb[2] - ca[2]) * t]);
+}
+
+function luminance(hex: string): number {
+  const [r, g, b] = hexToRgb(hex).map((v) => {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  }) as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+function isHex(value: string | undefined): value is string {
+  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value);
+}
+
+// ---------------------------------------------------------------------------
+// Extraction
+// ---------------------------------------------------------------------------
+
+export type ExtractedPptxDesign = {
+  theme: DeckTheme;
+  slideSize?: PptxSlideSize;
+  /** Master background when it is a solid color (already folded into theme.background when present). */
+  backgroundColor?: string;
+  /** Master background image bytes + stored filename extension, when the master background is an image. */
+  backgroundImage?: { bytes: Uint8Array; extension: string };
+};
+
+async function zipText(zip: JSZip, path: string | undefined): Promise<string | undefined> {
+  if (!path) return undefined;
+  const file = zip.file(path);
+  return file ? file.async('string') : undefined;
+}
+
+export async function extractPptxDesign(bytes: Uint8Array): Promise<ExtractedPptxDesign> {
+  let zip: JSZip;
+  try {
+    zip = await JSZip.loadAsync(bytes);
+  } catch {
+    throw new PptxTemplateError('not_a_pptx', 'berkas ini bukan PPTX yang valid (bukan arsip zip)');
+  }
+  const paths = Object.keys(zip.files);
+  const presentationPath = firstPart(paths, /^ppt\/presentation\.xml$/);
+  if (!presentationPath) {
+    throw new PptxTemplateError('not_a_pptx', 'berkas ini bukan PPTX yang valid (ppt/presentation.xml tidak ditemukan)');
+  }
+
+  // --- slide size -------------------------------------------------------
+  let slideSize: PptxSlideSize | undefined;
+  const presentationXml = await zipText(zip, presentationPath);
+  const sldSzTag = presentationXml ? /<p:sldSz\b[^>]*>/.exec(presentationXml)?.[0] : undefined;
+  if (sldSzTag) {
+    const cx = Number(attr(sldSzTag, 'cx'));
+    const cy = Number(attr(sldSzTag, 'cy'));
+    if (Number.isFinite(cx) && Number.isFinite(cy) && cx > 0 && cy > 0) {
+      const ratio = cx / cy;
+      const label = Math.abs(ratio - 16 / 9) < 0.02 ? '16:9' : Math.abs(ratio - 4 / 3) < 0.02 ? '4:3' : `${(cx / 914400).toFixed(2)} × ${(cy / 914400).toFixed(2)} in`;
+      slideSize = { cx, cy, label };
+    }
+  }
+
+  // --- slide master (background + which theme it points at) ------------
+  const masterPath = firstPart(paths, /^ppt\/slideMasters\/slideMaster\d+\.xml$/);
+  const masterDir = masterPath ? masterPath.slice(0, masterPath.lastIndexOf('/')) : undefined;
+  const masterRelsPath = masterPath ? `${masterDir}/_rels/${basename(masterPath)}.rels` : undefined;
+  const masterXml = await zipText(zip, masterPath);
+  const masterRelsXml = await zipText(zip, masterRelsPath);
+
+  let backgroundColor: string | undefined;
+  let backgroundImage: ExtractedPptxDesign['backgroundImage'];
+  const bgBlock = masterXml ? /<p:bg>([\s\S]*?)<\/p:bg>/.exec(masterXml)?.[1] : undefined;
+  if (bgBlock) {
+    const srgb = /<a:srgbClr\s+val="([0-9A-Fa-f]{6})"/.exec(bgBlock)?.[1];
+    const sys = /<a:sysClr\b[^>]*\blastClr="([0-9A-Fa-f]{6})"/.exec(bgBlock)?.[1];
+    if (srgb) backgroundColor = `#${srgb.toLowerCase()}`;
+    else if (sys) backgroundColor = `#${sys.toLowerCase()}`;
+    const embed = /<a:blip\b[^>]*\br:embed="(rId\d+)"/.exec(bgBlock)?.[1];
+    if (!backgroundColor && embed && masterRelsXml && masterDir) {
+      const target = relTarget(masterRelsXml, embed);
+      const mediaPath = target ? resolvePartPath(masterDir, target) : undefined;
+      const mediaFile = mediaPath ? zip.file(mediaPath) : null;
+      if (mediaFile && mediaPath) {
+        const extension = extname(mediaPath).toLowerCase();
+        if (['.png', '.jpg', '.jpeg', '.gif', '.bmp'].includes(extension)) {
+          backgroundImage = { bytes: await mediaFile.async('uint8array'), extension };
+        }
+      }
+    }
+  }
+
+  // --- theme (colors + fonts) -------------------------------------------
+  let themePath: string | undefined;
+  if (masterRelsXml && masterDir) {
+    const themeRel = [...masterRelsXml.matchAll(/<Relationship\b[^>]*>/g)]
+      .map((m) => m[0])
+      .find((tag) => (attr(tag, 'Type') ?? '').endsWith('/theme'));
+    const target = themeRel ? attr(themeRel, 'Target') : undefined;
+    if (target) themePath = resolvePartPath(masterDir, target);
+  }
+  if (!themePath || !zip.file(themePath)) {
+    themePath = firstPart(paths, /^ppt\/theme\/theme\d+\.xml$/);
+  }
+  const themeXml = await zipText(zip, themePath);
+  const clrBlock = themeXml ? /<a:clrScheme\b[^>]*>([\s\S]*?)<\/a:clrScheme>/.exec(themeXml)?.[1] : undefined;
+  const fontBlock = themeXml ?? '';
+
+  const colors = clrBlock
+    ? {
+        dk1: schemeColor(clrBlock, 'dk1'),
+        lt1: schemeColor(clrBlock, 'lt1'),
+        dk2: schemeColor(clrBlock, 'dk2'),
+        lt2: schemeColor(clrBlock, 'lt2'),
+        accent1: schemeColor(clrBlock, 'accent1'),
+        accent2: schemeColor(clrBlock, 'accent2'),
+        accent3: schemeColor(clrBlock, 'accent3'),
+        accent4: schemeColor(clrBlock, 'accent4'),
+        accent5: schemeColor(clrBlock, 'accent5'),
+        accent6: schemeColor(clrBlock, 'accent6'),
+        hlink: schemeColor(clrBlock, 'hlink'),
+      }
+    : undefined;
+
+  // Per-field fallbacks (the bundled General tokens) keep a sparse theme
+  // honest instead of failing the import.
+  const fallback = { background: '#201f26', text: '#ecebf0', accent: '#6b50ff' };
+  const lt1 = isHex(colors?.lt1) ? colors.lt1 : fallback.background;
+  const dk1 = isHex(colors?.dk1) ? colors.dk1 : fallback.text;
+  const background = backgroundColor ?? lt1;
+  const dark = luminance(background) < 0.4;
+  // Office convention: lt1/dk1 are the light/dark text pair; once the
+  // master background decides the pole, text is the opposite pole's color.
+  const text = dark ? (background === lt1 ? dk1 : lt1) : (background === dk1 ? lt1 : dk1);
+  const surface = mixHex(background, text, dark ? 0.07 : 0.05);
+  const muted = mixHex(text, background, 0.38);
+  const series = [colors?.accent1, colors?.accent2, colors?.accent3, colors?.accent4, colors?.accent5, colors?.accent6].filter(isHex);
+  const headingFont = schemeFont(fontBlock, 'majorFont');
+  const bodyFont = schemeFont(fontBlock, 'minorFont');
+
+  const theme: DeckTheme = {
+    dark,
+    background,
+    surface,
+    text: isHex(text) ? text : fallback.text,
+    muted,
+    accent: isHex(colors?.accent1) ? colors.accent1 : isHex(colors?.hlink) ? colors.hlink : fallback.accent,
+    ...(series.length > 0 ? { series } : {}),
+    ...(headingFont ? { headingFont } : {}),
+    ...(bodyFont ? { bodyFont } : {}),
+  };
+
+  return { theme, ...(slideSize ? { slideSize } : {}), ...(backgroundColor ? { backgroundColor } : {}), ...(backgroundImage ? { backgroundImage } : {}) };
+}
+
+// ---------------------------------------------------------------------------
+// Store (<workspace>/.daedalus/slide-templates/<id>.json + <id>.background.<ext>)
+// ---------------------------------------------------------------------------
+
+function isPptxTemplate(value: unknown): value is PptxTemplate {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const t = value as Record<string, unknown>;
+  return (
+    typeof t.id === 'string' && ID_PATTERN.test(t.id) &&
+    typeof t.name === 'string' &&
+    typeof t.sourceFile === 'string' &&
+    typeof t.createdAt === 'string' &&
+    typeof t.theme === 'object' && t.theme !== null && !Array.isArray(t.theme) &&
+    (t.backgroundImageFile === undefined || typeof t.backgroundImageFile === 'string')
+  );
+}
+
+export async function savePptxTemplate(root: string, input: { fileName: string; bytes: Uint8Array }): Promise<PptxTemplate> {
+  const sourceFile = basename(input.fileName.replace(/\\+/g, '/'));
+  if (!sourceFile.toLowerCase().endsWith('.pptx')) {
+    throw new PptxTemplateError('not_a_pptx', 'hanya berkas .pptx yang bisa dijadikan template');
+  }
+  if (input.bytes.length > MAX_PPTX_TEMPLATE_BYTES) {
+    throw new PptxTemplateError('pptx_too_large', `berkas PPTX melebihi batas ${Math.round(MAX_PPTX_TEMPLATE_BYTES / (1024 * 1024))} MB`);
+  }
+  const extracted = await extractPptxDesign(input.bytes);
+  const dir = pptxTemplatesDir(root);
+  await mkdir(dir, { recursive: true });
+
+  const stem = sourceFile.slice(0, -'.pptx'.length).trim() || 'Template PPT';
+  let id = slugifyTitle(stem);
+  for (let suffix = 2; existsSync(join(dir, `${id}.json`)); suffix += 1) {
+    id = `${slugifyTitle(stem)}-${suffix}`;
+  }
+  let backgroundImageFile: string | undefined;
+  if (extracted.backgroundImage) {
+    backgroundImageFile = `${id}.background${extracted.backgroundImage.extension}`;
+    await writeFile(join(dir, backgroundImageFile), extracted.backgroundImage.bytes);
+  }
+  const template: PptxTemplate = {
+    id,
+    name: stem,
+    sourceFile,
+    createdAt: new Date().toISOString(),
+    theme: extracted.theme,
+    ...(extracted.slideSize ? { slideSize: extracted.slideSize } : {}),
+    ...(backgroundImageFile ? { backgroundImageFile } : {}),
+  };
+  await writeFile(join(dir, `${id}.json`), `${JSON.stringify(template, null, 2)}\n`, 'utf8');
+  return template;
+}
+
+export async function listPptxTemplates(root: string): Promise<PptxTemplate[]> {
+  const dir = pptxTemplatesDir(root);
+  let entries: string[];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    return [];
+  }
+  const templates: PptxTemplate[] = [];
+  for (const entry of entries) {
+    if (!entry.endsWith('.json')) continue;
+    try {
+      const parsed: unknown = JSON.parse(await readFile(join(dir, entry), 'utf8'));
+      if (isPptxTemplate(parsed)) templates.push(parsed);
+    } catch {
+      // A corrupt stored template is skipped, never fatal to the list.
+    }
+  }
+  return templates.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export async function getPptxTemplate(root: string, id: string): Promise<PptxTemplate | undefined> {
+  assertTemplateId(id);
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(pptxTemplatesDir(root), `${id}.json`), 'utf8'));
+    return isPptxTemplate(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function readPptxTemplateBackground(root: string, id: string): Promise<{ bytes: Buffer; fileName: string } | undefined> {
+  const template = await getPptxTemplate(root, id);
+  if (!template?.backgroundImageFile) return undefined;
+  try {
+    const bytes = await readFile(join(pptxTemplatesDir(root), template.backgroundImageFile));
+    return { bytes, fileName: template.backgroundImageFile };
+  } catch {
+    return undefined;
+  }
+}
+
+export async function deletePptxTemplate(root: string, id: string): Promise<boolean> {
+  assertTemplateId(id);
+  const dir = pptxTemplatesDir(root);
+  const jsonPath = join(dir, `${id}.json`);
+  if (!existsSync(jsonPath)) return false;
+  const template = await getPptxTemplate(root, id);
+  await rm(jsonPath, { force: true });
+  if (template?.backgroundImageFile) {
+    await rm(join(dir, template.backgroundImageFile), { force: true });
+  }
+  return true;
+}
+
+/**
+ * The DeckTheme to stamp onto a deck for an imported template: the stored
+ * tokens plus the apply-time stamps. The extracted background image is
+ * copied into deck/assets/ (the only directory the canvas and the PPTX
+ * exporter resolve images from), so a deck keeps rendering even if the
+ * stored template is later deleted.
+ */
+export async function applyPptxTemplateTheme(root: string, id: string): Promise<{ template: PptxTemplate; theme: DeckTheme }> {
+  const template = await getPptxTemplate(root, id);
+  if (!template) {
+    throw new PptxTemplateError('ppt_template_not_found', `template PPT "${id}" tidak ditemukan di workspace ini`);
+  }
+  let backgroundImage: string | undefined;
+  if (template.backgroundImageFile) {
+    const stored = await readPptxTemplateBackground(root, id);
+    if (stored) {
+      const ext = extname(template.backgroundImageFile).toLowerCase() || '.png';
+      backgroundImage = `template-bg-${id}${ext}`;
+      const assetsDir = deckPaths(root).assetsDir;
+      await mkdir(assetsDir, { recursive: true });
+      await writeFile(join(assetsDir, backgroundImage), stored.bytes);
+    }
+  }
+  const theme: DeckTheme = {
+    ...template.theme,
+    customTemplateId: template.id,
+    ...(backgroundImage ? { backgroundImage } : {}),
+  };
+  return { template, theme };
+}

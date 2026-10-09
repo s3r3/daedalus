@@ -12,7 +12,7 @@ type PptxTextOptions = Record<string, unknown>;
 type PptxTableCell = { text?: string; options?: Record<string, unknown> };
 type PptxTableRow = PptxTableCell[];
 interface PptxSlide {
-  background: { color: string };
+  background: { color?: string; path?: string };
   color: string;
   addText: (text: string | Array<{ text: string; options?: Record<string, unknown> }>, options?: PptxTextOptions) => unknown;
   addShape: (shapeName: string, options?: Record<string, unknown>) => unknown;
@@ -143,7 +143,12 @@ function glyphLines(slide: PptxSlide, points: string[], glyph: string, o: PptxTe
 
 function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root: string, ctx: Ctx): void {
   const slide = pptx.addSlide();
-  slide.background = { color: ctx.bg };
+  // An imported template's background image (deck/assets/, copied in when
+  // the template was applied) paints behind everything, exactly like the
+  // canvas; the theme background color stays the honest fallback when the
+  // file is gone.
+  const bgImagePath = deck.theme.backgroundImage ? join(deckPaths(root).assetsDir, basename(deck.theme.backgroundImage)) : '';
+  slide.background = bgImagePath && existsSync(bgImagePath) ? { path: bgImagePath } : { color: ctx.bg };
   slide.color = ctx.fg;
   const c = slideSpec.content;
   const title = str(c.title);
@@ -921,6 +926,10 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<{ 
 
   const dark = deck.theme.dark !== false;
   const accent = hex(deck.theme.accent, '6B50FF');
+  // An imported template's accent ramp (accent1..accent6) drives chart
+  // series when it carries one; otherwise the built-in series follows the
+  // accent exactly as before.
+  const themeSeries = (deck.theme.series ?? []).filter((c) => /^#[0-9a-fA-F]{6}$/.test(c)).map((c) => c.replace(/^#/, '').toUpperCase());
   const ctx: Ctx = {
     dark,
     bg: hex(deck.theme.background, dark ? '201F26' : 'F4F2FA'),
@@ -928,7 +937,7 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<{ 
     sub: hex(deck.theme.muted, dark ? 'BFBCC8' : '4D4C57'),
     surface: hex(deck.theme.surface, dark ? '2D2C36' : 'FFFFFF'),
     accent,
-    colors: [accent, ...SERIES_COLORS],
+    colors: themeSeries.length > 0 ? themeSeries : [accent, ...SERIES_COLORS],
   };
 
   const pptx = new PptxGenJS();

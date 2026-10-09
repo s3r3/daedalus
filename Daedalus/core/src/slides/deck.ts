@@ -12,6 +12,25 @@ export type DeckTheme = {
   bodyFont?: string;
   /** Id of the bundled template these tokens came from (set_deck_theme/create_deck templateId). */
   templateId?: string;
+  /**
+   * Id of the imported PPT template these tokens were extracted from
+   * (slides/pptx-template.ts, stored under .daedalus/slide-templates/).
+   * Mutually exclusive with templateId in practice: applying one kind
+   * replaces the whole theme, so the last applied pick wins.
+   */
+  customTemplateId?: string;
+  /**
+   * Deck-asset basename (deck/assets/) painted behind the slide content:
+   * the background image extracted from an imported PPT template, copied
+   * into the deck's assets when the template was applied. Renderers fall
+   * back to the background color whenever it is absent or unreadable.
+   */
+  backgroundImage?: string;
+  /**
+   * Chart series palette (accent1..accent6 of an imported template).
+   * Renderers fall back to the accent + built-in series when absent.
+   */
+  series?: string[];
 };
 
 /**

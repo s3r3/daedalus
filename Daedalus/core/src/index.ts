@@ -737,6 +737,23 @@ export {
 } from "./slides/templates.ts";
 
 export {
+  PPT_TEMPLATES_DIR,
+  MAX_PPTX_TEMPLATE_BYTES,
+  pptxTemplatesDir,
+  extractPptxDesign,
+  savePptxTemplate,
+  listPptxTemplates,
+  getPptxTemplate,
+  readPptxTemplateBackground,
+  deletePptxTemplate,
+  applyPptxTemplateTheme,
+  PptxTemplateError,
+  type PptxTemplate,
+  type PptxSlideSize,
+  type ExtractedPptxDesign,
+} from "./slides/pptx-template.ts";
+
+export {
   createDeckTool,
   readDeckTool,
   addSlideTool,
