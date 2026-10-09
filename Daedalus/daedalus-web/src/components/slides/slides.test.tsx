@@ -988,9 +988,15 @@ describe('Slide image upload (clickable placeholders)', () => {
     const onImagePick = vi.fn()
     const slide = imageDeck.slides[0]!
     render(<SlideRenderer slide={slide} theme={{}} editable onImagePick={onImagePick} />)
-    await user.click(screen.getByTestId('slide-image-upload-image'))
+    const button = screen.getByTestId('slide-image-upload-image')
+    await user.click(button)
     expect(onImagePick).toHaveBeenCalledTimes(1)
     expect(onImagePick).toHaveBeenCalledWith('image')
+    // A press that travels (a block drag starting on the placeholder)
+    // must not also open the picker.
+    await user.pointer({ keys: '[MouseLeft>]', target: button, coords: { x: 10, y: 10 } })
+    await user.pointer({ keys: '[/MouseLeft]', coords: { x: 90, y: 10 } })
+    expect(onImagePick).toHaveBeenCalledTimes(1)
   })
 
   const pickAndUpload = async (user: ReturnType<typeof userEvent.setup>, testId: string): Promise<File> => {

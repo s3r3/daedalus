@@ -2243,7 +2243,11 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
       last: origin,
       moved: false,
     }
-    setDragPos({ key, pos: origin })
+    // No setDragPos here: the positioned overlay render starts on the
+    // first actual pointer move (see the move handler). Remounting the
+    // block mid-gesture on pointerdown would unmount whatever the user
+    // pressed and eat its click — e.g. the image-upload button inside a
+    // placeholder, which must distinguish click from drag.
     event.preventDefault()
   }, [])
 
