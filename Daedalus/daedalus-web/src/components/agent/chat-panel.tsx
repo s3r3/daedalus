@@ -43,6 +43,8 @@ export function ChatPanel() {
   const thinking = useDaedalusStore((state) => state.composer.thinking)
   const conversation = useDaedalusStore((state) => state.conversation)
   const workspaceRoot = useDaedalusStore((state) => state.workspace.root)
+  const domain = useDaedalusStore((state) => state.domain)
+  const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
   const setConversation = useDaedalusStore((state) => state.setConversation)
   const setComposer = useDaedalusStore((state) => state.setComposer)
   const entries = useMemo(() => chatTranscript(events, thinking), [events, thinking])
@@ -102,8 +104,28 @@ export function ChatPanel() {
 
   // "New chat": a fresh conversation on the server, a clean panel here, and
   // the persisted pointer moved so a reload stays on the new session.
+  //
+  // In the Slide domain new chat resets EVERYTHING (Farid: "pas tekan new
+  // chat ke reset semua"): the server first archives the current deck
+  // aside and settles any staged outline, so the next prompt starts from
+  // an empty deck instead of being treated as edit operations on the
+  // previous deck. The archive runs BEFORE anything is cleared here —
+  // when it fails, the error is surfaced and neither the conversation
+  // nor the panels pretend a reset happened. Coding's new chat stays
+  // conversation-only, exactly as before.
   const startNewChat = async (): Promise<void> => {
     const root = workspaceRoot || conversation?.root
+    if (domain === 'slide' && root) {
+      try {
+        await api.deckReset(root)
+      } catch (error) {
+        setComposer({ error: `Deck belum bisa direset: ${error instanceof Error ? error.message : String(error)}` })
+        return
+      }
+      // The deck left deck/ (archived or never existed): repaint stage,
+      // outline, and deck workspace from the empty state.
+      bumpWorkspaceRevision()
+    }
     useDaedalusStore.setState({ taskId: null, events: [], report: null, taskAttachments: [] })
     setComposer({ goal: '', error: null })
     if (!root) {

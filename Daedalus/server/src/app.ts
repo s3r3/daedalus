@@ -1411,6 +1411,14 @@ export function createApp(ctx: AppContext) {
             ...(modelStrategy ? { modelStrategy } : {}),
           });
           ctx.activeRunners.set(taskId, runner);
+          if (domain === "slide") {
+            // A new slide prompt supersedes an outline still staged in
+            // this workspace: settle the waiting run honestly
+            // (staged_superseded) instead of leaving it parked.
+            for (const [otherId, other] of ctx.activeRunners) {
+              if (otherId !== taskId) other.abandonStagedDeck(repoPath);
+            }
+          }
 
           const task = {
             id: taskId,
@@ -1898,6 +1906,134 @@ export function createApp(ctx: AppContext) {
             ...CORS_HEADERS,
           });
           res.end(data);
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Outline-first generate (the Outline panel's Buat button): release
+    // the staged Standard run for this workspace so the original task
+    // fills/validates/exports through its own run; when no run is alive
+    // (partial task ended, server restarted) fill the staged skeleton
+    // directly. Nothing staged anywhere is an honest 404/409, never a
+    // silent success.
+    if (method === "POST" && url.pathname === "/slides/deck/generate") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const templateRaw = parsed.template_id ?? parsed.templateId;
+          const templateId = typeof templateRaw === "string" && templateRaw.trim() ? templateRaw.trim() : undefined;
+          if (templateId && !getSlideTemplate(templateId)) {
+            sendJson(res, 400, { error: "unknown_slide_template", request_id: requestId });
+            return;
+          }
+          await ensureProvidersLoaded(ctx);
+          const input = {
+            ...(templateId ? { templateId } : {}),
+            ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
+            ...(typeof parsed.provider_id === "string" ? { providerId: parsed.provider_id } : {}),
+          };
+          // The staged run completes through its own task: release it
+          // and answer with that task's own verdict.
+          for (const runner of ctx.activeRunners.values()) {
+            const released = await runner.releaseStagedDeck(root, input);
+            if (released) {
+              sendJson(res, 200, { root, task_id: released.taskId, outcome: released.outcome, summary: released.summary, exported: released.exported ?? null });
+              return;
+            }
+          }
+          // A live (non-staged) slide run owns this deck right now.
+          for (const runner of ctx.activeRunners.values()) {
+            if (runner.hasSlideEngineFor(root)) {
+              sendJson(res, 409, { error: "slide_run_in_progress", message: "Tugas slide sedang berjalan di workspace ini — tunggu selesai sebelum menekan Buat.", request_id: requestId });
+              return;
+            }
+          }
+          const deck = await readDeck(root).catch(() => null);
+          if (!deck) {
+            sendJson(res, 404, { error: "deck_not_found", request_id: requestId });
+            return;
+          }
+          if (!deck.slides.some((slide) => slide.status === "skeleton")) {
+            sendJson(res, 409, { error: "no_staged_outline", message: "Tidak ada outline yang menunggu dibuat di workspace ini — deck sudah terisi penuh.", request_id: requestId });
+            return;
+          }
+          const runner = new TaskRunner({
+            workspaceRoot: root,
+            bus: ctx.bus,
+            store: ctx.store,
+            settings: ctx.settings,
+            providerRegistry: ctx.providerStore.registry,
+          });
+          const fill = await runner.fillStagedDeck(root, input);
+          if (!fill) {
+            sendJson(res, 409, { error: "no_staged_outline", message: "Tidak ada outline yang menunggu dibuat di workspace ini.", request_id: requestId });
+            return;
+          }
+          const exported = fill.exported ?? null;
+          const outcome = exported ? "success" : fill.exportError ? "failed" : "partial";
+          const summary = exported
+            ? `done: ${exported.slides} slide selesai dan ter-export ke ${exported.path} (${Math.max(1, Math.round(exported.bytes / 1024))} KB).`
+            : fill.exportError
+              ? `Deck valid tapi export gagal: ${fill.exportError}. Deck tersimpan di deck/deck.json.`
+              : `Sebagian deck belum selesai (${fill.deck.slides.length - fill.failures.length}/${fill.deck.slides.length} slide terisi) dan belum ter-export — tekan Buat lagi untuk melanjutkan pengisian.`;
+          sendJson(res, 200, { root, outcome, summary, exported, failures: fill.failures });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Slide new-chat reset (Farid: "pas tekan new chat ke reset semua"):
+    // archive the current deck aside — never delete it — so the next
+    // prompt starts from an empty deck instead of being treated as edit
+    // operations on the previous deck. A staged Standard run waiting on
+    // this workspace is settled honestly (staged_superseded) through the
+    // same runtime seam a newer prompt uses; a run actively filling is
+    // a 409 — files are never yanked mid-write. No deck is an honest
+    // no-op success, not an error.
+    if (method === "POST" && url.pathname === "/slides/deck/reset") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          let stagedAbandoned = false;
+          for (const runner of ctx.activeRunners.values()) {
+            if (!runner.hasSlideEngineFor(root)) continue;
+            if (runner.abandonStagedDeck(root)) {
+              stagedAbandoned = true;
+              continue;
+            }
+            sendJson(res, 409, { error: "slide_run_in_progress", message: "Tugas slide sedang berjalan di workspace ini — tunggu selesai sebelum memulai chat baru.", request_id: requestId });
+            return;
+          }
+          const deckDir = join(root, "deck");
+          const deckStat = await stat(deckDir).catch(() => null);
+          if (!deckStat?.isDirectory()) {
+            sendJson(res, 200, { root, archived: null, staged_abandoned: stagedAbandoned });
+            return;
+          }
+          const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+          const archiveParent = join(root, ".daedalus", "deck-archive");
+          await mkdir(archiveParent, { recursive: true });
+          let name = stamp;
+          for (let suffix = 2; await stat(join(archiveParent, name)).then(() => true, () => false); suffix += 1) {
+            name = `${stamp}-${suffix}`;
+          }
+          await rename(deckDir, join(archiveParent, name));
+          sendJson(res, 200, { root, archived: `.daedalus/deck-archive/${name}`, staged_abandoned: stagedAbandoned });
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
