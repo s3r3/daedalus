@@ -112,6 +112,15 @@ export type SlideTemplateInfo = {
 
 export type DeckExportResult = { root: string; path: string; bytes: number; slides: number }
 
+/** Verdict of POST /slides/deck/generate (the Outline panel's Buat button). */
+export type DeckGenerateResult = {
+  root: string
+  task_id?: string
+  outcome: 'success' | 'partial' | 'failed'
+  summary: string
+  exported: { path: string; bytes: number; slides: number } | null
+}
+
 export const api = {
   health: () => request<{ status: string; service: string; active_tasks: number }>('/health'),
 
@@ -222,6 +231,17 @@ export const api = {
     request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/slide/move', {
       method: 'POST',
       body: JSON.stringify({ root, slide_id: slideId, to_index: toIndex }),
+    }),
+
+  /**
+   * The Outline panel's Buat button: generate the staged outline deck
+   * (fill → validate → export) with the settled template. The server
+   * answers with the run's verdict once generation settles.
+   */
+  deckGenerate: (root: string, input: { template_id?: string } = {}) =>
+    request<DeckGenerateResult>('/slides/deck/generate', {
+      method: 'POST',
+      body: JSON.stringify({ root, ...(input.template_id ? { template_id: input.template_id } : {}) }),
     }),
 
   /** Export the open deck to .pptx through core's native exporter. */
