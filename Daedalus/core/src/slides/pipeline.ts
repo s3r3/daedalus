@@ -131,7 +131,26 @@ export async function structuredCall<T>(
   ];
   let issues: string[] = ['model produced no parseable JSON'];
   for (let attempt = 1; attempt <= MAX_STAGE_ATTEMPTS; attempt += 1) {
-    const response = await provider.chat(messages, undefined, signal ? { signal } : undefined);
+    let response;
+    try {
+      response = await provider.chat(messages, undefined, signal ? { signal } : undefined);
+    } catch (error) {
+      // A provider-level failure (empty response, transient 5xx) is
+      // retried inside the stage like invalid output — the stage owns
+      // resilience; the caller sees only the final verdict. An aborted
+      // request is never retried.
+      if (signal?.aborted) throw error;
+      const message = error instanceof Error ? error.message : String(error);
+      issues = [`the model request failed: ${message}`];
+      if (attempt < MAX_STAGE_ATTEMPTS) {
+        messages.push({
+          role: 'user',
+          content: `The previous request failed (${message}). Return the corrected JSON only — no prose, no explanation, no markdown fences.`,
+        });
+        continue;
+      }
+      throw new SlidePipelineError(`model output stayed invalid after ${MAX_STAGE_ATTEMPTS} attempts: ${issues.join('; ')}`, issues);
+    }
     const raw = messageText(response.message.content);
     const verdict = validate(extractJsonValue(raw));
     if (verdict.ok) return verdict.value;

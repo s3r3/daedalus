@@ -86,11 +86,29 @@ describe('slide tasks in a code repo (owner-laptop conditions)', () => {
       name: 'repo-with-failing-checks',
       scripts: { test: 'false', lint: 'false', build: 'false' },
     }));
-    const provider = toolProvider([
-      { tool: 'create_deck', args: { title: 'Keamanan Anak' } },
-      { tool: 'add_slide', args: { layout: 'bullets', content: { title: 'Poin', points: ['satu'] } } },
-      { tool: 'export_deck', args: {} },
-    ]);
+    const provider: LLMProvider = {
+      name: 'deckval-stage',
+      async chat(messages: Message[]) {
+        const system = typeof messages[0]?.content === 'string' ? messages[0].content : '';
+        const user = typeof messages[1]?.content === 'string' ? messages[1].content : '';
+        if (system.includes('OUTLINE stage')) {
+          return {
+            message: {
+              role: 'assistant' as const,
+              content: JSON.stringify([
+                { title: 'Keamanan Anak', layoutId: 'title', keyMessage: 'pembuka' },
+                { title: 'Poin', layoutId: 'bullets', keyMessage: 'poin utama' },
+              ]),
+            },
+          };
+        }
+        if (user.includes('layout: title')) return { message: { role: 'assistant' as const, content: JSON.stringify({ title: 'Keamanan Anak', subtitle: 'Panduan' }) } };
+        return { message: { role: 'assistant' as const, content: JSON.stringify({ title: 'Poin', points: ['satu', 'dua'] }) } };
+      },
+      async *stream() {
+        yield { type: 'delta', content: '' };
+      },
+    };
     const store = new TaskStore(temp('daedalus-deckval-store-'));
     const runner = new TaskRunner({
       workspaceRoot: root,
@@ -100,13 +118,18 @@ describe('slide tasks in a code repo (owner-laptop conditions)', () => {
       approvalPolicy: 'auto',
     });
 
-    const { state } = await runner.run({
+    const { state, validation } = await runner.run({
       goal: 'buatkan deck presentasi tentang keamanan anak\noutline deck dibuat\nisi slide lengkap\ndeck ter-export ke pptx',
       taskId: 'deckval-repo-task',
       domain: 'slide',
+      slide: { generation: 'smart', slideCount: 2 },
     });
 
+    // The engine's own deck check is the only validation that ran: the
+    // repo's failing npm checks were never consulted.
     expect(state.status).toBe('done');
     expect(state.last_error).toBeUndefined();
+    expect(validation?.checks.length).toBeGreaterThan(0);
+    expect(validation?.checks.every((check) => check.name === 'deck')).toBe(true);
   });
 });

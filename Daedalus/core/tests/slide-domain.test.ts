@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -28,13 +28,15 @@ const DEPLOY_MARKER = 'DEPLOY BODY MARKER: run the release checklist';
 type ScriptAction = 'done' | 'write' | { read: string };
 
 /** Scripted provider: each chat consumes one action; 'done' finishes. Unlike the invocation-suite fake, read_skill takes any skill name. */
-function fakeProvider(script: ScriptAction[] = []): { provider: LLMProvider; seen: Message[][] } {
+function fakeProvider(script: ScriptAction[] = []): { provider: LLMProvider; seen: Message[][]; seenTools: unknown[] } {
   const seen: Message[][] = [];
+  const seenTools: unknown[] = [];
   let step = 0;
   const provider: LLMProvider = {
     name: 'fake',
-    async chat(messages: Message[]) {
+    async chat(messages: Message[], tools?: unknown) {
       seen.push(messages);
+      seenTools.push(tools);
       const action = script[step++] ?? 'done';
       if (typeof action === 'object') {
         return {
@@ -60,7 +62,7 @@ function fakeProvider(script: ScriptAction[] = []): { provider: LLMProvider; see
       yield { type: 'delta', content: '' };
     },
   };
-  return { provider, seen };
+  return { provider, seen, seenTools };
 }
 
 const passingValidator = {
@@ -96,21 +98,25 @@ function skillLoadedEvents(store: TaskStore, taskId: string): unknown[] {
 }
 
 describe('task domain: slide', () => {
-  test('slide domain pins the deck contract and advertises no skills at all', async () => {
+  test('slide domain runs on the SlideEngine: stage prompts carry no skill index at all', async () => {
     const workspace = temp('daedalus-slide-ws-');
     writeSkill(workspace, 'ppt-maker', 'Generate slides and presentations via external API', PPT_MARKER);
     writeSkill(workspace, 'deploy', 'Deploy the thing', DEPLOY_MARKER);
-    const { provider, seen } = fakeProvider(['done']);
+    const { provider, seen, seenTools } = fakeProvider(['done']);
     const { runner } = makeRunner(workspace, provider);
 
-    await runner.run({ goal: 'siapkan materi keamanan anak\ndone: deck selesai', taskId: 'slide-a', domain: 'slide' });
+    const { state } = await runner.run({ goal: 'siapkan materi keamanan anak\ndone: deck selesai', taskId: 'slide-a', domain: 'slide' });
 
+    // The engine's stage prompts are slide-pipeline prompts: no skills
+    // section exists to hide, and the provider is offered no tools. The
+    // scripted provider never answers with deck JSON, so the run fails
+    // honestly instead of executing anything.
+    expect(state.status).toBe('failed');
     const system = systemOf(seen[0]);
-    expect(system).toContain('Slide domain');
-    expect(system).toContain('create_deck');
-    expect(system).toContain('export_deck');
+    expect(system).toContain('OUTLINE stage');
     expect(system).not.toContain('ppt-maker');
     expect(system).not.toContain('deploy');
+    for (const tools of seenTools) expect(tools).toBeUndefined();
   });
 
   test('without a domain there is no slide block and presentation skills stay listed', async () => {
@@ -127,18 +133,20 @@ describe('task domain: slide', () => {
     expect(system).toContain('ppt-maker');
   });
 
-  test('slide domain has no read_skill to call: the locked registry answers unknown tool and no SKILL_LOADED is recorded', async () => {
+  test('slide domain executes no tool calls at all: read_skill/write_file asks are ignored, nothing runs', async () => {
     const workspace = temp('daedalus-slide-ws-');
     writeSkill(workspace, 'ppt-maker', 'Generate slides and presentations via external API', PPT_MARKER);
-    const { provider, seen } = fakeProvider([{ read: 'ppt-maker' }, 'done']);
+    const { provider } = fakeProvider([{ read: 'ppt-maker' }, 'write', 'done']);
     const { runner, store } = makeRunner(workspace, provider);
 
     await runner.run({ goal: 'siapkan materi keamanan anak\ndone: deck selesai', taskId: 'slide-c', domain: 'slide' });
 
-    const next = requestText(seen[1]);
-    expect(next.toLowerCase()).toContain('not available in this run');
-    expect(next).not.toContain(PPT_MARKER);
+    // The model asked for read_skill and write_file; a slide run has no
+    // tool surface, so neither executed: no skill body was served and no
+    // file appeared.
     expect(skillLoadedEvents(store, 'slide-c')).toEqual([]);
+    expect(store.replay('slide-c').filter((event) => event.type === 'TOOL_CALL_STARTED')).toEqual([]);
+    expect(existsSync(join(workspace, 'deployed.txt'))).toBe(false);
   });
 
   test('a long skill body is served once in full, then history carries only a stub', async () => {
