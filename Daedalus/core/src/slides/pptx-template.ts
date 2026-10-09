@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import { inflateSync } from 'node:zlib';
 import { existsSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
@@ -150,6 +151,116 @@ function isHex(value: string | undefined): value is string {
 }
 
 // ---------------------------------------------------------------------------
+// PNG average color: when the master background is an image, its average
+// luminance — not the theme's lt1 slot — decides whether the design is a
+// dark or light one, and the average itself stands in as the background
+// token under the picture. Minimal decoder: 8-bit, non-interlaced PNGs
+// (the overwhelmingly common master art); anything else returns undefined
+// and the caller keeps the theme-derived fallback. JPEG/GIF masters are
+// not sampled (no decoder exists in the standard library).
+// ---------------------------------------------------------------------------
+
+function paeth(a: number, b: number, c: number): number {
+  const p = a + b - c;
+  const pa = Math.abs(p - a);
+  const pb = Math.abs(p - b);
+  const pc = Math.abs(p - c);
+  return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+}
+
+function pngAverageColor(bytes: Uint8Array): string | undefined {
+  try {
+    if (bytes.length < 8 || bytes[0] !== 0x89 || bytes[1] !== 0x50 || bytes[2] !== 0x4e || bytes[3] !== 0x47) return undefined;
+    let width = 0;
+    let height = 0;
+    let bitDepth = 0;
+    let colorType = -1;
+    let interlace = 1;
+    let palette: Uint8Array | undefined;
+    const idat: Buffer[] = [];
+    let offset = 8;
+    while (offset + 8 <= bytes.length) {
+      const length = ((bytes[offset] ?? 0) << 24) | ((bytes[offset + 1] ?? 0) << 16) | ((bytes[offset + 2] ?? 0) << 8) | (bytes[offset + 3] ?? 0);
+      const type = String.fromCharCode(bytes[offset + 4] ?? 0, bytes[offset + 5] ?? 0, bytes[offset + 6] ?? 0, bytes[offset + 7] ?? 0);
+      const data = bytes.subarray(offset + 8, offset + 8 + length);
+      if (type === 'IHDR') {
+        width = ((data[0] ?? 0) << 24) | ((data[1] ?? 0) << 16) | ((data[2] ?? 0) << 8) | (data[3] ?? 0);
+        height = ((data[4] ?? 0) << 24) | ((data[5] ?? 0) << 16) | ((data[6] ?? 0) << 8) | (data[7] ?? 0);
+        bitDepth = data[8] ?? 0;
+        colorType = data[9] ?? -1;
+        interlace = data[12] ?? 1;
+      } else if (type === 'PLTE') {
+        palette = data;
+      } else if (type === 'IDAT') {
+        idat.push(Buffer.from(data));
+      } else if (type === 'IEND') {
+        break;
+      }
+      offset += 12 + length;
+    }
+    const channels = colorType === 0 ? 1 : colorType === 2 ? 3 : colorType === 3 ? 1 : colorType === 4 ? 2 : colorType === 6 ? 4 : 0;
+    if (!width || !height || bitDepth !== 8 || interlace !== 0 || channels === 0 || idat.length === 0) return undefined;
+    const raw = inflateSync(Buffer.concat(idat));
+    const stride = width * channels;
+    const step = Math.max(1, Math.floor(Math.sqrt((width * height) / 4096)));
+    let prev = new Uint8Array(stride);
+    let pos = 0;
+    let r = 0;
+    let g = 0;
+    let b = 0;
+    let n = 0;
+    for (let y = 0; y < height; y += 1) {
+      const filter = raw[pos] ?? 0;
+      pos += 1;
+      const row = raw.subarray(pos, pos + stride);
+      pos += stride;
+      const cur = new Uint8Array(stride);
+      for (let i = 0; i < stride; i += 1) {
+        const left = i >= channels ? (cur[i - channels] ?? 0) : 0;
+        const up = prev[i] ?? 0;
+        const upLeft = i >= channels ? (prev[i - channels] ?? 0) : 0;
+        const value = row[i] ?? 0;
+        cur[i] =
+          filter === 0 ? value
+          : filter === 1 ? (value + left) & 0xff
+          : filter === 2 ? (value + up) & 0xff
+          : filter === 3 ? (value + ((left + up) >> 1)) & 0xff
+          : filter === 4 ? (value + paeth(left, up, upLeft)) & 0xff
+          : value;
+      }
+      if (y % step === 0) {
+        for (let x = 0; x < width; x += step) {
+          const i = x * channels;
+          const alpha = colorType === 4 ? (cur[i + 1] ?? 255) : colorType === 6 ? (cur[i + 3] ?? 255) : 255;
+          if (alpha < 128) continue;
+          if (colorType === 3) {
+            const p = (cur[i] ?? 0) * 3;
+            r += palette?.[p] ?? 0;
+            g += palette?.[p + 1] ?? 0;
+            b += palette?.[p + 2] ?? 0;
+          } else if (colorType === 0 || colorType === 4) {
+            const gray = cur[i] ?? 0;
+            r += gray;
+            g += gray;
+            b += gray;
+          } else {
+            r += cur[i] ?? 0;
+            g += cur[i + 1] ?? 0;
+            b += cur[i + 2] ?? 0;
+          }
+          n += 1;
+        }
+      }
+      prev = cur;
+    }
+    if (n === 0) return undefined;
+    return rgbToHex([r / n, g / n, b / n]);
+  } catch {
+    return undefined;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Extraction
 // ---------------------------------------------------------------------------
 
@@ -158,6 +269,8 @@ export type ExtractedPptxDesign = {
   slideSize?: PptxSlideSize;
   /** Master background when it is a solid color (already folded into theme.background when present). */
   backgroundColor?: string;
+  /** Average color sampled from a PNG master background image (already folded into theme.background when present). */
+  backgroundSampled?: string;
   /** Master background image bytes + stored filename extension, when the master background is an image. */
   backgroundImage?: { bytes: Uint8Array; extension: string };
 };
@@ -261,7 +374,12 @@ export async function extractPptxDesign(bytes: Uint8Array): Promise<ExtractedPpt
   const fallback = { background: '#201f26', text: '#ecebf0', accent: '#6b50ff' };
   const lt1 = isHex(colors?.lt1) ? colors.lt1 : fallback.background;
   const dk1 = isHex(colors?.dk1) ? colors.dk1 : fallback.text;
-  const background = backgroundColor ?? lt1;
+  // An image master background overrides the theme's light slot visually,
+  // so its sampled average (PNG only) decides the pole — a dark photo
+  // master must not inherit light-background tokens with dark text.
+  const sampledBackground =
+    backgroundImage && backgroundImage.extension === '.png' ? pngAverageColor(backgroundImage.bytes) : undefined;
+  const background = backgroundColor ?? sampledBackground ?? lt1;
   const dark = luminance(background) < 0.4;
   // Office convention: lt1/dk1 are the light/dark text pair; once the
   // master background decides the pole, text is the opposite pole's color.
@@ -284,7 +402,13 @@ export async function extractPptxDesign(bytes: Uint8Array): Promise<ExtractedPpt
     ...(bodyFont ? { bodyFont } : {}),
   };
 
-  return { theme, ...(slideSize ? { slideSize } : {}), ...(backgroundColor ? { backgroundColor } : {}), ...(backgroundImage ? { backgroundImage } : {}) };
+  return {
+    theme,
+    ...(slideSize ? { slideSize } : {}),
+    ...(backgroundColor ? { backgroundColor } : {}),
+    ...(sampledBackground ? { backgroundSampled: sampledBackground } : {}),
+    ...(backgroundImage ? { backgroundImage } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------

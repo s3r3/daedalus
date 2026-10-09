@@ -66,8 +66,8 @@ function masterXml(bgInner: string): string {
 </p:sldMaster>`;
 }
 
-/** A 1x1 transparent PNG. */
-const PNG_1PX = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64');
+/** A 4x4 solid emerald (#0F2D1E) PNG — a dark master photo stand-in. */
+const PNG_1PX = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAIAAAAmkwkpAAAAEElEQVR4nGPg15WDIwbiOACRhAWhBERxUQAAAABJRU5ErkJggg==', 'base64');
 
 async function syntheticPptx(kind: 'solid-bg' | 'image-bg'): Promise<Buffer> {
   const zip = new JSZip();
@@ -105,11 +105,16 @@ describe('extractPptxDesign', () => {
     expect(design.slideSize).toEqual({ cx: 12192000, cy: 6858000, label: '16:9' });
   });
 
-  test('extracts a master background image with its bytes', async () => {
+  test('extracts a master background image with its bytes and samples its dark pole', async () => {
     const design = await extractPptxDesign(await syntheticPptx('image-bg'));
     expect(design.backgroundImage?.extension).toBe('.png');
     expect(Buffer.from(design.backgroundImage?.bytes ?? []).equals(PNG_1PX)).toBe(true);
-    // Tokens still resolve from the theme scheme (honest fallback under the image).
+    expect(design.backgroundSampled).toBe('#0f2d1e');
+    // The sampled dark image — not the theme's light slot — decides the
+    // pole: tokens pair light text with the emerald background.
+    expect(design.theme.background).toBe('#0f2d1e');
+    expect(design.theme.dark).toBe(true);
+    expect(design.theme.text).toBe('#f7f3e8');
     expect(design.theme.accent).toBe('#c59a46');
   });
 
