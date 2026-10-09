@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import type { ToolDefinition, ToolExecutionContext } from './registry.ts';
 import { deckPaths, type DeckSpec, type Slide } from '../slides/deck.ts';
-import { getLayout, LAYOUTS, validateSlideContent, type PropSchema } from '../slides/layouts.ts';
+import { getLayout, LAYOUTS, summarizeLayoutSchema, validateSlideContent } from '../slides/layouts.ts';
 import { ensureDeckDir, newDeck, newSlideId, readDeck, summarizeDeck, validateDeck, writeDeck } from '../slides/store.ts';
 import { getSlideTemplate, SLIDE_TEMPLATES } from '../slides/templates.ts';
 import { exportDeckToPptx } from '../slides/export-pptx.ts';
@@ -27,27 +27,8 @@ function mergeShallow(base: Record<string, unknown>, over: Record<string, unknow
 
 const LAYOUT_CATALOG = LAYOUTS.map((l) => `${l.id} (${l.category}): ${l.label}`).join('; ');
 
-/** Compact per-layout content schema (`*` = required), rendered from the same schema objects the validator enforces, so the model sees the exact field shapes (nested objects and array item fields included) instead of guessing them. */
-function summarizeProp(prop: PropSchema): string {
-  if (prop.type === 'array') {
-    const items = prop.items ? summarizeProp(prop.items) : 'string';
-    const bounds = prop.minItems !== undefined || prop.maxItems !== undefined ? ` (${prop.minItems ?? 0}..${prop.maxItems ?? 'n'})` : '';
-    return `${items}[]${bounds}`;
-  }
-  if (prop.type === 'object' && prop.properties) {
-    const required = new Set(prop.required ?? []);
-    const fields = Object.entries(prop.properties).map(([key, value]) => `${key}${required.has(key) ? '*' : ''}: ${summarizeProp(value)}`);
-    return `{ ${fields.join(', ')} }`;
-  }
-  return prop.enum ? prop.enum.join('|') : prop.type;
-}
-
 export function summarizeLayoutSchemas(): string {
-  return LAYOUTS.map((layout) => {
-    const required = new Set(layout.schema.required);
-    const fields = Object.entries(layout.schema.properties).map(([key, value]) => `${key}${required.has(key) ? '*' : ''}: ${summarizeProp(value)}`);
-    return `${layout.id} { ${fields.join(', ')} }`;
-  }).join('\n');
+  return LAYOUTS.map((layout) => summarizeLayoutSchema(layout)).join('\n');
 }
 
 const LAYOUT_SCHEMAS = summarizeLayoutSchemas();

@@ -19,6 +19,17 @@ export type Slide = {
   layout: string;
   content: Record<string, unknown>;
   notes?: string;
+  /**
+   * Generation-pipeline state (slides/pipeline.ts): 'skeleton' is an
+   * outline placeholder whose content is still the layout defaults plus
+   * the outline title, awaiting the fill stage. Absent (ordinary slides,
+   * hand-edited decks) or 'filled' means real content. The fill stage
+   * resumes exactly the skeleton slides, which is what makes a partial
+   * generation recoverable across tool calls and tasks.
+   */
+  status?: 'skeleton' | 'filled';
+  /** Outline key message captured when the skeleton was created; guides the fill stage. */
+  keyMessage?: string;
 };
 
 export type DeckSpec = {

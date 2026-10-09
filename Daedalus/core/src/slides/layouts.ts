@@ -190,6 +190,27 @@ export function getLayout(id: string): LayoutDef | undefined {
   return LAYOUTS.find((l) => l.id === id);
 }
 
+/** Compact schema rendering (`*` = required), rendered from the same schema objects the validator enforces, so a model sees the exact field shapes (nested objects and array item fields included) instead of guessing them. Shared by the deck-tool descriptions and the slide generation pipeline's stage prompts. */
+function summarizePropSchema(prop: PropSchema): string {
+  if (prop.type === 'array') {
+    const items = prop.items ? summarizePropSchema(prop.items) : 'string';
+    const bounds = prop.minItems !== undefined || prop.maxItems !== undefined ? ` (${prop.minItems ?? 0}..${prop.maxItems ?? 'n'})` : '';
+    return `${items}[]${bounds}`;
+  }
+  if (prop.type === 'object' && prop.properties) {
+    const required = new Set(prop.required ?? []);
+    const fields = Object.entries(prop.properties).map(([key, value]) => `${key}${required.has(key) ? '*' : ''}: ${summarizePropSchema(value)}`);
+    return `{ ${fields.join(', ')} }`;
+  }
+  return prop.enum ? prop.enum.join('|') : prop.type;
+}
+
+export function summarizeLayoutSchema(layout: LayoutDef): string {
+  const required = new Set(layout.schema.required);
+  const fields = Object.entries(layout.schema.properties).map(([key, value]) => `${key}${required.has(key) ? '*' : ''}: ${summarizePropSchema(value)}`);
+  return `${layout.id} { ${fields.join(', ')} }`;
+}
+
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
