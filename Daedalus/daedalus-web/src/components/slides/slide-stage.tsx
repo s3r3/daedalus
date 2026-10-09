@@ -166,7 +166,7 @@ export function SlideStage() {
     setExporting(true)
     setExportError(null)
     try {
-      const result = await api.deckExport(root, choice)
+      const result = choice ? await api.deckExport(root, choice) : await api.deckExport(root)
       setExported(result)
       bumpWorkspaceRevision()
     } catch (exportErr: unknown) {
