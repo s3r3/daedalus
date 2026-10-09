@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
-import { ToolRegistry, newDeck, newSlideId, readDeck, validateDeck, writeDeck, type ToolCall, type ToolResult } from '../src/index.ts';
+import { EventBus, TaskRunner, TaskStore, ToolRegistry, newDeck, newSlideId, readDeck, validateDeck, writeDeck, type LLMProvider, type Message, type ToolCall, type ToolResult } from '../src/index.ts';
 import { exportDeckToPptx } from '../src/slides/export-pptx.ts';
 import { SLIDE_TOOLS } from '../src/tools/slides.ts';
 
@@ -99,6 +99,149 @@ describe('empty deck export', () => {
     expect(res.status).toBe('error');
     expect(res.output).toContain('empty deck');
     expect(pptxFiles(root)).toHaveLength(0);
+  });
+});
+
+type RawStep = { tool: string; rawArgs: string } | { text: string };
+
+/** Scripted provider that can emit raw (even malformed) argument strings. */
+function rawProvider(steps: RawStep[], seen?: Message[][]): LLMProvider {
+  let index = 0;
+  return {
+    name: 'slide-repair-scripted',
+    async chat(messages: Message[]) {
+      seen?.push(messages);
+      const step = steps[index++];
+      if (!step) return { message: { role: 'assistant' as const, content: 'done: nothing further scripted' } };
+      if ('text' in step) return { message: { role: 'assistant' as const, content: step.text } };
+      return {
+        message: {
+          role: 'assistant' as const,
+          content: '',
+          tool_calls: [{ id: `raw-${index}`, type: 'function' as const, function: { name: step.tool, arguments: step.rawArgs } }],
+        },
+      };
+    },
+    async *stream() {
+      yield { type: 'delta', content: '' };
+    },
+  };
+}
+
+const J = (value: unknown): string => JSON.stringify(value);
+
+describe('Standard vs Smart flows (harness level)', () => {
+  test('Smart: a mid-fill invalid slide is an error result, not a task failure; the deck so far survives and export completes', async () => {
+    const root = temp('daedalus-repair-smart-');
+    const seen: Message[][] = [];
+    const provider = rawProvider([
+      { tool: 'create_deck', rawArgs: J({ title: 'Smart Deck' }) },
+      { tool: 'add_slide', rawArgs: J({ layout: 'title', content: { title: 'Smart Deck' } }) },
+      { tool: 'add_slide', rawArgs: J({ layout: 'stats', content: { title: 'Angka', stats: [{ value: '42' }] } }) },
+      { tool: 'add_slide', rawArgs: J({ layout: 'bullets', content: { title: 'Isi', points: ['satu', 'dua'] } }) },
+      { tool: 'export_deck', rawArgs: J({}) },
+    ], seen);
+    const store = new TaskStore(temp('daedalus-repair-smart-store-'));
+    const runner = new TaskRunner({ workspaceRoot: root, store, bus: new EventBus(), provider, approvalPolicy: 'auto' });
+    const { state } = await runner.run({
+      goal: 'buatkan deck smart\ndeck dibuat dan terisi\ndeck ter-export ke pptx',
+      taskId: 'repair-smart',
+      domain: 'slide',
+      slide: { generation: 'smart' },
+    });
+    expect(state.status).toBe('done');
+    expect((await readDeck(root))?.slides).toHaveLength(2);
+    expect(pptxFiles(root)).toHaveLength(1);
+    const transcript = JSON.stringify(seen);
+    expect(transcript).toContain('invalid content for layout stats');
+  });
+
+  test('Standard: the outline checkpoint answer steers the same skeleton deck (theme applied, skeleton slide filled, not rebuilt)', async () => {
+    const root = temp('daedalus-repair-standard-');
+    const seen: Message[][] = [];
+    // The skeleton bullets slide is the most recently added one, so its
+    // id is the last "(slide-…)" mentioned in the tool results.
+    const skeletonId = (messages: Message[]): string => {
+      const matches = JSON.stringify(messages).match(/\(slide-[0-9a-z-]{4,}\)/g) ?? [];
+      const last = matches[matches.length - 1];
+      return last ? last.slice(1, -1) : '';
+    };
+    const provider: LLMProvider = {
+      name: 'slide-repair-standard',
+      async chat(messages: Message[]) {
+        seen.push(messages);
+        const step = seen.length;
+        const call = (tool: string, args: unknown) => ({
+          message: {
+            role: 'assistant' as const,
+            content: '',
+            tool_calls: [{ id: `std-${step}`, type: 'function' as const, function: { name: tool, arguments: J(args) } }],
+          },
+        });
+        if (step === 1) return call('create_deck', { title: 'Standar' });
+        if (step === 2) return call('add_slide', { layout: 'title', content: { title: 'Standar' } });
+        if (step === 3) return call('add_slide', { layout: 'bullets', content: { title: 'Kerangka', points: ['kerangka'] } });
+        if (step === 4) return call('ask_user', { question: 'Pilih desain untuk presentasi ini:', options: [{ label: 'Midnight Scholar' }, { label: 'Ocean' }] });
+        if (step === 5) return call('set_deck_theme', { templateId: 'midnight-scholar' });
+        if (step === 6) return call('update_slide', { slideId: skeletonId(messages), content: { title: 'Kerangka', points: ['isi final satu', 'isi final dua'] } });
+        if (step === 7) return call('export_deck', {});
+        return { message: { role: 'assistant' as const, content: 'done: deck selesai' } };
+      },
+      async *stream() {
+        yield { type: 'delta', content: '' };
+      },
+    };
+    const store = new TaskStore(temp('daedalus-repair-std-store-'));
+    const runner = new TaskRunner({ workspaceRoot: root, store, bus: new EventBus(), provider, approvalPolicy: 'auto' });
+    const { state, events } = await runner.run({
+      goal: 'buatkan deck standar\ndeck dibuat dan terisi\ndeck ter-export ke pptx',
+      taskId: 'repair-standard',
+      domain: 'slide',
+      slide: { generation: 'standard', slideCount: 2, language: 'Bahasa Indonesia' },
+      onEvent: (event) => {
+        if (event.type === 'QUESTION_REQUESTED') {
+          const question = (event.payload as { question?: { id: string } }).question;
+          if (question) setTimeout(() => runner.questions.answer(question.id, 'Midnight Scholar'), 5);
+        }
+      },
+    });
+    expect(events.some((event) => event.type === 'QUESTION_REQUESTED')).toBe(true);
+    expect(events.some((event) => event.type === 'QUESTION_ANSWERED')).toBe(true);
+    expect(state.status).toBe('done');
+    const deck = await readDeck(root);
+    expect(deck?.theme.templateId).toBe('midnight-scholar');
+    expect(deck?.slides).toHaveLength(2);
+    expect(deck?.slides[1]?.content.points).toEqual(['isi final satu', 'isi final dua']);
+    expect(pptxFiles(root)).toHaveLength(1);
+  });
+
+  test('a tool call with truncated JSON arguments gets an invalid-arguments result and the task recovers', async () => {
+    const root = temp('daedalus-repair-truncated-');
+    const seen: Message[][] = [];
+    const provider = rawProvider([
+      { tool: 'create_deck', rawArgs: J({ title: 'Potong' }) },
+      { tool: 'add_slide', rawArgs: '{"layout":"bullets","content":{"title":"Terpotong"' },
+      { tool: 'add_slide', rawArgs: J({ layout: 'bullets', content: { title: 'Utuh', points: ['satu'] } }) },
+      { tool: 'export_deck', rawArgs: J({}) },
+    ], seen);
+    const store = new TaskStore(temp('daedalus-repair-trunc-store-'));
+    const runner = new TaskRunner({ workspaceRoot: root, store, bus: new EventBus(), provider, approvalPolicy: 'auto' });
+    const { state, events } = await runner.run({
+      goal: 'buatkan deck\ndeck dibuat dan terisi\ndeck ter-export ke pptx',
+      taskId: 'repair-truncated',
+      domain: 'slide',
+      slide: { generation: 'smart' },
+    });
+    expect(state.status).toBe('done');
+    const deck = await readDeck(root);
+    expect(deck?.slides).toHaveLength(1);
+    expect(deck?.slides[0]?.content.title).toBe('Utuh');
+    // The malformed call never executed: no slide was added for it, no
+    // tool-call events carry it, and the model was told its reply was
+    // invalid instead of the task crashing or looping.
+    expect(events.filter((event) => event.type === 'TOOL_CALL_STARTED')).toHaveLength(3);
+    expect(JSON.stringify(seen)).toContain('Invalid model response');
+    expect(pptxFiles(root)).toHaveLength(1);
   });
 });
 
