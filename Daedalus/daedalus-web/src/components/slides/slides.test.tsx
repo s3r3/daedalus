@@ -1183,6 +1183,26 @@ describe('SlideWorkspacePanel', () => {
     expect(useDaedalusStore.getState().openFilePath).toBeNull()
   })
 
+  test('revision bumps and the refresh button re-read the tree without reopening the panel', async () => {
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideWorkspacePanel />)
+
+    await screen.findByTestId('slide-ws-open-deck')
+    const rootLists = () => listMock.mock.calls.filter((call) => (call as unknown[])[1] === '.').length
+    const initial = rootLists()
+    expect(initial).toBeGreaterThanOrEqual(1)
+
+    // A task-side write lands as a revision bump: the root listing is
+    // re-read so a new deck/ folder appears on its own.
+    act(() => useDaedalusStore.getState().bumpWorkspaceRevision())
+    await waitFor(() => expect(rootLists()).toBe(initial + 1))
+
+    // The manual refresh button does the same on demand.
+    await user.click(screen.getByTestId('slide-ws-refresh'))
+    await waitFor(() => expect(rootLists()).toBe(initial + 2))
+  })
+
   test('a pptx outside deck/ is listed but gets no download affordance', async () => {
     useDaedalusStore.getState().setWorkspace({ root: '/ws' })
     render(<SlideWorkspacePanel />)

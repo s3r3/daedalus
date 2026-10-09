@@ -198,10 +198,13 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
       // Any recorded file change — the selected task's own writes and the
       // mirrored copies of orchestrator children's writes alike — bumps
       // the workspace revision so the file tree refreshes on agent writes,
-      // not only on editor saves.
+      // not only on editor saves. A finished task bumps once more as the
+      // safety net: writes that produce no per-file event (binary
+      // artifacts like an exported .pptx) still refresh the trees when
+      // the run ends instead of leaving a stale panel.
       return {
         events: [...state.events, event],
-        ...(event.type === 'FILE_CHANGED' ? { workspaceRevision: state.workspaceRevision + 1 } : {}),
+        ...(event.type === 'FILE_CHANGED' || event.type === 'TASK_COMPLETED' ? { workspaceRevision: state.workspaceRevision + 1 } : {}),
       }
     }),
   seedEvents: (events) =>

@@ -248,7 +248,7 @@ describe('orchestrator parent views (JOB B mirrors + single-path note)', () => {
     expect(chatTranscript(events).some((entry) => entry.text.includes('orchestration skipped'))).toBe(true)
   })
 
-  test('FILE_CHANGED appends bump the workspace revision; duplicates and other events do not', () => {
+  test('FILE_CHANGED appends and task completion bump the workspace revision; duplicates and other events do not', () => {
     const store = useDaedalusStore.getState()
     store.reset()
     const before = useDaedalusStore.getState().workspaceRevision
@@ -261,6 +261,10 @@ describe('orchestrator parent views (JOB B mirrors + single-path note)', () => {
     expect(useDaedalusStore.getState().workspaceRevision).toBe(before + 1)
     store.appendEvent(tagged(3, 'parent-1', 'FILE_CHANGED', { call_id: 'c2', path: 'b.ts', tool: 'write_file', operation: 'created', added: 1, removed: 0, lines: [], patch: '', parent_task_id: 'parent-1', child_task_id: 'child-1', mirrored: true }))
     expect(useDaedalusStore.getState().workspaceRevision).toBe(before + 2)
+    // Terminal safety net: a completed run refreshes the trees once, so
+    // artifacts without a per-file event (an exported .pptx) still show.
+    store.appendEvent(tagged(4, 'task-1', 'TASK_COMPLETED', { state: {}, outcome: 'success', reason: 'completed' }))
+    expect(useDaedalusStore.getState().workspaceRevision).toBe(before + 3)
     useDaedalusStore.getState().reset()
   })
 })
