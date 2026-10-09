@@ -7,7 +7,11 @@ import { useDaedalusStore } from '../../state/taskStore'
  * Reads the workspace deck (`deck/deck.json`) through the existing file API.
  * The deck is a workspace artifact like any other file: agent writes bump
  * `workspaceRevision`, which re-reads it here, and `refresh()` forces a
- * re-read on demand. A missing or malformed deck is an honest empty state
+ * re-read on demand. Task-event growth also re-reads while a run is
+ * active, so a read that failed before the deck existed recovers on its
+ * own once the run announces progress (the 2026-10-09 hang: a staged
+ * outline waited behind a latched ENOENT and the Buat button could
+ * never render). A missing or malformed deck is an honest empty state
  * (deck null + error), never a crash.
  */
 export type UseDeckResult = {
@@ -36,6 +40,12 @@ function isDeckSpec(value: unknown): value is DeckSpec {
 export function useDeck(): UseDeckResult {
   const root = useDaedalusStore((state) => state.workspace.root)
   const revision = useDaedalusStore((state) => state.workspaceRevision)
+  // Backstop retry driver: while a task runs, its event stream grows.
+  // A deck read that failed before the engine wrote deck.json (the
+  // pre-run ENOENT state) must not stay latched until a manual
+  // refresh — the next task event re-reads. While a run is parked at
+  // the staging gate no events arrive, so this never busy-polls.
+  const eventCount = useDaedalusStore((state) => state.events.length)
   const slideIndex = useDaedalusStore((state) => state.slideIndex)
   const [deck, setDeck] = useState<DeckSpec | null>(null)
   const [loading, setLoading] = useState(false)
@@ -90,7 +100,7 @@ export function useDeck(): UseDeckResult {
     return () => {
       cancelled = true
     }
-  }, [root, revision, tick])
+  }, [root, revision, tick, eventCount])
 
   const slideCount = deck?.slides.length ?? 0
   const safeIndex = slideCount === 0 ? 0 : Math.min(Math.max(0, slideIndex), slideCount - 1)

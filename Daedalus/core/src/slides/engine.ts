@@ -1,10 +1,12 @@
+import { readFile } from 'node:fs/promises';
 import type { Plan, PlanStep, TaskSpec, TaskState, ValidationResult } from '../contracts.ts';
 import { emitEvent, type EventBus } from '../events.ts';
 import type { TaskStore } from '../persistence.ts';
 import type { QuestionBroker } from '../interaction/questions.ts';
 import type { LLMProvider, Message } from '../providers/llm/types.ts';
 import type { SlideTaskParams } from '../agent/context.ts';
-import type { DeckSpec, Slide } from './deck.ts';
+import { deckPaths, type DeckSpec, type Slide } from './deck.ts';
+import { diffLines, changedLineCounts, renderPatch } from '../tools/filesystem/diff.ts';
 import { readDeck, newSlideId, validateDeck, writeDeck } from './store.ts';
 import { DeckValidator } from './deck-validator.ts';
 import { getLayout, LAYOUTS } from './layouts.ts';
@@ -111,6 +113,8 @@ export class SlideEngine {
   #requests = 0;
   /** The staging gate of a Standard run waiting on the Outline panel's Buat button (null otherwise). */
   #staged: { settle: (decision: StagedDecision) => void } | null = null;
+  /** Sequence for deck FILE_CHANGED evidence emitted by this run. */
+  #deckChangeSeq = 0;
   /** The current run's own completion, so a released staged run can be awaited by its releaser. */
   #completion: Promise<SlideEngineRunResult> | null = null;
 
@@ -205,6 +209,46 @@ export class SlideEngine {
     emitEvent({ bus: this.#deps.bus, store: this.#deps.store }, this.#taskId, undefined, type, payload);
   }
 
+  /** Raw deck.json text on disk (null when no deck file exists yet). */
+  async #deckFileText(root: string): Promise<string | null> {
+    try {
+      return await readFile(deckPaths(root).file, 'utf8');
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The deck is a workspace file, and the Web refreshes its deck
+   * surfaces (canvas, Outline panel, file tree) off FILE_CHANGED —
+   * the signal the coding runtime emits for its writes. Pipeline
+   * stages write deck.json directly through the filesystem, so the
+   * engine must announce those writes itself: without this event a
+   * staged Standard outline exists on disk yet no panel ever re-reads
+   * it, the Buat button never renders, and the staging gate waits
+   * forever (field incident 2026-10-09). Emitted only when the file
+   * actually changed, with the same diff payload shape the runtime
+   * emits for tool writes.
+   */
+  async #emitDeckChanged(root: string, before: string | null): Promise<void> {
+    const after = await this.#deckFileText(root);
+    if (after === null || after === before) return;
+    const lines = diffLines(before ?? '', after);
+    if (lines.length === 0) return;
+    const counts = changedLineCounts(lines);
+    this.#deckChangeSeq += 1;
+    this.#emit('FILE_CHANGED', {
+      call_id: `slide-deck-${this.#deckChangeSeq}`,
+      path: 'deck/deck.json',
+      tool: 'slide-engine',
+      operation: before === null ? 'created' : 'modified',
+      added: counts.added,
+      removed: counts.removed,
+      lines,
+      patch: renderPatch('deck/deck.json', lines),
+    });
+  }
+
   #throwIfAborted(): void {
     if (this.#abort.signal.aborted || this.#deps.store.isCancelRequested(this.#taskId)) throw new EngineAborted();
   }
@@ -289,9 +333,13 @@ export class SlideEngine {
 
     if (route === 'generate') {
       ctx.setStep('outline', 'active');
+      const deckTextBeforeOutline = await this.#deckFileText(root);
       const outlineResult = await generateDeckOutlineStage(this.#provider, root, brief, { signal });
       outline = outlineResult.outline;
       ctx.setStep('outline', 'done');
+      // The skeleton is on disk now — announce it so the Web's deck
+      // surfaces re-read and the Outline panel can offer Buat.
+      await this.#emitDeckChanged(root, deckTextBeforeOutline);
       this.#emit('THOUGHT', {
         text: `Outline tersusun (${outline.length} slide) dan tersimpan sebagai deck kerangka:\n${outline.map((item, i) => `${i + 1}. [${item.layoutId}] ${item.title}`).join('\n')}`,
       });
@@ -331,6 +379,7 @@ export class SlideEngine {
     }
 
     ctx.setStep('fill', 'active');
+    const deckTextBeforeFill = await this.#deckFileText(root);
     const fill = await fillDeckSlidesStage(this.#provider, root, {
       ...(brief.language ? { language: brief.language } : {}),
       ...(brief.templateId ? { templateId: brief.templateId } : {}),
@@ -339,6 +388,7 @@ export class SlideEngine {
       ...(stagedFill ? { stagedGenerate: true } : {}),
       signal,
     });
+    await this.#emitDeckChanged(root, deckTextBeforeFill);
     ctx.setStep('fill', fill.failures.length === 0 ? 'done' : 'active');
     this.#throwIfAborted();
 
@@ -436,7 +486,9 @@ export class SlideEngine {
     );
     this.#throwIfAborted();
 
+    const deckTextBeforeEdit = await this.#deckFileText(root);
     await writeDeck(root, next.deck);
+    await this.#emitDeckChanged(root, deckTextBeforeEdit);
     ctx.setStep('ops', 'done');
     this.#emit('THOUGHT', { text: `Perubahan diterapkan ke deck (${next.opsApplied} operasi, ${next.deck.slides.length} slide) dan tersimpan di deck/deck.json.` });
 

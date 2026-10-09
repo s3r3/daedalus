@@ -63,6 +63,31 @@ describe('TaskStore', () => {
     expect(store.loadState('t1')).toEqual({ status: 'created' })
     expect(store.listTasks()).toContain('t1')
   })
+
+  test('eventStats summarizes first/last lines without a full replay; hasEvents stats the file', async () => {
+    const tmp = mkdtempSync(join(tmpdir(), 'daedalus-core-stats-'))
+    const store = new TaskStore(tmp)
+    onTestFinished(() => rmSync(tmp, { recursive: true, force: true }))
+
+    expect(store.hasEvents('belum-ada')).toBe(false)
+    expect(store.eventStats('belum-ada')).toEqual({ count: 0, firstTs: null, lastSeq: 0, lastType: null, lastTs: null })
+
+    store.append('t1', { seq: 1, task_id: 't1', type: 'TASK_STARTED', payload: {}, ts: '2026-01-01T00:00:00Z' })
+    store.append('t1', { seq: 2, task_id: 't1', type: 'THOUGHT', payload: { text: 'tengah' }, ts: '2026-01-01T00:01:00Z' })
+    store.append('t1', { seq: 3, task_id: 't1', type: 'TASK_COMPLETED', payload: {}, ts: '2026-01-01T00:02:00Z' })
+
+    expect(store.hasEvents('t1')).toBe(true)
+    // Matches what a full replay would report for the same fields.
+    expect(store.eventStats('t1')).toEqual({
+      count: 3,
+      firstTs: '2026-01-01T00:00:00Z',
+      lastSeq: 3,
+      lastType: 'TASK_COMPLETED',
+      lastTs: '2026-01-01T00:02:00Z',
+    })
+    const replayed = store.replay('t1')
+    expect(store.eventStats('t1').count).toBe(replayed.length)
+  })
 })
 
 describe('logger', () => {

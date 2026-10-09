@@ -695,6 +695,73 @@ describe('DeckOutlinePanel Buat (staged outline-first generate)', () => {
   })
 })
 
+describe('DeckOutlinePanel staged refresh (2026-10-09 hang regression)', () => {
+  test('a deck read that failed before staging recovers when the run announces its write; Buat renders without a manual refresh', async () => {
+    fileMock.mockRejectedValueOnce(new Error("ENOENT: no such file or directory, stat '/ws/deck/deck.json'"))
+    fileMock.mockResolvedValue(deckFile(stagedDeck))
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<DeckOutlinePanel />)
+
+    // The incident state: the pre-run read failed and latched — no
+    // outline, no Buat, the staged run waits unreachable.
+    expect(await screen.findByText(/Tidak ada deck/)).toBeTruthy()
+    expect(screen.queryByTestId('deck-generate')).toBeNull()
+
+    // The engine announces the staged deck write (FILE_CHANGED); the
+    // store turns it into the refresh signal and the panel re-reads on
+    // its own — the button the engine waits for finally renders.
+    act(() => {
+      useDaedalusStore.getState().appendEvent({
+        task_id: 't-hang',
+        seq: 1,
+        type: 'FILE_CHANGED',
+        payload: { call_id: 'slide-deck-1', path: 'deck/deck.json', tool: 'slide-engine', operation: 'created', added: 24, removed: 0, lines: [], patch: '' },
+        ts: new Date().toISOString(),
+      } as never)
+    })
+
+    const button = await screen.findByTestId('deck-generate')
+    expect(button.textContent).toContain('Buat')
+    expect(screen.getByTestId('deck-outline-item-1').textContent).toContain('Isi Kerangka')
+  })
+
+  test('later task activity re-reads a deck whose first read failed (no signal missed can latch)', async () => {
+    fileMock.mockRejectedValueOnce(new Error("ENOENT: no such file or directory, stat '/ws/deck/deck.json'"))
+    fileMock.mockResolvedValue(deckFile(stagedDeck))
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<DeckOutlinePanel />)
+    expect(await screen.findByText(/Tidak ada deck/)).toBeTruthy()
+    expect(screen.queryByTestId('deck-generate')).toBeNull()
+
+    // A plain progress event (no FILE_CHANGED): task activity alone
+    // re-reads while a run is active, so a missed signal cannot leave
+    // the checkpoint hidden behind the latched error.
+    act(() => {
+      useDaedalusStore.getState().appendEvent({
+        task_id: 't-hang',
+        seq: 2,
+        type: 'THOUGHT',
+        payload: { text: 'Outline selesai dan tersimpan sebagai kerangka deck' },
+        ts: new Date().toISOString(),
+      } as never)
+    })
+
+    expect(await screen.findByTestId('deck-generate')).toBeTruthy()
+  })
+
+  test('the failed deck read offers a retry that re-reads and reveals the staged outline', async () => {
+    const user = userEvent.setup()
+    fileMock.mockRejectedValueOnce(new Error("ENOENT: no such file or directory, stat '/ws/deck/deck.json'"))
+    fileMock.mockResolvedValue(deckFile(stagedDeck))
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<DeckOutlinePanel />)
+
+    const retry = await screen.findByTestId('deck-outline-retry')
+    await user.click(retry)
+    expect(await screen.findByTestId('deck-generate')).toBeTruthy()
+  })
+})
+
 describe('SlideStage', () => {
   test('renders the mocked deck, counts slides, and next/thumb navigation moves the selection', async () => {
     useDaedalusStore.getState().setWorkspace({ root: '/ws' })

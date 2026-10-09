@@ -60,10 +60,17 @@ export function DeckOutlinePanel() {
   return (
     <Panel title="Outline deck" data-testid="deck-outline">
       {!deck ? (
-        <p className="px-1 py-1 text-[11px] text-muted">
-          {loading ? 'Memuat deck…' : 'Tidak ada deck'}
-          {error ? <span className="block opacity-80">{error}</span> : null}
-        </p>
+        <div className="px-1 py-1">
+          <p className="text-[11px] text-muted">
+            {loading ? 'Memuat deck…' : 'Tidak ada deck'}
+            {error ? <span className="block opacity-80">{error}</span> : null}
+          </p>
+          {error && !loading ? (
+            <Button size="sm" variant="ghost" onClick={refresh} data-testid="deck-outline-retry" className="mt-1.5">
+              Coba lagi
+            </Button>
+          ) : null}
+        </div>
       ) : (
         <>
         <ol className="flex flex-col gap-0.5">

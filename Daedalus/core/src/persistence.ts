@@ -42,6 +42,50 @@ export class TaskStore {
     }
   }
 
+  /** True when the task has any recorded events (cheap stat, no file read). */
+  hasEvents(taskId: string): boolean {
+    try {
+      return statSync(join(this.taskDir(taskId), "events.jsonl")).size > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Cheap event-log summary for task lists/monitoring: how many events,
+   * plus the first/last events' seq/type/ts — parsed from ONLY the
+   * first and last lines. `replay()` JSON-parses every line ever
+   * recorded; at ~200 historical tasks that made each GET /tasks poll
+   * re-parse the whole history (seconds per poll on a busy machine).
+   * This keeps the summary O(lines counted, 2 parsed) instead.
+   */
+  eventStats(taskId: string): TaskEventStats {
+    const empty: TaskEventStats = { count: 0, firstTs: null, lastSeq: 0, lastType: null, lastTs: null };
+    let raw: string;
+    try {
+      raw = readFileSync(join(this.taskDir(taskId), "events.jsonl"), "utf8");
+    } catch {
+      return empty;
+    }
+    const lines = raw.split("\n").filter((line) => line.trim().length > 0);
+    if (lines.length === 0) return empty;
+    const meta = (line: string): { seq: number; type: string | null; ts: string | null } => {
+      try {
+        const event = JSON.parse(line) as Partial<Event>;
+        return {
+          seq: typeof event.seq === "number" ? event.seq : 0,
+          type: typeof event.type === "string" ? event.type : null,
+          ts: typeof event.ts === "string" ? event.ts : null,
+        };
+      } catch {
+        return { seq: 0, type: null, ts: null };
+      }
+    };
+    const first = meta(lines[0]!);
+    const last = meta(lines[lines.length - 1]!);
+    return { count: lines.length, firstTs: first.ts, lastSeq: last.seq, lastType: last.type, lastTs: last.ts };
+  }
+
   saveState(taskId: string, state: unknown): void {
     const dir = this.taskDir(taskId);
     mkdirSync(dir, { recursive: true });
@@ -210,5 +254,14 @@ export class TaskStore {
 }
 
 type BackupEntry = { path: string; created: boolean };
+
+/** First/last-line summary of a task's event log (see TaskStore.eventStats). */
+export type TaskEventStats = {
+  count: number;
+  firstTs: string | null;
+  lastSeq: number;
+  lastType: string | null;
+  lastTs: string | null;
+};
 
 export type { EventType };

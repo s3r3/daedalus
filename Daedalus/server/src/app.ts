@@ -127,6 +127,10 @@ export type AppContext = {
   providersReady?: Promise<void>;
   webDist?: string;
   extensionStatusCache?: Map<string, { expiresAt: number; value: ExtensionStatus }>;
+  /** Memoized taskStores() result (see TASK_STORES_CACHE_MS). */
+  taskStoresCache?: { expiresAt: number; stores: TaskStore[] };
+  /** Per-task summary memo, keyed by a stat fingerprint of the task's files (see summarizeFrom). */
+  taskSummaryCache?: Map<string, { fingerprint: string; summary: Record<string, unknown> }>;
 };
 
 export function createContext(overrides: Partial<AppContext> = {}): AppContext {
@@ -761,7 +765,20 @@ function conversationStoreFor(ctx: AppContext, root: string): ConversationStore 
   return new ConversationStore(resolveDaedalusHome(ctx.settings.daedalusHome, root));
 }
 
+/**
+ * How long the task-store list may be reused. Building it scans every
+ * recorded task state (recordedRoots → allowedRoots), which is O(task
+ * history): at ~200 tasks that scan alone cost ~600ms when GET /tasks
+ * rebuilt the list once per task (quadratic per poll). Only the LIST
+ * is memoized — task data itself is always read live — so a store
+ * that appears (new workspace, CLI task next door) is picked up
+ * within a second.
+ */
+const TASK_STORES_CACHE_MS = 1_000;
+
 function taskStores(ctx: AppContext): TaskStore[] {
+  const cached = ctx.taskStoresCache;
+  if (cached && cached.expiresAt > Date.now()) return cached.stores;
   const stores: TaskStore[] = [];
   const seen = new Set<string>();
   const add = (store: TaskStore) => {
@@ -772,6 +789,7 @@ function taskStores(ctx: AppContext): TaskStore[] {
   };
   add(ctx.store);
   for (const root of allowedRoots(ctx)) add(new TaskStore(resolveDaedalusHome(ctx.settings.daedalusHome, root)));
+  ctx.taskStoresCache = { expiresAt: Date.now() + TASK_STORES_CACHE_MS, stores };
   return stores;
 }
 
@@ -779,7 +797,7 @@ function findTask(ctx: AppContext, taskId: string): TaskLookup | undefined {
   for (const store of taskStores(ctx)) {
     const state = store.loadState<Record<string, unknown>>(taskId);
     if (state !== undefined) return { store, state };
-    if (store.replay(taskId).length > 0) return { store, state: {} };
+    if (store.hasEvents(taskId)) return { store, state: {} };
   }
   return undefined;
 }
@@ -818,16 +836,44 @@ function planProducerTaskId(ctx: AppContext, slug: string): string | null {
   return producer;
 }
 
+/** Stat fingerprint (size@mtime per file, "x" when absent) of everything a task summary reads. */
+function taskFileFingerprint(store: TaskStore, taskId: string): string {
+  const dir = store.taskDir(taskId);
+  const part = (name: string): string => {
+    try {
+      const stat = statSync(join(dir, name));
+      return `${stat.size}@${Math.round(stat.mtimeMs)}`;
+    } catch {
+      return "x";
+    }
+  };
+  return `${part("state.json")}|${part("report.json")}|${part("events.jsonl")}`;
+}
+
 function summarizeFrom(ctx: AppContext, lookup: TaskLookup, taskId: string): Record<string, unknown> {
   const { store, state } = lookup;
+  // GET /tasks builds one summary per historical task on EVERY poll.
+  // The summary derives only from the task's three files, so memoize
+  // it behind their stat fingerprint: an unchanged history costs a few
+  // stats per poll instead of re-reading every event log (the scan
+  // that made polls take seconds at ~200 tasks). The `running` flag's
+  // live half (activeRunners) is overlaid after the memo, never cached.
+  ctx.taskSummaryCache ??= new Map();
+  const cacheKey = `${resolve(store.root)}:${taskId}`;
+  const fingerprint = taskFileFingerprint(store, taskId);
+  const cached = ctx.taskSummaryCache.get(cacheKey);
+  if (cached && cached.fingerprint === fingerprint) {
+    return { ...cached.summary, running: ctx.activeRunners.has(taskId) || cached.summary.running === true };
+  }
   const spec = (state.spec && typeof state.spec === "object" ? state.spec : state) as Record<string, unknown>;
-  const events = store.replay(taskId);
+  // Cheap first/last-line stats, NOT a full replay: replay()
+  // JSON-parses every event ever recorded.
+  const stats = store.eventStats(taskId);
   const report = store.loadReport<{ outcome?: string }>(taskId);
-  const last = events.at(-1);
   const stateStatus = typeof state.status === "string" ? state.status : "unknown";
   const outcome = typeof report?.outcome === "string" ? report.outcome : stateStatus === "unknown" ? undefined : stateStatus;
   const activeStatus = ["created", "pending", "active", "running"].includes(stateStatus);
-  return {
+  const summary: Record<string, unknown> = {
     id: taskId,
     goal: typeof spec.goal === "string" ? spec.goal : undefined,
     title: typeof state.title === "string" ? state.title : typeof spec.title === "string" ? spec.title : undefined,
@@ -837,14 +883,16 @@ function summarizeFrom(ctx: AppContext, lookup: TaskLookup, taskId: string): Rec
     mode: typeof state.mode === "string" ? state.mode : typeof spec.mode === "string" ? spec.mode : undefined,
     ...(typeof state.conversation_id === "string" ? { conversation_id: state.conversation_id } : {}),
     thinking: typeof state.thinking === "boolean" ? state.thinking : typeof spec.thinking === "boolean" ? spec.thinking : undefined,
-    created_at: typeof spec.created_at === "string" ? spec.created_at : typeof state.created_at === "string" ? state.created_at : events[0]?.ts ?? null,
-    event_count: events.length,
-    last_seq: last?.seq ?? 0,
-    last_event: last?.type ?? null,
-    updated_at: last?.ts ?? (typeof spec.created_at === "string" ? spec.created_at : null),
-    running: ctx.activeRunners.has(taskId) || (activeStatus && !report),
+    created_at: typeof spec.created_at === "string" ? spec.created_at : typeof state.created_at === "string" ? state.created_at : stats.firstTs,
+    event_count: stats.count,
+    last_seq: stats.lastSeq,
+    last_event: stats.lastType,
+    updated_at: stats.lastTs ?? (typeof spec.created_at === "string" ? spec.created_at : null),
+    running: activeStatus && !report,
     store_root: store.root,
   };
+  ctx.taskSummaryCache.set(cacheKey, { fingerprint, summary });
+  return { ...summary, running: ctx.activeRunners.has(taskId) || summary.running === true };
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -1739,12 +1787,13 @@ export function createApp(ctx: AppContext) {
         sendJson(res, 404, { error: "not_found", request_id: requestId });
         return;
       }
+      const summary = summarizeFrom(ctx, lookup, taskId);
       sendJson(res, 200, {
         state: lookup.state,
         events: lookup.store.replay(taskId),
         report: lookup.store.loadReport<FinalReport>(taskId) ?? null,
-        running: ctx.activeRunners.has(taskId) || summarizeFrom(ctx, lookup, taskId).running === true,
-        task: summarizeFrom(ctx, lookup, taskId),
+        running: ctx.activeRunners.has(taskId) || summary.running === true,
+        task: summary,
       });
       return;
     }

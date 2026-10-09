@@ -216,6 +216,14 @@ describe('SlideEngine generation', () => {
     expect(pptxFiles(root)).toHaveLength(0);
     expect(eventsOf(store, 'engine-standard', 'QUESTION_REQUESTED')).toHaveLength(0);
     expect(eventsOf(store, 'engine-standard', 'TASK_COMPLETED')).toHaveLength(0);
+    // The Web's deck surfaces refresh only on FILE_CHANGED: the staged
+    // skeleton write must be announced, or the Outline panel keeps its
+    // pre-deck ENOENT state and Buat can never render (field hang).
+    const stagedChanges = eventsOf(store, 'engine-standard', 'FILE_CHANGED');
+    expect(stagedChanges).toHaveLength(1);
+    const stagedPayload = stagedChanges[0]?.payload as { path?: string; operation?: string };
+    expect(stagedPayload.path).toBe('deck/deck.json');
+    expect(stagedPayload.operation).toBe('created');
 
     const released = await runner.releaseStagedDeck(root, { templateId: 'midnight-scholar' });
     expect(released?.taskId).toBe('engine-standard');
@@ -229,6 +237,11 @@ describe('SlideEngine generation', () => {
     expect(deck?.slides.every((slide) => slide.status === 'filled')).toBe(true);
     expect(pptxFiles(root)).toHaveLength(1);
     expect(calls.filter((call) => call.system.includes(FILL_SYSTEM_MARKER))).toHaveLength(3);
+    // The fill write is announced too (modified), so the canvas and
+    // outline repaint from skeleton to filled without a manual refresh.
+    const changes = eventsOf(store, 'engine-standard', 'FILE_CHANGED');
+    expect(changes.length).toBeGreaterThanOrEqual(2);
+    expect((changes.at(-1)?.payload as { operation?: string }).operation).toBe('modified');
   });
 
   test('staged generate fills the deck as edited in the panel meanwhile (order, titles, hand-written slide kept)', async () => {
@@ -467,7 +480,7 @@ describe('SlideEngine edit ops', () => {
       }
       return {};
     });
-    const { runner } = makeRunner(root, provider);
+    const { runner, store } = makeRunner(root, provider);
 
     const { state } = await runner.run({
       goal: 'ganti judul slide pertama menjadi lebih singkat',
@@ -476,6 +489,11 @@ describe('SlideEngine edit ops', () => {
     });
 
     expect(state.status).toBe('done');
+    // Edit writes are announced as FILE_CHANGED too, so the Web canvas
+    // repaints the edited deck without a manual refresh.
+    const editChanges = eventsOf(store, 'engine-edit', 'FILE_CHANGED');
+    expect(editChanges).toHaveLength(1);
+    expect((editChanges[0]?.payload as { operation?: string }).operation).toBe('modified');
     const deck = await readDeck(root);
     expect(deck?.slides[0]?.content.title).toBe('Diganti');
     expect(deck?.slides[0]?.content.points).toEqual(['a']);
