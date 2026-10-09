@@ -19,6 +19,7 @@ import { ScrollArea } from './components/ui/scroll-area'
 import { SlideStage } from './components/slides/slide-stage'
 import { DeckOutlinePanel } from './components/slides/deck-outline'
 import { SlideTemplatesPanel } from './components/slides/slide-templates'
+import { SlidePptTemplatesPanel } from './components/slides/slide-ppt-templates'
 import { SlideWorkspacePanel } from './components/slides/slide-workspace'
 import { useEventStream } from './api/useEventStream'
 import { api } from './api/client'
@@ -326,6 +327,7 @@ export function App() {
             <div className="flex flex-col gap-2 pr-1">
               {domain === 'slide' ? <DeckOutlinePanel /> : null}
               {domain === 'slide' ? <SlideTemplatesPanel /> : null}
+              {domain === 'slide' ? <SlidePptTemplatesPanel /> : null}
               {domain === 'slide' ? null : <ExtensionsPanel />}
               <PlanPanel />
               <ActivityTimeline />

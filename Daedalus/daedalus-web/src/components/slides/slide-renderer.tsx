@@ -20,6 +20,8 @@ type Ctx = {
   muted: string
   panelBg: string
   line: string
+  /** Extracted accent ramp of an imported PPT template (accent1..accent6). */
+  series?: string[]
 }
 
 const SERIES_VARS = [
@@ -30,7 +32,11 @@ const SERIES_VARS = [
   'var(--daedalus-primary)',
 ]
 
-function seriesColor(index: number, accent: string): string {
+function seriesColor(index: number, accent: string, series?: string[]): string {
+  // An imported template's own accent ramp wins so canvas charts carry the
+  // same palette the PPTX exporter writes; built-in decks keep the app
+  // palette rotation exactly as before.
+  if (series && series.length > 1) return series[index % series.length]
   return index === 0 ? accent : SERIES_VARS[(index - 1) % SERIES_VARS.length]
 }
 
@@ -644,7 +650,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
               const y = padT + plotH - barH
               return (
                 <g key={index}>
-                  <rect x={x} y={y} width={barW} height={barH} rx="5" style={{ fill: seriesColor(index, ctx.accent) }} />
+                  <rect x={x} y={y} width={barW} height={barH} rx="5" style={{ fill: seriesColor(index, ctx.accent, ctx.series) }} />
                   <text x={x + barW / 2} y={y - 8} textAnchor="middle" fontSize="14" fontWeight="700" style={{ fill: 'currentColor' }}>
                     {d.value}
                     {str(c.unit)}
@@ -693,10 +699,10 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                   strokeLinejoin="round"
                   strokeLinecap="round"
                   points={s.points.map((p, i) => `${xAt(i, s.points.length)},${yAt(p)}`).join(' ')}
-                  style={{ stroke: seriesColor(si, ctx.accent) }}
+                  style={{ stroke: seriesColor(si, ctx.accent, ctx.series) }}
                 />
                 {s.points.map((p, i) => (
-                  <circle key={i} cx={xAt(i, s.points.length)} cy={yAt(p)} r="4.5" style={{ fill: seriesColor(si, ctx.accent) }} />
+                  <circle key={i} cx={xAt(i, s.points.length)} cy={yAt(p)} r="4.5" style={{ fill: seriesColor(si, ctx.accent, ctx.series) }} />
                 ))}
               </g>
             ))}
@@ -706,7 +712,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
             <div className="flex flex-wrap" style={{ gap: '1.6cqw' }}>
               {series.map((s, si) => (
                 <span key={si} className="inline-flex items-center" style={{ gap: '0.5cqw', fontSize: '1.2cqw' }}>
-                  <span aria-hidden style={{ width: '1.4cqw', height: '0.45cqw', borderRadius: 999, backgroundColor: seriesColor(si, ctx.accent) }} />
+                  <span aria-hidden style={{ width: '1.4cqw', height: '0.45cqw', borderRadius: 999, backgroundColor: seriesColor(si, ctx.accent, ctx.series) }} />
                   {s.name}
                   {str(c.unit) ? <span style={{ color: ctx.muted }}>({str(c.unit)})</span> : null}
                 </span>
@@ -744,7 +750,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                       strokeWidth="30"
                       strokeDasharray={`${Math.max(0, dash - 2)} ${C - dash + 2}`}
                       strokeDashoffset={-acc}
-                      style={{ stroke: seriesColor(index, ctx.accent) }}
+                      style={{ stroke: seriesColor(index, ctx.accent, ctx.series) }}
                     />
                   )
                   acc += dash
@@ -761,7 +767,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
               <ul className="flex flex-col" style={{ gap: '0.9cqw' }}>
                 {slices.map((slice, index) => (
                   <li key={index} className="flex items-center" style={{ gap: '0.7cqw', fontSize: '1.35cqw' }}>
-                    <span aria-hidden className="rounded-sm" style={{ width: '1.3cqw', height: '1.3cqw', backgroundColor: seriesColor(index, ctx.accent) }} />
+                    <span aria-hidden className="rounded-sm" style={{ width: '1.3cqw', height: '1.3cqw', backgroundColor: seriesColor(index, ctx.accent, ctx.series) }} />
                     <span>{slice.label}</span>
                     <strong>
                       {slice.value}
@@ -972,7 +978,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                       className="flex min-w-0 flex-1 flex-col items-center justify-center text-center"
                       style={{
                         clipPath: clip,
-                        backgroundColor: seriesColor(index, ctx.accent),
+                        backgroundColor: seriesColor(index, ctx.accent, ctx.series),
                         color: 'var(--daedalus-onPrimary)',
                         gap: '0.3cqw',
                         padding: '1.15cqw 1.9cqw 1.15cqw 2.2cqw',
@@ -1023,7 +1029,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                     style={{
                       width: `${widthPct}%`,
                       clipPath: 'polygon(9% 0, 91% 0, 100% 100%, 0 100%)',
-                      backgroundColor: seriesColor(index, ctx.accent),
+                      backgroundColor: seriesColor(index, ctx.accent, ctx.series),
                       color: 'var(--daedalus-onPrimary)',
                       gap: '0.25cqw',
                       padding: '1cqw 3cqw',
@@ -1064,7 +1070,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                     <span
                       aria-hidden
                       className="flex shrink-0 items-center justify-center rounded-full font-bold"
-                      style={{ width: '2.2cqw', height: '2.2cqw', backgroundColor: seriesColor(index, ctx.accent), color: 'var(--daedalus-onPrimary)', fontSize: '1.15cqw' }}
+                      style={{ width: '2.2cqw', height: '2.2cqw', backgroundColor: seriesColor(index, ctx.accent, ctx.series), color: 'var(--daedalus-onPrimary)', fontSize: '1.15cqw' }}
                     >
                       {index + 1}
                     </span>
@@ -1270,7 +1276,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                   <span
                     aria-hidden
                     className="flex items-center justify-center rounded-full font-bold"
-                    style={{ width: '4.4cqw', height: '4.4cqw', backgroundColor: seriesColor(index, ctx.accent), color: 'var(--daedalus-onPrimary)', fontSize: '1.7cqw' }}
+                    style={{ width: '4.4cqw', height: '4.4cqw', backgroundColor: seriesColor(index, ctx.accent, ctx.series), color: 'var(--daedalus-onPrimary)', fontSize: '1.7cqw' }}
                   >
                     {initialsOf(str(person.name))}
                   </span>
@@ -1441,7 +1447,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                   <div className="flex items-center" style={{ gap: '1.5cqw' }}>
                     <div
                       className="shrink-0 rounded-md"
-                      style={{ width: `${26 + pct * 0.5}%`, backgroundColor: seriesColor(index, ctx.accent), padding: '0.85cqw 1.3cqw' }}
+                      style={{ width: `${26 + pct * 0.5}%`, backgroundColor: seriesColor(index, ctx.accent, ctx.series), padding: '0.85cqw 1.3cqw' }}
                     >
                       <div className="flex items-baseline justify-between" style={{ gap: '1cqw', color: 'var(--daedalus-onPrimary)' }}>
                         <span className="truncate font-semibold" style={{ fontSize: '1.45cqw' }}>
@@ -1493,7 +1499,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                     <div className="relative flex-1 rounded-full border" style={{ height: '2.05cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}>
                       <div
                         className="absolute rounded-full"
-                        style={{ left: `${start}%`, width: `${span}%`, top: '16%', height: '68%', backgroundColor: seriesColor(index, ctx.accent) }}
+                        style={{ left: `${start}%`, width: `${span}%`, top: '16%', height: '68%', backgroundColor: seriesColor(index, ctx.accent, ctx.series) }}
                       />
                     </div>
                     <div className="shrink-0 truncate" style={{ width: '14%', fontSize: '1.05cqw', color: ctx.muted }}>
@@ -2073,7 +2079,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                   <div className="flex" style={{ gap: '1.2cqw' }}>
                     <span aria-hidden style={{ minWidth: '3cqw' }} />
                     <div className="relative flex-1 overflow-hidden rounded-full border" style={{ height: '0.95cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}>
-                      <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.max(4, (num(entry.value) / max) * 100)}%`, backgroundColor: seriesColor(index, ctx.accent) }} />
+                      <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.max(4, (num(entry.value) / max) * 100)}%`, backgroundColor: seriesColor(index, ctx.accent, ctx.series) }} />
                     </div>
                   </div>
                 </div>
@@ -2128,7 +2134,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                     <span
                       aria-hidden
                       className="flex shrink-0 items-center justify-center rounded-full font-bold"
-                      style={{ width: '3.1cqw', height: '3.1cqw', backgroundColor: seriesColor(index, ctx.accent), color: 'var(--daedalus-onPrimary)', fontSize: '1.2cqw' }}
+                      style={{ width: '3.1cqw', height: '3.1cqw', backgroundColor: seriesColor(index, ctx.accent, ctx.series), color: 'var(--daedalus-onPrimary)', fontSize: '1.2cqw' }}
                     >
                       {initialsOf(str(quote.name))}
                     </span>
@@ -2194,11 +2200,17 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
     muted: theme?.muted ?? (isLight ? light.fgMoreSubtle : 'var(--daedalus-fgMoreSubtle)'),
     panelBg: theme?.surface ?? (isLight ? light.bgBase : 'var(--daedalus-bgSurface)'),
     line: 'var(--daedalus-separator)',
+    ...(Array.isArray(theme?.series) && theme.series.length > 0 ? { series: theme.series } : {}),
   }
+  // Imported-template background image (a deck asset, resolved like slide
+  // images): paints over the background color exactly as the exported
+  // PPTX paints it; without a resolver the color alone carries the theme.
+  const bgSrc = theme?.backgroundImage && resolveImageSrc ? resolveImageSrc(theme.backgroundImage) : undefined
   const rootStyle: CSSProperties = {
     backgroundColor: theme?.background ?? (isLight ? light.bgSurface : 'var(--daedalus-bgBase)'),
     color: theme?.text ?? (isLight ? light.fgBase : 'var(--daedalus-fgBase)'),
     ...(theme?.bodyFont ? { fontFamily: theme.bodyFont } : {}),
+    ...(bgSrc ? { backgroundImage: `url("${bgSrc}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}),
   }
 
   const boxRef = useRef<HTMLDivElement | null>(null)
