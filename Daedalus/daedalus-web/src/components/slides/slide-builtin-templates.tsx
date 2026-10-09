@@ -18,10 +18,15 @@ function MiniSlide({ template, kind, label }: { template: BuiltinTemplateInfo; k
   const layoutId = template.design[kind][0] ?? (kind === 'cover' ? 'title' : 'bullets')
   const layout = getLayout(layoutId)
   if (!layout) return null
+  const sample: Record<string, unknown> = { title: kind === 'cover' ? 'Judul Presentasi' : 'Judul Konten' }
+  if ('subtitle' in layout.defaults) sample.subtitle = 'Subjudul contoh'
+  if ('points' in layout.defaults) sample.points = ['Poin contoh pertama', 'Poin contoh kedua']
+  if ('lead' in layout.defaults) sample.lead = 'Contoh kalimat pembuka untuk slide ini.'
+  if ('text' in layout.defaults) sample.text = 'Contoh kutipan untuk pratinjau desain.'
   const slide: Slide = {
     id: `contoh-${template.id}-${kind}`,
     layout: layoutId,
-    content: { ...layout.defaults, ...(kind === 'cover' ? { title: 'Judul Presentasi' } : {}) },
+    content: { ...layout.defaults, ...sample },
   }
   const theme = { ...template.theme, templateId: template.skinId, designId: template.id }
   return (
