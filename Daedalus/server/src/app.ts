@@ -41,6 +41,7 @@ import {
   validateDeck,
   writeDeck,
   type DeckSpec,
+  type Slide,
   type SlideTaskParams,
   type AgentMode,
   type ApprovalDecision,
@@ -2170,15 +2171,34 @@ export function createApp(ctx: AppContext) {
           }
 
           if (url.pathname === "/slides/deck/slide/update") {
+            // `positions` (the canvas editor's drag placements) may ride
+            // along without content; commit() validates them via
+            // validateDeck, so garbage coordinates are a 422, never a
+            // silent write. positions: null clears all placements.
+            const hasPositions = "positions" in parsed;
             const content = parsed.content;
-            if (!content || typeof content !== "object" || Array.isArray(content)) {
+            if (!hasPositions && (!content || typeof content !== "object" || Array.isArray(content))) {
               badDeck(400, "content_required");
               return;
             }
             const current = deck.slides[index]!;
             const layout = typeof parsed.layout === "string" && parsed.layout ? parsed.layout : current.layout;
-            // Shallow merge, exactly like the agent's update_slide.
-            const slides = deck.slides.map((slide, i) => (i === index ? { ...slide, layout, content: { ...slide.content, ...(content as Record<string, unknown>) } } : slide));
+            const slides = deck.slides.map((slide, i) => {
+              if (i !== index) return slide;
+              // Shallow merge, exactly like the agent's update_slide.
+              const next: Slide = {
+                ...slide,
+                layout,
+                ...(content && typeof content === "object" && !Array.isArray(content)
+                  ? { content: { ...slide.content, ...(content as Record<string, unknown>) } }
+                  : {}),
+              };
+              if (hasPositions) {
+                if (parsed.positions === null) delete next.positions;
+                else next.positions = parsed.positions as Slide["positions"];
+              }
+              return next;
+            });
             await commit({ ...deck, slides });
             return;
           }
