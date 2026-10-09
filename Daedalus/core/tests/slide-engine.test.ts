@@ -7,6 +7,7 @@ import {
   EventBus,
   TaskRunner,
   TaskStore,
+  loadSettings,
   newDeck,
   readDeck,
   writeDeck,
@@ -631,5 +632,41 @@ describe('regenerateSlideStage (editor variant seam)', () => {
 
     await expect(regenerateSlideStage(provider, root, 'tidak-ada')).rejects.toThrow(/not found/);
     expect(readFileSync(join(root, 'deck', 'deck.json'), 'utf8')).toBe(before);
+  });
+});
+
+describe('TaskRunner.regenerateSlide model resolution (editor variant)', () => {
+  async function seededRoot(): Promise<string> {
+    const root = temp('daedalus-engine-regen-model-');
+    const deck = newDeck('Deck Varian');
+    deck.slides = [{ id: 's-1', layout: 'bullets', content: { title: 'Lama', points: ['a'] }, status: 'filled' }];
+    await writeDeck(root, deck);
+    return root;
+  }
+
+  test('no model in the whole chain fails BEFORE any request with the remedy named', async () => {
+    const root = await seededRoot();
+    const store = new TaskStore(temp('daedalus-engine-regen-model-store-'));
+    // No injected provider, no registry, no settings model: the editor
+    // sent nothing and nothing is configured (the laptop "Missing
+    // model" incident). The failure must name the fix, not the upstream.
+    const runner = new TaskRunner({
+      workspaceRoot: root, store, bus: new EventBus(),
+      settings: loadSettings({ LLM_MODEL: '', LLM_BASE_URL: 'http://127.0.0.1:9/v1', LLM_API_KEY: '' }),
+    });
+    await expect(runner.regenerateSlide(root, 's-1')).rejects.toThrow(/no model resolved for slide regeneration/);
+  });
+
+  test('a configured settings model resolves: failure moves downstream, never the no-model error', async () => {
+    const root = await seededRoot();
+    const store = new TaskStore(temp('daedalus-engine-regen-model-store-'));
+    const runner = new TaskRunner({
+      workspaceRoot: root, store, bus: new EventBus(),
+      settings: loadSettings({ LLM_MODEL: 'model-uji', LLM_BASE_URL: 'http://127.0.0.1:9/v1', LLM_API_KEY: 'uji' }),
+    });
+    const error = await runner.regenerateSlide(root, 's-1').catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toContain('no model resolved');
+    expect((error as Error).message).toContain('model output stayed invalid');
   });
 });
