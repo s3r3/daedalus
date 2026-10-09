@@ -284,6 +284,7 @@ export function SlideStage() {
                       >
                         {template.name}
                         {deck.theme.customTemplateId === template.id ? ' · sedang dipakai' : ''}
+                        {template.hasSource === false ? ' · versi lama (ekspor aproksimasi)' : ''}
                       </button>
                     ))}
                   </>

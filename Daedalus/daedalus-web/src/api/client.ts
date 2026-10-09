@@ -159,6 +159,8 @@ export type PptTemplateInfo = {
   backgroundImageFile?: string
   /** Parsed slide designs (v2); absent on templates imported before page parsing existed. */
   pages?: PptTemplatePageInfo[]
+  /** Whether the kept source .pptx is on disk (v3 clone-fidelity availability), derived by the server from the store. False on pre-v3 imports: exports approximate the design (and say so); re-uploading the same file upgrades the record in place. */
+  hasSource?: boolean
 }
 
 /**
