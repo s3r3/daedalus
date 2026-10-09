@@ -20,8 +20,9 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { changedLineCounts, diffLines, renderPatch } from './tools/filesystem/diff.ts';
 import { ApprovalBroker, ExecutionHarness, commandLineOf, resolveApprovalTimeoutMs, type ApprovalDecision, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
 import { CommandValidator, type ValidationCommand, type Validator } from './validation/index.ts';
-import { SlideEngine } from './slides/engine.ts';
-import { regenerateSlideStage } from './slides/pipeline.ts';
+import { SlideEngine, type SlideEngineOutcome } from './slides/engine.ts';
+import { fillDeckSlidesStage, regenerateSlideStage, type ExportInfo, type FillStageResult } from './slides/pipeline.ts';
+import { readDeck } from './slides/store.ts';
 import type { DeckSpec, Slide } from './slides/deck.ts';
 import { createProviderFromSettings } from './providers/index.ts';
 import { OpenAICompatProvider } from './providers/llm/openai-compat.ts';
@@ -1367,8 +1368,8 @@ export class TaskRunner {
 
   /**
    * Slide-domain execution: the SlideEngine (slides/engine.ts) runs the
-   * task — generation stages, its Standard checkpoint over the shared
-   * question broker, edit ops, and its own completion verdict — while
+   * task — generation stages, its Standard outline-staging gate, edit
+   * ops, and its own completion verdict — while
    * this layer only supplies the run's provider, collects the events
    * for the report, and records the same FinalReport shape coding runs
    * produce. No AgentLoop, registry, or mode policy is constructed.
@@ -1448,6 +1449,65 @@ export class TaskRunner {
     );
     const result = await regenerateSlideStage(provider, root, slideId);
     return { deck: result.deck, slide: result.slide };
+  }
+
+  /**
+   * Slide staging seam (the Outline panel's Buat button): release a
+   * staged Standard run waiting in this workspace. The engine fills the
+   * deck exactly as it now stands in the panel, validates, and exports
+   * — the original task completes through its own run. Null when no
+   * staged run waits on this runner for that workspace.
+   */
+  async releaseStagedDeck(root: string, input: { templateId?: string } = {}): Promise<{ taskId: string; outcome: SlideEngineOutcome; summary: string; exported?: ExportInfo } | null> {
+    for (const engine of this.#activeEngines.values()) {
+      if (engine.workspaceRoot !== root) continue;
+      const completion = engine.generateStagedDeck(input);
+      if (!completion) continue;
+      const result = await completion;
+      return { taskId: engine.taskId, outcome: result.outcome, summary: result.summary, ...(result.exported ? { exported: result.exported } : {}) };
+    }
+    return null;
+  }
+
+  /** True while any slide engine is executing for this workspace (staged or mid-fill). */
+  hasSlideEngineFor(root: string): boolean {
+    for (const engine of this.#activeEngines.values()) {
+      if (engine.workspaceRoot === root) return true;
+    }
+    return false;
+  }
+
+  /**
+   * A newer slide prompt in the same workspace supersedes a staged
+   * outline: the waiting run settles honestly (failed,
+   * staged_superseded) instead of parking forever on an outline the
+   * user has moved on from. True when a staged run was settled.
+   */
+  abandonStagedDeck(root: string): boolean {
+    let settled = false;
+    for (const engine of this.#activeEngines.values()) {
+      if (engine.workspaceRoot === root && engine.abandonStagedDeck()) settled = true;
+    }
+    return settled;
+  }
+
+  /**
+   * Buat pressed while no run is alive (the staged task already ended
+   * partial, or the server restarted): fill the staged skeleton deck
+   * directly, editor-seam style — not a task; no events, no task
+   * state. Null when there is no deck or nothing is at skeleton status.
+   */
+  async fillStagedDeck(root: string, options: { templateId?: string; model?: string; providerId?: string } = {}): Promise<FillStageResult | null> {
+    const deck = await readDeck(root).catch(() => null);
+    if (!deck || !deck.slides.some((slide) => slide.status === 'skeleton')) return null;
+    const provider = this.#options.provider ?? this.#providerFor(
+      { ...(options.model ? { model: options.model } : {}), ...(options.providerId ? { providerId: options.providerId } : {}) } as RunOptions,
+      'slide-staged-generate',
+    );
+    return fillDeckSlidesStage(provider, root, {
+      stagedGenerate: true,
+      ...(options.templateId ? { templateId: options.templateId } : {}),
+    });
   }
 
   /**

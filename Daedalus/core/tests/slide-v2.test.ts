@@ -152,7 +152,7 @@ describe('Agentic Slide v2 (Farid design 2026-10-09)', () => {
     expect(readdirSync(join(root, 'deck')).some((name) => name.endsWith('.pptx'))).toBe(true);
   });
 
-  test('standard flow stops at the checkpoint; composer params reach the outline stage', async () => {
+  test('standard flow stages the outline for the panel (no chat question); Buat completes it', async () => {
     const root = temp('daedalus-slidev2-std-');
     const capture = { toolsPerCall: [] as unknown[], systems: [] as string[], users: [] as string[] };
     const provider = stageProvider(capture);
@@ -165,28 +165,26 @@ describe('Agentic Slide v2 (Farid design 2026-10-09)', () => {
       slide: { generation: 'standard', slideCount: 4, language: 'Bahasa Indonesia' },
     });
 
-    let questionId: string | undefined;
-    let optionLabels: string[] = [];
-    for (let attempt = 0; attempt < 200 && !questionId; attempt++) {
-      const requested = store.replay('slidev2-std').find((event) => event.type === 'QUESTION_REQUESTED');
-      const question = (requested?.payload as { question?: { id: string; options: Array<{ label: string }> } } | undefined)?.question;
-      if (question) {
-        questionId = question.id;
-        optionLabels = question.options.map((option) => option.label);
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
+    // The run parks on a persisted skeleton deck (all four slides at
+    // skeleton status) instead of asking a question in chat.
+    let staged = false;
+    for (let attempt = 0; attempt < 200 && !staged; attempt++) {
+      try {
+        const raw = JSON.parse(readFileSync(join(root, 'deck', 'deck.json'), 'utf8')) as { slides: Array<{ status: string }> };
+        staged = raw.slides.length === 4 && raw.slides.every((slide) => slide.status === 'skeleton');
+      } catch { /* deck not persisted yet */ }
+      if (!staged) await new Promise((resolve) => setTimeout(resolve, 10));
     }
-
-    expect(questionId).toBeTruthy();
-    expect(optionLabels.length).toBeGreaterThanOrEqual(4);
+    expect(staged).toBe(true);
+    expect(store.replay('slidev2-std').find((event) => event.type === 'QUESTION_REQUESTED')).toBeUndefined();
     // Composer parameters reached the outline stage prompt.
     const outlineUser = capture.users.find((userText) => userText.includes('slide_count:'));
     expect(outlineUser).toContain('slide_count: 4');
     expect(outlineUser).toContain('Bahasa Indonesia');
     expect(capture.systems[0]).toContain('OUTLINE stage');
 
-    expect(runner.questions.answer(questionId!, 'midnight-scholar')).toBe(true);
+    const released = await runner.releaseStagedDeck(root, { templateId: 'midnight-scholar' });
+    expect(released?.outcome).toBe('success');
     const { state } = await pending;
     expect(state.status).toBe('done');
     const deck = JSON.parse(readFileSync(join(root, 'deck', 'deck.json'), 'utf8')) as { theme: { templateId?: string }; slides: Array<{ status: string }> };

@@ -1,8 +1,7 @@
-import { randomUUID } from 'node:crypto';
 import type { Plan, PlanStep, TaskSpec, TaskState, ValidationResult } from '../contracts.ts';
 import { emitEvent, type EventBus } from '../events.ts';
 import type { TaskStore } from '../persistence.ts';
-import type { QuestionBroker, UserQuestionInfo } from '../interaction/questions.ts';
+import type { QuestionBroker } from '../interaction/questions.ts';
 import type { LLMProvider, Message } from '../providers/llm/types.ts';
 import type { SlideTaskParams } from '../agent/context.ts';
 import type { DeckSpec, Slide } from './deck.ts';
@@ -62,11 +61,22 @@ type StageStep = { id: string; intent: string };
 
 const GENERATION_STEPS: StageStep[] = [
   { id: 'outline', intent: 'Generate the deck outline with the slide pipeline (skeleton deck persisted)' },
-  { id: 'checkpoint', intent: 'Confirm the design direction (template) at the checkpoint' },
+  { id: 'checkpoint', intent: 'Stage the outline in the Outline panel — the Buat button there starts generation' },
   { id: 'fill', intent: 'Fill every slide with the pipeline (resumable per slide)' },
   { id: 'validate', intent: 'Validate the deck' },
   { id: 'export', intent: 'Export the .pptx' },
 ];
+
+/**
+ * How a staged Standard run leaves the staging gate: the Outline
+ * panel's Buat button releases it into generation (with the template
+ * settled in the panel), a newer prompt supersedes the staged outline,
+ * or a stop cancels the wait.
+ */
+type StagedDecision =
+  | { kind: 'generate'; templateId?: string }
+  | { kind: 'superseded' }
+  | { kind: 'cancelled' };
 
 const EDIT_STEPS: StageStep[] = [
   { id: 'ops', intent: 'Compute and apply the deck edit operations' },
@@ -99,13 +109,59 @@ export class SlideEngine {
   #taskId = '';
   #provider: LLMProvider;
   #requests = 0;
+  /** The staging gate of a Standard run waiting on the Outline panel's Buat button (null otherwise). */
+  #staged: { settle: (decision: StagedDecision) => void } | null = null;
+  /** The current run's own completion, so a released staged run can be awaited by its releaser. */
+  #completion: Promise<SlideEngineRunResult> | null = null;
 
   constructor(deps: SlideEngineDeps) {
     this.#deps = deps;
     this.#provider = this.#observingProvider(deps.provider);
   }
 
-  /** Stop the run: in-flight provider calls abort and any pending checkpoint question settles as cancelled. */
+  /** Workspace this engine serves (staged runs are matched to deck endpoints by root). */
+  get workspaceRoot(): string {
+    return this.#deps.workspaceRoot;
+  }
+
+  /** The task this engine is executing (empty until run starts). */
+  get taskId(): string {
+    return this.#taskId;
+  }
+
+  /** True while a Standard run is staged: outline persisted, waiting for the panel's Buat button. */
+  get isStaged(): boolean {
+    return this.#staged !== null;
+  }
+
+  /**
+   * The Outline panel's Buat button, delivered through the runtime:
+   * release the staged outline into fill → validate → export with the
+   * template settled in the panel. Fill re-reads deck.json, so titles,
+   * layouts, and order edited in the panel meanwhile are what gets
+   * generated. Returns the run's own completion — the original task
+   * finishes through its normal path — or null when this engine is
+   * not waiting at the staging gate.
+   */
+  generateStagedDeck(input: { templateId?: string }): Promise<SlideEngineRunResult> | null {
+    if (!this.#staged || !this.#completion) return null;
+    this.#staged.settle({ kind: 'generate', ...(input.templateId ? { templateId: input.templateId } : {}) });
+    return this.#completion;
+  }
+
+  /**
+   * A newer prompt supersedes a staged outline: settle the gate so the
+   * waiting run ends honestly (failed, staged_superseded) instead of
+   * parking forever on a deck the user has moved on from. True when a
+   * staged run was waiting.
+   */
+  abandonStagedDeck(): boolean {
+    if (!this.#staged) return false;
+    this.#staged.settle({ kind: 'superseded' });
+    return true;
+  }
+
+  /** Stop the run: in-flight provider calls abort and a staged wait settles as cancelled. */
   stop(): void {
     this.#abort.abort();
     if (this.#taskId) this.#deps.questions.cancelTasks([this.#taskId]);
@@ -153,7 +209,13 @@ export class SlideEngine {
     if (this.#abort.signal.aborted || this.#deps.store.isCancelRequested(this.#taskId)) throw new EngineAborted();
   }
 
-  async run(spec: TaskSpec, slide?: SlideTaskParams): Promise<SlideEngineRunResult> {
+  run(spec: TaskSpec, slide?: SlideTaskParams): Promise<SlideEngineRunResult> {
+    const completion = this.#runTask(spec, slide);
+    this.#completion = completion;
+    return completion;
+  }
+
+  async #runTask(spec: TaskSpec, slide?: SlideTaskParams): Promise<SlideEngineRunResult> {
     this.#taskId = spec.id;
     const root = this.#deps.workspaceRoot;
     const existing = await readDeck(root).catch(() => null);
@@ -223,6 +285,7 @@ export class SlideEngine {
       ...(slide?.templateId ? { templateId: slide.templateId } : {}),
     };
     let outline: OutlineItem[] = [];
+    let stagedFill = false;
 
     if (route === 'generate') {
       ctx.setStep('outline', 'active');
@@ -237,14 +300,25 @@ export class SlideEngine {
       const generation = slide?.generation ?? 'standard';
       if (generation === 'smart') {
         ctx.setStep('checkpoint', 'skipped');
-      } else if (slide?.templateId) {
-        ctx.setStep('checkpoint', 'done');
-        this.#emit('THOUGHT', { text: `Template sudah dipilih di composer (${slide.templateId}) — checkpoint desain dilewati.` });
       } else {
+        // Outline-first staging (Farid's flow): the skeleton is already
+        // persisted and rendered by the Outline panel; the run PAUSES
+        // here — not completed, not failed — until the panel's Buat
+        // button releases it with the template settled in the panel.
         ctx.setStep('checkpoint', 'active');
-        const chosen = await this.#askDesign(spec.id, outline);
+        this.#emit('THOUGHT', {
+          text: `Outline selesai dan tersimpan sebagai kerangka deck (${outline.length} slide) — sudah tampil di panel Outline. Periksa judul, layout, dan urutannya, atur template di panel Template bila perlu, lalu tekan tombol Buat di panel Outline untuk mulai mengisi slide dan export .pptx.`,
+        });
+        const decision = await this.#awaitGenerate();
+        if (decision.kind === 'superseded') {
+          const summary = 'Outline ini tidak jadi dibuat: prompt baru menggantikannya sebelum tombol Buat ditekan. Yang berlaku sekarang adalah kerangka deck terbaru di panel Outline.';
+          this.#emit('THOUGHT', { text: summary });
+          return { state: { status: 'failed', last_error: 'staged_superseded' }, outcome: 'failed', reason: 'staged_superseded', summary };
+        }
+        if (decision.kind === 'cancelled') throw new EngineAborted();
         ctx.setStep('checkpoint', 'done');
-        if (chosen) brief.templateId = chosen;
+        if (decision.templateId) brief.templateId = decision.templateId;
+        stagedFill = true;
         this.#throwIfAborted();
       }
     } else {
@@ -260,6 +334,9 @@ export class SlideEngine {
     const fill = await fillDeckSlidesStage(this.#provider, root, {
       ...(brief.language ? { language: brief.language } : {}),
       ...(brief.templateId ? { templateId: brief.templateId } : {}),
+      // A Buat-released fill generates the deck as it now stands in the
+      // panel (hand-edited skeletons are adopted, not overwritten).
+      ...(stagedFill ? { stagedGenerate: true } : {}),
       signal,
     });
     ctx.setStep('fill', fill.failures.length === 0 ? 'done' : 'active');
@@ -287,54 +364,25 @@ export class SlideEngine {
   }
 
   /**
-   * The Standard checkpoint: one question card (same QUESTION_* shapes
-   * ask_user emits) offering the bundled templates. The answer picks
-   * the theme the fill stage applies; a timeout proceeds without a
-   * template and says so; a cancel aborts the run.
+   * The staging gate: parks the run until the Outline panel's Buat
+   * button releases it (generateStagedDeck), a newer prompt supersedes
+   * the staged outline (abandonStagedDeck), or the run is stopped —
+   * which settles the wait as cancelled. No timeout: a staged outline
+   * waits for an explicit decision, like a document waits to be built.
    */
-  async #askDesign(taskId: string, outline: OutlineItem[]): Promise<string | undefined> {
-    const info: UserQuestionInfo = {
-      id: randomUUID(),
-      taskId,
-      question: `Pilih arah desain untuk deck "${outline[0]?.title ?? 'presentasi'}" ini:`,
-      options: SLIDE_TEMPLATES.map((template) => ({ label: template.name, description: template.description })),
-      allowFreeText: true,
-      createdAt: new Date().toISOString(),
-    };
-    this.#emit('QUESTION_REQUESTED', { question: info });
-    await this.#deps.bus.drain();
-    const result = await new Promise<{ outcome: 'answered' | 'timeout' | 'cancelled'; answer?: string }>((resolvePromise) => {
+  #awaitGenerate(): Promise<StagedDecision> {
+    return new Promise<StagedDecision>((resolvePromise) => {
       let settled = false;
-      const done = (value: { outcome: 'answered' | 'timeout' | 'cancelled'; answer?: string }): void => {
+      const settle = (decision: StagedDecision): void => {
         if (settled) return;
         settled = true;
-        resolvePromise(value);
+        if (this.#staged?.settle === settle) this.#staged = null;
+        resolvePromise(decision);
       };
-      void this.#deps.questions.ask(info).then(done);
-      if (this.#abort.signal.aborted) done({ outcome: 'cancelled' });
-      else this.#abort.signal.addEventListener('abort', () => done({ outcome: 'cancelled' }), { once: true });
+      this.#staged = { settle };
+      if (this.#abort.signal.aborted) settle({ kind: 'cancelled' });
+      else this.#abort.signal.addEventListener('abort', () => settle({ kind: 'cancelled' }), { once: true });
     });
-    const optionIndex = result.answer !== undefined ? info.options.findIndex((option) => option.label === result.answer) : -1;
-    this.#emit('QUESTION_ANSWERED', {
-      question_id: info.id,
-      question: info.question,
-      outcome: result.outcome,
-      ...(result.answer !== undefined ? { answer: result.answer } : {}),
-      ...(optionIndex >= 0 ? { option_index: optionIndex } : {}),
-      ...(result.outcome === 'timeout' ? { timed_out: true } : {}),
-      ...(result.outcome === 'cancelled' ? { cancelled: true } : {}),
-    });
-    await this.#deps.bus.drain();
-    if (result.outcome === 'cancelled') throw new EngineAborted();
-    if (result.outcome === 'timeout' || result.answer === undefined) {
-      this.#emit('THOUGHT', { text: 'Checkpoint desain tidak dijawab — lanjut tanpa template (tema bawaan deck).' });
-      return undefined;
-    }
-    const answer = result.answer.trim().toLowerCase();
-    const match = SLIDE_TEMPLATES.find((template) => template.name.toLowerCase() === answer || template.id.toLowerCase() === answer);
-    if (match) return match.id;
-    this.#emit('THOUGHT', { text: `Jawaban checkpoint "${result.answer}" tidak cocok dengan template bawaan — lanjut tanpa mengganti tema.` });
-    return undefined;
   }
 
   /* ------------------------------------------------------------ edit */
