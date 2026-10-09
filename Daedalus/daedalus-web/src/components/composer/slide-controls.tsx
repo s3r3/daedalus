@@ -56,7 +56,7 @@ export function SlideComposerControls() {
               'px-2 py-1 text-[11px] capitalize',
               slideOptions.generation === generation ? 'bg-primary text-white' : 'bg-surface text-muted hover:text-foreground',
             )}
-            title={generation === 'standard' ? 'Outline dulu, checkpoint arah desain, baru isi slide' : 'Langsung generate dalam satu jalan'}
+            title={generation === 'standard' ? 'Outline dulu, checkpoint warna & font, baru isi slide' : 'Langsung generate dalam satu jalan'}
           >
             {generation}
           </button>
@@ -109,13 +109,13 @@ export function SlideComposerControls() {
       </label>
       {slideOptions.templateId ? (
         <span className="inline-flex items-center gap-1 rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] text-muted" data-testid="slide-template-chip">
-          template: {slideOptions.templateId}
-          <button type="button" aria-label="hapus pilihan template" onClick={() => setSlideOptions({ templateId: null })} className="hover:text-foreground">
+          warna & font: {slideOptions.templateId}
+          <button type="button" aria-label="hapus pilihan warna & font" onClick={() => setSlideOptions({ templateId: null })} className="hover:text-foreground">
             <X className="size-3" aria-hidden />
           </button>
         </span>
       ) : null}
-      <span className="text-[10px] text-muted">Standard berhenti di outline untuk pilih arah desain · Enter mengirim</span>
+      <span className="text-[10px] text-muted">Standard berhenti di outline untuk pilih warna & font · Enter mengirim</span>
     </>
   )
 }

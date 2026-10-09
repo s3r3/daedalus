@@ -355,7 +355,7 @@ export class SlideEngine {
         // button releases it with the template settled in the panel.
         ctx.setStep('checkpoint', 'active');
         this.#emit('THOUGHT', {
-          text: `Outline selesai dan tersimpan sebagai kerangka deck (${outline.length} slide) — sudah tampil di panel Outline. Periksa judul, layout, dan urutannya, atur template di panel Template bila perlu, lalu tekan tombol Buat di panel Outline untuk mulai mengisi slide dan export .pptx.`,
+          text: `Outline selesai dan tersimpan sebagai kerangka deck (${outline.length} slide) — sudah tampil di panel Outline. Periksa judul, layout, dan urutannya, atur warna & font di panel Warna & Font bila perlu, lalu tekan tombol Buat di panel Outline untuk mulai mengisi slide dan export .pptx.`,
         });
         const decision = await this.#awaitGenerate();
         if (decision.kind === 'superseded') {

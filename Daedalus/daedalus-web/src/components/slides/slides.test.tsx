@@ -817,11 +817,12 @@ describe('SlideStage', () => {
 })
 
 describe('SlideTemplatesPanel', () => {
-  test('lists bundled templates and applies the pick to the open deck through the API', async () => {
+  test('lists bundled templates under the Warna & Font title and applies the pick to the open deck through the API', async () => {
     const user = userEvent.setup()
     useDaedalusStore.getState().setWorkspace({ root: '/ws' })
     render(<SlideTemplatesPanel />)
 
+    expect(screen.getByText('Warna & Font')).toBeTruthy()
     const ocean = await screen.findByTestId('slide-template-ocean')
     expect(screen.getByTestId('slide-template-general')).toBeTruthy()
     await user.click(ocean)

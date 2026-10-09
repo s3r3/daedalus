@@ -170,7 +170,7 @@ export function normalizeBrief(brief: DeckBrief): NormalizedBrief {
   const topic = typeof brief.topic === 'string' ? brief.topic.trim() : '';
   if (!topic) throw new SlidePipelineError('topic must be a non-empty string');
   if (brief.templateId !== undefined && !getSlideTemplate(brief.templateId)) {
-    throw new SlidePipelineError(`unknown templateId "${brief.templateId}" — bundled templates: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
+    throw new SlidePipelineError(`unknown templateId "${brief.templateId}" — warna & font bawaan: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
   }
   const count = typeof brief.slideCount === 'number' && Number.isFinite(brief.slideCount) ? Math.floor(brief.slideCount) : 8;
   return {
@@ -334,7 +334,7 @@ export async function fillDeckSlidesStage(
   }
   if (options.templateId) {
     const template = getSlideTemplate(options.templateId);
-    if (!template) throw new SlidePipelineError(`unknown templateId "${options.templateId}" — bundled templates: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
+    if (!template) throw new SlidePipelineError(`unknown templateId "${options.templateId}" — warna & font bawaan: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
     deck.theme = { ...template.theme, templateId: template.id };
     await writeDeck(root, deck);
   }

@@ -17,8 +17,8 @@ import { cn } from '../../lib/utils'
  * Outline-first flow: a Standard run stages its outline here as a
  * skeleton deck and waits. While any slide is still a skeleton this
  * panel offers the Buat button — generation (fill → validate →
- * export) starts only from that press, with the template settled in
- * the Template panel.
+ * export) starts only from that press, with the color & font settled
+ * in the Warna & Font panel.
  */
 function previewOf(slide: Slide): string {
   const title = slide.content.title
