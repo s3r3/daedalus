@@ -240,7 +240,7 @@ function templateIssues(slide: Slide, root: string | undefined, assetExists: ((n
   if (!root) return issues;
   const template = readPptxTemplateSync(root, ref.templateId);
   if (!template) {
-    err('templateRef.templateId', 'unknown-template', `imported PPT template "${ref.templateId}" not found in this workspace — import it again from the "Template dari PPT" panel`);
+    err('templateRef.templateId', 'unknown-template', `imported PPT template "${ref.templateId}" not found in this workspace — import it again from the "Template impor" panel`);
     return issues;
   }
   if (!template.pages || template.pages.length === 0) {

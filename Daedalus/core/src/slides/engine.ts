@@ -76,7 +76,7 @@ const GENERATION_STEPS: StageStep[] = [
  * or a stop cancels the wait.
  */
 type StagedDecision =
-  | { kind: 'generate'; templateId?: string }
+  | { kind: 'generate'; templateId?: string; designId?: string }
   | { kind: 'superseded' }
   | { kind: 'cancelled' };
 
@@ -147,9 +147,9 @@ export class SlideEngine {
    * finishes through its normal path — or null when this engine is
    * not waiting at the staging gate.
    */
-  generateStagedDeck(input: { templateId?: string }): Promise<SlideEngineRunResult> | null {
+  generateStagedDeck(input: { templateId?: string; designId?: string }): Promise<SlideEngineRunResult> | null {
     if (!this.#staged || !this.#completion) return null;
-    this.#staged.settle({ kind: 'generate', ...(input.templateId ? { templateId: input.templateId } : {}) });
+    this.#staged.settle({ kind: 'generate', ...(input.templateId ? { templateId: input.templateId } : {}), ...(input.designId ? { designId: input.designId } : {}) });
     return this.#completion;
   }
 
@@ -327,6 +327,7 @@ export class SlideEngine {
       ...(slide?.slideCount ? { slideCount: slide.slideCount } : {}),
       ...(slide?.language ? { language: slide.language } : {}),
       ...(slide?.templateId ? { templateId: slide.templateId } : {}),
+      ...(slide?.designId ? { designId: slide.designId } : {}),
       ...(slide?.customTemplateId ? { customTemplateId: slide.customTemplateId } : {}),
     };
     let outline: OutlineItem[] = [];
@@ -367,6 +368,7 @@ export class SlideEngine {
         if (decision.kind === 'cancelled') throw new EngineAborted();
         ctx.setStep('checkpoint', 'done');
         if (decision.templateId) brief.templateId = decision.templateId;
+        if (decision.designId) brief.designId = decision.designId;
         stagedFill = true;
         this.#throwIfAborted();
       }
@@ -384,6 +386,7 @@ export class SlideEngine {
     const fill = await fillDeckSlidesStage(this.#provider, root, {
       ...(brief.language ? { language: brief.language } : {}),
       ...(brief.templateId ? { templateId: brief.templateId } : {}),
+      ...(brief.designId ? { designId: brief.designId } : {}),
       // A Buat-released fill generates the deck as it now stands in the
       // panel (hand-edited skeletons are adopted, not overwritten).
       ...(stagedFill ? { stagedGenerate: true } : {}),

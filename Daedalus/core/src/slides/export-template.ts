@@ -179,7 +179,7 @@ function slideRelsPath(part: string): string {
  * part name when a page is reused), then its text slots are rewritten
  * with the deck's words and its clicked image slots' media bytes swapped.
  */
-export async function exportTemplateDeckToPptx(deck: DeckSpec, root: string, template: PptxTemplate): Promise<TemplateCloneExportResult> {
+export async function exportTemplateDeckToPptx(deck: DeckSpec, root: string, template: PptxTemplate, options: { fileSuffix?: string } = {}): Promise<TemplateCloneExportResult> {
   const source = await readPptxTemplateSource(root, template.id);
   if (!source) {
     throw new TemplateCloneError(`template "${template.id}" tidak menyimpan berkas sumber .pptx-nya (impor ulang dari panel "Template dari PPT" untuk ekspor fidelitas penuh)`);
@@ -349,7 +349,7 @@ export async function exportTemplateDeckToPptx(deck: DeckSpec, root: string, tem
 
   const paths = deckPaths(root);
   await mkdir(paths.dir, { recursive: true });
-  const fileName = `${slugifyTitle(deck.title)}.pptx`;
+  const fileName = `${slugifyTitle(deck.title)}${options.fileSuffix ? `-${options.fileSuffix}` : ''}.pptx`;
   const outPath = join(paths.dir, fileName);
   const buffer = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
   await writeFile(outPath, buffer);
