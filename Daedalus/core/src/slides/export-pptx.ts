@@ -50,6 +50,11 @@ function num(v: unknown): number { return typeof v === 'number' && Number.isFini
 function arr(v: unknown): unknown[] { return Array.isArray(v) ? v : []; }
 function rec(v: unknown): Record<string, unknown> { return typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : {}; }
 function strings(v: unknown): string[] { return arr(v).map((x) => str(x)).filter((x) => x.length > 0); }
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  return parts.slice(0, 2).map((p) => p.charAt(0).toUpperCase()).join('');
+}
 
 function text(slide: PptxSlide, txt: string, o: PptxTextOptions, ctx: Ctx): void {
   slide.addText(txt, { fontFace: 'Arial', color: ctx.fg, ...o });
@@ -347,6 +352,193 @@ function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root:
       if (str(c.cta)) {
         const cr = rectFor(slideSpec, 'cta', { x: 1.3, y: 4.1, w: 10.7, h: 0.8 });
         text(slide, str(c.cta), { x: cr.x, y: cr.y, w: cr.w, h: cr.h, fontSize: 20, align: 'center', color: ctx.accent }, ctx);
+      }
+      break;
+    }
+    case 'numbered-steps': {
+      titleBlock(slide, slideSpec, title, ctx);
+      const steps = arr(c.steps).map(rec);
+      steps.forEach((st, i) => {
+        const r = rectFor(slideSpec, `step-${i}`, { x: 0.7, y: 1.55 + i * 0.88, w: 11.9, h: 0.8 });
+        text(slide, String(i + 1).padStart(2, '0'), { x: r.x, y: r.y, w: 1.05, h: 0.6, fontSize: 26, bold: true, color: ctx.accent }, ctx);
+        text(slide, str(st.title), { x: r.x + 1.25, y: r.y + 0.02, w: r.w - 1.25, h: 0.42, fontSize: 19, bold: true }, ctx);
+        if (str(st.desc)) text(slide, str(st.desc), { x: r.x + 1.25, y: r.y + 0.46, w: r.w - 1.25, h: Math.max(0.24, r.h - 0.46), fontSize: 12, color: ctx.sub }, ctx);
+      });
+      break;
+    }
+    case 'code-focus': {
+      titleBlock(slide, slideSpec, title, ctx);
+      const points = strings(c.points);
+      const cr = rectFor(slideSpec, 'code', { x: 0.6, y: 1.5, w: points.length > 0 ? 7.3 : 12.1, h: 5.2 });
+      slide.addShape('roundRect', { x: cr.x, y: cr.y, w: cr.w, h: cr.h, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
+      if (str(c.language)) text(slide, str(c.language), { x: cr.x + 0.3, y: cr.y + 0.16, w: cr.w - 0.6, h: 0.35, fontSize: 11, align: 'right', color: ctx.sub }, ctx);
+      text(slide, str(c.code), { x: cr.x + 0.35, y: cr.y + 0.58, w: cr.w - 0.7, h: Math.max(0.5, cr.h - 0.8), fontSize: 13, fontFace: 'Consolas', valign: 'top' }, ctx);
+      if (points.length > 0) {
+        const pr = rectFor(slideSpec, 'points', { x: 8.2, y: 1.7, w: 4.5, h: 4.8 });
+        bullets(slide, points, { x: pr.x, y: pr.y, w: pr.w, h: pr.h }, ctx);
+      }
+      break;
+    }
+    case 'chevron-process': {
+      titleBlock(slide, slideSpec, title, ctx);
+      const steps = arr(c.steps).map(rec);
+      const n = Math.max(1, steps.length);
+      const segW = 12.1 / n;
+      steps.forEach((st, i) => {
+        const r = rectFor(slideSpec, `step-${i}`, { x: 0.6 + i * segW, y: 2.35, w: segW, h: 2.6 });
+        slide.addShape(i === 0 ? 'homePlate' : 'chevron', { x: r.x + 0.03, y: r.y, w: Math.max(0.4, r.w - 0.06), h: 1.05, fill: { color: ctx.colors[i % ctx.colors.length] }, line: { type: 'none' } });
+        text(slide, str(st.title), { x: r.x + 0.14, y: r.y + 0.32, w: r.w - 0.28, h: 0.5, fontSize: 13, bold: true, align: 'center', color: '201F26' }, ctx);
+        if (str(st.desc)) text(slide, str(st.desc), { x: r.x + 0.12, y: r.y + 1.32, w: r.w - 0.24, h: Math.max(0.3, r.h - 1.32), fontSize: 11, align: 'center', color: ctx.sub }, ctx);
+      });
+      break;
+    }
+    case 'diagram-pyramid': {
+      titleBlock(slide, slideSpec, title, ctx);
+      const tiers = arr(c.tiers).map(rec);
+      const n = Math.max(1, tiers.length);
+      const tierH = 5.05 / n;
+      tiers.forEach((tier, i) => {
+        const dw = 12.1 * (0.4 + (i * 0.56) / Math.max(1, n - 1));
+        const r = rectFor(slideSpec, `tier-${i}`, { x: (W - dw) / 2, y: 1.6 + i * tierH, w: dw, h: tierH - 0.14 });
+        slide.addShape('trapezoid', { x: r.x, y: r.y, w: r.w, h: r.h, fill: { color: ctx.colors[i % ctx.colors.length] }, line: { type: 'none' } });
+        text(slide, str(tier.label), { x: r.x + 0.3, y: r.y + r.h * 0.16, w: r.w - 0.6, h: 0.42, fontSize: 16, bold: true, align: 'center', color: '201F26' }, ctx);
+        if (str(tier.desc)) text(slide, str(tier.desc), { x: r.x + 0.3, y: r.y + r.h * 0.16 + 0.46, w: r.w - 0.6, h: Math.max(0.24, r.h * 0.42), fontSize: 11, align: 'center', color: '201F26' }, ctx);
+      });
+      break;
+    }
+    case 'roadmap': {
+      titleBlock(slide, slideSpec, title, ctx);
+      const phases = arr(c.phases).map(rec);
+      const n = Math.max(1, phases.length);
+      const bw = (12.1 - 0.3 * (n - 1)) / n;
+      phases.forEach((phase, i) => {
+        const x = 0.6 + i * (bw + 0.3);
+        panel(slide, str(phase.label), strings(phase.items), rectFor(slideSpec, `phase-${i}`, { x, y: 1.55, w: bw, h: 5.1 }), ctx);
+      });
+      break;
+    }
+    case 'versus': {
+      titleBlock(slide, slideSpec, title, ctx);
+      const left = rec(c.left); const right = rec(c.right);
+      panel(slide, str(left.title), strings(left.points), rectFor(slideSpec, 'left', { x: 0.6, y: 1.55, w: 5.85, h: 4.35 }), ctx);
+      panel(slide, str(right.title), strings(right.points), rectFor(slideSpec, 'right', { x: 6.85, y: 1.55, w: 5.85, h: 4.35 }), ctx);
+      const br = rectFor(slideSpec, 'badge', { x: W / 2 - 0.45, y: 3.28, w: 0.9, h: 0.9 });
+      slide.addShape('ellipse', { x: br.x, y: br.y, w: br.w, h: br.h, fill: { color: ctx.accent }, line: { color: ctx.bg, width: 3 } });
+      text(slide, 'VS', { x: br.x, y: br.y + br.h / 2 - 0.21, w: br.w, h: 0.42, fontSize: 16, bold: true, align: 'center', color: 'FFFFFF' }, ctx);
+      if (str(c.verdict)) {
+        const r = rectFor(slideSpec, 'verdict', { x: 0.6, y: 6.1, w: 12.1, h: 0.62 });
+        slide.addShape('roundRect', { x: r.x, y: r.y, w: r.w, h: r.h, fill: { color: ctx.accent }, line: { type: 'none' } });
+        text(slide, str(c.verdict), { x: r.x + 0.25, y: r.y + 0.09, w: r.w - 0.5, h: Math.max(0.2, r.h - 0.16), fontSize: 14, bold: true, align: 'center', color: '201F26' }, ctx);
+      }
+      break;
+    }
+    case 'matrix-quadrant': {
+      titleBlock(slide, slideSpec, title, ctx);
+      const quadrants = arr(c.quadrants).map(rec).slice(0, 4);
+      const pos: Array<[number, number]> = [[1.35, 1.55], [7.2, 1.55], [1.35, 4.12], [7.2, 4.12]];
+      const anyPlaced = quadrants.some((_, i) => hasPos(slideSpec, `quadrant-${i}`));
+      quadrants.forEach((q, i) => {
+        const [x, y] = pos[i]!;
+        panel(slide, str(q.label), strings(q.items), rectFor(slideSpec, `quadrant-${i}`, { x, y, w: 5.55, h: 2.28 }), ctx);
+      });
+      if (!anyPlaced) {
+        slide.addShape('line', { x: 7.05, y: 1.55, w: 0, h: 4.85, line: { color: ctx.accent, width: 1.5 } });
+        slide.addShape('line', { x: 1.35, y: 3.98, w: 11.4, h: 0, line: { color: ctx.accent, width: 1.5 } });
+      }
+      text(slide, str(c.xAxis), { x: 1.35, y: 6.58, w: 11.4, h: 0.4, fontSize: 12, align: 'center', color: ctx.sub }, ctx);
+      text(slide, str(c.yAxis), { x: -0.5, y: 3.78, w: 3.2, h: 0.4, fontSize: 12, align: 'center', color: ctx.sub, rotate: 270 }, ctx);
+      break;
+    }
+    case 'big-stat': {
+      if (title || hasPos(slideSpec, 'title')) titleBlock(slide, slideSpec, title, ctx);
+      const vr = rectFor(slideSpec, 'value', { x: 0.7, y: 2.0, w: 7.2, h: 1.9 });
+      text(slide, str(c.value), { x: vr.x, y: vr.y, w: vr.w, h: vr.h, fontSize: 88, bold: true, color: ctx.accent, valign: 'middle' }, ctx);
+      const lr = rectFor(slideSpec, 'label', { x: 0.7, y: 4.05, w: 7.2, h: 1.0 });
+      text(slide, str(c.label), { x: lr.x, y: lr.y, w: lr.w, h: lr.h, fontSize: 22, color: ctx.sub }, ctx);
+      const points = strings(c.points);
+      if (points.length > 0) {
+        const pr = rectFor(slideSpec, 'points', { x: 8.3, y: 1.9, w: 4.4, h: 3.7 });
+        slide.addShape('roundRect', { x: pr.x, y: pr.y, w: pr.w, h: pr.h, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
+        bullets(slide, points, { x: pr.x + 0.3, y: pr.y + 0.3, w: pr.w - 0.6, h: Math.max(0.4, pr.h - 0.6) }, ctx);
+      }
+      break;
+    }
+    case 'testimonial': {
+      const tr = rectFor(slideSpec, 'text', { x: 1.1, y: 1.5, w: 11.1, h: 2.7 });
+      text(slide, `“${str(c.text)}”`, { x: tr.x, y: tr.y, w: tr.w, h: tr.h, fontSize: 30, italic: true, align: 'center', valign: 'middle' }, ctx);
+      const pr = rectFor(slideSpec, 'person', { x: 4.55, y: 4.45, w: 4.25, h: 1.0 });
+      slide.addShape('ellipse', { x: pr.x, y: pr.y + 0.08, w: 0.84, h: 0.84, fill: { color: ctx.accent }, line: { type: 'none' } });
+      text(slide, initialsOf(str(c.name)), { x: pr.x, y: pr.y + 0.31, w: 0.84, h: 0.4, fontSize: 14, bold: true, align: 'center', color: 'FFFFFF' }, ctx);
+      text(slide, str(c.name), { x: pr.x + 1.05, y: pr.y + 0.14, w: pr.w - 1.05, h: 0.42, fontSize: 17, bold: true }, ctx);
+      if (str(c.role)) text(slide, str(c.role), { x: pr.x + 1.05, y: pr.y + 0.58, w: pr.w - 1.05, h: 0.35, fontSize: 12, color: ctx.sub }, ctx);
+      const metrics = arr(c.metrics).map(rec);
+      if (metrics.length > 0) {
+        const mr = rectFor(slideSpec, 'metrics', { x: (W - (metrics.length * 2.7 + (metrics.length - 1) * 0.25)) / 2, y: 5.85, w: metrics.length * 2.7 + (metrics.length - 1) * 0.25, h: 0.6 });
+        const slot = mr.w / metrics.length;
+        metrics.forEach((m, i) => {
+          const x = mr.x + i * slot + 0.07;
+          slide.addShape('roundRect', { x, y: mr.y, w: slot - 0.14, h: mr.h, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
+          text(slide, `${str(m.value)}  ${str(m.label)}`, { x: x + 0.1, y: mr.y + 0.16, w: slot - 0.34, h: 0.32, fontSize: 12, align: 'center' }, ctx);
+        });
+      }
+      break;
+    }
+    case 'profile-cards': {
+      titleBlock(slide, slideSpec, title, ctx);
+      const people = arr(c.people).map(rec);
+      const n = Math.max(1, people.length);
+      const bw = (12.1 - 0.3 * (n - 1)) / n;
+      people.forEach((person, i) => {
+        const x = 0.6 + i * (bw + 0.3);
+        const r = rectFor(slideSpec, `person-${i}`, { x, y: 1.6, w: bw, h: 5.0 });
+        slide.addShape('roundRect', { x: r.x, y: r.y, w: r.w, h: r.h, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
+        slide.addShape('ellipse', { x: r.x + 0.3, y: r.y + 0.3, w: 0.85, h: 0.85, fill: { color: ctx.colors[i % ctx.colors.length] }, line: { type: 'none' } });
+        text(slide, initialsOf(str(person.name)), { x: r.x + 0.3, y: r.y + 0.53, w: 0.85, h: 0.4, fontSize: 14, bold: true, align: 'center', color: 'FFFFFF' }, ctx);
+        text(slide, str(person.name), { x: r.x + 0.3, y: r.y + 1.42, w: r.w - 0.6, h: 0.55, fontSize: 18, bold: true }, ctx);
+        text(slide, str(person.role), { x: r.x + 0.3, y: r.y + 1.98, w: r.w - 0.6, h: 0.4, fontSize: 12, bold: true, color: ctx.accent }, ctx);
+        if (str(person.note)) text(slide, str(person.note), { x: r.x + 0.3, y: r.y + 2.45, w: r.w - 0.6, h: Math.max(0.35, r.h - 2.65), fontSize: 12, color: ctx.sub }, ctx);
+      });
+      break;
+    }
+    case 'glossary': {
+      titleBlock(slide, slideSpec, title, ctx);
+      const terms = arr(c.terms).map(rec);
+      const cols = terms.length <= 4 ? 2 : 3;
+      const rows = Math.max(1, Math.ceil(terms.length / cols));
+      const bw = (12.1 - 0.3 * (cols - 1)) / cols;
+      const bh = (5.15 - 0.25 * (rows - 1)) / rows;
+      terms.forEach((entry, i) => {
+        const col = i % cols;
+        const row = Math.floor(i / cols);
+        const r = rectFor(slideSpec, `term-${i}`, { x: 0.6 + col * (bw + 0.3), y: 1.55 + row * (bh + 0.25), w: bw, h: bh });
+        slide.addShape('roundRect', { x: r.x, y: r.y, w: r.w, h: r.h, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
+        text(slide, str(entry.term), { x: r.x + 0.28, y: r.y + 0.2, w: r.w - 0.56, h: 0.42, fontSize: 16, bold: true, color: ctx.accent }, ctx);
+        text(slide, str(entry.definition), { x: r.x + 0.28, y: r.y + 0.68, w: r.w - 0.56, h: Math.max(0.3, r.h - 0.85), fontSize: 12, color: ctx.sub }, ctx);
+      });
+      break;
+    }
+    case 'mosaic': {
+      if (title || hasPos(slideSpec, 'title')) titleBlock(slide, slideSpec, title, ctx);
+      const tiles = arr(c.tiles).map(rec).slice(0, 4);
+      const defaults: Rect[] = [
+        { x: 0.6, y: 1.55, w: 5.9, h: 5.05 },
+        { x: 6.7, y: 1.55, w: 6.0, h: 2.4 },
+        { x: 6.7, y: 4.2, w: 2.9, h: 2.4 },
+        { x: 9.8, y: 4.2, w: 2.9, h: 2.4 },
+      ];
+      tiles.forEach((tile, i) => {
+        const r = rectFor(slideSpec, `tile-${i}`, defaults[i]!);
+        const imageName = str(tile.image);
+        const imgPath = imageName ? join(deckPaths(root).assetsDir, basename(imageName)) : '';
+        if (imgPath && existsSync(imgPath)) {
+          slide.addImage({ path: imgPath, x: r.x, y: r.y, w: r.w, h: r.h, altText: str(tile.alt) || imageName });
+        } else {
+          boxText(slide, imageName ? `Image: ${imageName}` : 'Image', { x: r.x, y: r.y, w: r.w, h: r.h, fontSize: 13, color: ctx.sub }, ctx);
+        }
+      });
+      if (str(c.caption)) {
+        const r = rectFor(slideSpec, 'caption', { x: 0.6, y: 6.7, w: 12.1, h: 0.45 });
+        text(slide, str(c.caption), { x: r.x, y: r.y, w: r.w, h: r.h, fontSize: 13, align: 'center', color: ctx.sub }, ctx);
       }
       break;
     }
