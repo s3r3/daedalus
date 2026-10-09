@@ -1,19 +1,33 @@
 import JSZip from 'jszip';
 import { inflateSync } from 'node:zlib';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { deckPaths, slugifyTitle, type DeckTheme } from './deck.ts';
+import {
+  extractPptxPages,
+  pptxTemplateAssetFiles,
+  prefixPageAssets,
+  type PptxTemplatePage,
+} from './pptx-pages.ts';
 
 /**
  * Templates imported from a downloaded .pptx (Farid's "Template dari PPT"
- * panel): the file's design skin — theme color scheme, font scheme, slide
- * size, and the slide-master background — is extracted once and stored as
- * theme-token data under `<workspace>/.daedalus/slide-templates/`, so it
- * can be applied to any deck exactly like the bundled templates in
- * slides/templates.ts (which stay the default). The source file's slide
- * geometry is NOT cloned: layouts remain Daedalus' own 50; only the
- * palette, fonts, and master background transfer.
+ * panel), two layers:
+ *
+ * v1 (skin): the file's theme color scheme, font scheme, slide size, and
+ * slide-master background are extracted once and stored as theme-token
+ * data under `<workspace>/.daedalus/slide-templates/`, so they can be
+ * applied to any deck exactly like the bundled templates in
+ * slides/templates.ts (which stay the default).
+ *
+ * v2 (pages): the file's actual slide DESIGNS are parsed by
+ * pptx-pages.ts into pages[] (background + text/image slots + page kind).
+ * When a deck is generated with such a template, the outline is poured
+ * into those pages and only the words change — font, color, and layout
+ * all come from the template (the Docmee model). Decks whose template
+ * has no pages[] (imported before v2, or unparseable slides) keep the
+ * v1 skin behavior.
  *
  * Extraction is deliberately per-field honest: a missing color or font
  * falls back to the bundled General tokens for that field, never a crash.
@@ -50,6 +64,12 @@ export type PptxTemplate = {
   slideSize?: PptxSlideSize;
   /** Stored background image filename beside the JSON, when the master background is an image. */
   backgroundImageFile?: string;
+  /**
+   * v2: the source file's parsed slide designs, in presentation order.
+   * Absent on templates imported before v2 (skin-only) or when no slide
+   * could be parsed — generation then falls back to the skin path.
+   */
+  pages?: PptxTemplatePage[];
 };
 
 export const PPT_TEMPLATES_DIR = '.daedalus/slide-templates';
@@ -412,7 +432,7 @@ export async function extractPptxDesign(bytes: Uint8Array): Promise<ExtractedPpt
 }
 
 // ---------------------------------------------------------------------------
-// Store (<workspace>/.daedalus/slide-templates/<id>.json + <id>.background.<ext>)
+// Store (<workspace>/.daedalus/slide-templates/<id>.json + <id>.* assets)
 // ---------------------------------------------------------------------------
 
 function isPptxTemplate(value: unknown): value is PptxTemplate {
@@ -424,7 +444,8 @@ function isPptxTemplate(value: unknown): value is PptxTemplate {
     typeof t.sourceFile === 'string' &&
     typeof t.createdAt === 'string' &&
     typeof t.theme === 'object' && t.theme !== null && !Array.isArray(t.theme) &&
-    (t.backgroundImageFile === undefined || typeof t.backgroundImageFile === 'string')
+    (t.backgroundImageFile === undefined || typeof t.backgroundImageFile === 'string') &&
+    (t.pages === undefined || Array.isArray(t.pages))
   );
 }
 
@@ -450,6 +471,17 @@ export async function savePptxTemplate(root: string, input: { fileName: string; 
     backgroundImageFile = `${id}.background${extracted.backgroundImage.extension}`;
     await writeFile(join(dir, backgroundImageFile), extracted.backgroundImage.bytes);
   }
+  // v2: parse the source's slide designs so generation can pour words
+  // into them. Page assets (background images, slot pictures) are stored
+  // beside the JSON with the template id as filename prefix; a source
+  // whose slides parse to nothing stays a v1 skin-only template.
+  const pagesExtract = await extractPptxPages(input.bytes).catch((): Awaited<ReturnType<typeof extractPptxPages>> => ({ pages: [], assets: [] }));
+  const pages = pagesExtract.pages.length > 0 ? prefixPageAssets(pagesExtract.pages, `${id}.`) : undefined;
+  if (pages) {
+    for (const asset of pagesExtract.assets) {
+      await writeFile(join(dir, `${id}.${asset.file}`), asset.bytes);
+    }
+  }
   const template: PptxTemplate = {
     id,
     name: stem,
@@ -458,6 +490,7 @@ export async function savePptxTemplate(root: string, input: { fileName: string; 
     theme: extracted.theme,
     ...(extracted.slideSize ? { slideSize: extracted.slideSize } : {}),
     ...(backgroundImageFile ? { backgroundImageFile } : {}),
+    ...(pages ? { pages } : {}),
   };
   await writeFile(join(dir, `${id}.json`), `${JSON.stringify(template, null, 2)}\n`, 'utf8');
   return template;
@@ -510,12 +543,72 @@ export async function deletePptxTemplate(root: string, id: string): Promise<bool
   const dir = pptxTemplatesDir(root);
   const jsonPath = join(dir, `${id}.json`);
   if (!existsSync(jsonPath)) return false;
-  const template = await getPptxTemplate(root, id);
-  await rm(jsonPath, { force: true });
-  if (template?.backgroundImageFile) {
-    await rm(join(dir, template.backgroundImageFile), { force: true });
+  // Removes the JSON and every stored asset of this template (`<id>.*`:
+  // the v1 master background plus any v2 page backgrounds/pictures).
+  let entries: string[] = [];
+  try {
+    entries = await readdir(dir);
+  } catch {
+    entries = [];
+  }
+  for (const entry of entries) {
+    if (entry === `${id}.json` || entry.startsWith(`${id}.`)) {
+      await rm(join(dir, entry), { force: true });
+    }
   }
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Synchronous + asset readers (validateDeck and the PPTX exporter are
+// synchronous core paths; the asset endpoint serves page images to the
+// canvas). The sync reader memoizes per (root,id) keyed on file mtime so
+// repeated validation of a 40-slide deck stays cheap.
+// ---------------------------------------------------------------------------
+
+const syncTemplateCache = new Map<string, { mtimeMs: number; template: PptxTemplate | undefined }>();
+
+export function readPptxTemplateSync(root: string, id: string): PptxTemplate | undefined {
+  if (!ID_PATTERN.test(id)) return undefined;
+  const path = join(pptxTemplatesDir(root), `${id}.json`);
+  let mtimeMs: number;
+  try {
+    mtimeMs = statSync(path).mtimeMs;
+  } catch {
+    syncTemplateCache.delete(`${root} ${id}`);
+    return undefined;
+  }
+  const key = `${root} ${id}`;
+  const cached = syncTemplateCache.get(key);
+  if (cached && cached.mtimeMs === mtimeMs) return cached.template;
+  let template: PptxTemplate | undefined;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    template = isPptxTemplate(parsed) ? parsed : undefined;
+  } catch {
+    template = undefined;
+  }
+  syncTemplateCache.set(key, { mtimeMs, template });
+  return template;
+}
+
+/**
+ * Reads one stored template asset (master background or a v2 page asset)
+ * by bare file name. Only names the template actually references are
+ * served — this guards the HTTP endpoint against path traversal and
+ * against reading arbitrary files out of the template store.
+ */
+export async function readPptxTemplateAsset(root: string, id: string, file: string): Promise<{ bytes: Buffer; fileName: string } | undefined> {
+  if (!ID_PATTERN.test(id) || !file || file !== basename(file)) return undefined;
+  const template = await getPptxTemplate(root, id);
+  if (!template) return undefined;
+  if (!pptxTemplateAssetFiles(template).includes(file)) return undefined;
+  try {
+    const bytes = await readFile(join(pptxTemplatesDir(root), file));
+    return { bytes, fileName: file };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
