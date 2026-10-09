@@ -10,6 +10,13 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+/** Mirrors core MAX_PPTX_TEMPLATE_BYTES — the panel refuses oversize files before spending an upload on them. */
+const MAX_PPT_TEMPLATE_BYTES = 100 * 1024 * 1024
+
+function formatMb(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1).replace('.', ',')
+}
+
 const PAGE_KIND_LABEL: Record<PptTemplatePageInfo['kind'], string> = {
   cover: 'sampul',
   toc: 'daftar isi',
@@ -76,6 +83,12 @@ export function SlidePptTemplatesPanel() {
 
   const onUpload = async (file: File | undefined): Promise<void> => {
     if (!file || !root) return
+    if (file.size > MAX_PPT_TEMPLATE_BYTES) {
+      setNote(null)
+      setError(`Berkas ${formatMb(file.size)} MB — melebihi batas ${Math.round(MAX_PPT_TEMPLATE_BYTES / (1024 * 1024))} MB`)
+      if (fileRef.current) fileRef.current.value = ''
+      return
+    }
     setUploading(true)
     setError(null)
     setNote(null)

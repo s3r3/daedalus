@@ -94,6 +94,20 @@ describe('SlidePptTemplatesPanel', () => {
     expect(await screen.findByTestId('slide-ppt-template-note')).toBeTruthy()
   })
 
+  test('an oversize file is refused in the panel without uploading', async () => {
+    const user = userEvent.setup()
+    render(<SlidePptTemplatesPanel />)
+    await screen.findByTestId('slide-ppt-template-emerald-gold')
+
+    const input = screen.getByTestId('slide-ppt-template-file') as HTMLInputElement
+    const big = new File(['pptx-bytes'], 'Raksasa.pptx', { type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation' })
+    Object.defineProperty(big, 'size', { value: 150 * 1024 * 1024 })
+    await user.upload(input, big)
+
+    expect(pptTemplateUploadMock).not.toHaveBeenCalled()
+    expect((await screen.findByText(/melebihi batas 100 MB/)).textContent).toContain('150,0')
+  })
+
   test('delete removes the template through the API and refreshes', async () => {
     const user = userEvent.setup()
     render(<SlidePptTemplatesPanel />)
