@@ -76,10 +76,39 @@ function boxText(slide: PptxSlide, txt: string, o: PptxTextOptions, ctx: Ctx, fi
   });
 }
 
-function panel(slide: PptxSlide, heading: string, points: string[], x: number, ctx: Ctx): void {
-  slide.addShape('roundRect', { x, y: 1.55, w: 5.85, h: 4.9, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
-  text(slide, heading, { x: x + 0.35, y: 1.75, w: 5.15, h: 0.5, fontSize: 20, bold: true, color: ctx.accent }, ctx);
-  bullets(slide, points, { x: x + 0.35, y: 2.35, w: 5.15, h: 3.8 }, ctx);
+function panel(slide: PptxSlide, heading: string, points: string[], r: Rect, ctx: Ctx): void {
+  slide.addShape('roundRect', { x: r.x, y: r.y, w: r.w, h: r.h, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
+  text(slide, heading, { x: r.x + 0.35, y: r.y + 0.2, w: r.w - 0.7, h: 0.5, fontSize: 20, bold: true, color: ctx.accent }, ctx);
+  bullets(slide, points, { x: r.x + 0.35, y: r.y + 0.8, w: r.w - 0.7, h: Math.max(0.4, r.h - 1.05) }, ctx);
+}
+
+type Rect = { x: number; y: number; w: number; h: number };
+
+/**
+ * The rect a named block is drawn into (inches): the slide's drag
+ * placement for that block (slide fractions × 13.333x7.5) when one is
+ * stored, else the layout's default rect. The Web canvas resolves the
+ * same fractions, so a dragged card lands in the same place in the
+ * exported file as on screen.
+ */
+function rectFor(slideSpec: Slide, key: string, d: Rect): Rect {
+  const p = slideSpec.positions?.[key];
+  if (!p) return d;
+  return { x: p.x * W, y: p.y * H, w: p.w !== undefined ? p.w * W : d.w, h: p.h !== undefined ? p.h * H : d.h };
+}
+
+function hasPos(slideSpec: Slide, key: string): boolean {
+  return slideSpec.positions?.[key] !== undefined;
+}
+
+/** The slide title: a dragged title becomes a placed text box; an unplaced one keeps the title bar. */
+function titleBlock(slide: PptxSlide, slideSpec: Slide, title: string, ctx: Ctx): void {
+  if (hasPos(slideSpec, 'title')) {
+    const r = rectFor(slideSpec, 'title', { x: 0.8, y: 0.35, w: 11.9, h: 0.75 });
+    text(slide, title, { x: r.x, y: r.y, w: r.w, h: r.h, fontSize: 28, bold: true, valign: 'middle' }, ctx);
+    return;
+  }
+  addTitleBar(slide, title, ctx);
 }
 
 function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root: string, ctx: Ctx): void {
@@ -91,68 +120,92 @@ function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root:
 
   switch (slideSpec.layout) {
     case 'title': {
-      text(slide, title, { x: 0.8, y: 2.2, w: 11.7, h: 1.6, fontSize: 44, bold: true, align: 'center', valign: 'middle' }, ctx);
-      if (str(c.subtitle)) text(slide, str(c.subtitle), { x: 1.3, y: 3.95, w: 10.7, h: 0.9, fontSize: 22, align: 'center', color: ctx.sub }, ctx);
-      slide.addShape('rect', { x: 5.9, y: 5.05, w: 1.5, h: 0.08, fill: { color: ctx.accent }, line: { type: 'none' } });
+      const tr = rectFor(slideSpec, 'title', { x: 0.8, y: 2.2, w: 11.7, h: 1.6 });
+      text(slide, title, { x: tr.x, y: tr.y, w: tr.w, h: tr.h, fontSize: 44, bold: true, align: 'center', valign: 'middle' }, ctx);
+      if (str(c.subtitle)) {
+        const sr = rectFor(slideSpec, 'subtitle', { x: 1.3, y: 3.95, w: 10.7, h: 0.9 });
+        text(slide, str(c.subtitle), { x: sr.x, y: sr.y, w: sr.w, h: sr.h, fontSize: 22, align: 'center', color: ctx.sub }, ctx);
+      }
+      if (!hasPos(slideSpec, 'title')) slide.addShape('rect', { x: 5.9, y: 5.05, w: 1.5, h: 0.08, fill: { color: ctx.accent }, line: { type: 'none' } });
       break;
     }
     case 'section': {
       const numLabel = c.number !== undefined && c.number !== '' ? str(c.number) : '';
-      if (numLabel) text(slide, numLabel, { x: 0.7, y: 1.6, w: 2.2, h: 1.6, fontSize: 72, bold: true, color: ctx.accent }, ctx);
-      text(slide, title, { x: numLabel ? 3.0 : 0.8, y: 2.55, w: 9.5, h: 1.4, fontSize: 40, bold: true, valign: 'middle' }, ctx);
+      if (numLabel) {
+        const nr = rectFor(slideSpec, 'number', { x: 0.7, y: 1.6, w: 2.2, h: 1.6 });
+        text(slide, numLabel, { x: nr.x, y: nr.y, w: nr.w, h: nr.h, fontSize: 72, bold: true, color: ctx.accent }, ctx);
+      }
+      const titleX = numLabel && !hasPos(slideSpec, 'number') ? 3.0 : 0.8;
+      const tr = rectFor(slideSpec, 'title', { x: titleX, y: 2.55, w: 9.5, h: 1.4 });
+      text(slide, title, { x: tr.x, y: tr.y, w: tr.w, h: tr.h, fontSize: 40, bold: true, valign: 'middle' }, ctx);
       break;
     }
     case 'bullets': {
-      addTitleBar(slide, title, ctx);
-      bullets(slide, strings(c.points), { x: 0.85, y: 1.45, w: 11.6, h: 5.4 }, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
+      const r = rectFor(slideSpec, 'points', { x: 0.85, y: 1.45, w: 11.6, h: 5.4 });
+      bullets(slide, strings(c.points), { x: r.x, y: r.y, w: r.w, h: r.h }, ctx);
       break;
     }
     case 'two-column': {
-      addTitleBar(slide, title, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
       const left = rec(c.left); const right = rec(c.right);
-      panel(slide, str(left.heading), strings(left.points), 0.6, ctx);
-      panel(slide, str(right.heading), strings(right.points), 6.85, ctx);
+      panel(slide, str(left.heading), strings(left.points), rectFor(slideSpec, 'left', { x: 0.6, y: 1.55, w: 5.85, h: 4.9 }), ctx);
+      panel(slide, str(right.heading), strings(right.points), rectFor(slideSpec, 'right', { x: 6.85, y: 1.55, w: 5.85, h: 4.9 }), ctx);
       break;
     }
     case 'image-side': {
-      addTitleBar(slide, title, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
       const side = c.side === 'left' ? 'left' : 'right';
       const imgX = side === 'left' ? 0.6 : 7.1;
       const txtX = side === 'left' ? 7.1 : 0.6;
+      const ir = rectFor(slideSpec, 'image', { x: imgX, y: 1.55, w: 5.6, h: 4.9 });
       const imageName = str(c.image);
       const imgPath = imageName ? join(deckPaths(root).assetsDir, basename(imageName)) : '';
       if (imgPath && existsSync(imgPath)) {
-        slide.addImage({ path: imgPath, x: imgX, y: 1.55, w: 5.6, h: 4.9, altText: str(c.alt) || imageName });
+        slide.addImage({ path: imgPath, x: ir.x, y: ir.y, w: ir.w, h: ir.h, altText: str(c.alt) || imageName });
       } else {
-        boxText(slide, imageName ? `Image: ${imageName}` : 'Image', { x: imgX, y: 1.55, w: 5.6, h: 4.9, fontSize: 16, color: ctx.sub }, ctx);
+        boxText(slide, imageName ? `Image: ${imageName}` : 'Image', { x: ir.x, y: ir.y, w: ir.w, h: ir.h, fontSize: 16, color: ctx.sub }, ctx);
       }
-      bullets(slide, strings(c.points), { x: txtX, y: 1.7, w: 5.6, h: 4.7 }, ctx);
+      const pr = rectFor(slideSpec, 'points', { x: txtX, y: 1.7, w: 5.6, h: 4.7 });
+      bullets(slide, strings(c.points), { x: pr.x, y: pr.y, w: pr.w, h: pr.h }, ctx);
       break;
     }
     case 'diagram-flow': {
-      addTitleBar(slide, title, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
       const steps = arr(c.steps).map(rec);
       const n = Math.max(1, steps.length);
       const gap = 0.28; const totalW = 12.1; const bw = (totalW - gap * (n - 1)) / n;
       steps.forEach((st, i) => {
         const x = 0.6 + i * (bw + gap);
+        const key = `step-${i}`;
+        if (hasPos(slideSpec, key)) {
+          const r = rectFor(slideSpec, key, { x, y: 2.35, w: bw, h: 2.4 });
+          boxText(slide, str(st.title), { x: r.x, y: r.y, w: r.w, h: r.h * 0.48, fontSize: 15, bold: true }, ctx);
+          if (str(st.desc)) text(slide, str(st.desc), { x: r.x, y: r.y + r.h * 0.52, w: r.w, h: r.h * 0.44, fontSize: 11, align: 'center', color: ctx.sub }, ctx);
+          return;
+        }
         boxText(slide, str(st.title), { x, y: 2.35, w: bw, h: 1.15, fontSize: 15, bold: true }, ctx);
         if (str(st.desc)) text(slide, str(st.desc), { x, y: 3.65, w: bw, h: 1.1, fontSize: 11, align: 'center', color: ctx.sub }, ctx);
-        if (i < steps.length - 1) slide.addShape('chevron', { x: x + bw + 0.02, y: 2.78, w: 0.24, h: 0.3, fill: { color: ctx.accent }, line: { type: 'none' } });
+        if (i < steps.length - 1 && !hasPos(slideSpec, `step-${i + 1}`)) slide.addShape('chevron', { x: x + bw + 0.02, y: 2.78, w: 0.24, h: 0.3, fill: { color: ctx.accent }, line: { type: 'none' } });
       });
       break;
     }
     case 'diagram-cycle': {
-      addTitleBar(slide, title, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
       const nodes = strings(c.nodes).slice(0, 4);
       const pos: Array<[number, number]> = [[5.15, 1.55], [8.6, 3.35], [5.15, 5.15], [1.7, 3.35]];
-      nodes.forEach((node, i) => { const [x, y] = pos[i]!; boxText(slide, node, { x, y, w: 3.0, h: 1.0, fontSize: 16, bold: true }, ctx); });
+      nodes.forEach((node, i) => {
+        const [x, y] = pos[i]!;
+        const r = rectFor(slideSpec, `node-${i}`, { x, y, w: 3.0, h: 1.0 });
+        boxText(slide, node, { x: r.x, y: r.y, w: r.w, h: r.h, fontSize: 16, bold: true }, ctx);
+      });
       slide.addShape('ellipse', { x: 5.85, y: 3.35, w: 1.6, h: 1.0, fill: { color: ctx.accent }, line: { type: 'none' } });
       break;
     }
     case 'diagram-hierarchy': {
-      addTitleBar(slide, title, ctx);
-      boxText(slide, str(c.root), { x: 4.9, y: 1.4, w: 3.5, h: 0.95, fontSize: 18, bold: true }, ctx, ctx.accent);
+      titleBlock(slide, slideSpec, title, ctx);
+      const rr = rectFor(slideSpec, 'root', { x: 4.9, y: 1.4, w: 3.5, h: 0.95 });
+      boxText(slide, str(c.root), { x: rr.x, y: rr.y, w: rr.w, h: rr.h, fontSize: 18, bold: true }, ctx, ctx.accent);
       const groups = arr(c.groups).map(rec);
       const n = Math.max(1, groups.length);
       const bw = Math.min(3.6, (12.1 - 0.3 * (n - 1)) / n);
@@ -160,118 +213,145 @@ function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root:
       const startX = (W - total) / 2;
       groups.forEach((g, i) => {
         const x = startX + i * (bw + 0.3);
-        const cx = x + bw / 2;
-        slide.addShape('line', { x: cx, y: 2.35, w: 0, h: 0.85, line: { color: ctx.accent, width: 2 } });
-        slide.addShape('roundRect', { x, y: 3.2, w: bw, h: 3.4, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
-        text(slide, str(g.label), { x: x + 0.25, y: 3.4, w: bw - 0.5, h: 0.5, fontSize: 16, bold: true, align: 'center', color: ctx.accent }, ctx);
-        bullets(slide, strings(g.items), { x: x + 0.25, y: 3.95, w: bw - 0.5, h: 2.4 }, ctx);
+        const key = `group-${i}`;
+        const r = rectFor(slideSpec, key, { x, y: 3.2, w: bw, h: 3.4 });
+        if (!hasPos(slideSpec, key) && !hasPos(slideSpec, 'root')) {
+          slide.addShape('line', { x: x + bw / 2, y: 2.35, w: 0, h: 0.85, line: { color: ctx.accent, width: 2 } });
+        }
+        slide.addShape('roundRect', { x: r.x, y: r.y, w: r.w, h: r.h, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
+        text(slide, str(g.label), { x: r.x + 0.25, y: r.y + 0.2, w: r.w - 0.5, h: 0.5, fontSize: 16, bold: true, align: 'center', color: ctx.accent }, ctx);
+        bullets(slide, strings(g.items), { x: r.x + 0.25, y: r.y + 0.75, w: r.w - 0.5, h: Math.max(0.4, r.h - 0.95) }, ctx);
       });
       break;
     }
     case 'timeline': {
-      addTitleBar(slide, title, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
       const events = arr(c.events).map(rec);
-      slide.addShape('line', { x: 0.7, y: 3.85, w: 11.9, h: 0, line: { color: ctx.accent, width: 3 } });
+      const anyPlaced = events.some((_, i) => hasPos(slideSpec, `event-${i}`));
+      if (!anyPlaced) slide.addShape('line', { x: 0.7, y: 3.85, w: 11.9, h: 0, line: { color: ctx.accent, width: 3 } });
       const n = Math.max(1, events.length);
       events.forEach((ev, i) => {
         const x = 0.8 + (i * 11.7) / n;
         const bw = 11.7 / n - 0.2;
         const above = i % 2 === 0;
-        slide.addShape('ellipse', { x: x + bw / 2 - 0.11, y: 3.74, w: 0.22, h: 0.22, fill: { color: ctx.accent }, line: { type: 'none' } });
+        const key = `event-${i}`;
         const ty = above ? 1.65 : 4.25;
+        if (hasPos(slideSpec, key)) {
+          const r = rectFor(slideSpec, key, { x, y: ty, w: bw, h: 1.65 });
+          slide.addShape('ellipse', { x: r.x, y: r.y, w: 0.18, h: 0.18, fill: { color: ctx.accent }, line: { type: 'none' } });
+          text(slide, `${str(ev.when)} — ${str(ev.title)}`, { x: r.x, y: r.y + 0.26, w: r.w, h: 0.6, fontSize: 13, bold: true, color: ctx.accent }, ctx);
+          if (str(ev.desc)) text(slide, str(ev.desc), { x: r.x, y: r.y + 0.86, w: r.w, h: Math.max(0.3, r.h - 0.86), fontSize: 11, color: ctx.sub }, ctx);
+          return;
+        }
+        slide.addShape('ellipse', { x: x + bw / 2 - 0.11, y: 3.74, w: 0.22, h: 0.22, fill: { color: ctx.accent }, line: { type: 'none' } });
         text(slide, `${str(ev.when)} — ${str(ev.title)}`, { x, y: ty, w: bw, h: 0.75, fontSize: 13, bold: true, align: 'center', color: ctx.accent }, ctx);
         if (str(ev.desc)) text(slide, str(ev.desc), { x, y: ty + 0.75, w: bw, h: 0.9, fontSize: 11, align: 'center', color: ctx.sub }, ctx);
       });
       break;
     }
     case 'comparison': {
-      addTitleBar(slide, title, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
       const left = rec(c.left); const right = rec(c.right);
-      panel(slide, str(left.title), strings(left.points), 0.6, ctx);
-      panel(slide, str(right.title), strings(right.points), 6.85, ctx);
+      panel(slide, str(left.title), strings(left.points), rectFor(slideSpec, 'left', { x: 0.6, y: 1.55, w: 5.85, h: 4.9 }), ctx);
+      panel(slide, str(right.title), strings(right.points), rectFor(slideSpec, 'right', { x: 6.85, y: 1.55, w: 5.85, h: 4.9 }), ctx);
       if (str(c.verdict)) {
-        slide.addShape('roundRect', { x: 0.6, y: 6.55, w: 12.1, h: 0.6, fill: { color: ctx.accent }, line: { type: 'none' } });
-        text(slide, str(c.verdict), { x: 0.85, y: 6.62, w: 11.6, h: 0.45, fontSize: 14, bold: true, align: 'center', color: '201F26' }, ctx);
+        const r = rectFor(slideSpec, 'verdict', { x: 0.6, y: 6.55, w: 12.1, h: 0.6 });
+        slide.addShape('roundRect', { x: r.x, y: r.y, w: r.w, h: r.h, fill: { color: ctx.accent }, line: { type: 'none' } });
+        text(slide, str(c.verdict), { x: r.x + 0.25, y: r.y + 0.08, w: r.w - 0.5, h: Math.max(0.2, r.h - 0.15), fontSize: 14, bold: true, align: 'center', color: '201F26' }, ctx);
       }
       break;
     }
     case 'chart-bar': {
-      addTitleBar(slide, title, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
       const data = arr(c.data).map(rec);
+      const r = rectFor(slideSpec, 'chart', { x: 0.7, y: 1.45, w: 11.9, h: 5.4 });
       slide.addChart('bar', [{ name: str(c.unit) || title, labels: data.map((d) => str(d.label)), values: data.map((d) => num(d.value)) }], {
-        x: 0.7, y: 1.45, w: 11.9, h: 5.4, barDir: 'col', chartColors: ctx.colors, showLegend: false, showTitle: false,
+        x: r.x, y: r.y, w: r.w, h: r.h, barDir: 'col', chartColors: ctx.colors, showLegend: false, showTitle: false,
         catAxisLabelColor: ctx.fg, valAxisLabelColor: ctx.sub, catAxisLineColor: ctx.sub, valAxisLineColor: ctx.sub,
       });
       break;
     }
     case 'chart-line': {
-      addTitleBar(slide, title, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
       const series = arr(c.series).map(rec);
       const maxLen = Math.max(0, ...series.map((s) => arr(s.points).length));
       const labels = Array.from({ length: maxLen }, (_, i) => `${i + 1}`);
+      const r = rectFor(slideSpec, 'chart', { x: 0.7, y: 1.45, w: 11.9, h: 5.4 });
       slide.addChart('line', series.map((s) => ({ name: str(s.name), labels, values: arr(s.points).map(num) })), {
-        x: 0.7, y: 1.45, w: 11.9, h: 5.4, chartColors: ctx.colors, showLegend: true, legendPos: 'b', showTitle: false,
+        x: r.x, y: r.y, w: r.w, h: r.h, chartColors: ctx.colors, showLegend: true, legendPos: 'b', showTitle: false,
         catAxisLabelColor: ctx.fg, valAxisLabelColor: ctx.sub, catAxisLineColor: ctx.sub, valAxisLineColor: ctx.sub, lineSize: 3,
       });
       break;
     }
     case 'chart-donut': {
-      addTitleBar(slide, title, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
       const slices = arr(c.slices).map(rec);
+      const r = rectFor(slideSpec, 'chart', { x: 0.7, y: 1.45, w: 11.9, h: 5.4 });
       slide.addChart('doughnut', [{ name: str(c.unit) || title, labels: slices.map((s) => str(s.label)), values: slices.map((s) => num(s.value)) }], {
-        x: 0.7, y: 1.45, w: 11.9, h: 5.4, chartColors: ctx.colors, showLegend: true, legendPos: 'r', showTitle: false, holeSize: 55,
+        x: r.x, y: r.y, w: r.w, h: r.h, chartColors: ctx.colors, showLegend: true, legendPos: 'r', showTitle: false, holeSize: 55,
       });
       break;
     }
     case 'table': {
-      addTitleBar(slide, title, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
       const cols = strings(c.columns);
       const rowsRaw = arr(c.rows).map((r) => arr(r).map((x) => str(x)));
       const header: PptxTableRow = cols.map((col) => ({ text: col, options: { bold: true, color: 'FFFFFF', fill: { color: ctx.accent } } }));
       const body: PptxTableRow[] = rowsRaw.map((r) => cols.map((_, i) => ({ text: r[i] ?? '', options: { color: ctx.fg, fill: { color: ctx.surface } } })));
-      slide.addTable([header, ...body], { x: 0.7, y: 1.55, w: 11.9, border: { type: 'solid', color: ctx.sub, pt: 0.75 }, fontFace: 'Arial', fontSize: 14 });
+      const r = rectFor(slideSpec, 'table', { x: 0.7, y: 1.55, w: 11.9, h: 5.2 });
+      slide.addTable([header, ...body], { x: r.x, y: r.y, w: r.w, border: { type: 'solid', color: ctx.sub, pt: 0.75 }, fontFace: 'Arial', fontSize: 14 });
       break;
     }
     case 'stats': {
-      addTitleBar(slide, title, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
       const stats = arr(c.stats).map(rec);
       const n = Math.max(1, stats.length);
       const bw = (12.1 - 0.3 * (n - 1)) / n;
       stats.forEach((st, i) => {
         const x = 0.6 + i * (bw + 0.3);
-        slide.addShape('roundRect', { x, y: 2.25, w: bw, h: 2.9, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
-        text(slide, str(st.value), { x: x + 0.2, y: 2.6, w: bw - 0.4, h: 1.0, fontSize: 36, bold: true, align: 'center', color: ctx.accent }, ctx);
-        text(slide, str(st.label), { x: x + 0.2, y: 3.75, w: bw - 0.4, h: 0.8, fontSize: 15, align: 'center', color: ctx.sub }, ctx);
+        const r = rectFor(slideSpec, `stat-${i}`, { x, y: 2.25, w: bw, h: 2.9 });
+        slide.addShape('roundRect', { x: r.x, y: r.y, w: r.w, h: r.h, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
+        text(slide, str(st.value), { x: r.x + 0.2, y: r.y + 0.35, w: r.w - 0.4, h: 1.0, fontSize: 36, bold: true, align: 'center', color: ctx.accent }, ctx);
+        text(slide, str(st.label), { x: r.x + 0.2, y: r.y + 1.5, w: r.w - 0.4, h: 0.8, fontSize: 15, align: 'center', color: ctx.sub }, ctx);
       });
       break;
     }
     case 'quote': {
-      text(slide, `“${str(c.text)}”`, { x: 1.1, y: 2.0, w: 11.1, h: 2.8, fontSize: 32, italic: true, align: 'center', valign: 'middle' }, ctx);
-      if (str(c.author)) text(slide, `— ${str(c.author)}`, { x: 1.1, y: 5.0, w: 11.1, h: 0.6, fontSize: 18, align: 'center', color: ctx.accent }, ctx);
+      const tr = rectFor(slideSpec, 'text', { x: 1.1, y: 2.0, w: 11.1, h: 2.8 });
+      text(slide, `“${str(c.text)}”`, { x: tr.x, y: tr.y, w: tr.w, h: tr.h, fontSize: 32, italic: true, align: 'center', valign: 'middle' }, ctx);
+      if (str(c.author)) {
+        const ar = rectFor(slideSpec, 'author', { x: 1.1, y: 5.0, w: 11.1, h: 0.6 });
+        text(slide, `— ${str(c.author)}`, { x: ar.x, y: ar.y, w: ar.w, h: ar.h, fontSize: 18, align: 'center', color: ctx.accent }, ctx);
+      }
       break;
     }
     case 'icon-grid': {
-      addTitleBar(slide, title, ctx);
+      titleBlock(slide, slideSpec, title, ctx);
       const items = arr(c.items).map(rec);
       const cols = Math.min(3, Math.max(1, items.length));
       items.forEach((it, i) => {
         const col = i % cols; const row = Math.floor(i / cols);
         const x = 0.6 + col * 4.15; const y = 1.6 + row * 2.65;
-        slide.addShape('roundRect', { x, y, w: 3.85, h: 2.35, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
+        const r = rectFor(slideSpec, `item-${i}`, { x, y, w: 3.85, h: 2.35 });
+        slide.addShape('roundRect', { x: r.x, y: r.y, w: r.w, h: r.h, fill: { color: ctx.surface }, line: { color: ctx.accent, width: 1 } });
         // Icon name is rendered as text glyph placeholder (no raster icon).
-        text(slide, `• ${str(it.icon)}`, { x: x + 0.3, y: y + 0.25, w: 3.25, h: 0.45, fontSize: 13, color: ctx.accent }, ctx);
-        text(slide, str(it.title), { x: x + 0.3, y: y + 0.72, w: 3.25, h: 0.55, fontSize: 18, bold: true }, ctx);
-        if (str(it.desc)) text(slide, str(it.desc), { x: x + 0.3, y: y + 1.3, w: 3.25, h: 0.85, fontSize: 12, color: ctx.sub }, ctx);
+        text(slide, `• ${str(it.icon)}`, { x: r.x + 0.3, y: r.y + 0.25, w: r.w - 0.6, h: 0.45, fontSize: 13, color: ctx.accent }, ctx);
+        text(slide, str(it.title), { x: r.x + 0.3, y: r.y + 0.72, w: r.w - 0.6, h: 0.55, fontSize: 18, bold: true }, ctx);
+        if (str(it.desc)) text(slide, str(it.desc), { x: r.x + 0.3, y: r.y + 1.3, w: r.w - 0.6, h: Math.max(0.3, r.h - 1.45), fontSize: 12, color: ctx.sub }, ctx);
       });
       break;
     }
     case 'closing': {
-      text(slide, title, { x: 0.8, y: 2.45, w: 11.7, h: 1.4, fontSize: 42, bold: true, align: 'center', valign: 'middle' }, ctx);
-      if (str(c.cta)) text(slide, str(c.cta), { x: 1.3, y: 4.1, w: 10.7, h: 0.8, fontSize: 20, align: 'center', color: ctx.accent }, ctx);
+      const tr = rectFor(slideSpec, 'title', { x: 0.8, y: 2.45, w: 11.7, h: 1.4 });
+      text(slide, title, { x: tr.x, y: tr.y, w: tr.w, h: tr.h, fontSize: 42, bold: true, align: 'center', valign: 'middle' }, ctx);
+      if (str(c.cta)) {
+        const cr = rectFor(slideSpec, 'cta', { x: 1.3, y: 4.1, w: 10.7, h: 0.8 });
+        text(slide, str(c.cta), { x: cr.x, y: cr.y, w: cr.w, h: cr.h, fontSize: 20, align: 'center', color: ctx.accent }, ctx);
+      }
       break;
     }
     default: {
-      addTitleBar(slide, title || slideSpec.layout, ctx);
+      titleBlock(slide, slideSpec, title || slideSpec.layout, ctx);
       text(slide, JSON.stringify(c, null, 2).slice(0, 1200), { x: 0.85, y: 1.5, w: 11.6, h: 5.2, fontSize: 13, color: ctx.sub }, ctx);
       break;
     }
