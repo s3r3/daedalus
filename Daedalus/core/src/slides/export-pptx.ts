@@ -420,8 +420,8 @@ function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root:
     case 'versus': {
       titleBlock(slide, slideSpec, title, ctx);
       const left = rec(c.left); const right = rec(c.right);
-      panel(slide, str(left.title), strings(left.points), rectFor(slideSpec, 'left', { x: 0.6, y: 1.55, w: 5.85, h: 4.35 }), ctx);
-      panel(slide, str(right.title), strings(right.points), rectFor(slideSpec, 'right', { x: 6.85, y: 1.55, w: 5.85, h: 4.35 }), ctx);
+      panel(slide, str(left.title), strings(left.points), rectFor(slideSpec, 'left', { x: 0.6, y: 1.55, w: 5.62, h: 4.35 }), ctx);
+      panel(slide, str(right.title), strings(right.points), rectFor(slideSpec, 'right', { x: 7.08, y: 1.55, w: 5.62, h: 4.35 }), ctx);
       const br = rectFor(slideSpec, 'badge', { x: W / 2 - 0.45, y: 3.28, w: 0.9, h: 0.9 });
       slide.addShape('ellipse', { x: br.x, y: br.y, w: br.w, h: br.h, fill: { color: ctx.accent }, line: { color: ctx.bg, width: 3 } });
       text(slide, 'VS', { x: br.x, y: br.y + br.h / 2 - 0.21, w: br.w, h: 0.42, fontSize: 16, bold: true, align: 'center', color: 'FFFFFF' }, ctx);

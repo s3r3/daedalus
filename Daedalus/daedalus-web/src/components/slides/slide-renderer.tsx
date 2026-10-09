@@ -997,7 +997,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
           <Block blockKey="title">
             <SlideTitle>{str(c.title)}</SlideTitle>
           </Block>
-          <div className="relative flex min-h-0 flex-1" style={{ gap: '1.6cqw' }}>
+          <div className="relative flex min-h-0 flex-1" style={{ gap: '6.4cqw' }}>
             <Block blockKey="left">
               <ColumnPanel heading={str(left.title)} points={strList(left.points)} ctx={ctx} />
             </Block>
