@@ -29,6 +29,7 @@ import {
   type Message,
   type ToolDefinition,
 } from "../src/index.ts";
+import { StreamMessageAssembler } from "../src/providers/llm/stream-assembly.ts";
 
 function fakeFetch(handler: (req: Request) => Promise<Response>): typeof fetch {
   return async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -314,6 +315,56 @@ describe("OpenAICompatProvider streaming", () => {
     expect(deltas.join("")).toBe("Hello world!");
     expect(finishReason).toBe("stop");
     expect(finalUsage?.total_tokens).toBe(8);
+  });
+
+  test("yields tool-call fragments that arrive without text or reasoning", async () => {
+    // Regression (live failure 2026-10-09): a gateway translating the
+    // upstream API streamed "..." text, then the export_deck call in
+    // chunks carrying only tool_calls (content null). The delta filter
+    // dropped those chunks, the assembled turn had finish_reason
+    // "tool_calls" but zero calls, and the loop re-prompted until the
+    // token budget killed the task.
+    const chunks = [
+      'data: {"choices":[{"delta":{"content":"..."}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","type":"function","function":{"name":"export_deck","arguments":""}}]}}]}\n\n',
+      'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"format\\":\\"pptx\\"}"}}]}}]}\n\n',
+      'data: {"choices":[{"finish_reason":"tool_calls"}]}\n\n',
+      "data: [DONE]\n\n",
+    ];
+
+    const stream = new ReadableStream({
+      start(controller) {
+        for (const chunk of chunks) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        }
+        controller.close();
+      },
+    });
+
+    const fetchImpl = fakeFetch(async () =>
+      new Response(stream, {
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+      }),
+    );
+
+    const provider = new OpenAICompatProvider({
+      baseUrl: "https://llm.ayid.cc.cd/v1",
+      apiKey: "k",
+      model: "m",
+      fetch: fetchImpl,
+    });
+
+    const assembler = new StreamMessageAssembler();
+    for await (const chunk of provider.stream([userMessage("export it")])) {
+      assembler.push(chunk);
+    }
+    const response = assembler.toResponse();
+    expect(response.message.content).toBe("...");
+    expect(response.finish_reason).toBe("tool_calls");
+    expect(response.message.tool_calls).toHaveLength(1);
+    expect(response.message.tool_calls?.[0]?.function.name).toBe("export_deck");
+    expect(response.message.tool_calls?.[0]?.function.arguments).toBe('{"format":"pptx"}');
   });
 });
 

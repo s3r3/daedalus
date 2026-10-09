@@ -109,7 +109,15 @@ export class OpenAICompatProvider implements LLMProvider {
           const reasoning = [delta?.reasoning_content, delta?.reasoning, delta?.thinking].find(
             (value): value is string => typeof value === "string" && value.length > 0,
           );
-          if (delta?.content || reasoning) {
+          // Tool-call fragments must be yielded even when the chunk
+          // carries no text or reasoning: gateways that translate other
+          // APIs often stream a tool call on its own (content null), and
+          // dropping those chunks loses the whole call while the finish
+          // chunk still reports finish_reason "tool_calls" — the turn
+          // then reassembles to "..." with zero calls and the loop
+          // re-prompts until the token budget kills the task (live
+          // failure 2026-10-09, export_deck never landed).
+          if (delta?.content || reasoning || delta?.tool_calls?.length) {
             yield { type: "delta", content: delta?.content ?? "", tool_calls: delta?.tool_calls, ...(reasoning ? { reasoning } : {}) };
           }
           if (choice?.finish_reason) yield { type: "finish", finish_reason: choice.finish_reason };

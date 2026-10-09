@@ -1,7 +1,7 @@
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
-import { buildHybridSlideDraft } from '../slides/hybrid-generator';
-import type { ToolDefinition } from './registry';
+import { buildHybridSlideDraft } from '../slides/hybrid-generator.ts';
+import type { ToolDefinition } from './registry.ts';
 
 function ok(output: string, meta: Record<string, unknown> = {}): { call_id: string; status: 'ok'; output: string; truncated: false; meta: Record<string, unknown> } {
   return { call_id: '', status: 'ok', output, truncated: false, meta };

@@ -13,7 +13,7 @@ import type { Validator } from '../validation/index.ts';
 import { completionGate, normalizeError, validationFailed, validationFailureSignature } from '../validation/index.ts';
 import { interpretTask } from './interpreter.ts';
 import { createPlan, replan } from './planner.ts';
-import { DefaultContextManager, CONDENSED_TOOL_OUTPUT, condenseToolOutputs, contextMeter } from './context.ts';
+import { DefaultContextManager, CONDENSED_TOOL_OUTPUT, condenseToolOutputs, contextMeter, presentationCreationGoal } from './context.ts';
 import { LoopGuard, REPEAT_SUPPRESSED_OUTPUT, loopDirectiveNote, loopGuidanceNote, toolCallSignature } from './loop-guard.ts';
 import { toolCallParseErrorOutput, validateToolCallArguments } from './tool-call-validation.ts';
 import { handleObservation } from './observation.ts';
@@ -1885,10 +1885,15 @@ export class AgentLoop {
    * that asks for a presentation to be produced (which also catches
    * the markdown-shortcut run that never touches the deck tools).
    * Read-only slide questions arm neither, and Ask/Plan keep their own
-   * semantics.
+   * semantics. The gate arms in the slide domain unconditionally, and
+   * in ANY domain when the goal itself is a presentation-creation
+   * goal — the laptop incident ran "buatkan 8 slide …" as a coding
+   * task, where the unarmed gate let a .md draft pose as the
+   * deliverable. In other domains the goal is the trigger; deck-work
+   * evidence only picks which refusal detail applies.
    */
   #slideExportRefusal(state: TaskState): { reason: string; detail: string } | undefined {
-    if (state.domain !== 'slide') return undefined;
+    if (state.domain !== 'slide' && !presentationCreationGoal(state.goal)) return undefined;
     const mode = state.mode ?? this.#modeController.mode;
     if (mode === 'ask' || mode === 'plan') return undefined;
     if (this.#slideExports.has(state.id)) return undefined;
@@ -2191,20 +2196,6 @@ const MAX_THOUGHT_CHARS = 4_000;
 
 /** Deck-building slide tools: one successful call means the task built deck content (the slide completion gate's trigger). */
 const SLIDE_DECK_WORK_TOOLS = new Set(['create_deck', 'add_slide', 'update_slide', 'move_slide', 'delete_slide', 'set_deck_theme']);
-
-const SLIDE_GOAL_NOUN = /\b(slide|slides|pptx|powerpoint|presentasi|presentation|deck)\b/i;
-const SLIDE_GOAL_VERB = /\b(buat|buatkan|bikin|membuat|membuatkan|create|make|generate|build|convert|konversi|ubah|jadikan|susun)\b/i;
-
-/**
- * A goal that asks for a presentation to be produced. Arms the slide
- * gate even when the model never touched the deck tools — the markdown
- * shortcut (write a .md draft, report "Selesai") otherwise completes a
- * slide task with zero deck evidence. Question-shaped goals are exempt.
- */
-function presentationCreationGoal(goal: string): boolean {
-  if (goal.trim().endsWith('?')) return false;
-  return SLIDE_GOAL_NOUN.test(goal) && SLIDE_GOAL_VERB.test(goal);
-}
 
 /** Cheap content fingerprint for the stall tracker's "new observation" test. */
 function observationHash(text: string): string {

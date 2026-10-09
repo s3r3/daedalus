@@ -79,6 +79,11 @@ function pptxFiles(root: string): string[] {
   return existsSync(dir) ? readdirSync(dir).filter((name) => name.endsWith('.pptx')) : [];
 }
 
+function systemOf(messages: Message[] | undefined): string {
+  const content = messages?.find((message) => message.role === 'system')?.content;
+  return typeof content === 'string' ? content : '';
+}
+
 describe('slide completion gate in the agent loop', () => {
   test('a slide task that exports before claiming done succeeds and leaves a .pptx', async () => {
     const root = temp('daedalus-slide-gate-ok-');
@@ -180,5 +185,67 @@ describe('slide completion gate in the agent loop', () => {
     const state = await loop.run(spec(root, 'gate-coding', 'buatkan file catatan', undefined, ['file catatan dibuat']));
     expect(state.status).toBe('done');
     expect(state.last_error).toBeUndefined();
+  });
+
+  test('a coding-domain presentation goal is export-gated: a markdown draft cannot report success', async () => {
+    const root = temp('daedalus-slide-gate-coding-md-');
+    const provider = scriptedProvider([
+      { tool: 'write_file', args: { path: 'slides-biologi.md', content: '# Biologi\n' } },
+      { text: 'done: slide selesai' },
+      { text: 'done: slide selesai' },
+    ]);
+    const { loop, store } = makeLoop(root, provider);
+    const state = await loop.run(spec(root, 'gate-coding-md', 'buatkan 8 slide tentang biologi', undefined, ['deck presentasi dibuat dengan deck tools', 'pptx ter-export']));
+    expect(state.status).toBe('failed');
+    expect(state.last_error).toBe('slide_export_missing');
+    expect(pptxFiles(root)).toHaveLength(0);
+    const recoveries = store.replay('gate-coding-md').filter((event) => event.type === 'RECOVERY_STARTED');
+    expect(recoveries).toHaveLength(1);
+    expect(JSON.stringify(recoveries[0]?.payload ?? {})).toContain('slide_export_missing');
+  });
+
+  test('a coding-domain presentation goal completes once the deck is built and exported', async () => {
+    const root = temp('daedalus-slide-gate-coding-export-');
+    const provider = scriptedProvider([
+      { tool: 'write_file', args: { path: 'slides-biologi.md', content: '# Biologi\n' } },
+      { text: 'done: slide selesai' },
+      { tool: 'create_deck', args: { title: 'Biologi' } },
+      { tool: 'add_slide', args: { layout: 'bullets', content: { title: 'Sel', points: ['satu', 'dua'] } } },
+      { tool: 'export_deck', args: {} },
+    ]);
+    const { loop } = makeLoop(root, provider);
+    const state = await loop.run(spec(root, 'gate-coding-export', 'buatkan 8 slide tentang biologi', undefined, ['deck presentasi dibuat dengan deck tools', 'pptx ter-export']));
+    expect(state.status).toBe('done');
+    expect(pptxFiles(root)).toHaveLength(1);
+  });
+
+  test('a coding-domain ordinary goal stays ungated and unsteered', async () => {
+    const root = temp('daedalus-slide-gate-coding-plain-');
+    const seen: Message[][] = [];
+    const provider = scriptedProvider([
+      { tool: 'write_file', args: { path: 'ringkasan.md', content: '# Ringkasan biologi\n' } },
+    ], seen);
+    const { loop, store } = makeLoop(root, provider);
+    const state = await loop.run(spec(root, 'gate-coding-plain', 'buatkan ringkasan tentang biologi', undefined, ['ringkasan dibuat']));
+    expect(state.status).toBe('done');
+    expect(state.last_error).toBeUndefined();
+    expect(store.replay('gate-coding-plain').filter((event) => event.type === 'RECOVERY_STARTED')).toEqual([]);
+    expect(systemOf(seen[0])).not.toContain('Slide goal in the Coding domain');
+  });
+
+  test('a coding-domain presentation goal is steered to the deck tools in its prompt', async () => {
+    const root = temp('daedalus-slide-gate-coding-steer-');
+    const seen: Message[][] = [];
+    const provider = scriptedProvider([
+      { tool: 'create_deck', args: { title: 'Biologi' } },
+      { tool: 'add_slide', args: { layout: 'bullets', content: { title: 'Sel', points: ['satu', 'dua'] } } },
+      { tool: 'export_deck', args: {} },
+    ], seen);
+    const { loop } = makeLoop(root, provider);
+    const state = await loop.run(spec(root, 'gate-coding-steer', 'buatkan 8 slide tentang biologi', undefined, ['deck presentasi dibuat dengan deck tools', 'pptx ter-export']));
+    expect(state.status).toBe('done');
+    const system = systemOf(seen[0]);
+    expect(system).toContain('Slide goal in the Coding domain');
+    expect(system).toContain('export_deck');
   });
 });
