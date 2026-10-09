@@ -1,6 +1,7 @@
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { inflateRawSync } from 'node:zlib';
 import { afterEach, describe, expect, test } from 'vitest';
 import { EventBus, TaskRunner, TaskStore, ToolRegistry, newDeck, newSlideId, readDeck, validateDeck, writeDeck, type LLMProvider, type Message, type ToolCall, type ToolResult } from '../src/index.ts';
 import { exportDeckToPptx } from '../src/slides/export-pptx.ts';
@@ -242,6 +243,79 @@ describe('Standard vs Smart flows (harness level)', () => {
     expect(events.filter((event) => event.type === 'TOOL_CALL_STARTED')).toHaveLength(3);
     expect(JSON.stringify(seen)).toContain('Invalid model response');
     expect(pptxFiles(root)).toHaveLength(1);
+  });
+});
+
+/** Minimal read-only ZIP reader (central directory + inflate), so PPTX structure is verified without adding a dependency. */
+function unzipText(file: string): Map<string, string> {
+  const buf = readFileSync(file);
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0; i -= 1) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('not a zip: no end-of-central-directory');
+  const count = buf.readUInt16LE(eocd + 10);
+  let offset = buf.readUInt32LE(eocd + 16);
+  const out = new Map<string, string>();
+  for (let n = 0; n < count; n += 1) {
+    if (buf.readUInt32LE(offset) !== 0x02014b50) throw new Error('bad central directory');
+    const method = buf.readUInt16LE(offset + 10);
+    const size = buf.readUInt32LE(offset + 20);
+    const nameLen = buf.readUInt16LE(offset + 28);
+    const extraLen = buf.readUInt16LE(offset + 30);
+    const commentLen = buf.readUInt16LE(offset + 32);
+    const localOffset = buf.readUInt32LE(offset + 42);
+    const name = buf.toString('utf8', offset + 46, offset + 46 + nameLen);
+    const localNameLen = buf.readUInt16LE(localOffset + 26);
+    const localExtraLen = buf.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + localNameLen + localExtraLen;
+    const raw = buf.subarray(dataStart, dataStart + size);
+    out.set(name, method === 8 ? inflateRawSync(raw).toString('utf8') : raw.toString('utf8'));
+    offset += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}
+
+describe('full flow exports a structurally valid, editable PPTX', () => {
+  test('scripted slide task exports a 4-slide pptx with native text runs, shapes, and a native chart', async () => {
+    const root = temp('daedalus-repair-e2e-');
+    const provider = rawProvider([
+      { tool: 'create_deck', rawArgs: J({ title: 'Sejarah Komputer' }) },
+      { tool: 'add_slide', rawArgs: J({ layout: 'title', content: { title: 'Sejarah Komputer', subtitle: 'Dari abakus ke AI' } }) },
+      { tool: 'add_slide', rawArgs: J({ layout: 'bullets', content: { title: 'Tonggak Awal', points: ['Mesin analitik Babbage', 'Komputer elektronik pertama'] } }) },
+      { tool: 'add_slide', rawArgs: J({ layout: 'chart-bar', content: { title: 'Adopsi Komputer', unit: ' jt unit', data: [{ label: '1980', value: 2 }, { label: '2000', value: 60 }, { label: '2020', value: 95 }] } }) },
+      { tool: 'add_slide', rawArgs: J({ layout: 'quote', content: { text: 'Komputer mengubah cara manusia berpikir.', author: 'Catatan kelas' } }) },
+      { tool: 'export_deck', rawArgs: J({}) },
+    ]);
+    const store = new TaskStore(temp('daedalus-repair-e2e-store-'));
+    const runner = new TaskRunner({ workspaceRoot: root, store, bus: new EventBus(), provider, approvalPolicy: 'auto' });
+    const { state } = await runner.run({
+      goal: 'buatkan deck sejarah komputer\ndeck dibuat dan terisi\ndeck ter-export ke pptx',
+      taskId: 'repair-e2e',
+      domain: 'slide',
+      slide: { generation: 'smart' },
+    });
+    expect(state.status).toBe('done');
+
+    const files = pptxFiles(root);
+    expect(files).toHaveLength(1);
+    const parts = unzipText(join(root, 'deck', files[0]!));
+    const slideNames = [...parts.keys()].filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name)).sort();
+    expect(slideNames).toHaveLength(4);
+    const allSlides = slideNames.map((name) => parts.get(name) ?? '').join('\n');
+    // Editable native text: real <a:t> runs holding our content, in shapes.
+    expect(allSlides).toContain('<a:t>Sejarah Komputer</a:t>');
+    expect(allSlides).toContain('<a:t>Mesin analitik Babbage</a:t>');
+    expect(allSlides).toContain('<a:t>“Komputer mengubah cara manusia berpikir.”</a:t>');
+    expect(allSlides).toContain('<p:sp>');
+    // The chart slide carries a native chart part, not a picture of a chart.
+    expect([...parts.keys()].some((name) => /^ppt\/charts\/chart\d+\.xml$/.test(name))).toBe(true);
+    expect(allSlides).toContain('<p:graphicFrame>');
+    expect(parts.get('ppt/slides/slide3.xml') ?? '').toContain('<p:graphicFrame>');
+
+    // Keep the artifact for inspection when the preview shelf exists.
+    const shelf = join(homedir(), 'workspace', 'daedalus-preview');
+    if (existsSync(shelf)) copyFileSync(join(root, 'deck', files[0]!), join(shelf, 'daedalus-repair-e2e.pptx'));
   });
 });
 
