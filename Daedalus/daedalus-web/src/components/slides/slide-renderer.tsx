@@ -4,6 +4,13 @@ import * as lucideIcons from 'lucide-react'
 import { Image as ImageIcon, Quote as QuoteIcon, Sparkles } from 'lucide-react'
 import type { BlockPosition, DeckSpec, Slide } from '@daedalus/core'
 import { getLayout } from '@daedalus/core/slides/layouts'
+import {
+  builtinKindOfLayout,
+  builtinTemplateForTheme,
+  furnitureRect,
+  pageChipRect,
+  type FurnitureColorRole,
+} from '@daedalus/core/slides/builtin-templates'
 import { getPalette } from '@daedalus/core/palette'
 
 /**
@@ -22,6 +29,10 @@ type Ctx = {
   line: string
   /** Extracted accent ramp of an imported PPT template (accent1..accent6). */
   series?: string[]
+  /** Built-in design typography (slides/builtin-templates.ts); defaults keep legacy decks unchanged. */
+  titleScale: number
+  headingTransform: 'none' | 'uppercase'
+  titleTreatment: 'bar' | 'underline'
 }
 
 const SERIES_VARS = [
@@ -68,16 +79,24 @@ function initialsOf(name: string): string {
   return parts.slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join('')
 }
 
-function SlideTitle({ children }: { children: ReactNode }) {
+function SlideTitle({ children, ctx }: { children: ReactNode; ctx?: Ctx }) {
+  const scale = ctx?.titleScale ?? 1
   return (
-    <div className="font-bold tracking-tight" style={{ fontSize: '3.3cqw', lineHeight: 1.15 }}>
+    <div
+      className="font-bold tracking-tight"
+      style={{
+        fontSize: `${3.3 * scale}cqw`,
+        lineHeight: 1.15,
+        ...(ctx?.headingTransform === 'uppercase' ? { textTransform: 'uppercase' as const } : {}),
+      }}
+    >
       {children}
     </div>
   )
 }
 
-function AccentBar({ accent, width = '7cqw' }: { accent: string; width?: string }) {
-  return <div aria-hidden style={{ width, height: '0.7cqw', borderRadius: 999, backgroundColor: accent }} />
+function AccentBar({ accent, width = '7cqw', height = '0.7cqw' }: { accent: string; width?: string; height?: string }) {
+  return <div aria-hidden style={{ width, height, borderRadius: 999, backgroundColor: accent }} />
 }
 
 function Points({ items, ctx, size = '1.5cqw' }: { items: string[]; ctx: Ctx; size?: string }) {
@@ -303,7 +322,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
         <div className="flex flex-1 flex-col justify-center" style={{ gap: '1.6cqw' }}>
           <AccentBar accent={ctx.accent} width="9cqw" />
           <Block blockKey="title">
-            <div className="font-bold tracking-tight" style={{ fontSize: '6.6cqw', lineHeight: 1.05 }}>
+            <div className="font-bold tracking-tight" style={{ fontSize: `${6.6 * ctx.titleScale}cqw`, lineHeight: 1.05, ...(ctx.headingTransform === 'uppercase' ? { textTransform: 'uppercase' as const } : {}) }}>
               {str(c.title) || 'Untitled presentation'}
             </div>
           </Block>
@@ -331,7 +350,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
             {str(c.number) ? `Bagian ${str(c.number)}` : 'Bagian'}
           </div>
           <Block blockKey="title">
-            <div className="font-bold tracking-tight" style={{ fontSize: '5cqw', lineHeight: 1.1 }}>
+            <div className="font-bold tracking-tight" style={{ fontSize: `${5 * ctx.titleScale}cqw`, lineHeight: 1.1, ...(ctx.headingTransform === 'uppercase' ? { textTransform: 'uppercase' as const } : {}) }}>
               {str(c.title)}
             </div>
           </Block>
@@ -344,7 +363,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
         <div className="flex flex-1 flex-col items-center justify-center text-center" style={{ gap: '1.8cqw' }}>
           <AccentBar accent={ctx.accent} width="9cqw" />
           <Block blockKey="title">
-            <div className="font-bold tracking-tight" style={{ fontSize: '5.6cqw', lineHeight: 1.1 }}>
+            <div className="font-bold tracking-tight" style={{ fontSize: `${5.6 * ctx.titleScale}cqw`, lineHeight: 1.1, ...(ctx.headingTransform === 'uppercase' ? { textTransform: 'uppercase' as const } : {}) }}>
               {str(c.title)}
             </div>
           </Block>
@@ -382,9 +401,13 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.8cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
-          <AccentBar accent={ctx.accent} width="5cqw" />
+          {ctx.titleTreatment === 'underline' ? (
+            <AccentBar accent={ctx.accent} width="14cqw" height="0.35cqw" />
+          ) : (
+            <AccentBar accent={ctx.accent} width="5cqw" />
+          )}
           <Block blockKey="points">
             <Points items={strList(c.points)} ctx={ctx} />
           </Block>
@@ -397,7 +420,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex min-h-0 flex-1" style={{ gap: '1.6cqw' }}>
             <Block blockKey="left">
@@ -416,7 +439,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.4cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex min-h-0 flex-1" style={{ gap: '1.6cqw' }}>
             <Block blockKey="left">
@@ -444,7 +467,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       const textCol = (
         <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <Block blockKey="points">
             <Points items={strList(c.points)} ctx={ctx} size="1.4cqw" />
@@ -472,7 +495,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.8cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex flex-1 items-stretch" style={{ gap: '0.6cqw' }}>
             {steps.map((step, index) => (
@@ -510,7 +533,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.4cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="relative flex-1" style={{ margin: '0 6cqw' }}>
             <svg aria-hidden className="absolute inset-0 h-full w-full" viewBox="0 0 400 220">
@@ -547,7 +570,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
         <div className="flex flex-1 flex-col items-center" style={{ gap: 0 }}>
           <div className="self-start">
             <Block blockKey="title">
-              <SlideTitle>{str(c.title)}</SlideTitle>
+              <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
             </Block>
           </div>
           <Block blockKey="root">
@@ -602,7 +625,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '2cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="relative flex flex-1 items-start" style={{ paddingTop: '0.4cqw' }}>
             <div aria-hidden className="absolute" style={{ left: 0, right: 0, top: '1.05cqw', height: 2, backgroundColor: ctx.accent, opacity: 0.45 }} />
@@ -638,7 +661,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex min-h-0 flex-1 flex-col" style={{ gap: '1.2cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <Block blockKey="chart">
           <svg viewBox={`0 0 ${W} ${H}`} className="min-h-0 w-full flex-1" role="img" aria-label={str(c.title)}>
@@ -685,7 +708,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex min-h-0 flex-1 flex-col" style={{ gap: '1cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <Block blockKey="chart">
           <svg viewBox={`0 0 ${W} ${H}`} className="min-h-0 w-full flex-1" role="img" aria-label={str(c.title)}>
@@ -731,7 +754,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.2cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex flex-1 items-center" style={{ gap: '3cqw' }}>
             <Block blockKey="chart">
@@ -788,7 +811,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <Block blockKey="table">
           <div className="overflow-hidden rounded-md border" style={{ borderColor: ctx.line }}>
@@ -824,7 +847,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '2cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="grid flex-1 items-center" style={{ gridTemplateColumns: `repeat(${Math.max(1, stats.length)}, minmax(0, 1fr))`, gap: '1.6cqw' }}>
             {stats.map((stat, index) => (
@@ -848,7 +871,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.7cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="grid flex-1" style={{ gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gridAutoRows: '1fr', gap: '1.4cqw' }}>
             {items.map((item, index) => {
@@ -877,7 +900,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex flex-1 flex-col justify-center">
             {steps.map((step, index) => (
@@ -911,7 +934,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex min-h-0 flex-1" style={{ gap: '1.8cqw' }}>
             <Block blockKey="code">
@@ -963,7 +986,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex flex-1 flex-col justify-center" style={{ gap: '1.4cqw' }}>
             <div className="flex" style={{ gap: '0.45cqw' }}>
@@ -1017,7 +1040,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex flex-1 flex-col items-center justify-center" style={{ gap: '0.55cqw' }}>
             {tiers.map((tier, index) => {
@@ -1057,7 +1080,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex min-h-0 flex-1" style={{ gap: '1.4cqw' }}>
             {phases.map((phase, index) => (
@@ -1092,7 +1115,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.4cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="relative flex min-h-0 flex-1" style={{ gap: '6.4cqw' }}>
             <Block blockKey="left">
@@ -1140,7 +1163,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.3cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex min-h-0 flex-1" style={{ gap: '0.7cqw' }}>
             <div
@@ -1181,7 +1204,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
         <div className="flex flex-1 flex-col" style={{ gap: '1.4cqw' }}>
           {str(c.title) ? (
             <Block blockKey="title">
-              <SlideTitle>{str(c.title)}</SlideTitle>
+              <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
             </Block>
           ) : null}
           <div className="flex flex-1 items-center" style={{ gap: '3cqw' }}>
@@ -1264,7 +1287,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="grid flex-1" style={{ gridTemplateColumns: `repeat(${Math.max(1, people.length)}, minmax(0, 1fr))`, gridAutoRows: '1fr', gap: '1.4cqw' }}>
             {people.map((person, index) => (
@@ -1304,7 +1327,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="grid flex-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridAutoRows: '1fr', gap: '1.3cqw' }}>
             {terms.map((entry, index) => (
@@ -1332,7 +1355,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
         <div className="flex flex-1 flex-col" style={{ gap: '1.2cqw' }}>
           {str(c.title) ? (
             <Block blockKey="title">
-              <SlideTitle>{str(c.title)}</SlideTitle>
+              <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
             </Block>
           ) : null}
           <div
@@ -1364,7 +1387,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <AccentBar accent={ctx.accent} width="5cqw" />
           <div className="flex min-h-0 flex-1 flex-col justify-center">
@@ -1395,7 +1418,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           {str(c.title) ? (
             <Block blockKey="title">
-              <SlideTitle>{str(c.title)}</SlideTitle>
+              <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
             </Block>
           ) : null}
           <div className="grid min-h-0 flex-1 items-center" style={{ gridTemplateColumns: `repeat(${Math.max(1, kpis.length)}, minmax(0, 1fr))`, gap: '1.3cqw' }}>
@@ -1436,7 +1459,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex min-h-0 flex-1 flex-col justify-center" style={{ gap: '0.95cqw' }}>
             {stages.map((stage, index) => {
@@ -1478,7 +1501,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.4cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           {str(c.startLabel) || str(c.endLabel) ? (
             <div className="flex" style={{ paddingLeft: '23.2%', paddingRight: '15.2%', fontSize: '1.05cqw', color: ctx.muted }}>
@@ -1554,7 +1577,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.3cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex justify-center">
             <div style={{ width: '36%' }}>
@@ -1618,7 +1641,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex min-h-0 flex-1" style={{ gap: '1.6cqw' }}>
             <Block blockKey="pros">{panel(pros, true)}</Block>
@@ -1632,7 +1655,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="grid min-h-0 flex-1 items-stretch" style={{ gridTemplateColumns: `repeat(${Math.max(1, tiers.length)}, minmax(0, 1fr))`, gap: '1.3cqw' }}>
             {tiers.map((tier, index) => {
@@ -1685,7 +1708,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex min-h-0 flex-1 flex-col justify-center" style={{ gap: '1.05cqw' }}>
             {items.map((item, index) => (
@@ -1718,7 +1741,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="relative flex min-h-0 flex-1 items-stretch" style={{ gap: '1.3cqw' }}>
             <div aria-hidden className="absolute" style={{ top: '1.9cqw', left: '12%', right: '12%', borderTop: `2px dashed ${ctx.line}` }} />
@@ -1837,7 +1860,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           {str(c.title) ? (
             <Block blockKey="title">
-              <SlideTitle>{str(c.title)}</SlideTitle>
+              <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
             </Block>
           ) : null}
           <div className="grid min-h-0 flex-1 items-center" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '1.2cqw' }}>
@@ -1870,7 +1893,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           {str(c.title) ? (
             <Block blockKey="title">
-              <SlideTitle>{str(c.title)}</SlideTitle>
+              <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
             </Block>
           ) : null}
           <div className="flex min-h-0 flex-1 items-center" style={{ gap: '1.6cqw' }}>
@@ -1915,7 +1938,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           {str(c.title) ? (
             <Block blockKey="title">
-              <SlideTitle>{str(c.title)}</SlideTitle>
+              <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
             </Block>
           ) : null}
           <div className="flex min-h-0 flex-1 items-center" style={{ gap: '2.2cqw' }}>
@@ -1945,7 +1968,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex min-h-0 flex-1 flex-col justify-center" style={{ gap: '0.95cqw' }}>
             {steps.map((step, index) => (
@@ -1996,7 +2019,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
           </Block>
           <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '1.3cqw' }}>
             <Block blockKey="title">
-              <SlideTitle>{str(c.title)}</SlideTitle>
+              <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
             </Block>
             {str(c.lead) ? (
               <div className="line-clamp-3" style={{ fontSize: '1.5cqw', lineHeight: 1.45, color: ctx.muted }}>
@@ -2054,7 +2077,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
           <Block blockKey="title">
-            <SlideTitle>{str(c.title)}</SlideTitle>
+            <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
           </Block>
           <div className="flex min-h-0 flex-1 flex-col justify-center">
             {entries.map((entry, index) => (
@@ -2116,7 +2139,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
         <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           {str(c.title) ? (
             <Block blockKey="title">
-              <SlideTitle>{str(c.title)}</SlideTitle>
+              <SlideTitle ctx={ctx}>{str(c.title)}</SlideTitle>
             </Block>
           ) : null}
           <div className="grid min-h-0 flex-1" style={{ gridTemplateColumns: `repeat(${Math.max(1, quotes.length)}, minmax(0, 1fr))`, gap: '1.3cqw' }}>
@@ -2159,7 +2182,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
     default: {
       return (
         <div className="flex flex-1 flex-col justify-center" style={{ gap: '1.2cqw' }}>
-          <SlideTitle>{str(c.title) || slide.id}</SlideTitle>
+          <SlideTitle ctx={ctx}>{str(c.title) || slide.id}</SlideTitle>
           <div style={{ fontSize: '1.5cqw', color: ctx.muted }}>Layout tidak dikenal: {slide.layout}</div>
         </div>
       )
@@ -2358,6 +2381,80 @@ function TemplateSlots({ slide, page, assetSrc, editable, onImagePick, imageSrc,
 }
 
 /**
+ * The built-in template's decorative furniture (slides/builtin-templates.ts
+ * in core): spec shapes painted behind the content at the slide margins
+ * — the same slide-fraction geometry the PPTX exporter draws from, so
+ * the canvas and the exported file wear the same design. The numbered
+ * page chip shows on every slide except covers. Template-page slides
+ * never get this layer: their design is the imported file itself.
+ */
+function FurnitureLayer({ spec, kind, theme, ctx, slideIndex }: {
+  spec: import('@daedalus/core/slides/builtin-templates').FurnitureSpec
+  kind: import('@daedalus/core/slides/builtin-templates').BuiltinSlideKind
+  theme?: DeckSpec['theme']
+  ctx: Ctx
+  slideIndex?: number
+}) {
+  const colorOf = (role: FurnitureColorRole): string => {
+    switch (role) {
+      case 'accent': return ctx.accent
+      case 'surface': return theme?.surface ?? ctx.panelBg
+      case 'text': return theme?.text ?? 'inherit'
+      case 'muted': return ctx.muted
+      case 'background': return theme?.background ?? 'transparent'
+    }
+  }
+  const chip = spec.pageChip && kind !== 'cover' && slideIndex !== undefined && slideIndex > 0 ? spec.pageChip : null
+  const chipRect = chip ? pageChipRect(chip) : null
+  return (
+    <div aria-hidden className="pointer-events-none absolute inset-0" style={{ zIndex: 1 }} data-testid="slide-furniture">
+      {spec.elements
+        .filter((el) => !el.kinds || el.kinds.includes(kind))
+        .map((el, i) => {
+          const r = furnitureRect(el)
+          return (
+            <div
+              key={i}
+              style={{
+                position: 'absolute',
+                left: `${r.x * 100}%`,
+                top: `${r.y * 100}%`,
+                width: `${Math.abs(r.w) * 100}%`,
+                height: `${Math.abs(r.h) * 100}%`,
+                backgroundColor: colorOf(el.color),
+                opacity: el.opacity ?? 1,
+                borderRadius: el.shape === 'ellipse' ? '50%' : el.shape === 'roundRect' ? '40%' : '0',
+              }}
+            />
+          )
+        })}
+      {chip && chipRect ? (
+        <div
+          data-testid="slide-page-chip"
+          style={{
+            position: 'absolute',
+            left: `${chipRect.x * 100}%`,
+            top: `${chipRect.y * 100}%`,
+            width: `${chipRect.w * 100}%`,
+            height: `${chipRect.h * 100}%`,
+            backgroundColor: ctx.accent,
+            borderRadius: chip.style === 'circle' ? '50%' : '18%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: theme?.background ?? 'var(--daedalus-bgBase)',
+            fontSize: '1.05cqw',
+            fontWeight: 700,
+          }}
+        >
+          {slideIndex !== undefined ? slideIndex + 1 : ''}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/**
  * A template slide whose page design could not be resolved (template
  * deleted or fetch failed): honest degradation — theme background plus
  * the slide's own words as plain lines, never a fake design.
@@ -2372,16 +2469,18 @@ function TemplateFallbackBody({ slide, ctx }: { slide: Slide; ctx: Ctx }) {
           {line}
         </div>
       ))}
-      <div style={{ fontSize: '1.2cqw', color: ctx.muted }}>Desain template tidak terbaca — impor ulang template-nya dari panel Template dari PPT.</div>
+      <div style={{ fontSize: '1.2cqw', color: ctx.muted }}>Desain template tidak terbaca — impor ulang template-nya dari panel Template impor.</div>
     </div>
   )
 }
 
-export function SlideRenderer({ slide, theme, editable = false, onPositionsChange, resolveImageSrc, onImagePick, templateSlide }: {
+export function SlideRenderer({ slide, theme, editable = false, onPositionsChange, resolveImageSrc, onImagePick, templateSlide, slideIndex }: {
   slide: Slide
   theme?: DeckSpec['theme']
   /** Edit mode: blocks become grabbable; drags persist via onPositionsChange. */
   editable?: boolean
+  /** 0-based position in the deck; drives the built-in template's numbered page chip. */
+  slideIndex?: number
   onPositionsChange?: (slideId: string, positions: Record<string, BlockPosition>) => void
   /** Maps a local deck-asset name to a displayable URL (uploaded images). */
   resolveImageSrc?: (name: string) => string | undefined
@@ -2400,12 +2499,19 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
   // Template tokens (slides/templates.ts) win over the app palette when
   // the deck carries them — the canvas then matches the exported PPTX,
   // which resolves the same tokens in core's exporter.
+  // The deck's built-in design template (theme.designId) drives the
+  // furniture layer and title typography; decks without one keep the
+  // legacy neutral look exactly.
+  const builtin = builtinTemplateForTheme(theme)
   const ctx: Ctx = {
     accent,
     muted: theme?.muted ?? (isLight ? light.fgMoreSubtle : 'var(--daedalus-fgMoreSubtle)'),
     panelBg: theme?.surface ?? (isLight ? light.bgBase : 'var(--daedalus-bgSurface)'),
     line: 'var(--daedalus-separator)',
     ...(Array.isArray(theme?.series) && theme.series.length > 0 ? { series: theme.series } : {}),
+    titleScale: builtin?.typography.titleScale ?? 1,
+    headingTransform: builtin?.typography.headingTransform ?? 'none',
+    titleTreatment: builtin?.furniture.titleTreatment ?? 'bar',
   }
   // Imported-template background image (a deck asset, resolved like slide
   // images): paints over the background color exactly as the exported
@@ -2514,10 +2620,13 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
   return (
     <div ref={boxRef} data-testid="slide-renderer" data-layout={slide.layout} className="relative flex h-full w-full flex-col overflow-hidden" style={rootStyle}>
       <BlockCtx.Provider value={{ positions: mergedPositions, editable, overlayEl, onDragStart, imageSrc: resolveImageSrc, onImagePick }}>
+        {builtin && !slide.templateRef ? (
+          <FurnitureLayer spec={builtin.furniture} kind={builtinKindOfLayout(slide.layout)} theme={theme} ctx={ctx} slideIndex={slideIndex} />
+        ) : null}
         {tpl ? (
           <TemplateSlots slide={slide} page={tpl.page} assetSrc={tpl.assetSrc} editable={editable} onImagePick={onImagePick} imageSrc={resolveImageSrc} ctx={ctx} />
         ) : null}
-        <div className="flex min-h-0 flex-1 flex-col" style={{ padding: tpl ? 0 : '3cqw' }}>
+        <div className="relative flex min-h-0 flex-1 flex-col" style={{ padding: tpl ? 0 : '3cqw', zIndex: 2 }}>
           {tpl ? null : slide.templateRef ? <TemplateFallbackBody slide={slide} ctx={ctx} /> : renderBody(slide, ctx)}
         </div>
         <div ref={setOverlayEl} data-testid="slide-overlay" className="pointer-events-none absolute inset-0" style={{ zIndex: 4 }} />

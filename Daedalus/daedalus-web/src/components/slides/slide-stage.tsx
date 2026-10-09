@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState, type ChangeEvent } from 'react'
-import { ChevronLeft, ChevronRight, FileDown, Pencil, Presentation, RefreshCw } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, FileDown, Pencil, Presentation, RefreshCw } from 'lucide-react'
 import type { BlockPosition, Slide } from '@daedalus/core'
 import { getLayout } from '@daedalus/core/slides/layouts'
 import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
-import { api, type DeckExportResult, type PptTemplateInfo, type PptTemplatePageInfo } from '../../api/client'
+import { api, type BuiltinTemplateInfo, type DeckExportResult, type PptTemplateInfo, type PptTemplatePageInfo } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useDeck } from './useDeck'
 import { SlideRenderer } from './slide-renderer'
@@ -17,6 +17,13 @@ import { SlideEditor } from './slide-editor'
  * the Edit toggle opens the in-canvas editor and Export runs core's
  * native PPTX exporter — the canvas is a working surface, not a preview.
  */
+/** The deck's design source, named for the export picker: built-in name, imported id, or null (Warna & Font only). */
+function deckDesignName(deck: NonNullable<ReturnType<typeof useDeck>['deck']>, builtins: BuiltinTemplateInfo[]): string | null {
+  if (deck.theme.customTemplateId) return `impor: ${deck.theme.customTemplateId}`
+  if (deck.theme.designId) return builtins.find((template) => template.id === deck.theme.designId)?.name ?? deck.theme.designId
+  return null
+}
+
 export function SlideStage() {
   const { deck, loading, error, refresh, slide, slideCount, safeIndex, root } = useDeck()
   const setSlideIndex = useDaedalusStore((state) => state.setSlideIndex)
@@ -31,7 +38,23 @@ export function SlideStage() {
   // Imported PPT templates of this workspace: a templateRef slide's page
   // design (background + slots) comes from here, resolved per slide.
   const [pptTemplates, setPptTemplates] = useState<PptTemplateInfo[]>([])
+  const [builtinTemplates, setBuiltinTemplates] = useState<BuiltinTemplateInfo[]>([])
+  const [exportMenuOpen, setExportMenuOpen] = useState(false)
   const customTemplateId = deck?.theme.customTemplateId
+  useEffect(() => {
+    let cancelled = false
+    api
+      .builtinTemplates()
+      .then(({ templates }) => {
+        if (!cancelled) setBuiltinTemplates(templates)
+      })
+      .catch(() => {
+        if (!cancelled) setBuiltinTemplates([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
   useEffect(() => {
     if (!root) {
       setPptTemplates([])
@@ -137,12 +160,13 @@ export function SlideStage() {
     }
   }
 
-  const exportDeck = async (): Promise<void> => {
+  const exportDeck = async (choice?: { design_id?: string; custom_template_id?: string }): Promise<void> => {
     if (!root) return
+    setExportMenuOpen(false)
     setExporting(true)
     setExportError(null)
     try {
-      const result = await api.deckExport(root)
+      const result = await api.deckExport(root, choice)
       setExported(result)
       bumpWorkspaceRevision()
     } catch (exportErr: unknown) {
@@ -198,10 +222,79 @@ export function SlideStage() {
             <Pencil />
             Edit
           </Button>
-          <Button size="sm" onClick={() => void exportDeck()} disabled={!deck || exporting} data-testid="slide-export">
-            <FileDown />
-            {exporting ? ' mengekspor…' : ' Export .pptx'}
-          </Button>
+          <div className="relative flex items-center">
+            <Button size="sm" onClick={() => void exportDeck()} disabled={!deck || exporting} data-testid="slide-export">
+              <FileDown />
+              {exporting ? ' mengekspor…' : ' Export .pptx'}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setExportMenuOpen((value) => !value)}
+              disabled={!deck || exporting}
+              aria-haspopup="menu"
+              aria-expanded={exportMenuOpen}
+              aria-label="ekspor dengan template lain"
+              data-testid="slide-export-menu"
+              className="ml-1 px-1.5"
+            >
+              <ChevronDown />
+            </Button>
+            {exportMenuOpen && deck ? (
+              <div
+                role="menu"
+                data-testid="slide-export-menu-list"
+                className="absolute right-0 top-full z-20 mt-1 w-72 rounded-md border border-line bg-surface p-1.5 shadow-xl"
+              >
+                <p className="px-1.5 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted">Ekspor dengan template</p>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="block w-full rounded px-1.5 py-1 text-left text-[11px] text-foreground hover:bg-surface-raised"
+                  data-testid="slide-export-as-deck"
+                  onClick={() => void exportDeck()}
+                >
+                  Sesuai deck{deckDesignName(deck, builtinTemplates) ? ` (${deckDesignName(deck, builtinTemplates)})` : ''}
+                </button>
+                <p className="px-1.5 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted">Template bawaan</p>
+                {builtinTemplates.map((template) => (
+                  <button
+                    key={template.id}
+                    type="button"
+                    role="menuitem"
+                    className="block w-full rounded px-1.5 py-1 text-left text-[11px] text-foreground hover:bg-surface-raised"
+                    data-testid={`slide-export-builtin-${template.id}`}
+                    onClick={() => void exportDeck({ design_id: template.id })}
+                  >
+                    {template.name}
+                    {deck.theme.designId === template.id ? ' · sedang dipakai' : ''}
+                  </button>
+                ))}
+                {pptTemplates.length > 0 ? (
+                  <>
+                    <p className="px-1.5 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted">Template impor</p>
+                    {pptTemplates.map((template) => (
+                      <button
+                        key={template.id}
+                        type="button"
+                        role="menuitem"
+                        className="block w-full rounded px-1.5 py-1 text-left text-[11px] text-foreground hover:bg-surface-raised"
+                        data-testid={`slide-export-ppt-${template.id}`}
+                        onClick={() => void exportDeck({ custom_template_id: template.id })}
+                      >
+                        {template.name}
+                        {deck.theme.customTemplateId === template.id ? ' · sedang dipakai' : ''}
+                      </button>
+                    ))}
+                  </>
+                ) : null}
+                <p className="px-1.5 pt-1.5 text-[10px] leading-snug text-muted">
+                  Template bawaan mengganti warna, font, &amp; ornamen (layout dan isi tetap); template impor menuangkan kata ke
+                  halaman asli file .pptx-nya.
+                </p>
+              </div>
+            ) : null}
+          </div>
         </div>
       </div>
 
@@ -211,6 +304,7 @@ export function SlideStage() {
           <a className="text-primary underline" href={api.deckDownloadUrl(exported.root, exported.path)} download>
             unduh .pptx
           </a>
+          {exported.note ? <span className="block">{exported.note}</span> : null}
         </p>
       ) : null}
       {exportError ? <p className="text-[11px] text-error">{exportError}</p> : null}
@@ -256,6 +350,7 @@ export function SlideStage() {
               <SlideRenderer
                 slide={slide}
                 theme={deck.theme}
+                slideIndex={safeIndex}
                 editable={editing}
                 onPositionsChange={(id, positions) => void persistPositions(id, positions)}
                 resolveImageSrc={resolveImageSrc}
@@ -281,7 +376,7 @@ export function SlideStage() {
                 >
                   <span className="relative block aspect-video w-full [container-type:inline-size]">
                     <span className="pointer-events-none absolute inset-0">
-                      <SlideRenderer slide={entry} theme={deck.theme} resolveImageSrc={resolveImageSrc} templateSlide={templateSlideFor(entry)} />
+                      <SlideRenderer slide={entry} theme={deck.theme} resolveImageSrc={resolveImageSrc} templateSlide={templateSlideFor(entry)} slideIndex={index} />
                     </span>
                   </span>
                   <span className="block truncate px-1.5 py-1 text-[10px] text-muted">

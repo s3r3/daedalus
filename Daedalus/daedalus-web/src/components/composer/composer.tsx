@@ -638,9 +638,10 @@ export function Composer() {
                 ...(slideOptions.language ? { language: slideOptions.language } : {}),
                 ...(slideOptions.customTemplateId
                   ? { custom_template_id: slideOptions.customTemplateId }
-                  : slideOptions.templateId
-                    ? { template_id: slideOptions.templateId }
-                    : {}),
+                  : {
+                      ...(slideOptions.designId ? { design_id: slideOptions.designId } : {}),
+                      ...(slideOptions.templateId ? { template_id: slideOptions.templateId } : {}),
+                    }),
               },
             }
           : {}),
