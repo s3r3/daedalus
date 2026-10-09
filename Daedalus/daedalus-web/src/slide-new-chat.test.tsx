@@ -29,6 +29,7 @@ vi.mock('./api/client', () => ({
     deckExport: vi.fn(async () => ({ root: '/workspace', path: 'deck/deck.pptx', bytes: 1, slides: 1 })),
     deckAssetUrl: (root: string, name: string) => `/slides/deck/asset?root=${encodeURIComponent(root)}&name=${encodeURIComponent(name)}`,
     pptTemplates: vi.fn(async () => ({ root: '/workspace', templates: [] })),
+    builtinTemplates: vi.fn(async () => ({ templates: [] })),
     pptTemplateAssetUrl: (root: string, id: string, file: string) => `/slides/ppt-templates/asset?root=${encodeURIComponent(root)}&id=${encodeURIComponent(id)}&file=${encodeURIComponent(file)}`,
   },
 }))
