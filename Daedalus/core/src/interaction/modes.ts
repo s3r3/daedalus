@@ -23,7 +23,7 @@ export function normalizeAgentMode(value: unknown): AgentMode {
 }
 
 const READ_TOOLS = new Set(['read_file', 'list_dir', 'grep', 'glob', 'git_diff', 'git_status', 'read_skill', 'lsp_diagnostics', 'fetch_url', 'web_search', 'view_image', 'screenshot', 'search_images', 'command_status', 'read_deck', 'validate_deck']);
-const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'edit_search_replace', 'create_dir', 'download_file', 'create_deck', 'add_slide', 'update_slide', 'move_slide', 'delete_slide', 'set_deck_theme']);
+const MUTATING_TOOLS = new Set(['write_file', 'edit_file', 'edit_search_replace', 'create_dir', 'download_file', 'create_deck', 'add_slide', 'update_slide', 'move_slide', 'delete_slide', 'set_deck_theme', 'generate_deck_outline', 'generate_deck_slides', 'generate_deck']);
 const EXECUTING_TOOLS = new Set(['run_command', 'command_kill', 'export_deck']);
 
 /**

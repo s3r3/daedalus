@@ -1390,6 +1390,13 @@ export class AgentLoop {
     if (call.tool === 'export_deck' && result.status === 'ok') {
       this.#slideExports.add(state.id);
     }
+    // Pipeline generation tools export through the same exporter; their
+    // success counts as delivery only when the run actually exported
+    // (meta.exported) — an honest PARTIAL report must never satisfy
+    // the gate, exactly like an unexported deck.
+    if (result.status === 'ok' && SLIDE_PIPELINE_EXPORT_TOOLS.has(call.tool) && result.meta?.exported === true) {
+      this.#slideExports.add(state.id);
+    }
     // Stall bookkeeping: progress is a file change, a successful
     // command, a download, or a NEW observation (a result this task has
     // not already seen). Anything else — re-reads, repeated searches,
@@ -2195,7 +2202,10 @@ export class AgentLoop {
 const MAX_THOUGHT_CHARS = 4_000;
 
 /** Deck-building slide tools: one successful call means the task built deck content (the slide completion gate's trigger). */
-const SLIDE_DECK_WORK_TOOLS = new Set(['create_deck', 'add_slide', 'update_slide', 'move_slide', 'delete_slide', 'set_deck_theme']);
+const SLIDE_DECK_WORK_TOOLS = new Set(['create_deck', 'add_slide', 'update_slide', 'move_slide', 'delete_slide', 'set_deck_theme', 'generate_deck_outline', 'generate_deck_slides', 'generate_deck']);
+
+/** Pipeline generation tools whose successful export satisfies the slide completion gate (only with meta.exported === true). */
+const SLIDE_PIPELINE_EXPORT_TOOLS = new Set(['generate_deck', 'generate_deck_slides']);
 
 /** Cheap content fingerprint for the stall tracker's "new observation" test. */
 function observationHash(text: string): string {

@@ -53,9 +53,9 @@ export function isDefaultPipeline(intents: string[]): boolean {
 
 /** The Slide domain's canned pipeline (used when a slide goal carries no done-criteria). */
 export const SLIDE_PLAN_STEPS = [
-  'Build the deck outline (create_deck, then one add_slide per outline item)',
+  'Generate the deck outline with the slide pipeline (skeleton deck persisted)',
   'Confirm the outline and design direction with the user (Standard checkpoint)',
-  'Fill every slide with content',
+  'Fill every slide with the pipeline (resumable per slide)',
   'Validate the deck and export the .pptx',
 ];
 

@@ -850,7 +850,11 @@ export class TaskRunner {
     }
     // Slide domain: the locked slide registry (deck tools only — coding
     // tools are not registered and cannot execute) and no extension tools.
-    const registry = options.domain === 'slide' ? createSlideRegistry() : createDefaultRegistry();
+    // The pipeline tools inside it call the run's model themselves, so
+    // the registry closes over the provider resolved below for this run
+    // (the exact instance the agent loop will use).
+    let runProvider: LLMProvider | undefined;
+    const registry = options.domain === 'slide' ? createSlideRegistry(() => runProvider) : createDefaultRegistry();
     if (options.domain !== 'slide') {
       for (const tool of extensions.tools) {
         try {
@@ -976,6 +980,7 @@ export class TaskRunner {
     // text-only model instead of silently dropping the picture.
     const visionEnabled = this.#visionEnabledFor(effectiveOptions);
     const provider = this.#options.provider ?? this.#providerFor(effectiveOptions, spec.id);
+    runProvider = provider;
     const loop = new AgentLoop({
       provider,
       bus: this.bus,
