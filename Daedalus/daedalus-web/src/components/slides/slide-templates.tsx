@@ -11,11 +11,13 @@ function messageOf(error: unknown): string {
 }
 
 /**
- * Template panel (Slide domain, under the outline): the bundled design
- * directions from Farid's reference-repo design — a template is palette +
- * typography tokens the outline is poured into. Picking one applies it to
- * the open deck at once (core revalidates and persists), or stays pending
- * and rides the next task's create_deck when no deck exists yet.
+ * Warna & Font panel (Slide domain, under the outline): the bundled design
+ * directions from Farid's reference-repo design — each one is only palette +
+ * typography tokens the outline is poured into (hence "Warna & Font", not
+ * "Template": the layouts are picked per slide, these only recolor it).
+ * Picking one applies it to the open deck at once (core revalidates and
+ * persists), or stays pending and rides the next task's create_deck when no
+ * deck exists yet.
  */
 export function SlideTemplatesPanel() {
   const { deck, root } = useDeck()
@@ -59,9 +61,9 @@ export function SlideTemplatesPanel() {
   }
 
   return (
-    <Panel title="Template" data-testid="slide-templates">
+    <Panel title="Warna & Font" data-testid="slide-templates">
       {error ? <p className="px-1 py-1 text-[11px] text-muted">{error}</p> : null}
-      {templates.length === 0 && !error ? <p className="px-1 py-1 text-[11px] text-muted">Memuat template…</p> : null}
+      {templates.length === 0 && !error ? <p className="px-1 py-1 text-[11px] text-muted">Memuat warna & font…</p> : null}
       <div className="flex flex-col gap-1.5">
         {templates.map((template) => {
           const active = template.id === activeId
@@ -98,7 +100,7 @@ export function SlideTemplatesPanel() {
         })}
       </div>
       <p className="px-1 pt-1.5 text-[10px] text-muted">
-        {deck ? 'Klik template untuk menerapkannya ke deck ini.' : 'Template terpilih dipakai saat deck berikutnya dibuat.'}
+        {deck ? 'Klik warna & font untuk menerapkannya ke deck ini.' : 'Warna & font terpilih dipakai saat deck berikutnya dibuat.'}
       </p>
     </Panel>
   )

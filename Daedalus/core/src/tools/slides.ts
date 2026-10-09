@@ -60,7 +60,7 @@ export const createDeckTool: ToolDefinition = {
     const a = args as { title?: unknown; templateId?: unknown };
     if (typeof a.title !== 'string' || a.title.trim().length === 0) return err('title must be a non-empty string');
     const template = getSlideTemplate(typeof a.templateId === 'string' ? a.templateId : undefined);
-    if (a.templateId !== undefined && !template) return err(`unknown templateId "${String(a.templateId)}" — bundled templates: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
+    if (a.templateId !== undefined && !template) return err(`unknown templateId "${String(a.templateId)}" — warna & font bawaan: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
     const root = context.workspaceRoot;
     const paths = deckPaths(root);
     if (existsSync(paths.file)) return err('deck already exists (deck/deck.json). Use read_deck to inspect it, or delete it manually before creating a new one.');
@@ -69,7 +69,7 @@ export const createDeckTool: ToolDefinition = {
       const deck = newDeck(a.title.trim());
       if (template) deck.theme = { ...template.theme, templateId: template.id };
       await writeDeck(root, deck);
-      return ok(`created deck at deck/deck.json${template ? ` with template ${template.id}` : ''}\n${summarizeDeck(deck)}`, { deck_id: deck.id, path: 'deck/deck.json' });
+      return ok(`created deck at deck/deck.json${template ? ` with warna & font ${template.id}` : ''}\n${summarizeDeck(deck)}`, { deck_id: deck.id, path: 'deck/deck.json' });
     } catch (e) { return err(String(e)); }
   },
 };
@@ -196,7 +196,7 @@ export const setDeckThemeTool: ToolDefinition = {
   async execute(args, context) {
     const a = args as { templateId?: unknown; accent?: unknown; dark?: unknown };
     const template = getSlideTemplate(typeof a.templateId === 'string' ? a.templateId : undefined);
-    if (a.templateId !== undefined && !template) return err(`unknown templateId "${String(a.templateId)}" — bundled templates: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
+    if (a.templateId !== undefined && !template) return err(`unknown templateId "${String(a.templateId)}" — warna & font bawaan: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
     if (a.accent !== undefined && (typeof a.accent !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(a.accent))) return err('accent must be a #rrggbb hex color');
     if (a.dark !== undefined && typeof a.dark !== 'boolean') return err('dark must be a boolean');
     if (!template && a.accent === undefined && a.dark === undefined) return err('provide templateId, accent and/or dark');
