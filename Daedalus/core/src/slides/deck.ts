@@ -14,11 +14,29 @@ export type DeckTheme = {
   templateId?: string;
 };
 
+/**
+ * User-chosen canvas placement for one named block of a slide (the Web
+ * editor's drag): fractions of the slide box (0..1), so the same values
+ * drive the HTML canvas and the PPTX exporter (13.333x7.5in). `w`/`h`
+ * are optional — renderers fall back to the layout's natural size.
+ * Blocks are keyed by the names `layoutBlockKeys` (slides/layouts.ts)
+ * returns for the layout: 'title', 'points', 'step-0', 'item-2', ...
+ * A slide without `positions` renders exactly as the layout dictates.
+ */
+export type BlockPosition = {
+  x: number;
+  y: number;
+  w?: number;
+  h?: number;
+};
+
 export type Slide = {
   id: string;
   layout: string;
   content: Record<string, unknown>;
   notes?: string;
+  /** Drag placements from the canvas editor, keyed by block name. */
+  positions?: Record<string, BlockPosition>;
   /**
    * Generation-pipeline state (slides/pipeline.ts): 'skeleton' is an
    * outline placeholder whose content is still the layout defaults plus

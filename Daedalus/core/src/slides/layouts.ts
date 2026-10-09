@@ -186,6 +186,44 @@ export const LAYOUTS: LayoutDef[] = [
 
 export const LAYOUT_IDS: string[] = LAYOUTS.map((l) => l.id);
 
+function indexedKeys(field: unknown, prefix: string, cap?: number): string[] {
+  const count = Array.isArray(field) ? field.length : 0;
+  const n = cap !== undefined ? Math.min(count, cap) : count;
+  return Array.from({ length: n }, (_, i) => `${prefix}-${i}`);
+}
+
+/**
+ * The named, individually placeable blocks a slide of this layout has,
+ * given its content (slides/deck.ts `positions` keys). The Web canvas
+ * editor drags exactly these blocks, the PPTX exporter places exactly
+ * these blocks, and validateDeck rejects placements for anything else —
+ * one vocabulary shared by all three. Repeated elements are indexed
+ * (`step-0`, `item-2`, `stat-1`, ...) in content order.
+ */
+export function layoutBlockKeys(layoutId: string, content: Record<string, unknown>): string[] {
+  switch (layoutId) {
+    case 'title': return ['title', 'subtitle'];
+    case 'section': return ['number', 'title'];
+    case 'closing': return ['title', 'cta'];
+    case 'quote': return ['text', 'author'];
+    case 'bullets': return ['title', 'points'];
+    case 'two-column': return ['title', 'left', 'right'];
+    case 'comparison': return ['title', 'left', 'right', 'verdict'];
+    case 'image-side': return ['title', 'points', 'image'];
+    case 'diagram-flow': return ['title', ...indexedKeys(content.steps, 'step')];
+    case 'diagram-cycle': return ['title', ...indexedKeys(content.nodes, 'node', 4)];
+    case 'diagram-hierarchy': return ['title', 'root', ...indexedKeys(content.groups, 'group')];
+    case 'timeline': return ['title', ...indexedKeys(content.events, 'event')];
+    case 'chart-bar': return ['title', 'chart'];
+    case 'chart-line': return ['title', 'chart', 'legend'];
+    case 'chart-donut': return ['title', 'chart', 'legend'];
+    case 'table': return ['title', 'table'];
+    case 'stats': return ['title', ...indexedKeys(content.stats, 'stat')];
+    case 'icon-grid': return ['title', ...indexedKeys(content.items, 'item')];
+    default: return [];
+  }
+}
+
 export function getLayout(id: string): LayoutDef | undefined {
   return LAYOUTS.find((l) => l.id === id);
 }
