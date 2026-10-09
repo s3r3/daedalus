@@ -133,6 +133,87 @@ describe('slide task through the engine (server level)', () => {
   })
 })
 
+async function waitForSkeletonFile(root: string, count: number): Promise<void> {
+  for (let attempt = 0; attempt < 150; attempt++) {
+    try {
+      const deck = JSON.parse(readFileSync(join(root, 'deck', 'deck.json'), 'utf8')) as { slides: Array<{ status: string }> }
+      if (deck.slides.length === count && deck.slides.every((slide) => slide.status === 'skeleton')) return
+    } catch { /* deck not persisted yet */ }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error('staged skeleton deck never appeared')
+}
+
+describe('POST /slides/deck/generate (outline-first Buat button)', () => {
+  test('a Standard task stages its outline; Buat releases it and the original task completes', async () => {
+    const { base, root } = await listen()
+    const created = await req(base, 'POST', '/tasks', {
+      goal: 'buatkan deck tentang arsitektur server',
+      provider_id: 'fake',
+      domain: 'slide',
+      slide: { generation: 'standard', slide_count: 2 },
+    })
+    expect(created.status).toBe(201)
+    const id = String(created.body.id ?? '')
+    expect(id).toBeTruthy()
+
+    await waitForSkeletonFile(root, 2)
+    // Parked at the staging gate: not done, not failed, no export yet.
+    const parked = await req(base, 'GET', `/tasks/${id}`)
+    const parkedRecord = (parked.body.state ?? parked.body) as Record<string, unknown>
+    expect(parkedRecord.status).not.toBe('done')
+    expect(parkedRecord.status).not.toBe('failed')
+    expect(readdirSync(join(root, 'deck')).some((name) => name.endsWith('.pptx'))).toBe(false)
+
+    const generated = await req(base, 'POST', '/slides/deck/generate', { root, template_id: 'ocean' })
+    expect(generated.status).toBe(200)
+    expect(generated.body.task_id).toBe(id)
+    expect(generated.body.outcome).toBe('success')
+
+    const record = await waitForTask(base, id)
+    expect(record.status).toBe('done')
+    const deck = JSON.parse(readFileSync(join(root, 'deck', 'deck.json'), 'utf8')) as { theme: { templateId?: string }; slides: Array<{ status: string }> }
+    expect(deck.theme.templateId).toBe('ocean')
+    expect(deck.slides.every((slide) => slide.status === 'filled')).toBe(true)
+    expect(readdirSync(join(root, 'deck')).some((name) => name.endsWith('.pptx'))).toBe(true)
+  })
+
+  test('nothing staged is an honest error; an unknown template is a 400', async () => {
+    const { base, root } = await listen()
+    const noDeck = await req(base, 'POST', '/slides/deck/generate', { root })
+    expect(noDeck.status).toBe(404)
+    expect(noDeck.body.error).toBe('deck_not_found')
+
+    const deck = newDeck('Deck Penuh')
+    deck.slides.push({ id: 's-1', layout: 'bullets', content: { title: 'Isi', points: ['a'] }, status: 'filled' })
+    await writeDeck(root, deck)
+    const filled = await req(base, 'POST', '/slides/deck/generate', { root })
+    expect(filled.status).toBe(409)
+    expect(filled.body.error).toBe('no_staged_outline')
+
+    const badTemplate = await req(base, 'POST', '/slides/deck/generate', { root, template_id: 'tidak-ada' })
+    expect(badTemplate.status).toBe(400)
+    expect(badTemplate.body.error).toBe('unknown_slide_template')
+  })
+
+  test('Buat with no live run fills the staged skeleton directly', async () => {
+    const { base, root } = await listen()
+    const deck = newDeck('Deck Kerangka')
+    deck.slides.push(
+      { id: 's-1', layout: 'title', content: { title: 'Judul' }, status: 'skeleton', keyMessage: 'pembuka' },
+      { id: 's-2', layout: 'bullets', content: { title: 'Isi' }, status: 'skeleton', keyMessage: 'inti' },
+    )
+    await writeDeck(root, deck)
+
+    const generated = await req(base, 'POST', '/slides/deck/generate', { root })
+    expect(generated.status).toBe(200)
+    expect(generated.body.outcome).toBe('success')
+    const after = JSON.parse(readFileSync(join(root, 'deck', 'deck.json'), 'utf8')) as { slides: Array<{ status: string }> }
+    expect(after.slides.every((slide) => slide.status === 'filled')).toBe(true)
+    expect(readdirSync(join(root, 'deck')).some((name) => name.endsWith('.pptx'))).toBe(true)
+  })
+})
+
 describe('POST /slides/deck/regenerate (editor variant)', () => {
   test('regenerates the one slide in place; unknown slide and missing deck are honest errors', async () => {
     const { base, root } = await listen()

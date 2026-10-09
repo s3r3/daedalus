@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { DeckSpec } from '@daedalus/core'
 import { useDaedalusStore } from '../../state/taskStore'
@@ -20,6 +20,7 @@ const deckAddSlideMock = vi.fn()
 const deckExportMock = vi.fn()
 const deckRegenerateSlideMock = vi.fn()
 const listMock = vi.fn()
+const deckGenerateMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
   api: {
@@ -31,6 +32,7 @@ vi.mock('../../api/client', () => ({
     deckDeleteSlide: vi.fn(async () => ({ root: '/ws', deck: { version: 1, id: 'd', title: 't', theme: {}, slides: [] } })),
     deckMoveSlide: vi.fn(async () => ({ root: '/ws', deck: { version: 1, id: 'd', title: 't', theme: {}, slides: [] } })),
     deckExport: (...args: unknown[]) => deckExportMock(...args),
+    deckGenerate: (...args: unknown[]) => deckGenerateMock(...args),
     deckDownloadUrl: (root: string, path: string) => `/slides/deck/download?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
     deckRegenerateSlide: (...args: unknown[]) => deckRegenerateSlideMock(...args),
     list: (...args: unknown[]) => listMock(...args),
@@ -122,6 +124,14 @@ beforeEach(() => {
       ],
     }
   })
+  deckGenerateMock.mockReset()
+  deckGenerateMock.mockResolvedValue({
+    root: '/ws',
+    task_id: 't-1',
+    outcome: 'success',
+    summary: 'done: 2 slide selesai dan ter-export ke deck/deck-kerangka.pptx (42 KB).',
+    exported: { path: 'deck/deck-kerangka.pptx', bytes: 43008, slides: 2 },
+  })
   useDaedalusStore.getState().reset()
 })
 
@@ -196,6 +206,74 @@ describe('DeckOutlinePanel', () => {
   })
 })
 
+const stagedDeck: DeckSpec = {
+  version: 1,
+  id: 'deck-kerangka',
+  title: 'Deck Kerangka',
+  theme: {},
+  slides: [
+    { id: 'k1', layout: 'title', content: { title: 'Judul Kerangka' }, status: 'skeleton', keyMessage: 'pembuka' },
+    { id: 'k2', layout: 'bullets', content: { title: 'Isi Kerangka' }, status: 'skeleton', keyMessage: 'inti' },
+  ],
+}
+
+describe('DeckOutlinePanel Buat (staged outline-first generate)', () => {
+  test('the Buat button renders only while the deck is staged (skeleton slides)', async () => {
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    const filled = render(<DeckOutlinePanel />)
+    await screen.findByTestId('deck-outline-item-0')
+    expect(screen.queryByTestId('deck-generate')).toBeNull()
+    filled.unmount()
+
+    fileMock.mockResolvedValue(deckFile(stagedDeck))
+    render(<DeckOutlinePanel />)
+    const button = await screen.findByTestId('deck-generate')
+    expect(button.textContent).toContain('Buat')
+    expect(screen.getByTestId('deck-outline-item-1').textContent).toContain('Isi Kerangka')
+  })
+
+  test('clicking Buat sends the settled template, disables while generating, then reports the verdict', async () => {
+    const user = userEvent.setup()
+    fileMock.mockResolvedValue(deckFile(stagedDeck))
+    let resolveGenerate: (value: unknown) => void = () => undefined
+    deckGenerateMock.mockReturnValue(new Promise((resolve) => { resolveGenerate = resolve }))
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    useDaedalusStore.getState().setSlideOptions({ templateId: 'ocean' })
+    render(<DeckOutlinePanel />)
+
+    const button = await screen.findByTestId('deck-generate')
+    await user.click(button)
+
+    expect(deckGenerateMock).toHaveBeenCalledTimes(1)
+    expect(deckGenerateMock).toHaveBeenCalledWith('/ws', { template_id: 'ocean' })
+    expect((screen.getByTestId('deck-generate') as HTMLButtonElement).disabled).toBe(true)
+
+    await act(async () => {
+      resolveGenerate({
+        root: '/ws',
+        task_id: 't-1',
+        outcome: 'success',
+        summary: 'done: 2 slide selesai dan ter-export ke deck/deck-kerangka.pptx (42 KB).',
+        exported: { path: 'deck/deck-kerangka.pptx', bytes: 43008, slides: 2 },
+      })
+    })
+    const note = await screen.findByTestId('deck-generate-note')
+    expect(note.textContent).toContain('ter-export ke deck/deck-kerangka.pptx')
+    expect((screen.getByTestId('deck-generate') as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  test('a template already applied to the deck wins over the pending composer pick', async () => {
+    const user = userEvent.setup()
+    fileMock.mockResolvedValue(deckFile({ ...stagedDeck, theme: { templateId: 'general' } }))
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    useDaedalusStore.getState().setSlideOptions({ templateId: 'ocean' })
+    render(<DeckOutlinePanel />)
+
+    await user.click(await screen.findByTestId('deck-generate'))
+    expect(deckGenerateMock).toHaveBeenCalledWith('/ws', { template_id: 'general' })
+  })
+})
+
 describe('SlideStage', () => {
   test('renders the mocked deck, counts slides, and next/thumb navigation moves the selection', async () => {
     useDaedalusStore.getState().setWorkspace({ root: '/ws' })
@@ -214,6 +292,23 @@ describe('SlideStage', () => {
     await userEvent.click(screen.getByTestId('slide-thumb-2'))
     expect(screen.getByTestId('slide-counter').textContent).toContain('3 / 3')
     expect(useDaedalusStore.getState().slideIndex).toBe(2)
+  })
+
+  test('the filmstrip stays in view: the preview region flexes and the strip cannot shrink away', async () => {
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    const preview = screen.getByTestId('slide-preview')
+    const strip = screen.getByTestId('slide-filmstrip')
+    // The preview region is the flexible, height-constrained one, so
+    // header + preview + filmstrip always fit the stage cell.
+    expect(preview.className).toContain('min-h-0')
+    expect(preview.className).toContain('flex-1')
+    expect(strip.className).toContain('shrink-0')
+    // The filmstrip still follows the preview in flow order.
+    expect(preview.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getAllByTestId(/^slide-thumb-/)).toHaveLength(3)
   })
 
   test('a missing deck shows the honest empty state with a working refresh', async () => {

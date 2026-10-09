@@ -139,14 +139,21 @@ function eventsOf(store: TaskStore, taskId: string, type: string): Event[] {
   return store.replay(taskId).filter((event) => event.type === type);
 }
 
-async function waitForQuestion(store: TaskStore, taskId: string): Promise<{ id: string; options: Array<{ label: string }> }> {
+/** Poll until the engine has persisted a fully-skeleton deck of `count` slides (the staged outline). */
+async function waitForSkeleton(root: string, count: number): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt++) {
-    const requested = eventsOf(store, taskId, 'QUESTION_REQUESTED');
-    const payload = requested[0]?.payload as { question?: { id: string; options: Array<{ label: string }> } } | undefined;
-    if (payload?.question) return payload.question;
+    const deck = await readDeck(root).catch(() => null);
+    if (deck && deck.slides.length === count && deck.slides.every((slide) => slide.status === 'skeleton')) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  throw new Error('engine never asked its checkpoint question');
+  throw new Error('engine never staged a skeleton deck');
+}
+
+async function isSettled(promise: Promise<unknown>): Promise<boolean> {
+  return Promise.race([
+    promise.then(() => true, () => true),
+    new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 60)),
+  ]);
 }
 
 describe('SlideEngine generation', () => {
@@ -188,7 +195,7 @@ describe('SlideEngine generation', () => {
     expect(allSlides).toContain('poin satu');
   });
 
-  test('standard flow: the checkpoint pauses on a persisted skeleton and the answer steers the same deck', async () => {
+  test('standard flow stages the outline in the panel; Buat fills the persisted skeleton and completes the task', async () => {
     const root = temp('daedalus-engine-standard-');
     const { provider, calls } = goodDeckProvider();
     const { runner, store } = makeRunner(root, provider);
@@ -200,25 +207,151 @@ describe('SlideEngine generation', () => {
       slide: { generation: 'standard', slideCount: 3 },
     });
 
-    const question = await waitForQuestion(store, 'engine-standard');
-    expect(question.options.map((option) => option.label)).toContain('Midnight Scholar');
-    // While the question is pending, the skeleton deck is already on disk
-    // and nothing has been filled or exported yet.
-    const skeleton = await readDeck(root);
-    expect(skeleton?.slides).toHaveLength(3);
-    expect(skeleton?.slides.every((slide) => slide.status === 'skeleton')).toBe(true);
+    // Staged: skeleton persisted, nothing filled or exported, no chat
+    // question card, and the task has NOT settled — it waits for Buat.
+    await waitForSkeleton(root, 3);
+    expect(await isSettled(pending)).toBe(false);
+    expect(calls.filter((call) => call.system.includes(FILL_SYSTEM_MARKER))).toHaveLength(0);
     expect(pptxFiles(root)).toHaveLength(0);
+    expect(eventsOf(store, 'engine-standard', 'QUESTION_REQUESTED')).toHaveLength(0);
+    expect(eventsOf(store, 'engine-standard', 'TASK_COMPLETED')).toHaveLength(0);
 
-    expect(runner.questions.answer(question.id, 'midnight-scholar')).toBe(true);
+    const released = await runner.releaseStagedDeck(root, { templateId: 'midnight-scholar' });
+    expect(released?.taskId).toBe('engine-standard');
+    expect(released?.outcome).toBe('success');
+    expect(released?.summary).toContain('done:');
+
     const { state } = await pending;
-
     expect(state.status).toBe('done');
     const deck = await readDeck(root);
     expect(deck?.theme.templateId).toBe('midnight-scholar');
     expect(deck?.slides.every((slide) => slide.status === 'filled')).toBe(true);
     expect(pptxFiles(root)).toHaveLength(1);
-    expect(eventsOf(store, 'engine-standard', 'QUESTION_ANSWERED')).toHaveLength(1);
     expect(calls.filter((call) => call.system.includes(FILL_SYSTEM_MARKER))).toHaveLength(3);
+  });
+
+  test('staged generate fills the deck as edited in the panel meanwhile (order, titles, hand-written slide kept)', async () => {
+    const root = temp('daedalus-engine-staged-edits-');
+    const { provider, calls } = goodDeckProvider();
+    const { runner } = makeRunner(root, provider);
+
+    const pending = runner.run({
+      goal: 'buatkan deck tentang panel surya',
+      taskId: 'engine-staged-edits',
+      domain: 'slide',
+      slide: { generation: 'standard', slideCount: 3 },
+    });
+    await waitForSkeleton(root, 3);
+
+    // Panel edits while staged: move the closing slide to the front,
+    // retitle the title slide, hand-write the bullets slide outright.
+    const staged = (await readDeck(root))!;
+    const [titleSlide, bulletsSlide, closingSlide] = staged.slides;
+    await writeDeck(root, {
+      ...staged,
+      slides: [
+        closingSlide!,
+        { ...bulletsSlide!, content: { title: 'Versi Panel', points: ['poin tulisanku sendiri'] } },
+        { ...titleSlide!, content: { ...titleSlide!.content, title: 'Judul Dari Panel' } },
+      ],
+    });
+
+    const released = await runner.releaseStagedDeck(root, {});
+    expect(released?.outcome).toBe('success');
+    const { state } = await pending;
+    expect(state.status).toBe('done');
+
+    const deck = (await readDeck(root))!;
+    // Order is the panel's order, and every slide is filled.
+    expect(deck.slides.map((slide) => slide.id)).toEqual([closingSlide!.id, bulletsSlide!.id, titleSlide!.id]);
+    expect(deck.slides.every((slide) => slide.status === 'filled')).toBe(true);
+    // The hand-written slide is the user's: kept verbatim, never sent to the model.
+    const handwritten = deck.slides.find((slide) => slide.id === bulletsSlide!.id);
+    expect(handwritten?.content).toEqual({ title: 'Versi Panel', points: ['poin tulisanku sendiri'] });
+    const fillCalls = calls.filter((call) => call.system.includes(FILL_SYSTEM_MARKER));
+    expect(fillCalls).toHaveLength(2);
+    // The retitled slide was generated under its panel title.
+    expect(fillCalls.some((call) => call.user.includes('slide title: Judul Dari Panel'))).toBe(true);
+    expect(pptxFiles(root)).toHaveLength(1);
+  });
+
+  test('a staged outline abandoned by a new prompt settles honestly; the staged deck stays the one that counts', async () => {
+    const root = temp('daedalus-engine-staged-supersede-');
+    const { provider, calls } = goodDeckProvider();
+    const { runner } = makeRunner(root, provider);
+
+    const stagedRun = runner.run({
+      goal: 'buatkan deck tentang topik lama',
+      taskId: 'engine-staged-old',
+      domain: 'slide',
+      slide: { generation: 'standard', slideCount: 2 },
+    });
+    await waitForSkeleton(root, 2);
+
+    expect(runner.abandonStagedDeck(root)).toBe(true);
+    const abandoned = await stagedRun;
+    expect(abandoned.state.status).toBe('failed');
+    expect(abandoned.state.last_error).toBe('staged_superseded');
+    expect(abandoned.outcome).toBe('failed');
+    expect(calls.filter((call) => call.system.includes(FILL_SYSTEM_MARKER))).toHaveLength(0);
+    expect(pptxFiles(root)).toHaveLength(0);
+
+    // The newest prompt owns the workspace now: it resumes the staged
+    // skeleton — the outline that counts — and finishes the deck.
+    const fresh = await runner.run({
+      goal: 'lanjutkan dengan topik terbaru',
+      taskId: 'engine-staged-new',
+      domain: 'slide',
+      slide: { generation: 'standard' },
+    });
+    expect(fresh.state.status).toBe('done');
+    expect(pptxFiles(root)).toHaveLength(1);
+    const deck = await readDeck(root);
+    expect(deck?.slides.every((slide) => slide.status === 'filled')).toBe(true);
+  });
+
+  test('Buat again after a partial staged fill resumes the leftover skeletons with no live run', async () => {
+    const root = temp('daedalus-engine-staged-retry-');
+    let fills = 0;
+    const flaky = scripted((system) => {
+      if (system.includes(OUTLINE_SYSTEM_MARKER)) {
+        return [0, 1].map((index) => ({ title: `Slide ${index + 1}`, layoutId: 'bullets', keyMessage: 'poin' }));
+      }
+      if (system.includes(FILL_SYSTEM_MARKER)) {
+        fills += 1;
+        if (fills <= 3) return 'bukan JSON';
+        return { title: 'Terisi', points: ['satu'] };
+      }
+      return {};
+    });
+    const { runner } = makeRunner(root, flaky.provider);
+
+    const pending = runner.run({
+      goal: 'buatkan deck tentang coba lagi',
+      taskId: 'engine-staged-retry',
+      domain: 'slide',
+      slide: { generation: 'standard', slideCount: 2 },
+    });
+    await waitForSkeleton(root, 2);
+
+    const released = await runner.releaseStagedDeck(root, {});
+    expect(released?.outcome).toBe('partial');
+    const first = await pending;
+    expect(first.state.status).toBe('failed');
+    expect(first.state.last_error).toBe('slide_partial');
+    expect(pptxFiles(root)).toHaveLength(0);
+
+    // The run is over; pressing Buat again fills just the leftover
+    // skeleton directly (the deck-endpoint fallback seam).
+    const good = goodDeckProvider();
+    const fill = await makeRunner(root, good.provider).runner.fillStagedDeck(root, {});
+    expect(fill?.exported).toBeTruthy();
+    expect(fill?.failures).toHaveLength(0);
+    expect(pptxFiles(root)).toHaveLength(1);
+    const deck = await readDeck(root);
+    expect(deck?.slides.every((slide) => slide.status === 'filled')).toBe(true);
+    // Nothing left at skeleton status: a further Buat is an honest null.
+    expect(await makeRunner(root, good.provider).runner.fillStagedDeck(root, {})).toBeNull();
   });
 
   test('composer parameters reach the outline stage (count and language)', async () => {
