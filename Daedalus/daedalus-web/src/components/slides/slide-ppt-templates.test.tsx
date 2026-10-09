@@ -101,14 +101,44 @@ describe('SlidePptTemplatesPanel', () => {
     expect(pptTemplateDeleteMock).toHaveBeenCalledWith('/ws', 'emerald-gold')
   })
 
-  test('without a deck, applying explains itself instead of calling the theme endpoint', async () => {
+  test('without a deck, clicking selects the template for the next deck instead of calling the theme endpoint', async () => {
     const user = userEvent.setup()
     fileMock.mockRejectedValue(new Error('404 Not Found'))
     render(<SlidePptTemplatesPanel />)
 
     await user.click(await screen.findByTestId('slide-ppt-template-emerald-gold'))
     expect(deckThemeMock).not.toHaveBeenCalled()
-    expect((await screen.findByTestId('slide-ppt-template-note')).textContent).toContain('Belum ada deck')
+    expect((await screen.findByTestId('slide-ppt-template-note')).textContent).toContain('dipilih untuk deck berikutnya')
+    expect(useDaedalusStore.getState().slideOptions.customTemplateId).toBe('emerald-gold')
+    expect(useDaedalusStore.getState().slideOptions.templateId).toBeNull()
+  })
+
+  test('a template with parsed pages shows its design summary; a skin-only one invites a re-import', async () => {
+    const paged = {
+      ...importedTemplate,
+      id: 'berhalaman',
+      name: 'Berhalaman',
+      pages: [
+        { kind: 'cover', slots: [] },
+        { kind: 'toc', slots: [] },
+        { kind: 'section', slots: [] },
+        { kind: 'content', slots: [] },
+        { kind: 'content', slots: [] },
+        { kind: 'closing', slots: [] },
+      ],
+    }
+    pptTemplatesMock.mockResolvedValue({ root: '/ws', templates: [paged, importedTemplate] })
+    render(<SlidePptTemplatesPanel />)
+
+    const summary = await screen.findByTestId('slide-ppt-template-pages-berhalaman')
+    expect(summary.textContent).toContain('6 halaman')
+    expect(summary.textContent).toContain('sampul')
+    expect(summary.textContent).toContain('isi ×2')
+    expect(summary.textContent).toContain('penutup')
+
+    const skinItem = await screen.findByTestId('slide-ppt-template-emerald-gold')
+    expect(skinItem.textContent).toContain('Impor ulang untuk memakai desain halamannya')
+    expect(screen.queryByTestId('slide-ppt-template-pages-emerald-gold')).toBeNull()
   })
 
   test('an applied template shows its active state from the deck theme', async () => {

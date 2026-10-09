@@ -159,16 +159,30 @@ export function SlideEditor({ root, deck, slide, index, onChanged }: {
 
       <label className="flex flex-col gap-1 text-[11px] text-muted">
         Layout
-        <select
-          value={layout}
-          onChange={(event) => setLayout(event.target.value)}
-          data-testid="slide-editor-layout"
-          className="rounded border border-line bg-surface-raised px-2 py-1.5 text-xs text-foreground"
-        >
-          {LAYOUTS.map((entry) => (
-            <option key={entry.id} value={entry.id}>{entry.label} ({entry.id})</option>
-          ))}
-        </select>
+        {slide.templateRef ? (
+          // Template slides keep the imported page's layout by design (v2):
+          // the select is replaced, not merely disabled, so nothing implies
+          // the layout can be switched — only the words (JSON below) change.
+          <select
+            value="template-page"
+            disabled
+            data-testid="slide-editor-layout"
+            className="rounded border border-line bg-surface-raised px-2 py-1.5 text-xs text-muted"
+          >
+            <option value="template-page">Halaman template (dari file .pptx — layout tetap)</option>
+          </select>
+        ) : (
+          <select
+            value={layout}
+            onChange={(event) => setLayout(event.target.value)}
+            data-testid="slide-editor-layout"
+            className="rounded border border-line bg-surface-raised px-2 py-1.5 text-xs text-foreground"
+          >
+            {LAYOUTS.map((entry) => (
+              <option key={entry.id} value={entry.id}>{entry.label} ({entry.id})</option>
+            ))}
+          </select>
+        )}
       </label>
 
       <label className="flex flex-col gap-1 text-[11px] text-muted">

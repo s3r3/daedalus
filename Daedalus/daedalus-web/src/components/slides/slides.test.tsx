@@ -22,6 +22,7 @@ const deckRegenerateSlideMock = vi.fn()
 const listMock = vi.fn()
 const deckGenerateMock = vi.fn()
 const deckUploadAssetMock = vi.fn()
+const pptTemplatesMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
   api: {
@@ -38,6 +39,8 @@ vi.mock('../../api/client', () => ({
     deckRegenerateSlide: (...args: unknown[]) => deckRegenerateSlideMock(...args),
     deckUploadAsset: (...args: unknown[]) => deckUploadAssetMock(...args),
     deckAssetUrl: (root: string, name: string) => `/slides/deck/asset?root=${encodeURIComponent(root)}&name=${encodeURIComponent(name)}`,
+    pptTemplates: (...args: unknown[]) => pptTemplatesMock(...args),
+    pptTemplateAssetUrl: (root: string, id: string, file: string) => `/slides/ppt-templates/asset?root=${encodeURIComponent(root)}&id=${encodeURIComponent(id)}&file=${encodeURIComponent(file)}`,
     list: (...args: unknown[]) => listMock(...args),
   },
 }))
@@ -129,6 +132,8 @@ beforeEach(() => {
   })
   deckUploadAssetMock.mockReset()
   deckUploadAssetMock.mockResolvedValue({ root: '/ws', name: 'foto-unggahan.png', path: 'deck/assets/foto-unggahan.png', size: 4321 })
+  pptTemplatesMock.mockReset()
+  pptTemplatesMock.mockResolvedValue({ root: '/ws', templates: [] })
   deckGenerateMock.mockReset()
   deckGenerateMock.mockResolvedValue({
     root: '/ws',
@@ -1229,5 +1234,136 @@ describe('SlideWorkspacePanel', () => {
     render(<SlideWorkspacePanel />)
     expect(screen.getByTestId('slide-workspace').textContent).toContain('Buka workspace dulu')
     expect(listMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('template slides (imported PPT designs)', () => {
+  const contentPage = {
+    kind: 'content' as const,
+    background: { color: '#0b3d2e' },
+    slots: [
+      { key: 's0', kind: 'text' as const, rect: { x: 0.06, y: 0.06, w: 0.6, h: 0.12 }, sampleText: 'Judul Sampel', fontSizePt: 28, bold: true, color: '#ffd97a', fontFamily: 'Georgia', lineCount: 1, maxChars: 60 },
+      { key: 's1', kind: 'text' as const, rect: { x: 0.06, y: 0.25, w: 0.5, h: 0.5 }, sampleText: 'Isi sampel', fontSizePt: 14, bold: false, lineCount: 3, maxChars: 200 },
+      { key: 's2', kind: 'image' as const, rect: { x: 0.62, y: 0.2, w: 0.32, h: 0.6 }, imageFile: 'emerald.page-3.pic-0.png' },
+    ],
+  }
+  const coverPage = {
+    kind: 'cover' as const,
+    background: { imageFile: 'emerald.page-0.background.png' },
+    slots: [
+      { key: 's0', kind: 'text' as const, rect: { x: 0.1, y: 0.3, w: 0.8, h: 0.25 }, sampleText: 'Judul Besar', fontSizePt: 44, bold: true, color: '#ffd97a', fontFamily: 'Georgia', align: 'center' as const, lineCount: 1, maxChars: 66 },
+    ],
+  }
+  const templateSlide: Slide = {
+    id: 't1',
+    layout: 'template-page',
+    templateRef: { templateId: 'emerald', page: 3 },
+    content: { title: 'Keluarga Virus', slots: { s0: 'Keluarga Virus', s1: 'Isi tentang virus', s2: '' } },
+    status: 'filled',
+  }
+  const templateDeck: DeckSpec = {
+    version: 1,
+    id: 'deck-template',
+    title: 'Deck Template',
+    theme: { customTemplateId: 'emerald', background: '#0b3d2e', text: '#f5efdb' },
+    slides: [templateSlide],
+  }
+  const assetSrc = (file: string): string => `/tpl-assets/${file}`
+
+  test('renderer draws the template page: slot words at their rects, original picture in the image slot', () => {
+    render(<SlideRenderer slide={templateSlide} theme={templateDeck.theme} templateSlide={{ page: contentPage, assetSrc }} />)
+    const layer = screen.getByTestId('template-slide')
+    expect(layer.getAttribute('data-page-kind')).toBe('content')
+    const title = screen.getByTestId('template-slot-s0')
+    expect(title.textContent).toBe('Keluarga Virus')
+    expect(title.style.left).toBe('6%')
+    expect(title.style.top).toBe('6%')
+    expect(title.style.color).toBe('rgb(255, 217, 122)')
+    expect(title.style.fontFamily).toContain('Georgia')
+    const imageSlot = screen.getByTestId('template-slot-s2')
+    const img = imageSlot.querySelector('img')
+    expect(img?.getAttribute('src')).toBe('/tpl-assets/emerald.page-3.pic-0.png')
+    expect(screen.getByTestId('slide-renderer').textContent).toContain('Halaman template')
+  })
+
+  test('renderer paints a page background image full-bleed from the template store', () => {
+    const coverSlide: Slide = {
+      id: 't0',
+      layout: 'template-page',
+      templateRef: { templateId: 'emerald', page: 0 },
+      content: { title: 'Taksonomi Virus', slots: { s0: 'Taksonomi Virus' } },
+      status: 'filled',
+    }
+    render(<SlideRenderer slide={coverSlide} theme={templateDeck.theme} templateSlide={{ page: coverPage, assetSrc }} />)
+    const root = screen.getByTestId('slide-renderer')
+    expect(root.style.backgroundImage).toContain('/tpl-assets/emerald.page-0.background.png')
+    expect(screen.getByTestId('template-slot-s0').textContent).toBe('Taksonomi Virus')
+  })
+
+  test('edit mode: clicking the image slot reports its slot key; a chosen asset replaces the picture', async () => {
+    const user = userEvent.setup()
+    const onImagePick = vi.fn()
+    render(<SlideRenderer slide={templateSlide} theme={templateDeck.theme} editable onImagePick={onImagePick} templateSlide={{ page: contentPage, assetSrc }} />)
+    await user.click(screen.getByTestId('slide-image-upload-s2'))
+    expect(onImagePick).toHaveBeenCalledTimes(1)
+    expect(onImagePick).toHaveBeenCalledWith('s2')
+
+    const chosen: Slide = {
+      ...templateSlide,
+      content: { title: 'Keluarga Virus', slots: { s0: 'Keluarga Virus', s1: 'Isi tentang virus', s2: 'foto-ku.png' } },
+    }
+    render(
+      <SlideRenderer
+        slide={chosen}
+        theme={templateDeck.theme}
+        templateSlide={{ page: contentPage, assetSrc }}
+        resolveImageSrc={(name) => `/slides/deck/asset?root=%2Fws&name=${encodeURIComponent(name)}`}
+      />,
+    )
+    const imgs = document.querySelectorAll('[data-testid="template-slot-s2"] img')
+    const srcs = [...imgs].map((img) => img.getAttribute('src'))
+    expect(srcs.some((src) => src?.includes('foto-ku.png'))).toBe(true)
+  })
+
+  test('an unresolved template page degrades honestly instead of a fake design', () => {
+    render(<SlideRenderer slide={templateSlide} theme={templateDeck.theme} />)
+    const fallback = screen.getByTestId('template-slide-fallback')
+    expect(fallback.textContent).toContain('Keluarga Virus')
+    expect(fallback.textContent).toContain('Desain template tidak terbaca')
+  })
+
+  test('stage flow: image upload on a template slide records the asset under its slot key', async () => {
+    const user = userEvent.setup()
+    fileMock.mockResolvedValue(deckFile(templateDeck))
+    pptTemplatesMock.mockResolvedValue({
+      root: '/ws',
+      templates: [
+        {
+          id: 'emerald',
+          name: 'Emerald',
+          sourceFile: 'Emerald.pptx',
+          createdAt: '2026-10-09T12:00:00.000Z',
+          theme: { background: '#0b3d2e', accent: '#0e7a5f', text: '#f5efdb' },
+          pages: [coverPage, { kind: 'toc', slots: [] }, { kind: 'section', slots: [] }, contentPage],
+        },
+      ],
+    })
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    expect((await screen.findAllByTestId('template-slide')).length).toBeGreaterThanOrEqual(1)
+    await user.click(screen.getByTestId('slide-edit-toggle'))
+    await user.click(screen.getByTestId('slide-image-upload-s2'))
+    const input = screen.getByTestId('slide-image-input') as HTMLInputElement
+    const file = new File([new Uint8Array([137, 80, 78, 71])], 'foto.png', { type: 'image/png' })
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    fireEvent.change(input)
+
+    await waitFor(() => expect(deckUpdateSlideMock).toHaveBeenCalled())
+    expect(deckUploadAssetMock).toHaveBeenCalledWith('/ws', file)
+    expect(deckUpdateSlideMock).toHaveBeenCalledWith('/ws', 't1', {
+      content: { slots: { s0: 'Keluarga Virus', s1: 'Isi tentang virus', s2: 'foto-unggahan.png' } },
+    })
   })
 })

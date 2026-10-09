@@ -2178,7 +2178,154 @@ type DragSession = {
   moved: boolean
 }
 
-export function SlideRenderer({ slide, theme, editable = false, onPositionsChange, resolveImageSrc, onImagePick }: {
+/**
+ * One image slot of a template page: the user's picked deck asset wins,
+ * then the template's own original picture, then the standard labelled
+ * placeholder. A failed load falls back to the placeholder rather than a
+ * broken glyph. In Edit mode the whole rect is the click target that asks
+ * the stage for the image picker (the stage writes the chosen asset into
+ * content.slots[slotKey]).
+ */
+function TemplateImageSlot({ slotKey, rectStyle, chosen, chosenSrc, originalSrc, editable, onImagePick, ctx }: {
+  slotKey: string
+  rectStyle: CSSProperties
+  chosen: string
+  chosenSrc?: string
+  originalSrc?: string
+  editable: boolean
+  onImagePick?: (blockKey: string) => void
+  ctx: Ctx
+}) {
+  const src = chosenSrc ?? originalSrc
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    setFailed(false)
+  }, [src])
+  const clickable = editable && onImagePick !== undefined
+  const inner = src && !failed ? (
+    <img src={src} alt={chosen || 'gambar template'} className="absolute inset-0 h-full w-full object-cover" onError={() => setFailed(true)} />
+  ) : (
+    <span className="flex h-full w-full flex-col items-center justify-center border border-dashed text-center" style={{ borderColor: ctx.line, backgroundColor: ctx.panelBg, gap: '0.7cqw', padding: '1cqw' }}>
+      <ImageIcon aria-hidden style={{ width: '3.4cqw', height: '3.4cqw', color: ctx.accent }} />
+      <span className="break-all font-semibold" style={{ fontSize: '1.1cqw' }}>
+        {chosen || 'image'}
+      </span>
+      {clickable ? (
+        <span className="font-semibold" style={{ fontSize: '1cqw', color: ctx.accent }}>
+          Klik untuk upload gambar
+        </span>
+      ) : null}
+    </span>
+  )
+  if (!clickable) {
+    return (
+      <div className="absolute overflow-hidden" style={rectStyle} data-testid={`template-slot-${slotKey}`}>
+        {inner}
+      </div>
+    )
+  }
+  return (
+    <button
+      type="button"
+      data-testid={`slide-image-upload-${slotKey}`}
+      aria-label={`Upload gambar untuk slot ${slotKey}`}
+      className="absolute cursor-pointer overflow-hidden"
+      style={rectStyle}
+      onClick={() => onImagePick(slotKey)}
+    >
+      {inner}
+    </button>
+  )
+}
+
+/**
+ * The template slide body: the imported page's slots at their exact
+ * fractions of the slide box (960pt wide → fontSizePt/9.6 in cqw). Text
+ * renders where the template put it, with the template's own run style;
+ * image slots follow TemplateImageSlot's honest fallback chain. Slot
+ * positions are the template's design — fixed, never draggable.
+ */
+function TemplateSlots({ slide, page, assetSrc, editable, onImagePick, imageSrc, ctx }: {
+  slide: Slide
+  page: import('../../api/client').PptTemplatePageInfo
+  assetSrc: (file: string) => string
+  editable: boolean
+  onImagePick?: (blockKey: string) => void
+  imageSrc?: (name: string) => string | undefined
+  ctx: Ctx
+}) {
+  const slots = obj(slide.content.slots)
+  return (
+    <div className="absolute inset-0" style={{ zIndex: 2 }} data-testid="template-slide" data-page-kind={page.kind}>
+      {page.slots.map((slot) => {
+        const rectStyle: CSSProperties = {
+          left: `${slot.rect.x * 100}%`,
+          top: `${slot.rect.y * 100}%`,
+          width: `${slot.rect.w * 100}%`,
+          height: `${slot.rect.h * 100}%`,
+        }
+        if (slot.kind === 'text') {
+          const value = typeof slots[slot.key] === 'string' ? (slots[slot.key] as string) : ''
+          return (
+            <div
+              key={slot.key}
+              data-testid={`template-slot-${slot.key}`}
+              className="absolute overflow-hidden whitespace-pre-wrap"
+              style={{
+                ...rectStyle,
+                fontSize: `${slot.fontSizePt / 9.6}cqw`,
+                fontWeight: slot.bold ? 700 : 400,
+                ...(slot.color ? { color: slot.color } : {}),
+                ...(slot.fontFamily ? { fontFamily: slot.fontFamily } : {}),
+                textAlign: slot.align ?? 'left',
+                lineHeight: 1.25,
+                pointerEvents: 'none',
+              }}
+            >
+              {value}
+            </div>
+          )
+        }
+        const chosen = typeof slots[slot.key] === 'string' ? (slots[slot.key] as string) : ''
+        return (
+          <TemplateImageSlot
+            key={slot.key}
+            slotKey={slot.key}
+            rectStyle={rectStyle}
+            chosen={chosen}
+            chosenSrc={chosen && imageSrc ? imageSrc(chosen) : undefined}
+            originalSrc={slot.imageFile ? assetSrc(slot.imageFile) : undefined}
+            editable={editable}
+            onImagePick={onImagePick}
+            ctx={ctx}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * A template slide whose page design could not be resolved (template
+ * deleted or fetch failed): honest degradation — theme background plus
+ * the slide's own words as plain lines, never a fake design.
+ */
+function TemplateFallbackBody({ slide, ctx }: { slide: Slide; ctx: Ctx }) {
+  const slots = obj(slide.content.slots)
+  const lines = [...new Set([str(slide.content.title), ...Object.values(slots).filter((v): v is string => typeof v === 'string' && v.length > 0)])].filter((line) => line.length > 0)
+  return (
+    <div className="flex flex-1 flex-col justify-center" style={{ gap: '1.2cqw' }} data-testid="template-slide-fallback">
+      {lines.map((line, index) => (
+        <div key={index} className={index === 0 ? 'font-bold tracking-tight' : undefined} style={{ fontSize: index === 0 ? '3.3cqw' : '1.6cqw', color: index === 0 ? undefined : ctx.muted, lineHeight: 1.3 }}>
+          {line}
+        </div>
+      ))}
+      <div style={{ fontSize: '1.2cqw', color: ctx.muted }}>Desain template tidak terbaca — impor ulang template-nya dari panel Template dari PPT.</div>
+    </div>
+  )
+}
+
+export function SlideRenderer({ slide, theme, editable = false, onPositionsChange, resolveImageSrc, onImagePick, templateSlide }: {
   slide: Slide
   theme?: DeckSpec['theme']
   /** Edit mode: blocks become grabbable; drags persist via onPositionsChange. */
@@ -2188,6 +2335,12 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
   resolveImageSrc?: (name: string) => string | undefined
   /** Edit mode: an image placeholder/image was clicked (not dragged). */
   onImagePick?: (blockKey: string) => void
+  /**
+   * For templateRef slides: the imported template's parsed page this
+   * slide pours into, plus its asset URL resolver (page backgrounds and
+   * slot pictures live in the template store, not deck/assets).
+   */
+  templateSlide?: { page: import('../../api/client').PptTemplatePageInfo; assetSrc: (file: string) => string }
 }) {
   const isLight = theme?.dark === false
   const light = getPalette('light')
@@ -2206,11 +2359,21 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
   // images): paints over the background color exactly as the exported
   // PPTX paints it; without a resolver the color alone carries the theme.
   const bgSrc = theme?.backgroundImage && resolveImageSrc ? resolveImageSrc(theme.backgroundImage) : undefined
+  // A template slide's own page design wins over the deck theme skin:
+  // its stored background image (or color) is the slide's background.
+  const tpl = slide.templateRef && templateSlide ? templateSlide : undefined
+  const tplBgSrc = tpl?.page.background?.imageFile ? tpl.assetSrc(tpl.page.background.imageFile) : undefined
   const rootStyle: CSSProperties = {
-    backgroundColor: theme?.background ?? (isLight ? light.bgSurface : 'var(--daedalus-bgBase)'),
+    backgroundColor: tpl?.page.background?.color ?? theme?.background ?? (isLight ? light.bgSurface : 'var(--daedalus-bgBase)'),
     color: theme?.text ?? (isLight ? light.fgBase : 'var(--daedalus-fgBase)'),
     ...(theme?.bodyFont ? { fontFamily: theme.bodyFont } : {}),
-    ...(bgSrc ? { backgroundImage: `url("${bgSrc}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : {}),
+    ...(tpl
+      ? tplBgSrc
+        ? { backgroundImage: `url("${tplBgSrc}")`, backgroundSize: 'cover', backgroundPosition: 'center' }
+        : {}
+      : bgSrc
+        ? { backgroundImage: `url("${bgSrc}")`, backgroundSize: 'cover', backgroundPosition: 'center' }
+        : {}),
   }
 
   const boxRef = useRef<HTMLDivElement | null>(null)
@@ -2299,12 +2462,15 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
   return (
     <div ref={boxRef} data-testid="slide-renderer" data-layout={slide.layout} className="relative flex h-full w-full flex-col overflow-hidden" style={rootStyle}>
       <BlockCtx.Provider value={{ positions: mergedPositions, editable, overlayEl, onDragStart, imageSrc: resolveImageSrc, onImagePick }}>
-        <div className="flex min-h-0 flex-1 flex-col" style={{ padding: '3cqw' }}>
-          {renderBody(slide, ctx)}
+        {tpl ? (
+          <TemplateSlots slide={slide} page={tpl.page} assetSrc={tpl.assetSrc} editable={editable} onImagePick={onImagePick} imageSrc={resolveImageSrc} ctx={ctx} />
+        ) : null}
+        <div className="flex min-h-0 flex-1 flex-col" style={{ padding: tpl ? 0 : '3cqw' }}>
+          {tpl ? null : slide.templateRef ? <TemplateFallbackBody slide={slide} ctx={ctx} /> : renderBody(slide, ctx)}
         </div>
         <div ref={setOverlayEl} data-testid="slide-overlay" className="pointer-events-none absolute inset-0" style={{ zIndex: 4 }} />
       </BlockCtx.Provider>
-      <div className="flex items-center justify-between" style={{ gap: '1cqw', padding: '0 1.6cqw 1.1cqw', fontSize: '1cqw', color: ctx.muted }}>
+      <div className="relative flex items-center justify-between" style={{ gap: '1cqw', padding: '0 1.6cqw 1.1cqw', fontSize: '1cqw', color: ctx.muted, zIndex: 3 }}>
         <span>{getLayout(slide.layout)?.label ?? slide.layout}</span>
         {slide.notes ? <span className="truncate italic">{slide.notes}</span> : <span className="truncate">{slide.id}</span>}
       </div>

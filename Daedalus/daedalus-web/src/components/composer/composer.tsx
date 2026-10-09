@@ -636,7 +636,11 @@ export function Composer() {
                 generation: slideOptions.generation,
                 ...(slideOptions.slideCount ? { slide_count: slideOptions.slideCount } : {}),
                 ...(slideOptions.language ? { language: slideOptions.language } : {}),
-                ...(slideOptions.templateId ? { template_id: slideOptions.templateId } : {}),
+                ...(slideOptions.customTemplateId
+                  ? { custom_template_id: slideOptions.customTemplateId }
+                  : slideOptions.templateId
+                    ? { template_id: slideOptions.templateId }
+                    : {}),
               },
             }
           : {}),

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Check, Trash2, Upload } from 'lucide-react'
 import { Panel } from '../common/panel'
-import { api, type PptTemplateInfo } from '../../api/client'
+import { api, type PptTemplateInfo, type PptTemplatePageInfo } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useDeck } from './useDeck'
 import { cn } from '../../lib/utils'
@@ -10,19 +10,46 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+const PAGE_KIND_LABEL: Record<PptTemplatePageInfo['kind'], string> = {
+  cover: 'sampul',
+  toc: 'daftar isi',
+  section: 'pemisah',
+  content: 'isi',
+  closing: 'penutup',
+}
+
+/** "6 halaman: sampul · daftar isi · pemisah · isi ×2 · penutup" — what designs one click will pour words into. */
+function pageSummary(template: PptTemplateInfo): string | null {
+  if (!template.pages || template.pages.length === 0) return null
+  const counts = new Map<PptTemplatePageInfo['kind'], number>()
+  for (const page of template.pages) counts.set(page.kind, (counts.get(page.kind) ?? 0) + 1)
+  const parts = (Object.keys(PAGE_KIND_LABEL) as Array<PptTemplatePageInfo['kind']>)
+    .filter((kind) => counts.has(kind))
+    .map((kind) => {
+      const count = counts.get(kind)!
+      return count > 1 ? `${PAGE_KIND_LABEL[kind]} ×${count}` : PAGE_KIND_LABEL[kind]
+    })
+  return `${template.pages.length} halaman: ${parts.join(' · ')}`
+}
+
 /**
  * "Template dari PPT" panel (Slide domain, under the Warna & Font panel):
- * a downloaded .pptx is uploaded once and its design — palette, fonts,
- * slide-master background — is extracted by core into a reusable template
- * stored in this workspace. Clicking one restyles the open deck through
- * the same validate-and-commit theme endpoint as the bundled templates;
- * the last applied pick (bundled or imported) wins. The bundled five stay
- * the default: importing never changes a deck until a template is clicked.
+ * a downloaded .pptx is uploaded once and its design is extracted by
+ * core into a reusable template stored in this workspace — the theme
+ * skin (palette, fonts, master background) AND the file's parsed slide
+ * designs (pages). Clicking one selects it: generation then pours the
+ * outline into those page designs and only the words change — font,
+ * color, and layout all come from the template. Templates imported
+ * before page parsing existed carry no pages and keep the v1 skin
+ * behavior (palette/fonts over the 50 Daedalus layouts). The bundled
+ * five stay the default: importing never changes a deck until a
+ * template is clicked.
  */
 export function SlidePptTemplatesPanel() {
   const { deck, root } = useDeck()
   const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
   const setSlideOptions = useDaedalusStore((state) => state.setSlideOptions)
+  const pendingCustomId = useDaedalusStore((state) => state.slideOptions.customTemplateId)
   const [templates, setTemplates] = useState<PptTemplateInfo[]>([])
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
@@ -55,7 +82,12 @@ export function SlidePptTemplatesPanel() {
     try {
       const { template } = await api.pptTemplateUpload(root, file)
       await load()
-      setNote(`Template "${template.name}" tersimpan — klik untuk menerapkannya ke deck.`)
+      const pages = template.pages?.length ?? 0
+      setNote(
+        pages > 0
+          ? `Template "${template.name}" tersimpan (${pages} desain halaman terbaca) — klik untuk memakainya.`
+          : `Template "${template.name}" tersimpan — klik untuk menerapkannya ke deck.`,
+      )
     } catch (uploadError: unknown) {
       setError(messageOf(uploadError))
     } finally {
@@ -67,16 +99,20 @@ export function SlidePptTemplatesPanel() {
   const apply = async (template: PptTemplateInfo): Promise<void> => {
     setError(null)
     setNote(null)
+    // One design source at a time: this pick retires any bundled pending
+    // pick, and rides the next task when no deck is open yet.
+    setSlideOptions({ customTemplateId: template.id, templateId: null })
     if (!deck || !root) {
-      setNote('Belum ada deck — buat deck dulu, lalu klik template untuk menerapkannya.')
+      setNote(
+        template.pages && template.pages.length > 0
+          ? `Template "${template.name}" dipilih untuk deck berikutnya — tulis prompt: font, warna, dan layout halaman dari template; AI hanya mengganti kata-katanya.`
+          : `Template "${template.name}" dipilih untuk deck berikutnya — palet dan font-nya dipakai; impor ulang berkasnya agar desain halamannya ikut terbaca.`,
+      )
       return
     }
     setBusyId(template.id)
     try {
       await api.deckTheme(root, { custom_template_id: template.id })
-      // The deck now follows the imported design; a stale bundled pending
-      // pick must not claim the active state in the panel above.
-      setSlideOptions({ templateId: null })
       bumpWorkspaceRevision()
     } catch (applyError: unknown) {
       setError(messageOf(applyError))
@@ -92,6 +128,7 @@ export function SlidePptTemplatesPanel() {
     setNote(null)
     try {
       await api.pptTemplateDelete(root, template.id)
+      if (pendingCustomId === template.id) setSlideOptions({ customTemplateId: null })
       await load()
       setNote(`Template "${template.name}" dihapus. Deck yang sudah memakai desainnya tidak berubah.`)
     } catch (deleteError: unknown) {
@@ -101,7 +138,7 @@ export function SlidePptTemplatesPanel() {
     }
   }
 
-  const activeId = deck?.theme.customTemplateId
+  const activeId = deck?.theme.customTemplateId ?? pendingCustomId
 
   return (
     <Panel
@@ -138,7 +175,7 @@ export function SlidePptTemplatesPanel() {
       ) : null}
       {templates.length === 0 && !error ? (
         <p className="px-1 py-1 text-[11px] text-muted">
-          Belum ada template impor. Unggah berkas .pptx — palet warna, font, dan latar master-nya menjadi template yang bisa dipakai ulang di workspace ini.
+          Belum ada template impor. Unggah berkas .pptx — desain halamannya (sampul, isi, penutup) menjadi template: generate berikutnya menuangkan kata-kata ke desain itu.
         </p>
       ) : null}
       <div className="flex flex-col gap-1.5">
@@ -184,6 +221,13 @@ export function SlidePptTemplatesPanel() {
                     {template.slideSize ? ` · ${template.slideSize.label}` : ''}
                     {template.backgroundImageFile ? ' · latar gambar' : ''}
                   </span>
+                  {pageSummary(template) ? (
+                    <span className="block text-[10px] text-muted" data-testid={`slide-ppt-template-pages-${template.id}`}>
+                      {pageSummary(template)}
+                    </span>
+                  ) : (
+                    <span className="block text-[10px] text-muted">Impor ulang untuk memakai desain halamannya</span>
+                  )}
                 </span>
               </button>
               <button
@@ -201,7 +245,7 @@ export function SlidePptTemplatesPanel() {
         })}
       </div>
       <p className="px-1 pt-1.5 text-[10px] text-muted">
-        Desain diambil dari PPTX (warna tema, font, latar master); layout slide tetap 50 layout Daedalus. Warna &amp; Font bawaan tetap pilihan bawaan.
+        Pakai template PPT: font, warna, dan layout halaman ikut template — AI hanya mengganti kata-katanya. Slot gambar tidak diisi AI: klik placeholder gambar di canvas (mode Edit) untuk menggantinya. Tanpa template PPT, Warna &amp; Font bawaan tetap pilihan bawaan.
       </p>
     </Panel>
   )
