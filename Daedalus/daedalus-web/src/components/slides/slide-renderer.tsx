@@ -56,6 +56,12 @@ function obj(value: unknown): Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
 }
 
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (parts.length === 0) return '?'
+  return parts.slice(0, 2).map((part) => part.charAt(0).toUpperCase()).join('')
+}
+
 function SlideTitle({ children }: { children: ReactNode }) {
   return (
     <div className="font-bold tracking-tight" style={{ fontSize: '3.3cqw', lineHeight: 1.15 }}>
@@ -80,6 +86,112 @@ function Points({ items, ctx, size = '1.5cqw' }: { items: string[]; ctx: Ctx; si
         </li>
       ))}
     </ul>
+  )
+}
+
+function CheckList({ items, ctx, size = '1.35cqw', marker = '✓', markerColor }: {
+  items: string[]
+  ctx: Ctx
+  size?: string
+  marker?: string
+  markerColor?: string
+}) {
+  return (
+    <ul className="flex flex-col" style={{ gap: '0.7cqw' }}>
+      {items.map((point, index) => (
+        <li key={index} className="flex items-start" style={{ gap: '0.7cqw' }}>
+          <span aria-hidden className="font-bold" style={{ color: markerColor ?? ctx.accent, fontSize: size, lineHeight: 1.35 }}>
+            {marker}
+          </span>
+          <span style={{ fontSize: size, lineHeight: 1.4 }}>{point}</span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/**
+ * One image area of a slide (`blockKey` = the draggable block it fills).
+ * Remote/data URLs render directly; a local deck-asset name renders the
+ * real bytes when the stage's resolver maps it to a URL; anything else
+ * is an honest labelled placeholder. In Edit mode the slot is a button:
+ * a click (not a drag — movement past a few px belongs to the block
+ * drag session) asks the stage to open the image picker for this block.
+ */
+function ImageSlot({ blockKey, image, alt, caption, ctx, style }: {
+  blockKey: string
+  image: string
+  alt: string
+  caption?: string
+  ctx: Ctx
+  style?: CSSProperties
+}) {
+  const blocks = useContext(BlockCtx)
+  const isRemote = /^(https?:|data:)/i.test(image)
+  const resolved = !isRemote && blocks.imageSrc ? blocks.imageSrc(image) : undefined
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    setFailed(false)
+  }, [image, resolved])
+  const showImg = isRemote || (resolved !== undefined && !failed)
+  const clickable = blocks.editable && blocks.onImagePick !== undefined && !isRemote
+  const downAt = useRef<{ x: number; y: number } | null>(null)
+
+  const content = showImg ? (
+    <img
+      src={isRemote ? image : resolved}
+      alt={alt}
+      className="absolute inset-0 h-full w-full object-cover"
+      onError={isRemote ? undefined : () => setFailed(true)}
+    />
+  ) : (
+    <>
+      <ImageIcon aria-hidden style={{ width: '3.4cqw', height: '3.4cqw', color: ctx.accent }} />
+      <div className="break-all font-semibold" style={{ fontSize: '1.1cqw' }}>
+        {image || 'image'}
+      </div>
+      {alt ? <div style={{ fontSize: '1cqw', color: ctx.muted }}>{alt}</div> : null}
+      {caption ? (
+        <div className="font-medium" style={{ fontSize: '1.05cqw', color: ctx.accent }}>
+          {caption}
+        </div>
+      ) : null}
+      {clickable ? (
+        <div className="font-semibold" style={{ fontSize: '1cqw', color: ctx.accent }}>
+          Klik untuk upload gambar
+        </div>
+      ) : null}
+    </>
+  )
+
+  const boxStyle: CSSProperties = { borderColor: ctx.line, backgroundColor: ctx.panelBg, gap: '0.7cqw', padding: '1cqw', ...style }
+  const boxClass = 'relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-md border text-center'
+  if (!clickable) {
+    return (
+      <div className={boxClass} style={boxStyle}>
+        {content}
+      </div>
+    )
+  }
+  return (
+    <button
+      type="button"
+      data-testid={`slide-image-upload-${blockKey}`}
+      aria-label={`Upload gambar${image ? `: ${image}` : ''}`}
+      className={`${boxClass} cursor-pointer`}
+      style={boxStyle}
+      onPointerDown={(event) => {
+        downAt.current = { x: event.clientX, y: event.clientY }
+      }}
+      onClick={(event) => {
+        const down = downAt.current
+        downAt.current = null
+        if (down && Math.abs(event.clientX - down.x) + Math.abs(event.clientY - down.y) > 4) return
+        blocks.onImagePick?.(blockKey)
+      }}
+    >
+      {content}
+    </button>
   )
 }
 
@@ -115,6 +227,10 @@ type BlockCtxValue = {
   editable: boolean
   overlayEl: HTMLElement | null
   onDragStart: (key: string, event: ReactPointerEvent) => void
+  /** Resolves a local deck-asset name to a displayable URL (stage-provided). */
+  imageSrc?: (name: string) => string | undefined
+  /** Edit mode: a placeholder (or placed image) was clicked, not dragged. */
+  onImagePick?: (blockKey: string) => void
 }
 
 const BlockCtx = createContext<BlockCtxValue>({ positions: {}, editable: false, overlayEl: null, onDragStart: () => {} })
@@ -318,26 +434,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       )
     }
     case 'image-side': {
-      const image = str(c.image)
-      const isRemote = /^(https?:|data:)/i.test(image)
-      const imageBox = (
-        <div
-          className="flex shrink-0 flex-col items-center justify-center overflow-hidden rounded-md border text-center"
-          style={{ width: '36%', borderColor: ctx.line, backgroundColor: ctx.panelBg, gap: '0.8cqw', padding: '1cqw' }}
-        >
-          {isRemote ? (
-            <img src={image} alt={str(c.alt)} className="h-full w-full rounded object-cover" />
-          ) : (
-            <>
-              <ImageIcon aria-hidden style={{ width: '4cqw', height: '4cqw', color: ctx.accent }} />
-              <div className="break-all font-semibold" style={{ fontSize: '1.2cqw' }}>
-                {image || 'image'}
-              </div>
-              {str(c.alt) ? <div style={{ fontSize: '1.05cqw', color: ctx.muted }}>{str(c.alt)}</div> : null}
-            </>
-          )}
-        </div>
-      )
+      const imageBox = <ImageSlot blockKey="image" image={str(c.image)} alt={str(c.alt)} ctx={ctx} style={{ width: '36%', flexShrink: 0 }} />
       const textCol = (
         <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           <Block blockKey="title">
@@ -769,6 +866,1290 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
         </div>
       )
     }
+    case 'numbered-steps': {
+      const steps = objList(c.steps)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="flex flex-1 flex-col justify-center">
+            {steps.map((step, index) => (
+              <Block key={index} blockKey={`step-${index}`}>
+                <div
+                  className="flex items-start"
+                  style={{ gap: '1.5cqw', padding: '1.05cqw 0.2cqw', ...(index > 0 ? { borderTop: `1px solid ${ctx.line}` } : {}) }}
+                >
+                  <span className="font-bold" style={{ fontSize: '3.1cqw', lineHeight: 1, color: ctx.accent, minWidth: '5.6cqw' }}>
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
+                  <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '0.35cqw', paddingTop: '0.25cqw' }}>
+                    <div className="font-semibold" style={{ fontSize: '1.75cqw', lineHeight: 1.25 }}>
+                      {str(step.title)}
+                    </div>
+                    {str(step.desc) ? (
+                      <div className="line-clamp-2" style={{ fontSize: '1.25cqw', color: ctx.muted, lineHeight: 1.4 }}>
+                        {str(step.desc)}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              </Block>
+            ))}
+          </div>
+        </div>
+      )
+    }
+    case 'code-focus': {
+      const points = strList(c.points)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="flex min-h-0 flex-1" style={{ gap: '1.8cqw' }}>
+            <Block blockKey="code">
+              <div
+                className="flex min-w-0 flex-col overflow-hidden rounded-md border"
+                style={{ flex: points.length > 0 ? '1.55 1 0%' : '1 1 0%', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+              >
+                <div
+                  className="flex items-center justify-between"
+                  style={{ padding: '0.75cqw 1.3cqw', borderBottom: `1px solid ${ctx.line}` }}
+                >
+                  <span className="inline-flex" style={{ gap: '0.45cqw' }}>
+                    {[0, 1, 2].map((dot) => (
+                      <span key={dot} aria-hidden className="rounded-full" style={{ width: '0.85cqw', height: '0.85cqw', backgroundColor: ctx.line }} />
+                    ))}
+                  </span>
+                  <span style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: '1.05cqw', color: ctx.muted }}>
+                    {str(c.language) || 'code'}
+                  </span>
+                </div>
+                <pre
+                  className="min-h-0 flex-1 overflow-hidden"
+                  style={{
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                    fontSize: '1.3cqw',
+                    lineHeight: 1.6,
+                    padding: '1.2cqw 1.4cqw',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                  }}
+                >
+                  {str(c.code)}
+                </pre>
+              </div>
+            </Block>
+            {points.length > 0 ? (
+              <div className="flex min-w-0 flex-col justify-center" style={{ flex: '1 1 0%', gap: '1.2cqw' }}>
+                <Block blockKey="points">
+                  <Points items={points} ctx={ctx} size="1.35cqw" />
+                </Block>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )
+    }
+    case 'chevron-process': {
+      const steps = objList(c.steps)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="flex flex-1 flex-col justify-center" style={{ gap: '1.4cqw' }}>
+            <div className="flex" style={{ gap: '0.45cqw' }}>
+              {steps.map((step, index) => {
+                const clip =
+                  index === 0
+                    ? 'polygon(0 0, calc(100% - 1.7cqw) 0, 100% 50%, calc(100% - 1.7cqw) 100%, 0 100%)'
+                    : 'polygon(0 0, calc(100% - 1.7cqw) 0, 100% 50%, calc(100% - 1.7cqw) 100%, 0 100%, 1.7cqw 50%)'
+                return (
+                  <Block key={index} blockKey={`step-${index}`}>
+                    <div
+                      className="flex min-w-0 flex-1 flex-col items-center justify-center text-center"
+                      style={{
+                        clipPath: clip,
+                        backgroundColor: seriesColor(index, ctx.accent),
+                        color: 'var(--daedalus-onPrimary)',
+                        gap: '0.3cqw',
+                        padding: '1.15cqw 1.9cqw 1.15cqw 2.2cqw',
+                        minHeight: '6.8cqw',
+                      }}
+                    >
+                      <span className="font-bold" style={{ fontSize: '1cqw', letterSpacing: '0.18em', opacity: 0.75 }}>
+                        LANGKAH {index + 1}
+                      </span>
+                      <span className="font-bold" style={{ fontSize: '1.5cqw', lineHeight: 1.2 }}>
+                        {str(step.title)}
+                      </span>
+                    </div>
+                  </Block>
+                )
+              })}
+            </div>
+            {steps.some((step) => str(step.desc)) ? (
+              <div className="flex" style={{ gap: '0.45cqw' }}>
+                {steps.map((step, index) => (
+                  <div key={index} className="min-w-0 flex-1 text-center" style={{ padding: '0 0.7cqw' }}>
+                    <span className="line-clamp-4" style={{ fontSize: '1.12cqw', color: ctx.muted, lineHeight: 1.4 }}>
+                      {str(step.desc)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )
+    }
+    case 'diagram-pyramid': {
+      const tiers = objList(c.tiers)
+      const n = Math.max(1, tiers.length)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="flex flex-1 flex-col items-center justify-center" style={{ gap: '0.55cqw' }}>
+            {tiers.map((tier, index) => {
+              const widthPct = 38 + (index * 56) / Math.max(1, n - 1)
+              return (
+                <Block key={index} blockKey={`tier-${index}`}>
+                  <div
+                    className="flex flex-col items-center justify-center text-center"
+                    style={{
+                      width: `${widthPct}%`,
+                      clipPath: 'polygon(9% 0, 91% 0, 100% 100%, 0 100%)',
+                      backgroundColor: seriesColor(index, ctx.accent),
+                      color: 'var(--daedalus-onPrimary)',
+                      gap: '0.25cqw',
+                      padding: '1cqw 3cqw',
+                      minHeight: '6.2cqw',
+                    }}
+                  >
+                    <span className="font-bold" style={{ fontSize: '1.55cqw', lineHeight: 1.2 }}>
+                      {str(tier.label)}
+                    </span>
+                    {str(tier.desc) ? (
+                      <span className="line-clamp-2" style={{ fontSize: '1.1cqw', lineHeight: 1.35, opacity: 0.85 }}>
+                        {str(tier.desc)}
+                      </span>
+                    ) : null}
+                  </div>
+                </Block>
+              )
+            })}
+          </div>
+        </div>
+      )
+    }
+    case 'roadmap': {
+      const phases = objList(c.phases)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="flex min-h-0 flex-1" style={{ gap: '1.4cqw' }}>
+            {phases.map((phase, index) => (
+              <Block key={index} blockKey={`phase-${index}`}>
+                <div
+                  className="flex min-w-0 flex-1 flex-col overflow-hidden rounded-md border"
+                  style={{ gap: '0.8cqw', padding: '1.3cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+                >
+                  <div className="flex items-center" style={{ gap: '0.7cqw' }}>
+                    <span
+                      aria-hidden
+                      className="flex shrink-0 items-center justify-center rounded-full font-bold"
+                      style={{ width: '2.2cqw', height: '2.2cqw', backgroundColor: seriesColor(index, ctx.accent), color: 'var(--daedalus-onPrimary)', fontSize: '1.15cqw' }}
+                    >
+                      {index + 1}
+                    </span>
+                    <span className="font-semibold" style={{ fontSize: '1.5cqw', color: ctx.accent, lineHeight: 1.25 }}>
+                      {str(phase.label)}
+                    </span>
+                  </div>
+                  <Points items={strList(phase.items)} ctx={ctx} size="1.18cqw" />
+                </div>
+              </Block>
+            ))}
+          </div>
+        </div>
+      )
+    }
+    case 'versus': {
+      const left = obj(c.left)
+      const right = obj(c.right)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.4cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="relative flex min-h-0 flex-1" style={{ gap: '6.4cqw' }}>
+            <Block blockKey="left">
+              <ColumnPanel heading={str(left.title)} points={strList(left.points)} ctx={ctx} />
+            </Block>
+            <Block blockKey="right">
+              <ColumnPanel heading={str(right.title)} points={strList(right.points)} ctx={ctx} />
+            </Block>
+            <Block blockKey="badge">
+              <span
+                aria-hidden
+                className="absolute flex items-center justify-center rounded-full font-bold"
+                style={{
+                  left: '50%',
+                  top: '50%',
+                  transform: 'translate(-50%, -50%)',
+                  width: '5.6cqw',
+                  height: '5.6cqw',
+                  backgroundColor: ctx.accent,
+                  color: 'var(--daedalus-onPrimary)',
+                  fontSize: '1.9cqw',
+                  zIndex: 5,
+                  boxShadow: '0 0 0 0.55cqw var(--daedalus-bgBase)',
+                }}
+              >
+                VS
+              </span>
+            </Block>
+          </div>
+          {str(c.verdict) ? (
+            <Block blockKey="verdict">
+              <div
+                className="rounded-md border text-center font-semibold"
+                style={{ borderColor: ctx.accent, color: ctx.accent, fontSize: '1.5cqw', padding: '0.9cqw' }}
+              >
+                {str(c.verdict)}
+              </div>
+            </Block>
+          ) : null}
+        </div>
+      )
+    }
+    case 'matrix-quadrant': {
+      const quadrants = objList(c.quadrants).slice(0, 4)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.3cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="flex min-h-0 flex-1" style={{ gap: '0.7cqw' }}>
+            <div
+              className="flex items-center justify-center font-semibold uppercase"
+              style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)', fontSize: '1.15cqw', letterSpacing: '0.16em', color: ctx.muted }}
+            >
+              {str(c.yAxis)}
+            </div>
+            <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '0.7cqw' }}>
+              <div className="relative grid min-h-0 flex-1" style={{ gridTemplateColumns: '1fr 1fr', gridTemplateRows: '1fr 1fr', gap: '1.1cqw' }}>
+                <div aria-hidden className="absolute" style={{ left: '50%', top: 0, bottom: 0, width: 2, transform: 'translateX(-50%)', backgroundColor: ctx.accent, opacity: 0.3 }} />
+                <div aria-hidden className="absolute" style={{ top: '50%', left: 0, right: 0, height: 2, transform: 'translateY(-50%)', backgroundColor: ctx.accent, opacity: 0.3 }} />
+                {quadrants.map((quadrant, index) => (
+                  <Block key={index} blockKey={`quadrant-${index}`}>
+                    <div
+                      className="flex h-full min-w-0 flex-col overflow-hidden rounded-md border"
+                      style={{ gap: '0.7cqw', padding: '1.15cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+                    >
+                      <div className="font-semibold" style={{ fontSize: '1.45cqw', color: ctx.accent }}>
+                        {str(quadrant.label)}
+                      </div>
+                      <Points items={strList(quadrant.items)} ctx={ctx} size="1.12cqw" />
+                    </div>
+                  </Block>
+                ))}
+              </div>
+              <div className="text-center font-semibold uppercase" style={{ fontSize: '1.15cqw', letterSpacing: '0.16em', color: ctx.muted }}>
+                {str(c.xAxis)}
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
+    case 'big-stat': {
+      const points = strList(c.points)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.4cqw' }}>
+          {str(c.title) ? (
+            <Block blockKey="title">
+              <SlideTitle>{str(c.title)}</SlideTitle>
+            </Block>
+          ) : null}
+          <div className="flex flex-1 items-center" style={{ gap: '3cqw' }}>
+            <div className="flex min-w-0 flex-col" style={{ flex: '1.25 1 0%', gap: '0.9cqw' }}>
+              <Block blockKey="value">
+                <div className="font-bold" style={{ fontSize: '9cqw', lineHeight: 1, color: ctx.accent }}>
+                  {str(c.value)}
+                </div>
+              </Block>
+              <Block blockKey="label">
+                <div style={{ fontSize: '1.9cqw', lineHeight: 1.35, color: ctx.muted }}>{str(c.label)}</div>
+              </Block>
+            </div>
+            {points.length > 0 ? (
+              <Block blockKey="points">
+                <div
+                  className="flex flex-col justify-center rounded-md border"
+                  style={{ flex: '1 1 0%', gap: '1cqw', padding: '1.6cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+                >
+                  <Points items={points} ctx={ctx} size="1.35cqw" />
+                </div>
+              </Block>
+            ) : null}
+          </div>
+        </div>
+      )
+    }
+    case 'testimonial': {
+      const metrics = objList(c.metrics)
+      return (
+        <div className="flex flex-1 flex-col items-center justify-center text-center" style={{ gap: '1.8cqw', padding: '0 3.5cqw' }}>
+          <Block blockKey="text">
+            <div className="flex flex-col items-center" style={{ gap: '1.5cqw' }}>
+              <QuoteIcon aria-hidden style={{ width: '3.6cqw', height: '3.6cqw', color: ctx.accent }} />
+              <div className="line-clamp-5" style={{ fontSize: '3cqw', lineHeight: 1.32, fontStyle: 'italic' }}>
+                {str(c.text)}
+              </div>
+            </div>
+          </Block>
+          <Block blockKey="person">
+            <div
+              className="flex items-center rounded-full border"
+              style={{ gap: '1.1cqw', padding: '0.8cqw 1.9cqw 0.8cqw 0.8cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+            >
+              <span
+                aria-hidden
+                className="flex shrink-0 items-center justify-center rounded-full font-bold"
+                style={{ width: '3.8cqw', height: '3.8cqw', backgroundColor: ctx.accent, color: 'var(--daedalus-onPrimary)', fontSize: '1.5cqw' }}
+              >
+                {initialsOf(str(c.name))}
+              </span>
+              <span className="flex flex-col text-left">
+                <span className="font-semibold" style={{ fontSize: '1.55cqw', lineHeight: 1.2 }}>
+                  {str(c.name)}
+                </span>
+                {str(c.role) ? <span style={{ fontSize: '1.15cqw', color: ctx.muted }}>{str(c.role)}</span> : null}
+              </span>
+            </div>
+          </Block>
+          {metrics.length > 0 ? (
+            <Block blockKey="metrics">
+              <div className="flex flex-wrap justify-center" style={{ gap: '1.1cqw' }}>
+                {metrics.map((metric, index) => (
+                  <span
+                    key={index}
+                    className="rounded-full border"
+                    style={{ borderColor: ctx.line, backgroundColor: ctx.panelBg, padding: '0.6cqw 1.4cqw', fontSize: '1.2cqw' }}
+                  >
+                    <strong style={{ color: ctx.accent }}>{str(metric.value)}</strong> {str(metric.label)}
+                  </span>
+                ))}
+              </div>
+            </Block>
+          ) : null}
+        </div>
+      )
+    }
+    case 'profile-cards': {
+      const people = objList(c.people)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="grid flex-1" style={{ gridTemplateColumns: `repeat(${Math.max(1, people.length)}, minmax(0, 1fr))`, gridAutoRows: '1fr', gap: '1.4cqw' }}>
+            {people.map((person, index) => (
+              <Block key={index} blockKey={`person-${index}`}>
+                <div
+                  className="flex flex-col overflow-hidden rounded-md border"
+                  style={{ gap: '0.75cqw', padding: '1.5cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+                >
+                  <span
+                    aria-hidden
+                    className="flex items-center justify-center rounded-full font-bold"
+                    style={{ width: '4.4cqw', height: '4.4cqw', backgroundColor: seriesColor(index, ctx.accent), color: 'var(--daedalus-onPrimary)', fontSize: '1.7cqw' }}
+                  >
+                    {initialsOf(str(person.name))}
+                  </span>
+                  <div className="font-semibold" style={{ fontSize: '1.6cqw', lineHeight: 1.25 }}>
+                    {str(person.name)}
+                  </div>
+                  <div className="font-semibold uppercase" style={{ fontSize: '1.08cqw', letterSpacing: '0.13em', color: ctx.accent }}>
+                    {str(person.role)}
+                  </div>
+                  {str(person.note) ? (
+                    <div className="line-clamp-4" style={{ fontSize: '1.15cqw', color: ctx.muted, lineHeight: 1.4 }}>
+                      {str(person.note)}
+                    </div>
+                  ) : null}
+                </div>
+              </Block>
+            ))}
+          </div>
+        </div>
+      )
+    }
+    case 'glossary': {
+      const terms = objList(c.terms)
+      const cols = terms.length <= 4 ? 2 : 3
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="grid flex-1" style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`, gridAutoRows: '1fr', gap: '1.3cqw' }}>
+            {terms.map((entry, index) => (
+              <Block key={index} blockKey={`term-${index}`}>
+                <div
+                  className="flex flex-col overflow-hidden rounded-md border"
+                  style={{ gap: '0.6cqw', padding: '1.3cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+                >
+                  <div className="font-semibold" style={{ fontSize: '1.5cqw', color: ctx.accent, lineHeight: 1.25 }}>
+                    {str(entry.term)}
+                  </div>
+                  <div className="line-clamp-4" style={{ fontSize: '1.18cqw', color: ctx.muted, lineHeight: 1.45 }}>
+                    {str(entry.definition)}
+                  </div>
+                </div>
+              </Block>
+            ))}
+          </div>
+        </div>
+      )
+    }
+    case 'mosaic': {
+      const tiles = objList(c.tiles).slice(0, 4)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.2cqw' }}>
+          {str(c.title) ? (
+            <Block blockKey="title">
+              <SlideTitle>{str(c.title)}</SlideTitle>
+            </Block>
+          ) : null}
+          <div
+            className="grid min-h-0 flex-1"
+            style={{ gridTemplateColumns: '1.9fr 1fr 1fr', gridTemplateRows: '1fr 1fr', gap: '1.1cqw' }}
+          >
+            {tiles.map((tile, index) => {
+              const cellStyle: CSSProperties =
+                index === 0 ? { gridRow: '1 / span 2' } : index === 1 ? { gridColumn: '2 / span 2' } : {}
+              return (
+                <Block key={index} blockKey={`tile-${index}`}>
+                  <ImageSlot blockKey={`tile-${index}`} image={str(tile.image)} alt={str(tile.alt)} caption={str(tile.caption)} ctx={ctx} style={cellStyle} />
+                </Block>
+              )
+            })}
+          </div>
+          {str(c.caption) ? (
+            <Block blockKey="caption">
+              <div className="text-center" style={{ fontSize: '1.2cqw', color: ctx.muted }}>
+                {str(c.caption)}
+              </div>
+            </Block>
+          ) : null}
+        </div>
+      )
+    }
+    case 'agenda-toc': {
+      const items = objList(c.items)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <AccentBar accent={ctx.accent} width="5cqw" />
+          <div className="flex min-h-0 flex-1 flex-col justify-center">
+            {items.map((item, index) => (
+              <Block key={index} blockKey={`item-${index}`}>
+                <div className="flex items-center" style={{ gap: '1.4cqw', padding: '0.8cqw 0.2cqw', borderBottom: `1px solid ${ctx.line}` }}>
+                  <span className="font-bold" style={{ fontSize: '2cqw', lineHeight: 1.1, color: ctx.accent, minWidth: '3.6cqw' }}>
+                    {String(index + 1).padStart(2, '0')}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate font-medium" style={{ fontSize: '1.65cqw' }}>
+                    {str(item.label)}
+                  </span>
+                  {str(item.page) ? (
+                    <span className="shrink-0 rounded-full border font-semibold" style={{ borderColor: ctx.line, color: ctx.muted, fontSize: '1.05cqw', padding: '0.25cqw 0.95cqw' }}>
+                      {str(item.page)}
+                    </span>
+                  ) : null}
+                </div>
+              </Block>
+            ))}
+          </div>
+        </div>
+      )
+    }
+    case 'kpi-band': {
+      const kpis = objList(c.kpis)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          {str(c.title) ? (
+            <Block blockKey="title">
+              <SlideTitle>{str(c.title)}</SlideTitle>
+            </Block>
+          ) : null}
+          <div className="grid min-h-0 flex-1 items-center" style={{ gridTemplateColumns: `repeat(${Math.max(1, kpis.length)}, minmax(0, 1fr))`, gap: '1.3cqw' }}>
+            {kpis.map((kpi, index) => {
+              const down = kpi.deltaUp === false
+              const deltaColor = down ? 'var(--daedalus-warning)' : 'var(--daedalus-success)'
+              return (
+                <Block key={index} blockKey={`kpi-${index}`}>
+                  <div
+                    className="flex flex-col justify-center overflow-hidden rounded-md border"
+                    style={{ gap: '0.75cqw', padding: '1.6cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg, minHeight: '58%' }}
+                  >
+                    <div className="font-bold" style={{ fontSize: '3.7cqw', lineHeight: 1.05, color: ctx.accent }}>
+                      {str(kpi.value)}
+                    </div>
+                    <div className="line-clamp-3" style={{ fontSize: '1.2cqw', lineHeight: 1.35, color: ctx.muted }}>
+                      {str(kpi.label)}
+                    </div>
+                    {str(kpi.delta) ? (
+                      <span
+                        className="w-fit rounded-full border font-semibold"
+                        style={{ borderColor: deltaColor, color: deltaColor, fontSize: '1.05cqw', padding: '0.3cqw 0.9cqw' }}
+                      >
+                        {down ? '▼' : '▲'} {str(kpi.delta)}
+                      </span>
+                    ) : null}
+                  </div>
+                </Block>
+              )
+            })}
+          </div>
+        </div>
+      )
+    }
+    case 'funnel': {
+      const stages = objList(c.stages)
+      const fallback = [100, 78, 58, 40]
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="flex min-h-0 flex-1 flex-col justify-center" style={{ gap: '0.95cqw' }}>
+            {stages.map((stage, index) => {
+              const value = num(stage.value)
+              const pct = value > 0 && value <= 100 ? Math.max(30, value) : fallback[Math.min(index, fallback.length - 1)]!
+              return (
+                <Block key={index} blockKey={`stage-${index}`}>
+                  <div className="flex items-center" style={{ gap: '1.5cqw' }}>
+                    <div
+                      className="shrink-0 rounded-md"
+                      style={{ width: `${26 + pct * 0.5}%`, backgroundColor: seriesColor(index, ctx.accent), padding: '0.85cqw 1.3cqw' }}
+                    >
+                      <div className="flex items-baseline justify-between" style={{ gap: '1cqw', color: 'var(--daedalus-onPrimary)' }}>
+                        <span className="truncate font-semibold" style={{ fontSize: '1.45cqw' }}>
+                          {str(stage.label)}
+                        </span>
+                        {value > 0 ? (
+                          <span className="shrink-0 font-bold" style={{ fontSize: '1.45cqw' }}>
+                            {value}%
+                          </span>
+                        ) : null}
+                      </div>
+                    </div>
+                    {str(stage.desc) ? (
+                      <div className="line-clamp-2 min-w-0" style={{ fontSize: '1.15cqw', lineHeight: 1.35, color: ctx.muted }}>
+                        {str(stage.desc)}
+                      </div>
+                    ) : null}
+                  </div>
+                </Block>
+              )
+            })}
+          </div>
+        </div>
+      )
+    }
+    case 'gantt-bars': {
+      const bars = objList(c.bars)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.4cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          {str(c.startLabel) || str(c.endLabel) ? (
+            <div className="flex" style={{ paddingLeft: '23.2%', paddingRight: '15.2%', fontSize: '1.05cqw', color: ctx.muted }}>
+              <span className="flex-1">{str(c.startLabel)}</span>
+              <span>{str(c.endLabel)}</span>
+            </div>
+          ) : null}
+          <div className="flex min-h-0 flex-1 flex-col justify-center" style={{ gap: '0.85cqw' }}>
+            {bars.map((bar, index) => {
+              const start = Math.min(95, Math.max(0, num(bar.start)))
+              const span = Math.min(100 - start, Math.max(3, num(bar.span) || 10))
+              return (
+                <Block key={index} blockKey={`bar-${index}`}>
+                  <div className="flex items-center" style={{ gap: '1.2cqw' }}>
+                    <div className="shrink-0 truncate font-medium" style={{ width: '22%', fontSize: '1.25cqw' }}>
+                      {str(bar.label)}
+                    </div>
+                    <div className="relative flex-1 rounded-full border" style={{ height: '2.05cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}>
+                      <div
+                        className="absolute rounded-full"
+                        style={{ left: `${start}%`, width: `${span}%`, top: '16%', height: '68%', backgroundColor: seriesColor(index, ctx.accent) }}
+                      />
+                    </div>
+                    <div className="shrink-0 truncate" style={{ width: '14%', fontSize: '1.05cqw', color: ctx.muted }}>
+                      {str(bar.note)}
+                    </div>
+                  </div>
+                </Block>
+              )
+            })}
+          </div>
+        </div>
+      )
+    }
+    case 'org-chart': {
+      const root = obj(c.root)
+      const reports = objList(c.reports)
+      const personCard = (person: Record<string, unknown>, members: string[], big: boolean) => (
+        <div
+          className="flex flex-col items-center overflow-hidden rounded-md border text-center"
+          style={{ gap: '0.55cqw', padding: big ? '1.4cqw' : '1.2cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+        >
+          <span
+            aria-hidden
+            className="flex shrink-0 items-center justify-center rounded-full font-bold"
+            style={{
+              width: big ? '4.2cqw' : '3.6cqw',
+              height: big ? '4.2cqw' : '3.6cqw',
+              backgroundColor: ctx.accent,
+              color: 'var(--daedalus-onPrimary)',
+              fontSize: big ? '1.6cqw' : '1.35cqw',
+            }}
+          >
+            {initialsOf(str(person.name))}
+          </span>
+          <div className="font-semibold" style={{ fontSize: big ? '1.6cqw' : '1.4cqw', lineHeight: 1.2 }}>
+            {str(person.name)}
+          </div>
+          <div className="line-clamp-2 font-semibold uppercase" style={{ fontSize: '1cqw', letterSpacing: '0.12em', color: ctx.accent }}>
+            {str(person.role)}
+          </div>
+          {members.length > 0 ? (
+            <div className="flex flex-wrap justify-center" style={{ gap: '0.45cqw' }}>
+              {members.map((member, i) => (
+                <span key={i} className="rounded-full border" style={{ borderColor: ctx.line, color: ctx.muted, fontSize: '0.95cqw', padding: '0.2cqw 0.7cqw' }}>
+                  {member}
+                </span>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.3cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="flex justify-center">
+            <div style={{ width: '36%' }}>
+              <Block blockKey="root">{personCard(root, [], true)}</Block>
+            </div>
+          </div>
+          <div aria-hidden className="relative w-full" style={{ height: '1.7cqw' }}>
+            <div className="absolute" style={{ left: '50%', top: 0, width: 2, height: '0.85cqw', marginLeft: -1, backgroundColor: ctx.line }} />
+            {reports.length > 1 ? (
+              <div
+                className="absolute"
+                style={{
+                  top: '0.85cqw',
+                  height: 2,
+                  left: `${(0.5 / Math.max(1, reports.length)) * 100}%`,
+                  width: `${((reports.length - 1) / Math.max(1, reports.length)) * 100}%`,
+                  backgroundColor: ctx.line,
+                }}
+              />
+            ) : null}
+          </div>
+          <div className="grid min-h-0 flex-1" style={{ gridTemplateColumns: `repeat(${Math.max(1, reports.length)}, minmax(0, 1fr))`, gap: '1.3cqw' }}>
+            {reports.map((person, index) => (
+              <Block key={index} blockKey={`person-${index}`}>
+                {personCard(person, strList(person.members), false)}
+              </Block>
+            ))}
+          </div>
+        </div>
+      )
+    }
+    case 'pros-cons': {
+      const pros = obj(c.pros)
+      const cons = obj(c.cons)
+      const panel = (column: Record<string, unknown>, good: boolean) => (
+        <div
+          className="flex min-w-0 flex-1 flex-col rounded-md border"
+          style={{ gap: '1cqw', padding: '1.6cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+        >
+          <div className="flex items-center" style={{ gap: '0.8cqw' }}>
+            <span
+              aria-hidden
+              className="font-bold"
+              style={{ fontSize: '1.8cqw', lineHeight: 1, color: good ? 'var(--daedalus-success)' : 'var(--daedalus-warning)' }}
+            >
+              {good ? '✓' : '✗'}
+            </span>
+            <span className="font-semibold" style={{ fontSize: '1.75cqw', color: ctx.accent }}>
+              {str(column.title)}
+            </span>
+          </div>
+          <CheckList
+            items={strList(column.points)}
+            ctx={ctx}
+            size="1.3cqw"
+            marker={good ? '✓' : '✗'}
+            markerColor={good ? 'var(--daedalus-success)' : 'var(--daedalus-warning)'}
+          />
+        </div>
+      )
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="flex min-h-0 flex-1" style={{ gap: '1.6cqw' }}>
+            <Block blockKey="pros">{panel(pros, true)}</Block>
+            <Block blockKey="cons">{panel(cons, false)}</Block>
+          </div>
+        </div>
+      )
+    }
+    case 'pricing-tiers': {
+      const tiers = objList(c.tiers)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="grid min-h-0 flex-1 items-stretch" style={{ gridTemplateColumns: `repeat(${Math.max(1, tiers.length)}, minmax(0, 1fr))`, gap: '1.3cqw' }}>
+            {tiers.map((tier, index) => {
+              const featured = tier.featured === true
+              return (
+                <Block key={index} blockKey={`tier-${index}`}>
+                  <div
+                    className="relative flex flex-col overflow-hidden rounded-md"
+                    style={{
+                      gap: '0.8cqw',
+                      padding: '1.6cqw',
+                      border: `${featured ? '0.28cqw' : '1px'} solid ${featured ? ctx.accent : ctx.line}`,
+                      backgroundColor: ctx.panelBg,
+                      ...(featured ? { transform: 'scale(1.02)' } : {}),
+                    }}
+                  >
+                    {featured ? (
+                      <span
+                        className="w-fit rounded-full font-bold uppercase"
+                        style={{ backgroundColor: ctx.accent, color: 'var(--daedalus-onPrimary)', fontSize: '0.95cqw', letterSpacing: '0.1em', padding: '0.3cqw 0.9cqw' }}
+                      >
+                        Paling dipilih
+                      </span>
+                    ) : null}
+                    <div className="font-semibold uppercase" style={{ fontSize: '1.25cqw', letterSpacing: '0.14em', color: ctx.muted }}>
+                      {str(tier.name)}
+                    </div>
+                    <div className="font-bold" style={{ fontSize: '3cqw', lineHeight: 1.05, color: featured ? ctx.accent : undefined }}>
+                      {str(tier.price)}
+                    </div>
+                    {str(tier.period) ? <div style={{ fontSize: '1.05cqw', color: ctx.muted }}>{str(tier.period)}</div> : null}
+                    <CheckList items={strList(tier.features)} ctx={ctx} size="1.18cqw" />
+                  </div>
+                </Block>
+              )
+            })}
+          </div>
+          {str(c.note) ? (
+            <Block blockKey="note">
+              <div className="text-center" style={{ fontSize: '1.15cqw', color: ctx.muted }}>
+                {str(c.note)}
+              </div>
+            </Block>
+          ) : null}
+        </div>
+      )
+    }
+    case 'faq': {
+      const items = objList(c.items)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="flex min-h-0 flex-1 flex-col justify-center" style={{ gap: '1.05cqw' }}>
+            {items.map((item, index) => (
+              <Block key={index} blockKey={`item-${index}`}>
+                <div className="flex" style={{ gap: '1.2cqw', paddingBottom: '0.9cqw', borderBottom: `1px solid ${ctx.line}` }}>
+                  <span
+                    aria-hidden
+                    className="flex shrink-0 items-center justify-center rounded-full font-bold"
+                    style={{ width: '2.5cqw', height: '2.5cqw', backgroundColor: ctx.accent, color: 'var(--daedalus-onPrimary)', fontSize: '1.3cqw' }}
+                  >
+                    Q
+                  </span>
+                  <div className="flex min-w-0 flex-col" style={{ gap: '0.35cqw' }}>
+                    <div className="font-semibold" style={{ fontSize: '1.5cqw', lineHeight: 1.25 }}>
+                      {str(item.q)}
+                    </div>
+                    <div className="line-clamp-3" style={{ fontSize: '1.22cqw', lineHeight: 1.4, color: ctx.muted }}>
+                      {str(item.a)}
+                    </div>
+                  </div>
+                </div>
+              </Block>
+            ))}
+          </div>
+        </div>
+      )
+    }
+    case 'steps-cards': {
+      const steps = objList(c.steps)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="relative flex min-h-0 flex-1 items-stretch" style={{ gap: '1.3cqw' }}>
+            <div aria-hidden className="absolute" style={{ top: '1.9cqw', left: '12%', right: '12%', borderTop: `2px dashed ${ctx.line}` }} />
+            {steps.map((step, index) => {
+              const Icon = iconFor(str(step.icon))
+              return (
+                <Block key={index} blockKey={`step-${index}`}>
+                  <div className="relative flex min-w-0 flex-1 flex-col items-center" style={{ gap: '1cqw' }}>
+                    <span
+                      aria-hidden
+                      className="flex items-center justify-center rounded-full border"
+                      style={{ width: '3.8cqw', height: '3.8cqw', borderColor: ctx.accent, backgroundColor: ctx.panelBg }}
+                    >
+                      <Icon aria-hidden style={{ width: '1.9cqw', height: '1.9cqw', color: ctx.accent }} />
+                    </span>
+                    <div
+                      className="flex w-full flex-1 flex-col overflow-hidden rounded-md border text-center"
+                      style={{ gap: '0.6cqw', padding: '1.3cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+                    >
+                      <div className="font-semibold" style={{ fontSize: '1.45cqw', lineHeight: 1.25 }}>
+                        {index + 1}. {str(step.title)}
+                      </div>
+                      {str(step.desc) ? (
+                        <div className="line-clamp-4" style={{ fontSize: '1.12cqw', lineHeight: 1.4, color: ctx.muted }}>
+                          {str(step.desc)}
+                        </div>
+                      ) : null}
+                    </div>
+                  </div>
+                </Block>
+              )
+            })}
+          </div>
+        </div>
+      )
+    }
+    case 'split-visual-quote': {
+      const imageBox = <ImageSlot blockKey="image" image={str(c.image)} alt={str(c.alt)} ctx={ctx} style={{ width: '40%', flexShrink: 0 }} />
+      const quoteCol = (
+        <div className="flex min-w-0 flex-1 flex-col justify-center" style={{ gap: '1.4cqw' }}>
+          <Block blockKey="quote">
+            <div className="flex flex-col" style={{ gap: '1.2cqw' }}>
+              <QuoteIcon aria-hidden style={{ width: '3.4cqw', height: '3.4cqw', color: ctx.accent }} />
+              <div className="line-clamp-6" style={{ fontSize: '2.7cqw', lineHeight: 1.32, fontStyle: 'italic' }}>
+                {str(c.quote)}
+              </div>
+            </div>
+          </Block>
+          {str(c.author) || str(c.role) ? (
+            <Block blockKey="author">
+              <div className="flex flex-col" style={{ gap: '0.25cqw' }}>
+                <span className="font-semibold" style={{ fontSize: '1.5cqw' }}>
+                  {str(c.author)}
+                </span>
+                {str(c.role) ? <span style={{ fontSize: '1.15cqw', color: ctx.muted }}>{str(c.role)}</span> : null}
+              </div>
+            </Block>
+          ) : null}
+        </div>
+      )
+      return (
+        <div className="flex min-h-0 flex-1" style={{ gap: '2.4cqw' }}>
+          {c.side === 'left' ? (
+            <>
+              <Block blockKey="image">{imageBox}</Block>
+              {quoteCol}
+            </>
+          ) : (
+            <>
+              {quoteCol}
+              <Block blockKey="image">{imageBox}</Block>
+            </>
+          )}
+        </div>
+      )
+    }
+    case 'banner-cta': {
+      return (
+        <div className="flex flex-1 flex-col items-center justify-center text-center" style={{ gap: '1.7cqw', padding: '0 5cqw' }}>
+          <AccentBar accent={ctx.accent} width="9cqw" />
+          <Block blockKey="title">
+            <div className="line-clamp-3 font-bold tracking-tight" style={{ fontSize: '5cqw', lineHeight: 1.12 }}>
+              {str(c.title)}
+            </div>
+          </Block>
+          {str(c.subtitle) ? (
+            <Block blockKey="subtitle">
+              <div className="line-clamp-3" style={{ fontSize: '1.85cqw', lineHeight: 1.4, color: ctx.muted }}>
+                {str(c.subtitle)}
+              </div>
+            </Block>
+          ) : null}
+          <Block blockKey="actions">
+            <div className="flex items-center" style={{ gap: '1.2cqw' }}>
+              <span className="rounded-full font-bold" style={{ backgroundColor: ctx.accent, color: 'var(--daedalus-onPrimary)', fontSize: '1.5cqw', padding: '0.8cqw 2.2cqw' }}>
+                {str(c.primary)}
+              </span>
+              {str(c.secondary) ? (
+                <span className="rounded-full border font-semibold" style={{ borderColor: ctx.accent, color: ctx.accent, fontSize: '1.5cqw', padding: '0.8cqw 2.2cqw' }}>
+                  {str(c.secondary)}
+                </span>
+              ) : null}
+            </div>
+          </Block>
+          {str(c.note) ? (
+            <Block blockKey="note">
+              <div style={{ fontSize: '1.1cqw', color: ctx.muted }}>{str(c.note)}</div>
+            </Block>
+          ) : null}
+        </div>
+      )
+    }
+    case 'logo-wall': {
+      const logos = objList(c.logos)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          {str(c.title) ? (
+            <Block blockKey="title">
+              <SlideTitle>{str(c.title)}</SlideTitle>
+            </Block>
+          ) : null}
+          <div className="grid min-h-0 flex-1 items-center" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '1.2cqw' }}>
+            {logos.map((logo, index) => (
+              <Block key={index} blockKey={`logo-${index}`}>
+                <div
+                  className="flex flex-col items-center justify-center overflow-hidden rounded-md border text-center"
+                  style={{ gap: '0.7cqw', padding: '1.3cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg, minHeight: '78%' }}
+                >
+                  <span
+                    aria-hidden
+                    className="flex items-center justify-center rounded-md border font-bold"
+                    style={{ width: '3.6cqw', height: '3.6cqw', borderColor: ctx.accent, color: ctx.accent, fontSize: '1.5cqw' }}
+                  >
+                    {initialsOf(str(logo.name))}
+                  </span>
+                  <div className="line-clamp-2 font-semibold" style={{ fontSize: '1.18cqw', lineHeight: 1.3 }}>
+                    {str(logo.name)}
+                  </div>
+                </div>
+              </Block>
+            ))}
+          </div>
+        </div>
+      )
+    }
+    case 'year-markers': {
+      const years = objList(c.years)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          {str(c.title) ? (
+            <Block blockKey="title">
+              <SlideTitle>{str(c.title)}</SlideTitle>
+            </Block>
+          ) : null}
+          <div className="flex min-h-0 flex-1 items-center" style={{ gap: '1.6cqw' }}>
+            {years.map((entry, index) => (
+              <Block key={index} blockKey={`year-${index}`}>
+                <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '0.8cqw' }}>
+                  <div className="font-bold" style={{ fontSize: '4.4cqw', lineHeight: 1, color: ctx.accent }}>
+                    {str(entry.year)}
+                  </div>
+                  <div aria-hidden className="relative" style={{ height: '0.4cqw', backgroundColor: ctx.line }}>
+                    <span className="absolute rounded-full" style={{ left: 0, top: '-0.55cqw', width: '1.5cqw', height: '1.5cqw', backgroundColor: ctx.accent }} />
+                  </div>
+                  <div className="font-semibold" style={{ fontSize: '1.5cqw', lineHeight: 1.25 }}>
+                    {str(entry.label)}
+                  </div>
+                  {str(entry.desc) ? (
+                    <div className="line-clamp-4" style={{ fontSize: '1.15cqw', lineHeight: 1.4, color: ctx.muted }}>
+                      {str(entry.desc)}
+                    </div>
+                  ) : null}
+                </div>
+              </Block>
+            ))}
+          </div>
+        </div>
+      )
+    }
+    case 'stat-duel': {
+      const left = obj(c.left)
+      const right = obj(c.right)
+      const side = (entry: Record<string, unknown>, strong: boolean) => (
+        <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '0.7cqw', textAlign: strong ? 'right' : 'left' }}>
+          <div className="font-bold" style={{ fontSize: '6.2cqw', lineHeight: 1, color: strong ? ctx.accent : undefined }}>
+            {str(entry.value)}
+          </div>
+          <div className="line-clamp-3" style={{ fontSize: '1.3cqw', lineHeight: 1.4, color: ctx.muted }}>
+            {str(entry.label)}
+          </div>
+        </div>
+      )
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          {str(c.title) ? (
+            <Block blockKey="title">
+              <SlideTitle>{str(c.title)}</SlideTitle>
+            </Block>
+          ) : null}
+          <div className="flex min-h-0 flex-1 items-center" style={{ gap: '2.2cqw' }}>
+            <Block blockKey="left">{side(left, false)}</Block>
+            <Block blockKey="delta">
+              <span
+                className="shrink-0 rounded-full font-bold"
+                style={{ backgroundColor: ctx.accent, color: 'var(--daedalus-onPrimary)', fontSize: '1.7cqw', padding: '0.8cqw 1.8cqw' }}
+              >
+                {str(c.delta)}
+              </span>
+            </Block>
+            <Block blockKey="right">{side(right, true)}</Block>
+          </div>
+          {str(c.note) ? (
+            <Block blockKey="note">
+              <div className="rounded-md border text-center" style={{ borderColor: ctx.line, backgroundColor: ctx.panelBg, fontSize: '1.2cqw', color: ctx.muted, padding: '1cqw' }}>
+                {str(c.note)}
+              </div>
+            </Block>
+          ) : null}
+        </div>
+      )
+    }
+    case 'waterfall-steps': {
+      const steps = objList(c.steps)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="flex min-h-0 flex-1 flex-col justify-center" style={{ gap: '0.95cqw' }}>
+            {steps.map((step, index) => (
+              <Block key={index} blockKey={`step-${index}`}>
+                <div
+                  className="flex items-center rounded-md border"
+                  style={{
+                    gap: '1.2cqw',
+                    padding: '1.05cqw 1.5cqw',
+                    marginLeft: `${index * 9}%`,
+                    width: `${100 - index * 9}%`,
+                    borderColor: ctx.line,
+                    backgroundColor: ctx.panelBg,
+                  }}
+                >
+                  <span className="shrink-0 font-bold" style={{ fontSize: '1.6cqw', color: ctx.accent }}>
+                    {index + 1}
+                  </span>
+                  <div className="flex min-w-0 flex-col" style={{ gap: '0.2cqw' }}>
+                    <span className="font-semibold" style={{ fontSize: '1.45cqw', lineHeight: 1.25 }}>
+                      {str(step.label)}
+                    </span>
+                    {str(step.desc) ? (
+                      <span className="line-clamp-2" style={{ fontSize: '1.1cqw', lineHeight: 1.35, color: ctx.muted }}>
+                        {str(step.desc)}
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+              </Block>
+            ))}
+          </div>
+        </div>
+      )
+    }
+    case 'feature-highlight': {
+      const Icon = iconFor(str(c.icon))
+      return (
+        <div className="flex min-h-0 flex-1 items-center" style={{ gap: '2.6cqw' }}>
+          <Block blockKey="icon">
+            <span
+              aria-hidden
+              className="flex shrink-0 items-center justify-center rounded-full border"
+              style={{ width: '9.5cqw', height: '9.5cqw', borderColor: ctx.accent, backgroundColor: ctx.panelBg }}
+            >
+              <Icon aria-hidden style={{ width: '4.6cqw', height: '4.6cqw', color: ctx.accent }} />
+            </span>
+          </Block>
+          <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '1.3cqw' }}>
+            <Block blockKey="title">
+              <SlideTitle>{str(c.title)}</SlideTitle>
+            </Block>
+            {str(c.lead) ? (
+              <div className="line-clamp-3" style={{ fontSize: '1.5cqw', lineHeight: 1.45, color: ctx.muted }}>
+                {str(c.lead)}
+              </div>
+            ) : null}
+            <Block blockKey="checks">
+              <CheckList items={strList(c.checks)} ctx={ctx} size="1.35cqw" />
+            </Block>
+          </div>
+        </div>
+      )
+    }
+    case 'callout': {
+      const tone = str(c.tone)
+      const toneColor = tone === 'success' ? 'var(--daedalus-success)' : tone === 'warning' ? 'var(--daedalus-warning)' : ctx.accent
+      const Icon = iconFor(str(c.icon) || (tone === 'success' ? 'circle-check' : 'info'))
+      return (
+        <div className="flex flex-1 flex-col justify-center">
+          <div
+            className="flex flex-col rounded-md"
+            style={{ gap: '1.1cqw', padding: '2cqw', border: `1px solid ${ctx.line}`, borderLeft: `0.7cqw solid ${toneColor}`, backgroundColor: ctx.panelBg }}
+          >
+            <div className="flex items-center" style={{ gap: '1.2cqw' }}>
+              <span
+                aria-hidden
+                className="flex shrink-0 items-center justify-center rounded-full"
+                style={{ width: '3.5cqw', height: '3.5cqw', backgroundColor: toneColor }}
+              >
+                <Icon aria-hidden style={{ width: '1.9cqw', height: '1.9cqw', color: 'var(--daedalus-onPrimary)' }} />
+              </span>
+              <Block blockKey="title">
+                <div className="font-bold" style={{ fontSize: '2.2cqw', lineHeight: 1.2 }}>
+                  {str(c.title)}
+                </div>
+              </Block>
+            </div>
+            <Block blockKey="body">
+              <div className="line-clamp-5" style={{ fontSize: '1.45cqw', lineHeight: 1.5 }}>
+                {str(c.body)}
+              </div>
+            </Block>
+            {strList(c.points).length > 0 ? (
+              <Block blockKey="points">
+                <CheckList items={strList(c.points)} ctx={ctx} size="1.25cqw" markerColor={toneColor} />
+              </Block>
+            ) : null}
+          </div>
+        </div>
+      )
+    }
+    case 'ranking-list': {
+      const entries = objList(c.entries)
+      const max = Math.max(1, ...entries.map((entry) => num(entry.value)))
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.5cqw' }}>
+          <Block blockKey="title">
+            <SlideTitle>{str(c.title)}</SlideTitle>
+          </Block>
+          <div className="flex min-h-0 flex-1 flex-col justify-center">
+            {entries.map((entry, index) => (
+              <Block key={index} blockKey={`entry-${index}`}>
+                <div className="flex flex-col" style={{ gap: '0.5cqw', padding: '0.6cqw 0.2cqw', borderBottom: `1px solid ${ctx.line}` }}>
+                  <div className="flex items-baseline" style={{ gap: '1.2cqw' }}>
+                    <span className="font-bold" style={{ fontSize: '1.9cqw', minWidth: '3cqw', color: index === 0 ? ctx.accent : ctx.muted }}>
+                      {index + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-semibold" style={{ fontSize: '1.45cqw' }}>
+                      {str(entry.label)}
+                      {str(entry.note) ? (
+                        <span className="font-normal" style={{ fontSize: '1.1cqw', color: ctx.muted }}>
+                          {'  '}· {str(entry.note)}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="shrink-0 font-bold" style={{ fontSize: '1.5cqw', color: ctx.accent }}>
+                      {str(entry.value)}
+                    </span>
+                  </div>
+                  <div className="flex" style={{ gap: '1.2cqw' }}>
+                    <span aria-hidden style={{ minWidth: '3cqw' }} />
+                    <div className="relative flex-1 overflow-hidden rounded-full border" style={{ height: '0.95cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}>
+                      <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.max(4, (num(entry.value) / max) * 100)}%`, backgroundColor: seriesColor(index, ctx.accent) }} />
+                    </div>
+                  </div>
+                </div>
+              </Block>
+            ))}
+          </div>
+        </div>
+      )
+    }
+    case 'hero-image-caption': {
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.4cqw' }}>
+          <Block blockKey="image">
+            <ImageSlot blockKey="image" image={str(c.image)} alt={str(c.alt)} ctx={ctx} style={{ height: '56%', flexShrink: 0 }} />
+          </Block>
+          <Block blockKey="title">
+            <div className="line-clamp-2 font-bold tracking-tight" style={{ fontSize: '3.3cqw', lineHeight: 1.15 }}>
+              {str(c.title)}
+            </div>
+          </Block>
+          {str(c.caption) ? (
+            <Block blockKey="caption">
+              <div className="line-clamp-3" style={{ fontSize: '1.35cqw', lineHeight: 1.45, color: ctx.muted }}>
+                {str(c.caption)}
+              </div>
+            </Block>
+          ) : null}
+        </div>
+      )
+    }
+    case 'quote-wall': {
+      const quotes = objList(c.quotes)
+      return (
+        <div className="flex flex-1 flex-col" style={{ gap: '1.6cqw' }}>
+          {str(c.title) ? (
+            <Block blockKey="title">
+              <SlideTitle>{str(c.title)}</SlideTitle>
+            </Block>
+          ) : null}
+          <div className="grid min-h-0 flex-1" style={{ gridTemplateColumns: `repeat(${Math.max(1, quotes.length)}, minmax(0, 1fr))`, gap: '1.3cqw' }}>
+            {quotes.map((quote, index) => (
+              <Block key={index} blockKey={`quote-${index}`}>
+                <div
+                  className="flex flex-col overflow-hidden rounded-md border"
+                  style={{ gap: '0.9cqw', padding: '1.5cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}
+                >
+                  <QuoteIcon aria-hidden style={{ width: '2.2cqw', height: '2.2cqw', color: ctx.accent }} />
+                  <div className="line-clamp-5 flex-1" style={{ fontSize: '1.42cqw', lineHeight: 1.45, fontStyle: 'italic' }}>
+                    {str(quote.text)}
+                  </div>
+                  <div className="flex items-center" style={{ gap: '0.9cqw' }}>
+                    <span
+                      aria-hidden
+                      className="flex shrink-0 items-center justify-center rounded-full font-bold"
+                      style={{ width: '3.1cqw', height: '3.1cqw', backgroundColor: seriesColor(index, ctx.accent), color: 'var(--daedalus-onPrimary)', fontSize: '1.2cqw' }}
+                    >
+                      {initialsOf(str(quote.name))}
+                    </span>
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate font-semibold" style={{ fontSize: '1.25cqw', lineHeight: 1.25 }}>
+                        {str(quote.name)}
+                      </span>
+                      {str(quote.role) ? (
+                        <span className="truncate" style={{ fontSize: '1.02cqw', color: ctx.muted }}>
+                          {str(quote.role)}
+                        </span>
+                      ) : null}
+                    </span>
+                  </div>
+                </div>
+              </Block>
+            ))}
+          </div>
+        </div>
+      )
+    }
     default: {
       return (
         <div className="flex flex-1 flex-col justify-center" style={{ gap: '1.2cqw' }}>
@@ -791,12 +2172,16 @@ type DragSession = {
   moved: boolean
 }
 
-export function SlideRenderer({ slide, theme, editable = false, onPositionsChange }: {
+export function SlideRenderer({ slide, theme, editable = false, onPositionsChange, resolveImageSrc, onImagePick }: {
   slide: Slide
   theme?: DeckSpec['theme']
   /** Edit mode: blocks become grabbable; drags persist via onPositionsChange. */
   editable?: boolean
   onPositionsChange?: (slideId: string, positions: Record<string, BlockPosition>) => void
+  /** Maps a local deck-asset name to a displayable URL (uploaded images). */
+  resolveImageSrc?: (name: string) => string | undefined
+  /** Edit mode: an image placeholder/image was clicked (not dragged). */
+  onImagePick?: (blockKey: string) => void
 }) {
   const isLight = theme?.dark === false
   const light = getPalette('light')
@@ -858,7 +2243,11 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
       last: origin,
       moved: false,
     }
-    setDragPos({ key, pos: origin })
+    // No setDragPos here: the positioned overlay render starts on the
+    // first actual pointer move (see the move handler). Remounting the
+    // block mid-gesture on pointerdown would unmount whatever the user
+    // pressed and eat its click — e.g. the image-upload button inside a
+    // placeholder, which must distinguish click from drag.
     event.preventDefault()
   }, [])
 
@@ -897,7 +2286,7 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
 
   return (
     <div ref={boxRef} data-testid="slide-renderer" data-layout={slide.layout} className="relative flex h-full w-full flex-col overflow-hidden" style={rootStyle}>
-      <BlockCtx.Provider value={{ positions: mergedPositions, editable, overlayEl, onDragStart }}>
+      <BlockCtx.Provider value={{ positions: mergedPositions, editable, overlayEl, onDragStart, imageSrc: resolveImageSrc, onImagePick }}>
         <div className="flex min-h-0 flex-1 flex-col" style={{ padding: '3cqw' }}>
           {renderBody(slide, ctx)}
         </div>

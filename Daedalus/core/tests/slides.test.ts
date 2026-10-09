@@ -3,14 +3,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
 import {
+  LAYOUTS,
   ToolRegistry,
   classifyToolName,
   createDefaultRegistry,
+  exportDeckToPptx,
+  getLayout,
   isToolVisible,
+  layoutBlockKeys,
   newDeck,
   newSlideId,
   readDeck,
   validateDeck,
+  validateSlideContent,
   writeDeck,
   type ToolCall,
 } from '../src/index.ts';
@@ -102,6 +107,202 @@ describe('validateDeck positions (canvas drag placements)', () => {
     expect(issues.some((i) => i.code === 'invalid-position' && i.field === 'positions.points' && i.severity === 'error')).toBe(true);
     expect(issues.some((i) => i.code === 'invalid-position' && i.field === 'positions.title' && i.severity === 'error')).toBe(true);
     expect(issues.some((i) => i.code === 'unknown-block' && i.field === 'positions.nope' && i.severity === 'warning')).toBe(true);
+  });
+});
+
+describe('layout library expansion (50 total)', () => {
+  const NEW_LAYOUT_IDS = [
+    'numbered-steps', 'code-focus', 'chevron-process', 'diagram-pyramid', 'roadmap', 'versus',
+    'matrix-quadrant', 'big-stat', 'testimonial', 'profile-cards', 'glossary', 'mosaic',
+  ];
+  const EXPANSION_LAYOUT_IDS = [
+    'agenda-toc', 'kpi-band', 'funnel', 'gantt-bars', 'org-chart', 'pros-cons', 'pricing-tiers',
+    'faq', 'steps-cards', 'split-visual-quote', 'banner-cta', 'logo-wall', 'year-markers',
+    'stat-duel', 'waterfall-steps', 'feature-highlight', 'callout', 'ranking-list',
+    'hero-image-caption', 'quote-wall',
+  ];
+  const ALL_EXPANSION_IDS = [...NEW_LAYOUT_IDS, ...EXPANSION_LAYOUT_IDS];
+
+  test('catalog carries the 18 existing layouts plus all expansions (50 total)', () => {
+    expect(LAYOUTS).toHaveLength(50);
+    for (const id of ALL_EXPANSION_IDS) expect(getLayout(id), id).toBeDefined();
+  });
+
+  test('every expansion layout ships defaults that validate without errors', () => {
+    for (const id of ALL_EXPANSION_IDS) {
+      const def = getLayout(id)!;
+      const errors = validateSlideContent(def, JSON.parse(JSON.stringify(def.defaults)) as unknown)
+        .filter((i) => i.severity === 'error');
+      expect(errors, `${id}: ${JSON.stringify(errors)}`).toEqual([]);
+    }
+  });
+
+  test('every expansion layout rejects content missing a required field', () => {
+    for (const id of ALL_EXPANSION_IDS) {
+      const def = getLayout(id)!;
+      const content = JSON.parse(JSON.stringify(def.defaults)) as Record<string, unknown>;
+      const required = def.schema.required[0]!;
+      delete content[required];
+      const issues = validateSlideContent(def, content);
+      expect(issues.some((i) => i.code === 'missing-required' && i.severity === 'error'), `${id} without ${required}`).toBe(true);
+    }
+  });
+
+  test('array bounds are enforced on the 50-expansion layouts', () => {
+    const toc = getLayout('agenda-toc')!;
+    const tocTooMany = { title: 'X', items: Array.from({ length: 8 }, (_, i) => ({ label: `Bab ${i}` })) };
+    expect(validateSlideContent(toc, tocTooMany).some((i) => i.code === 'too-many-items' && i.severity === 'error')).toBe(true);
+    const wall = getLayout('logo-wall')!;
+    const wallTooFew = { logos: Array.from({ length: 5 }, (_, i) => ({ name: `Logo ${i}` })) };
+    expect(validateSlideContent(wall, wallTooFew).some((i) => i.code === 'too-few-items' && i.severity === 'error')).toBe(true);
+    const quotes = getLayout('quote-wall')!;
+    const quotesTooFew = { quotes: [{ text: 'A', name: 'B' }, { text: 'C', name: 'D' }] };
+    expect(validateSlideContent(quotes, quotesTooFew).some((i) => i.code === 'too-few-items' && i.severity === 'error')).toBe(true);
+    const tiers = getLayout('pricing-tiers')!;
+    const tiersTooFew = { title: 'X', tiers: [{ name: 'A', price: '1' }, { name: 'B', price: '2' }] };
+    expect(validateSlideContent(tiers, tiersTooFew).some((i) => i.severity === 'error')).toBe(true);
+    const callout = getLayout('callout')!;
+    const badTone = { title: 'X', body: 'Y', tone: 'loud' };
+    expect(validateSlideContent(callout, badTone).some((i) => i.code === 'invalid-enum' && i.severity === 'error')).toBe(true);
+  });
+
+  test('array bounds are enforced on the new layouts', () => {
+    const steps = getLayout('numbered-steps')!;
+    const tooMany = { title: 'X', steps: Array.from({ length: 7 }, (_, i) => ({ title: `S${i}` })) };
+    expect(validateSlideContent(steps, tooMany).some((i) => i.code === 'too-many-items' && i.severity === 'error')).toBe(true);
+    const mosaic = getLayout('mosaic')!;
+    const tooFew = { tiles: [{ image: 'a.png' }, { image: 'b.png' }, { image: 'c.png' }] };
+    expect(validateSlideContent(mosaic, tooFew).some((i) => i.code === 'too-few-items' && i.severity === 'error')).toBe(true);
+    const quadrant = getLayout('matrix-quadrant')!;
+    const three = { title: 'M', xAxis: 'X', yAxis: 'Y', quadrants: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] };
+    expect(validateSlideContent(quadrant, three).some((i) => i.severity === 'error')).toBe(true);
+  });
+
+  test('block keys name every draggable block of the new layouts', () => {
+    expect(layoutBlockKeys('numbered-steps', { steps: [{}, {}, {}] })).toEqual(['title', 'step-0', 'step-1', 'step-2']);
+    expect(layoutBlockKeys('chevron-process', { steps: [{}, {}, {}, {}] })).toEqual(['title', 'step-0', 'step-1', 'step-2', 'step-3']);
+    expect(layoutBlockKeys('diagram-pyramid', { tiers: [{}, {}, {}] })).toEqual(['title', 'tier-0', 'tier-1', 'tier-2']);
+    expect(layoutBlockKeys('roadmap', { phases: [{}, {}, {}, {}] })).toEqual(['title', 'phase-0', 'phase-1', 'phase-2', 'phase-3']);
+    expect(layoutBlockKeys('matrix-quadrant', { quadrants: [{}, {}, {}, {}] })).toEqual(['title', 'quadrant-0', 'quadrant-1', 'quadrant-2', 'quadrant-3']);
+    expect(layoutBlockKeys('big-stat', {})).toEqual(['title', 'value', 'label', 'points']);
+    expect(layoutBlockKeys('testimonial', {})).toEqual(['text', 'person', 'metrics']);
+    expect(layoutBlockKeys('code-focus', {})).toEqual(['title', 'code', 'points']);
+    expect(layoutBlockKeys('versus', {})).toEqual(['title', 'left', 'right', 'badge', 'verdict']);
+    expect(layoutBlockKeys('profile-cards', { people: [{}, {}, {}] })).toEqual(['title', 'person-0', 'person-1', 'person-2']);
+    expect(layoutBlockKeys('glossary', { terms: [{}, {}, {}, {}] })).toEqual(['title', 'term-0', 'term-1', 'term-2', 'term-3']);
+    expect(layoutBlockKeys('mosaic', { tiles: [{}, {}, {}, {}] })).toEqual(['title', 'tile-0', 'tile-1', 'tile-2', 'tile-3', 'caption']);
+  });
+
+  test('block keys name every draggable block of the 50-expansion layouts', () => {
+    expect(layoutBlockKeys('agenda-toc', { items: [{}, {}] })).toEqual(['title', 'item-0', 'item-1']);
+    expect(layoutBlockKeys('kpi-band', { kpis: [{}, {}, {}] })).toEqual(['title', 'kpi-0', 'kpi-1', 'kpi-2']);
+    expect(layoutBlockKeys('funnel', { stages: [{}, {}] })).toEqual(['title', 'stage-0', 'stage-1']);
+    expect(layoutBlockKeys('gantt-bars', { bars: [{}, {}] })).toEqual(['title', 'bar-0', 'bar-1']);
+    expect(layoutBlockKeys('org-chart', { reports: [{}, {}] })).toEqual(['title', 'root', 'person-0', 'person-1']);
+    expect(layoutBlockKeys('pros-cons', {})).toEqual(['title', 'pros', 'cons']);
+    expect(layoutBlockKeys('pricing-tiers', { tiers: [{}, {}, {}] })).toEqual(['title', 'tier-0', 'tier-1', 'tier-2', 'note']);
+    expect(layoutBlockKeys('faq', { items: [{}, {}] })).toEqual(['title', 'item-0', 'item-1']);
+    expect(layoutBlockKeys('steps-cards', { steps: [{}, {}] })).toEqual(['title', 'step-0', 'step-1']);
+    expect(layoutBlockKeys('split-visual-quote', {})).toEqual(['quote', 'author', 'image']);
+    expect(layoutBlockKeys('banner-cta', {})).toEqual(['title', 'subtitle', 'actions', 'note']);
+    expect(layoutBlockKeys('logo-wall', { logos: [{}, {}] })).toEqual(['title', 'logo-0', 'logo-1']);
+    expect(layoutBlockKeys('year-markers', { years: [{}, {}] })).toEqual(['title', 'year-0', 'year-1']);
+    expect(layoutBlockKeys('stat-duel', {})).toEqual(['title', 'left', 'delta', 'right', 'note']);
+    expect(layoutBlockKeys('waterfall-steps', { steps: [{}, {}] })).toEqual(['title', 'step-0', 'step-1']);
+    expect(layoutBlockKeys('feature-highlight', {})).toEqual(['title', 'icon', 'checks']);
+    expect(layoutBlockKeys('callout', {})).toEqual(['title', 'body', 'points']);
+    expect(layoutBlockKeys('ranking-list', { entries: [{}, {}] })).toEqual(['title', 'entry-0', 'entry-1']);
+    expect(layoutBlockKeys('hero-image-caption', {})).toEqual(['image', 'title', 'caption']);
+    expect(layoutBlockKeys('quote-wall', { quotes: [{}, {}, {}] })).toEqual(['title', 'quote-0', 'quote-1', 'quote-2']);
+  });
+
+  test('positions on 50-expansion blocks validate; unknown blocks warn', () => {
+    const deck = newDeck('Placed 50');
+    deck.slides.push({
+      id: 's-tier', layout: 'pricing-tiers',
+      content: {
+        title: 'Paket', note: 'Catatan',
+        tiers: [
+          { name: 'A', price: '1', features: ['x', 'x2'] },
+          { name: 'B', price: '2', features: ['y', 'y2'], featured: true },
+          { name: 'C', price: '3', features: ['z', 'z2'] },
+        ],
+      },
+      positions: { 'tier-1': { x: 0.35, y: 0.2, w: 0.3, h: 0.6 }, nope: { x: 0.1, y: 0.1 } },
+    });
+    const issues = validateDeck(deck).filter((i) => i.slideId === 's-tier');
+    expect(issues.filter((i) => i.severity === 'error')).toEqual([]);
+    expect(issues.some((i) => i.code === 'unknown-block' && i.field === 'positions.nope')).toBe(true);
+  });
+
+  test('exporter emits a real pptx covering every 50-expansion layout', async () => {
+    const root = temp('daedalus-slides-expansion-50-');
+    const deck = newDeck('Expansion 50 Export');
+    const content: Record<string, Record<string, unknown>> = {
+      'agenda-toc': { title: 'Agenda', items: [{ label: 'Bab Satu', page: '02' }, { label: 'Bab Dua', page: '05' }, { label: 'Bab Tiga', page: '09' }] },
+      'kpi-band': { title: 'Kinerja', kpis: [{ value: '92%', label: 'Tuntas', delta: '+6', deltaUp: true }, { value: '31', label: 'Menit', delta: '-8', deltaUp: true }, { value: '4,7', label: 'Puas', delta: '+0,3', deltaUp: true }] },
+      'funnel': { title: 'Corong', stages: [{ label: 'Masuk', value: 100, desc: 'Semua' }, { label: 'Outline', value: 78, desc: 'Terstruktur' }, { label: 'Valid', value: 54, desc: 'Lolos' }, { label: 'Kirim', value: 41, desc: 'Terkirim' }] },
+      'gantt-bars': { title: 'Jadwal', startLabel: 'M1', endLabel: 'M16', bars: [{ label: 'Riset', start: 0, span: 25, note: 'bab 1' }, { label: 'Inti', start: 15, span: 38, note: 'mesin' }, { label: 'Uji', start: 62, span: 22, note: 'responden' }] },
+      'org-chart': { title: 'Tim', root: { name: 'Andini Prameswari', role: 'Ketua' }, reports: [{ name: 'Bagas Nugraha', role: 'Mesin', members: ['Raka'] }, { name: 'Citra Lestari', role: 'Desain', members: ['Dewi'] }] },
+      'pros-cons': { title: 'Timbang', pros: { title: 'Pro', points: ['Cepat'] }, cons: { title: 'Kontra', points: ['Mahal'] } },
+      'pricing-tiers': { title: 'Paket', note: 'Termasuk ekspor', tiers: [{ name: 'Dasar', price: 'Rp0', period: 'uji', features: ['Inti'] }, { name: 'Tim', price: 'Rp149rb', period: 'bulan', features: ['Lengkap'], featured: true }, { name: 'Institusi', price: 'Kontak', period: 'tahun', features: ['Semua'] }] },
+      'faq': { title: 'Tanya', items: [{ q: 'Mengapa?', a: 'Karena terukur.' }, { q: 'Kapan?', a: 'Segera.' }, { q: 'Siapa?', a: 'Tim inti.' }] },
+      'steps-cards': { title: 'Langkah', steps: [{ icon: 'pen-line', title: 'Tulis', desc: 'Prompt' }, { icon: 'list-tree', title: 'Tinjau', desc: 'Outline' }, { icon: 'download', title: 'Unduh', desc: 'PPTX' }] },
+      'split-visual-quote': { quote: 'Kutipan penting.', author: 'Dr. Ratna Wulandari', role: 'Pembimbing', alt: 'Foto bimbingan' },
+      'banner-cta': { title: 'Siap Mencoba?', subtitle: 'Satu prompt saja.', primary: 'Mulai', secondary: 'Contoh', note: 'Gratis uji.' },
+      'logo-wall': { title: 'Dipercaya', logos: [{ name: 'Lab A' }, { name: 'Lab B' }, { name: 'Lab C' }, { name: 'Lab D' }, { name: 'Lab E' }, { name: 'Lab F' }] },
+      'year-markers': { title: 'Tahun', years: [{ year: '2024', label: 'Fondasi', desc: 'Agen pertama' }, { year: '2025', label: 'Canvas', desc: 'Editor web' }, { year: '2026', label: 'Lima Puluh', desc: 'Perpustakaan layout' }] },
+      'stat-duel': { title: 'Duel', left: { value: '38%', label: 'Sebelum' }, right: { value: '94%', label: 'Sesudah' }, delta: '+56 pt', note: 'Diukur pada 214 deck.' },
+      'waterfall-steps': { title: 'Tangga', steps: [{ label: 'Topik', desc: 'Masuk' }, { label: 'Outline', desc: 'Disetujui' }, { label: 'Valid', desc: 'Lolos' }, { label: 'Final', desc: 'Siap' }] },
+      'feature-highlight': { title: 'Validator', icon: 'shield-check', lead: 'Menjaga kerapian.', checks: ['Menolak berlebih', 'Peringatan jujur', 'Aset diverifikasi'] },
+      'callout': { title: 'Perhatian', body: 'Aset harus ada.', icon: 'triangle-alert', tone: 'warning', points: ['PNG didukung', 'Batas 10 MB'] },
+      'ranking-list': { title: 'Peringkat', entries: [{ label: 'Judul', value: 96, note: 'utama' }, { label: 'Poin', value: 88, note: 'isi' }, { label: 'Diagram', value: 74, note: 'visual' }] },
+      'hero-image-caption': { image: 'hero.png', alt: 'Lokakarya', title: 'Lokakarya Perdana', caption: 'Dua puluh peserta.' },
+      'quote-wall': { title: 'Kata Mereka', quotes: [{ text: 'Sangat membantu.', name: 'Sari Melati', role: 'Asisten' }, { text: 'Jauh lebih rapi.', name: 'Raka Pradana', role: 'Mahasiswa' }, { text: 'Klik dan selesai.', name: 'Gita Savitri', role: 'Staf' }] },
+    };
+    for (const id of EXPANSION_LAYOUT_IDS) deck.slides.push({ id: `s-${id}`, layout: id, content: content[id]! });
+    const result = await exportDeckToPptx(deck, root);
+    expect(result.slideCount).toBe(20);
+    const path = join(root, result.relativePath);
+    expect(existsSync(path)).toBe(true);
+    expect(statSync(path).size).toBeGreaterThan(10_000);
+  });
+
+  test('positions on new-layout blocks validate; unknown blocks warn', () => {
+    const deck = newDeck('Placed New');
+    deck.slides.push({
+      id: 's-versus', layout: 'versus',
+      content: { title: 'A vs B', left: { title: 'A', points: ['x'] }, right: { title: 'B', points: ['y'] } },
+      positions: { badge: { x: 0.46, y: 0.42, w: 0.08, h: 0.12 }, nope: { x: 0.1, y: 0.1 } },
+    });
+    const issues = validateDeck(deck).filter((i) => i.slideId === 's-versus');
+    expect(issues.filter((i) => i.severity === 'error')).toEqual([]);
+    expect(issues.some((i) => i.code === 'unknown-block' && i.field === 'positions.nope')).toBe(true);
+  });
+
+  test('exporter emits a real pptx covering every new layout', async () => {
+    const root = temp('daedalus-slides-new-layouts-');
+    const deck = newDeck('New Layouts Export');
+    const content: Record<string, Record<string, unknown>> = {
+      'numbered-steps': { title: 'Agenda', steps: [{ title: 'Satu', desc: 'Pertama' }, { title: 'Dua', desc: 'Kedua' }] },
+      'code-focus': { title: 'Kode', code: 'const x = 1;', language: 'ts', points: ['Singkat'] },
+      'chevron-process': { title: 'Alur', steps: [{ title: 'Mulai' }, { title: 'Proses' }, { title: 'Selesai' }] },
+      'diagram-pyramid': { title: 'Piramida', tiers: [{ label: 'Visi' }, { label: 'Strategi' }, { label: 'Operasi' }] },
+      'roadmap': { title: 'Peta', phases: [{ label: 'Fase 1', items: ['A'] }, { label: 'Fase 2', items: ['B'] }, { label: 'Fase 3', items: ['C'] }] },
+      'versus': { title: 'A vs B', left: { title: 'A', points: ['Pro'] }, right: { title: 'B', points: ['Pro'] }, verdict: 'Seri' },
+      'matrix-quadrant': { title: 'Matriks', xAxis: 'Dampak', yAxis: 'Upaya', quadrants: [{ label: 'Q1', items: ['a'] }, { label: 'Q2', items: ['b'] }, { label: 'Q3', items: ['c'] }, { label: 'Q4', items: ['d'] }] },
+      'big-stat': { title: 'Hasil', value: '92%', label: 'Berhasil', points: ['Konteks pendukung'] },
+      'testimonial': { text: 'Sangat membantu.', name: 'Andini Prameswari', role: 'Ketua Tim', metrics: [{ value: '3x', label: 'Lebih cepat' }] },
+      'profile-cards': { title: 'Tim', people: [{ name: 'Andini Prameswari', role: 'Ketua' }, { name: 'Bagas Nugraha', role: 'Inti' }, { name: 'Citra Lestari', role: 'Desain' }] },
+      'glossary': { title: 'Istilah', terms: [{ term: 'Agent', definition: 'Pelaksana langkah' }, { term: 'Prompt', definition: 'Instruksi' }, { term: 'Deck', definition: 'Kumpulan slide' }, { term: 'Layout', definition: 'Tata letak' }] },
+      'mosaic': { title: 'Galeri', tiles: [{ image: 'a.png' }, { image: 'b.png' }, { image: 'c.png' }, { image: 'd.png' }] },
+    };
+    for (const id of NEW_LAYOUT_IDS) deck.slides.push({ id: `s-${id}`, layout: id, content: content[id]! });
+    const result = await exportDeckToPptx(deck, root);
+    expect(result.slideCount).toBe(12);
+    const path = join(root, result.relativePath);
+    expect(existsSync(path)).toBe(true);
+    expect(statSync(path).size).toBeGreaterThan(10_000);
   });
 });
 

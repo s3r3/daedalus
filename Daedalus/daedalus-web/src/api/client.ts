@@ -111,6 +111,8 @@ export type SlideTemplateInfo = {
 }
 
 export type DeckExportResult = { root: string; path: string; bytes: number; slides: number }
+/** A deck image asset saved through POST /slides/deck/asset (deck/assets/). */
+export type DeckAssetUploadResult = { root: string; name: string; path: string; size: number }
 
 /** Verdict of POST /slides/deck/reset (Slide new chat's deck reset). */
 export type DeckResetResult = {
@@ -267,6 +269,13 @@ export const api = {
 
   /** Direct download URL for an exported deck file (deck/*.pptx). */
   deckDownloadUrl: (root: string, path: string) => `/slides/deck/download${query({ root, path })}`,
+  deckAssetUrl: (root: string, name: string) => `/slides/deck/asset${query({ root, name })}`,
+  deckUploadAsset: (root: string, file: File) => {
+    const form = new FormData()
+    form.set('root', root)
+    form.set('file', file)
+    return request<DeckAssetUploadResult>('/slides/deck/asset', { method: 'POST', body: form })
+  },
 
   extensionsStatus: (root: string) => request<ExtensionStatus>(`/extensions/status${query({ root })}`),
 
