@@ -102,6 +102,35 @@ export function buildSlideDomainPrompt(params: SlideTaskParams = {}): string {
 
 export const SLIDE_DOMAIN_PROMPT = buildSlideDomainPrompt();
 
+const SLIDE_GOAL_NOUN = /\b(slide|slides|pptx|powerpoint|presentasi|presentation|deck)\b/i;
+const SLIDE_GOAL_VERB = /\b(buat|buatkan|bikin|membuat|membuatkan|create|make|generate|build|convert|konversi|ubah|jadikan|susun)\b/i;
+
+/**
+ * A goal that asks for a presentation to be produced. Arms the slide
+ * completion gate even when the model never touched the deck tools —
+ * the markdown shortcut (write a .md draft, report "Selesai") otherwise
+ * completes a slide task with zero deck evidence. Question-shaped
+ * goals are exempt. Shared by the gate (agent loop) and the
+ * coding-domain steering contract below.
+ */
+export function presentationCreationGoal(goal: string): boolean {
+  if (goal.trim().endsWith('?')) return false;
+  return SLIDE_GOAL_NOUN.test(goal) && SLIDE_GOAL_VERB.test(goal);
+}
+
+/**
+ * Coding-domain steering for a presentation-creation goal: the deck
+ * tools ride along in the default registry, but without this contract a
+ * coding agent improvises a markdown draft and loops on it (the laptop
+ * incident). The completion gate enforces the same contract from the
+ * other side: no successful export_deck, no done.
+ */
+export const CODING_SLIDE_GOAL_CONTRACT = [
+  'Slide goal in the Coding domain: this task asks for a presentation, so it is a deck job, not a document job.',
+  'Build it with the built-in deck tools — create_deck, then add_slide once per slide, set_deck_theme for the design direction, validate_deck, then export_deck. They are available in this run alongside the coding tools.',
+  'A markdown/text draft, or slides assembled by a script, does not satisfy this goal. The task is complete only after export_deck succeeds and the .pptx exists.',
+].join('\n');
+
 /**
  * Context Manager: ordered prompt sections (role, task, plan, constraints),
  * token budgeting, and observation truncation (PLAN.md §3.1).
@@ -182,7 +211,9 @@ export class DefaultContextManager implements ContextManager {
         { id: 'mode', content: modePromptContract(state.mode ?? 'auto') },
         ...(this.#domain === 'slide'
           ? [{ id: 'domain', content: buildSlideDomainPrompt(this.#slide) }]
-          : []),
+          : presentationCreationGoal(state.goal)
+            ? [{ id: 'slide-goal', content: CODING_SLIDE_GOAL_CONTRACT }]
+            : []),
         { id: 'constraints', content: state.constraints.join('\n') || '(none)' },
         {
           id: 'protocol',
