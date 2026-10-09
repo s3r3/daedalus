@@ -127,11 +127,25 @@ export type PptTemplateSlotInfo =
     }
   | { key: string; kind: 'image'; rect: { x: number; y: number; w: number; h: number }; imageFile?: string }
 
+/**
+ * One decorative (non-slot) shape of a template page, drawn on the canvas
+ * behind the slots for preview honesty (v3). Preset geometry reduces to a
+ * colored div; an image draws the template's extracted picture. Freeform
+ * paths are not carried — the exported .pptx still contains them, because
+ * it clones the template's original slide instead of redrawing it.
+ */
+export type PptTemplateDecorShapeInfo =
+  | { type: 'shape'; rect: { x: number; y: number; w: number; h: number }; fill: string; geom: 'rect' | 'roundRect' | 'ellipse' }
+  | { type: 'image'; rect: { x: number; y: number; w: number; h: number }; imageFile: string }
+  | { type: 'path'; rect: { x: number; y: number; w: number; h: number }; fill: string; d: string; box: { w: number; h: number } }
+
 /** One parsed slide design of an imported PPT template. */
 export type PptTemplatePageInfo = {
   kind: 'cover' | 'toc' | 'section' | 'content' | 'closing'
   background?: { color?: string; imageFile?: string }
   slots: PptTemplateSlotInfo[]
+  /** Decorative shapes in paint order (v3); absent on older templates. */
+  shapes?: PptTemplateDecorShapeInfo[]
 }
 
 /** One imported PPT template (design extracted from an uploaded .pptx), from GET /slides/ppt-templates. */
