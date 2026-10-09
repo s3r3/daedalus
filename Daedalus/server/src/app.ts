@@ -1992,6 +1992,55 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
+    // Slide new-chat reset (Farid: "pas tekan new chat ke reset semua"):
+    // archive the current deck aside — never delete it — so the next
+    // prompt starts from an empty deck instead of being treated as edit
+    // operations on the previous deck. A staged Standard run waiting on
+    // this workspace is settled honestly (staged_superseded) through the
+    // same runtime seam a newer prompt uses; a run actively filling is
+    // a 409 — files are never yanked mid-write. No deck is an honest
+    // no-op success, not an error.
+    if (method === "POST" && url.pathname === "/slides/deck/reset") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          let stagedAbandoned = false;
+          for (const runner of ctx.activeRunners.values()) {
+            if (!runner.hasSlideEngineFor(root)) continue;
+            if (runner.abandonStagedDeck(root)) {
+              stagedAbandoned = true;
+              continue;
+            }
+            sendJson(res, 409, { error: "slide_run_in_progress", message: "Tugas slide sedang berjalan di workspace ini — tunggu selesai sebelum memulai chat baru.", request_id: requestId });
+            return;
+          }
+          const deckDir = join(root, "deck");
+          const deckStat = await stat(deckDir).catch(() => null);
+          if (!deckStat?.isDirectory()) {
+            sendJson(res, 200, { root, archived: null, staged_abandoned: stagedAbandoned });
+            return;
+          }
+          const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+          const archiveParent = join(root, ".daedalus", "deck-archive");
+          await mkdir(archiveParent, { recursive: true });
+          let name = stamp;
+          for (let suffix = 2; await stat(join(archiveParent, name)).then(() => true, () => false); suffix += 1) {
+            name = `${stamp}-${suffix}`;
+          }
+          await rename(deckDir, join(archiveParent, name));
+          sendJson(res, 200, { root, archived: `.daedalus/deck-archive/${name}`, staged_abandoned: stagedAbandoned });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
     if (method === "POST" && url.pathname.startsWith("/slides/deck")) {
       void (async () => {
         const parsed = await readJson(req);
