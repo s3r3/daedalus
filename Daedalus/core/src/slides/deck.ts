@@ -49,6 +49,21 @@ export type BlockPosition = {
   h?: number;
 };
 
+/**
+ * Reference to one parsed page of an imported PPT template
+ * (slides/pptx-pages.ts): this slide is poured into that page's design.
+ * Present exactly when the slide's layout is 'template-page' (enforced
+ * by validateDeck). The slide's words live in content.slots, keyed by
+ * the page's slot keys: strings for both kinds — text copy for text
+ * slots, a deck asset name (or '' for the template's own image) for
+ * image slots.
+ */
+export type SlideTemplateRef = {
+  templateId: string;
+  /** 0-based index into the template's pages[]. */
+  page: number;
+};
+
 export type Slide = {
   id: string;
   layout: string;
@@ -67,6 +82,8 @@ export type Slide = {
   status?: 'skeleton' | 'filled';
   /** Outline key message captured when the skeleton was created; guides the fill stage. */
   keyMessage?: string;
+  /** Imported-PPT-template page this slide is poured into (layout 'template-page'). */
+  templateRef?: SlideTemplateRef;
 };
 
 export type DeckSpec = {

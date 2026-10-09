@@ -4,6 +4,8 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { deckPaths, LONG_TEXT_CHARS, MAX_SLIDES, type DeckIssue, type DeckSpec, type Slide } from './deck.ts';
 import { getLayout, layoutBlockKeys, validateSlideContent } from './layouts.ts';
+import { readPptxTemplateSync } from './pptx-template.ts';
+import { validateTemplateSlideSlots } from './pptx-pages.ts';
 
 export { MAX_SLIDES };
 
@@ -206,6 +208,66 @@ function positionIssues(slide: Slide): DeckIssue[] {
   return issues;
 }
 
+/**
+ * Template-page slides (layout 'template-page' + slide.templateRef): the
+ * design lives in an imported PPT template, so instead of layout/density
+ * rules the slide is checked against that page — template exists, has
+ * parsed pages, the page index is in range, slot keys are the page's own,
+ * slot text fits its box (slot-too-long drives the fill repair loop), and
+ * a chosen image slot names a real deck asset. Template membership is
+ * only checked when a workspace root is available; coherence between
+ * layout and templateRef is always checked.
+ */
+function templateIssues(slide: Slide, root: string | undefined, assetExists: ((name: string) => boolean) | undefined): DeckIssue[] {
+  const issues: DeckIssue[] = [];
+  const err = (field: string, code: string, message: string): void => {
+    issues.push({ slideId: slide.id, layout: slide.layout, field, code, message: `slide ${slide.id}: ${message}`, severity: 'error' });
+  };
+  const ref = slide.templateRef;
+  if (slide.layout === 'template-page' && !ref) {
+    err('templateRef', 'template-ref-missing', 'layout "template-page" needs templateRef {templateId, page} naming the imported template page it pours into');
+    return issues;
+  }
+  if (!ref) return issues;
+  if (slide.layout !== 'template-page') {
+    err('layout', 'template-layout-mismatch', `templateRef is set but layout is "${slide.layout}" — a template slide's layout must be "template-page" (its design comes from the template page)`);
+    return issues;
+  }
+  if (typeof ref.templateId !== 'string' || ref.templateId.trim().length === 0 || !Number.isInteger(ref.page) || ref.page < 0) {
+    err('templateRef', 'template-ref-invalid', 'templateRef must be {templateId: string, page: non-negative integer}');
+    return issues;
+  }
+  if (!root) return issues;
+  const template = readPptxTemplateSync(root, ref.templateId);
+  if (!template) {
+    err('templateRef.templateId', 'unknown-template', `imported PPT template "${ref.templateId}" not found in this workspace — import it again from the "Template dari PPT" panel`);
+    return issues;
+  }
+  if (!template.pages || template.pages.length === 0) {
+    err('templateRef.templateId', 'template-no-pages', `imported PPT template "${ref.templateId}" has no parsed slide designs (skin only) — re-import the .pptx to use its pages`);
+    return issues;
+  }
+  const page = template.pages[ref.page];
+  if (!page) {
+    err('templateRef.page', 'template-page-out-of-range', `template "${ref.templateId}" has ${template.pages.length} pages; page ${ref.page} does not exist`);
+    return issues;
+  }
+  for (const message of validateTemplateSlideSlots(page, slide.content?.slots)) {
+    err('slots', message.includes("exceeds this slot's capacity") ? 'slot-too-long' : 'template-slot', message);
+  }
+  if (assetExists && slide.content && typeof slide.content === 'object' && slide.content.slots && typeof slide.content.slots === 'object' && !Array.isArray(slide.content.slots)) {
+    const slots = slide.content.slots as Record<string, unknown>;
+    for (const slot of page.slots) {
+      if (slot.kind !== 'image') continue;
+      const value = slots[slot.key];
+      if (typeof value === 'string' && value.length > 0 && !assetExists(value)) {
+        err(`slots.${slot.key}`, 'missing-asset', `image slot ${slot.key} names asset "${value}", which is not in deck/assets`);
+      }
+    }
+  }
+  return issues;
+}
+
 export function validateDeck(deck: DeckSpec, opts: ValidateDeckOptions = {}): DeckIssue[] {
   const issues: DeckIssue[] = [];
   if (!deck || typeof deck !== 'object') {
@@ -246,8 +308,14 @@ export function validateDeck(deck: DeckSpec, opts: ValidateDeckOptions = {}): De
     for (const iss of validateSlideContent(layout, slide.content)) {
       issues.push({ ...iss, slideId: slide.id });
     }
-    issues.push(...densityIssues(slide));
-    issues.push(...positionIssues(slide));
+    if (slide.layout === 'template-page' || slide.templateRef) {
+      // Template slides answer to their template page, not to the layout
+      // catalog's density/drag rules (their positions are fixed by design).
+      issues.push(...templateIssues(slide, root, assetExists));
+    } else {
+      issues.push(...densityIssues(slide));
+      issues.push(...positionIssues(slide));
+    }
     if (slide.layout === 'image-side' && assetExists) {
       const image = slide.content.image;
       if (typeof image === 'string' && image.length > 0 && !assetExists(image)) {
