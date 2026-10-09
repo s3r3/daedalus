@@ -664,6 +664,22 @@ export const LAYOUTS: LayoutDef[] = [
   },
 ];
 
+/**
+ * Pseudo-layout for slides poured into an imported PPT template page
+ * (slides/pptx-pages.ts). It is deliberately NOT part of the LAYOUTS
+ * catalog: the design lives in the template, never in this list, and
+ * generation never offers it — template slides are created only by the
+ * template pipeline with slide.templateRef set. `getLayout` resolves it
+ * so validators/renderers can name the slide ('Halaman template'), and
+ * validateDeck checks its slot map against the actual template page
+ * rather than this minimal schema.
+ */
+export const TEMPLATE_PAGE_LAYOUT: LayoutDef = {
+  id: 'template-page', label: 'Halaman template', category: 'content',
+  schema: schema([], { title: s(), slots: { type: 'object' } }),
+  defaults: { slots: {} },
+};
+
 // Allow section.number to be number|string despite the lite schema typing.
 (LAYOUTS.find((l) => l.id === 'section')!.schema.properties.number as LoosePropSchema).allowNumber = true;
 // stats.value may be number|string in practice; keep schema string but allow numbers similarly.
@@ -742,6 +758,7 @@ export function layoutBlockKeys(layoutId: string, content: Record<string, unknow
 }
 
 export function getLayout(id: string): LayoutDef | undefined {
+  if (id === TEMPLATE_PAGE_LAYOUT.id) return TEMPLATE_PAGE_LAYOUT;
   return LAYOUTS.find((l) => l.id === id);
 }
 

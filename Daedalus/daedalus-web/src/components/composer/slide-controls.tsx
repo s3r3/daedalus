@@ -107,7 +107,14 @@ export function SlideComposerControls() {
           ))}
         </select>
       </label>
-      {slideOptions.templateId ? (
+      {slideOptions.customTemplateId ? (
+        <span className="inline-flex items-center gap-1 rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] text-muted" data-testid="slide-ppt-template-chip">
+          template PPT: {slideOptions.customTemplateId}
+          <button type="button" aria-label="hapus pilihan template PPT" onClick={() => setSlideOptions({ customTemplateId: null })} className="hover:text-foreground">
+            <X className="size-3" aria-hidden />
+          </button>
+        </span>
+      ) : slideOptions.templateId ? (
         <span className="inline-flex items-center gap-1 rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] text-muted" data-testid="slide-template-chip">
           warna & font: {slideOptions.templateId}
           <button type="button" aria-label="hapus pilihan warna & font" onClick={() => setSlideOptions({ templateId: null })} className="hover:text-foreground">

@@ -677,6 +677,7 @@ export {
   type DeckSpec,
   type DeckTheme,
   type Slide,
+  type SlideTemplateRef,
   type BlockPosition,
   type DeckIssue,
 } from "./slides/deck.ts";
@@ -684,6 +685,7 @@ export {
 export {
   LAYOUTS,
   LAYOUT_IDS,
+  TEMPLATE_PAGE_LAYOUT,
   getLayout,
   layoutBlockKeys,
   validateSlideContent,
@@ -714,9 +716,12 @@ export {
   generateDeckFullStage,
   regenerateSlideStage,
   normalizeBrief,
+  assignTemplatePages,
+  templateSkeletonContent,
   SlidePipelineError,
   type DeckBrief,
   type OutlineItem,
+  type TemplateOutlineItem,
   type FillStageResult,
   type ExportInfo,
 } from "./slides/pipeline.ts";
@@ -735,6 +740,42 @@ export {
   listSlideTemplates,
   type SlideTemplate,
 } from "./slides/templates.ts";
+
+export {
+  PPT_TEMPLATES_DIR,
+  MAX_PPTX_TEMPLATE_BYTES,
+  pptxTemplatesDir,
+  extractPptxDesign,
+  savePptxTemplate,
+  listPptxTemplates,
+  getPptxTemplate,
+  readPptxTemplateBackground,
+  readPptxTemplateSync,
+  readPptxTemplateAsset,
+  deletePptxTemplate,
+  applyPptxTemplateTheme,
+  PptxTemplateError,
+  type PptxTemplate,
+  type PptxSlideSize,
+  type ExtractedPptxDesign,
+} from "./slides/pptx-template.ts";
+
+export {
+  extractPptxPages,
+  prefixPageAssets,
+  pptxTemplateAssetFiles,
+  templatePageTextSlots,
+  templatePageImageSlots,
+  validateTemplateSlideSlots,
+  slotMaxChars,
+  type PptxTemplatePage,
+  type PptxTemplatePageKind,
+  type PptxTemplateSlot,
+  type PptxTextSlot,
+  type PptxImageSlot,
+  type PptxSlotRect,
+  type PptxPagesExtract,
+} from "./slides/pptx-pages.ts";
 
 export {
   createDeckTool,

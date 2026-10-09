@@ -1,10 +1,10 @@
-import { useRef, useState, type ChangeEvent } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { ChevronLeft, ChevronRight, FileDown, Pencil, Presentation, RefreshCw } from 'lucide-react'
-import type { BlockPosition } from '@daedalus/core'
+import type { BlockPosition, Slide } from '@daedalus/core'
 import { getLayout } from '@daedalus/core/slides/layouts'
 import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
-import { api, type DeckExportResult } from '../../api/client'
+import { api, type DeckExportResult, type PptTemplateInfo, type PptTemplatePageInfo } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useDeck } from './useDeck'
 import { SlideRenderer } from './slide-renderer'
@@ -27,6 +27,37 @@ export function SlideStage() {
   const [exportError, setExportError] = useState<string | null>(null)
 
   const go = (index: number): void => setSlideIndex(Math.min(Math.max(0, index), Math.max(0, slideCount - 1)))
+
+  // Imported PPT templates of this workspace: a templateRef slide's page
+  // design (background + slots) comes from here, resolved per slide.
+  const [pptTemplates, setPptTemplates] = useState<PptTemplateInfo[]>([])
+  const customTemplateId = deck?.theme.customTemplateId
+  useEffect(() => {
+    if (!root) {
+      setPptTemplates([])
+      return
+    }
+    let cancelled = false
+    api
+      .pptTemplates(root)
+      .then(({ templates }) => {
+        if (!cancelled) setPptTemplates(templates)
+      })
+      .catch(() => {
+        if (!cancelled) setPptTemplates([])
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [root, customTemplateId])
+
+  const templateSlideFor = (entry: Slide): { page: PptTemplatePageInfo; assetSrc: (file: string) => string } | undefined => {
+    if (!entry.templateRef || !root) return undefined
+    const ref = entry.templateRef
+    const page = pptTemplates.find((template) => template.id === ref.templateId)?.pages?.[ref.page]
+    if (!page) return undefined
+    return { page, assetSrc: (file: string) => api.pptTemplateAssetUrl(root, ref.templateId, file) }
+  }
 
   const onDeckChanged = (): void => {
     refresh()
@@ -79,7 +110,16 @@ export function SlideStage() {
     try {
       const uploaded = await api.deckUploadAsset(root, file)
       const content: Record<string, unknown> = {}
-      if (slide.layout === 'mosaic') {
+      if (slide.templateRef) {
+        // Template slide: the picked image is recorded under its slot
+        // key in the same slots map the words live in (strings for both
+        // kinds); the server merge keeps every other slot untouched.
+        const currentSlots =
+          slide.content.slots && typeof slide.content.slots === 'object' && !Array.isArray(slide.content.slots)
+            ? (slide.content.slots as Record<string, unknown>)
+            : {}
+        content.slots = { ...currentSlots, [blockKey]: uploaded.name }
+      } else if (slide.layout === 'mosaic') {
         const tileIndex = Number(/^tile-(\d+)$/.exec(blockKey)?.[1] ?? -1)
         const tiles = Array.isArray(slide.content.tiles) ? [...(slide.content.tiles as Array<Record<string, unknown>>)] : []
         if (tileIndex < 0 || tileIndex >= tiles.length) throw new Error(`Blok gambar tidak dikenal: ${blockKey}`)
@@ -220,6 +260,7 @@ export function SlideStage() {
                 onPositionsChange={(id, positions) => void persistPositions(id, positions)}
                 resolveImageSrc={resolveImageSrc}
                 onImagePick={handleImagePick}
+                templateSlide={templateSlideFor(slide)}
               />
             </div>
           </div>
@@ -240,7 +281,7 @@ export function SlideStage() {
                 >
                   <span className="relative block aspect-video w-full [container-type:inline-size]">
                     <span className="pointer-events-none absolute inset-0">
-                      <SlideRenderer slide={entry} theme={deck.theme} resolveImageSrc={resolveImageSrc} />
+                      <SlideRenderer slide={entry} theme={deck.theme} resolveImageSrc={resolveImageSrc} templateSlide={templateSlideFor(entry)} />
                     </span>
                   </span>
                   <span className="block truncate px-1.5 py-1 text-[10px] text-muted">

@@ -12,6 +12,25 @@ export type DeckTheme = {
   bodyFont?: string;
   /** Id of the bundled template these tokens came from (set_deck_theme/create_deck templateId). */
   templateId?: string;
+  /**
+   * Id of the imported PPT template these tokens were extracted from
+   * (slides/pptx-template.ts, stored under .daedalus/slide-templates/).
+   * Mutually exclusive with templateId in practice: applying one kind
+   * replaces the whole theme, so the last applied pick wins.
+   */
+  customTemplateId?: string;
+  /**
+   * Deck-asset basename (deck/assets/) painted behind the slide content:
+   * the background image extracted from an imported PPT template, copied
+   * into the deck's assets when the template was applied. Renderers fall
+   * back to the background color whenever it is absent or unreadable.
+   */
+  backgroundImage?: string;
+  /**
+   * Chart series palette (accent1..accent6 of an imported template).
+   * Renderers fall back to the accent + built-in series when absent.
+   */
+  series?: string[];
 };
 
 /**
@@ -28,6 +47,21 @@ export type BlockPosition = {
   y: number;
   w?: number;
   h?: number;
+};
+
+/**
+ * Reference to one parsed page of an imported PPT template
+ * (slides/pptx-pages.ts): this slide is poured into that page's design.
+ * Present exactly when the slide's layout is 'template-page' (enforced
+ * by validateDeck). The slide's words live in content.slots, keyed by
+ * the page's slot keys: strings for both kinds — text copy for text
+ * slots, a deck asset name (or '' for the template's own image) for
+ * image slots.
+ */
+export type SlideTemplateRef = {
+  templateId: string;
+  /** 0-based index into the template's pages[]. */
+  page: number;
 };
 
 export type Slide = {
@@ -48,6 +82,8 @@ export type Slide = {
   status?: 'skeleton' | 'filled';
   /** Outline key message captured when the skeleton was created; guides the fill stage. */
   keyMessage?: string;
+  /** Imported-PPT-template page this slide is poured into (layout 'template-page'). */
+  templateRef?: SlideTemplateRef;
 };
 
 export type DeckSpec = {

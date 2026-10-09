@@ -12,7 +12,7 @@ type PptxTextOptions = Record<string, unknown>;
 type PptxTableCell = { text?: string; options?: Record<string, unknown> };
 type PptxTableRow = PptxTableCell[];
 interface PptxSlide {
-  background: { color: string };
+  background: { color?: string; path?: string };
   color: string;
   addText: (text: string | Array<{ text: string; options?: Record<string, unknown> }>, options?: PptxTextOptions) => unknown;
   addShape: (shapeName: string, options?: Record<string, unknown>) => unknown;
@@ -32,6 +32,7 @@ interface PptxInstance {
 type PptxCtor = new () => PptxInstance;
 const PptxGenJS = ((PptxGenJSModule as unknown as { default?: unknown }).default ?? PptxGenJSModule) as unknown as PptxCtor;
 import { deckPaths, slugifyTitle, type DeckSpec, type Slide } from './deck.ts';
+import { pptxTemplatesDir, readPptxTemplateSync } from './pptx-template.ts';
 
 const W = 13.333;
 const H = 7.5;
@@ -141,9 +142,88 @@ function glyphLines(slide: PptxSlide, points: string[], glyph: string, o: PptxTe
   );
 }
 
+/**
+ * A template-page slide exports its template design: the page's
+ * background (stored image or color, falling back to the deck theme),
+ * native editable text boxes at the slot rects with the slot's own size/
+ * font/color, and each image slot's chosen deck asset — or the
+ * template's original picture, or a labelled placeholder when neither
+ * exists (never a silent pretence). When the template or page cannot be
+ * resolved, the slide degrades honestly to the theme background plus its
+ * slot texts as plain lines.
+ */
+function renderTemplateSlide(slide: PptxSlide, slideSpec: Slide, deck: DeckSpec, root: string, ctx: Ctx): void {
+  const ref = slideSpec.templateRef!;
+  const template = readPptxTemplateSync(root, ref.templateId);
+  const page = template?.pages?.[ref.page];
+  const slots = rec(slideSpec.content.slots);
+  const themeBackground = (): void => {
+    const bgImagePath = deck.theme.backgroundImage ? join(deckPaths(root).assetsDir, basename(deck.theme.backgroundImage)) : '';
+    slide.background = bgImagePath && existsSync(bgImagePath) ? { path: bgImagePath } : { color: ctx.bg };
+  };
+  if (!page) {
+    themeBackground();
+    const title = str(slideSpec.content.title);
+    const lines = [...new Set([title, ...Object.values(slots).filter((v): v is string => typeof v === 'string' && v.length > 0)])].filter((line) => line.length > 0);
+    lines.forEach((line, i) => {
+      text(slide, line, { x: 0.8, y: 0.8 + i * 0.95, w: 11.7, h: 0.85, fontSize: i === 0 ? 30 : 16, bold: i === 0, valign: 'middle' }, ctx);
+    });
+    return;
+  }
+  const pageBgImage = page.background?.imageFile ? join(pptxTemplatesDir(root), page.background.imageFile) : '';
+  if (pageBgImage && existsSync(pageBgImage)) slide.background = { path: pageBgImage };
+  else if (page.background?.color) slide.background = { color: hex(page.background.color, ctx.bg) };
+  else themeBackground();
+
+  for (const slot of page.slots) {
+    const r: Rect = { x: slot.rect.x * W, y: slot.rect.y * H, w: slot.rect.w * W, h: slot.rect.h * H };
+    if (slot.kind === 'text') {
+      const value = typeof slots[slot.key] === 'string' ? (slots[slot.key] as string) : '';
+      if (!value) continue;
+      const fontFace = slot.fontFamily ?? (slot.fontSizePt >= 24 ? deck.theme.headingFont : deck.theme.bodyFont);
+      text(slide, value, {
+        x: r.x, y: r.y, w: r.w, h: r.h,
+        fontSize: slot.fontSizePt,
+        ...(fontFace ? { fontFace } : {}),
+        ...(slot.color ? { color: hex(slot.color, ctx.fg) } : {}),
+        bold: slot.bold,
+        align: slot.align ?? 'left',
+        valign: 'top', wrap: true, margin: 0, lineSpacingMultiple: 1.15,
+      }, ctx);
+      continue;
+    }
+    const chosen = typeof slots[slot.key] === 'string' ? (slots[slot.key] as string) : '';
+    if (chosen) {
+      // The user's picked deck asset; placeImage draws the labelled
+      // placeholder when the file is gone — never a false image.
+      placeImage(slide, root, chosen, chosen, r, ctx);
+    } else if (slot.imageFile) {
+      const originalPath = join(pptxTemplatesDir(root), slot.imageFile);
+      if (existsSync(originalPath)) {
+        slide.addImage({ path: originalPath, x: r.x, y: r.y, w: r.w, h: r.h, altText: slot.imageFile });
+      } else {
+        boxText(slide, 'Image', { x: r.x, y: r.y, w: r.w, h: r.h, fontSize: 13, color: ctx.sub }, ctx);
+      }
+    } else {
+      boxText(slide, 'Image', { x: r.x, y: r.y, w: r.w, h: r.h, fontSize: 13, color: ctx.sub }, ctx);
+    }
+  }
+}
+
 function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root: string, ctx: Ctx): void {
   const slide = pptx.addSlide();
-  slide.background = { color: ctx.bg };
+  if (slideSpec.templateRef) {
+    slide.color = ctx.fg;
+    renderTemplateSlide(slide, slideSpec, deck, root, ctx);
+    if (slideSpec.notes) slide.addNotes(slideSpec.notes);
+    return;
+  }
+  // An imported template's background image (deck/assets/, copied in when
+  // the template was applied) paints behind everything, exactly like the
+  // canvas; the theme background color stays the honest fallback when the
+  // file is gone.
+  const bgImagePath = deck.theme.backgroundImage ? join(deckPaths(root).assetsDir, basename(deck.theme.backgroundImage)) : '';
+  slide.background = bgImagePath && existsSync(bgImagePath) ? { path: bgImagePath } : { color: ctx.bg };
   slide.color = ctx.fg;
   const c = slideSpec.content;
   const title = str(c.title);
@@ -921,6 +1001,10 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<{ 
 
   const dark = deck.theme.dark !== false;
   const accent = hex(deck.theme.accent, '6B50FF');
+  // An imported template's accent ramp (accent1..accent6) drives chart
+  // series when it carries one; otherwise the built-in series follows the
+  // accent exactly as before.
+  const themeSeries = (deck.theme.series ?? []).filter((c) => /^#[0-9a-fA-F]{6}$/.test(c)).map((c) => c.replace(/^#/, '').toUpperCase());
   const ctx: Ctx = {
     dark,
     bg: hex(deck.theme.background, dark ? '201F26' : 'F4F2FA'),
@@ -928,7 +1012,7 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<{ 
     sub: hex(deck.theme.muted, dark ? 'BFBCC8' : '4D4C57'),
     surface: hex(deck.theme.surface, dark ? '2D2C36' : 'FFFFFF'),
     accent,
-    colors: [accent, ...SERIES_COLORS],
+    colors: themeSeries.length > 0 ? themeSeries : [accent, ...SERIES_COLORS],
   };
 
   const pptx = new PptxGenJS();

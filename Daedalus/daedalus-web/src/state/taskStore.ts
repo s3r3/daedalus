@@ -49,6 +49,8 @@ export type SlideOptions = {
   language: string
   /** Bundled template pre-picked for the next task; null = let the outline checkpoint ask. */
   templateId: string | null
+  /** Imported PPT template (Template dari PPT) pre-picked for the next task; wins over templateId and is cleared when a bundled pick is made. */
+  customTemplateId: string | null
 }
 
 export type TerminalState = {
@@ -175,7 +177,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   theme: 'daedalus-dark',
   domain: initialDomain(),
   slideIndex: 0,
-  slideOptions: { generation: 'standard', slideCount: null, language: '', templateId: null },
+  slideOptions: { generation: 'standard', slideCount: null, language: '', templateId: null, customTemplateId: null },
   openFilePath: null,
   error: null,
 
@@ -332,7 +334,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
       workspaceRevision: 0,
       domain: initialDomain(),
       slideIndex: 0,
-      slideOptions: { generation: 'standard', slideCount: null, language: '', templateId: null },
+      slideOptions: { generation: 'standard', slideCount: null, language: '', templateId: null, customTemplateId: null },
       openFilePath: null,
       error: null,
     })),

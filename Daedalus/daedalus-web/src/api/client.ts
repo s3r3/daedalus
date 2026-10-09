@@ -99,7 +99,7 @@ export type CreateTaskInput = {
   /** Skill names explicitly invoked for this task (composer `/skill <name>`); the server validates them and core force-loads their bodies. */
   skills?: string[]
   /** Slide composer parameters (Agentic Slide v2); only sent in the slide domain, validated by the server. */
-  slide?: { generation?: 'smart' | 'standard'; slide_count?: number; language?: string; template_id?: string }
+  slide?: { generation?: 'smart' | 'standard'; slide_count?: number; language?: string; template_id?: string; custom_template_id?: string }
 }
 
 /** One bundled slide template (design direction) from GET /slides/templates. */
@@ -108,6 +108,43 @@ export type SlideTemplateInfo = {
   name: string
   description: string
   theme: { accent?: string; dark?: boolean; background?: string; surface?: string; text?: string; muted?: string; headingFont?: string; bodyFont?: string; templateId?: string }
+}
+
+/** One slot of a parsed PPT template page (fractions of the slide box). */
+export type PptTemplateSlotInfo =
+  | {
+      key: string
+      kind: 'text'
+      rect: { x: number; y: number; w: number; h: number }
+      sampleText: string
+      fontSizePt: number
+      bold: boolean
+      color?: string
+      fontFamily?: string
+      align?: 'left' | 'center' | 'right'
+      lineCount: number
+      maxChars: number
+    }
+  | { key: string; kind: 'image'; rect: { x: number; y: number; w: number; h: number }; imageFile?: string }
+
+/** One parsed slide design of an imported PPT template. */
+export type PptTemplatePageInfo = {
+  kind: 'cover' | 'toc' | 'section' | 'content' | 'closing'
+  background?: { color?: string; imageFile?: string }
+  slots: PptTemplateSlotInfo[]
+}
+
+/** One imported PPT template (design extracted from an uploaded .pptx), from GET /slides/ppt-templates. */
+export type PptTemplateInfo = {
+  id: string
+  name: string
+  sourceFile: string
+  createdAt: string
+  theme: { accent?: string; dark?: boolean; background?: string; surface?: string; text?: string; muted?: string; headingFont?: string; bodyFont?: string; series?: string[] }
+  slideSize?: { cx: number; cy: number; label: string }
+  backgroundImageFile?: string
+  /** Parsed slide designs (v2); absent on templates imported before page parsing existed. */
+  pages?: PptTemplatePageInfo[]
 }
 
 export type DeckExportResult = { root: string; path: string; bytes: number; slides: number }
@@ -207,8 +244,32 @@ export const api = {
   /** The workspace deck via the core-gated slide API (404 when no deck exists). */
   deck: (root: string) => request<{ root: string; deck: import('@daedalus/core').DeckSpec }>(`/slides/deck${query({ root })}`),
 
-  /** Apply a bundled template (or accent/dark) to the open deck; the server validates and returns the fresh deck. */
-  deckTheme: (root: string, input: { template_id?: string; accent?: string; dark?: boolean }) =>
+  /** Imported PPT templates stored in this workspace (.daedalus/slide-templates/). */
+  pptTemplates: (root: string) => request<{ root: string; templates: PptTemplateInfo[] }>(`/slides/ppt-templates${query({ root })}`),
+
+  /** Upload a .pptx to extract its design into a reusable template. */
+  pptTemplateUpload: (root: string, file: File) => {
+    const form = new FormData()
+    form.set('root', root)
+    form.set('file', file)
+    return request<{ root: string; template: PptTemplateInfo }>('/slides/ppt-templates', { method: 'POST', body: form })
+  },
+
+  /** Delete one imported PPT template (decks already restyled keep their copied tokens). */
+  pptTemplateDelete: (root: string, id: string) =>
+    request<{ root: string; id: string; deleted: boolean }>('/slides/ppt-templates/delete', {
+      method: 'POST',
+      body: JSON.stringify({ root, id }),
+    }),
+
+  /** Thumbnail URL for an imported template's extracted master background. */
+  pptTemplateBackgroundUrl: (root: string, id: string) => `/slides/ppt-templates/background${query({ root, id })}`,
+
+  /** URL of one stored asset of an imported template (v2 page backgrounds and slot pictures). */
+  pptTemplateAssetUrl: (root: string, id: string, file: string) => `/slides/ppt-templates/asset${query({ root, id, file })}`,
+
+  /** Apply a bundled or imported template (or accent/dark) to the open deck; the server validates and returns the fresh deck. */
+  deckTheme: (root: string, input: { template_id?: string; custom_template_id?: string; accent?: string; dark?: boolean }) =>
     request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/theme', {
       method: 'POST',
       body: JSON.stringify({ root, ...input }),

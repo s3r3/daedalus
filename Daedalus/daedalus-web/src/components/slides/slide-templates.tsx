@@ -46,7 +46,9 @@ export function SlideTemplatesPanel() {
   const activeId = deck?.theme.templateId ?? pendingTemplateId
 
   const pick = async (template: SlideTemplateInfo): Promise<void> => {
-    setSlideOptions({ templateId: template.id })
+    // One design source at a time: a bundled pick retires a pending
+    // imported-PPT pick (the server refuses both on one task anyway).
+    setSlideOptions({ templateId: template.id, customTemplateId: null })
     if (!deck || !root) return
     setBusyId(template.id)
     setError(null)

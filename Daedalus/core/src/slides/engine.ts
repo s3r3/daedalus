@@ -327,6 +327,7 @@ export class SlideEngine {
       ...(slide?.slideCount ? { slideCount: slide.slideCount } : {}),
       ...(slide?.language ? { language: slide.language } : {}),
       ...(slide?.templateId ? { templateId: slide.templateId } : {}),
+      ...(slide?.customTemplateId ? { customTemplateId: slide.customTemplateId } : {}),
     };
     let outline: OutlineItem[] = [];
     let stagedFill = false;
@@ -457,10 +458,11 @@ export class SlideEngine {
       '- {"op":"set_theme","templateId":"<bundled template id>"}',
       '- {"op":"export"} — include when the user asks for the .pptx / export / download.',
       'Rules: change ONLY what the instruction asks; every other slide stays byte-identical. Use the exact slide ids from the deck summary. Content must satisfy the target layout schema. Never invent facts beyond what the instruction and the existing deck support.',
+      'Slides with layout "template-page" carry a "templateRef": their design (background, boxes, fonts) belongs to an imported PPT template and CANNOT change. To change their words, update_slide with content {"slots": {...}} using that slide\'s existing slot keys and short text that fits; never set their layout, and never invent new slot keys.',
       `Layout ids: ${LAYOUTS.map((layout) => layout.id).join(', ')}.`,
       `Bundled template ids: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}.`,
     ].join('\n');
-    const summarySlides = deck.slides.map((s, i) => ({ n: i + 1, id: s.id, layout: s.layout, status: s.status, content: s.content }));
+    const summarySlides = deck.slides.map((s, i) => ({ n: i + 1, id: s.id, layout: s.layout, status: s.status, ...(s.templateRef ? { templateRef: s.templateRef } : {}), content: s.content }));
     const user = [
       `instruction: ${spec.goal}`,
       ...(spec.constraints.length > 0 ? [`constraints: ${spec.constraints.join(' | ')}`] : []),
@@ -575,6 +577,13 @@ export function applyDeckOps(deck: DeckSpec, value: unknown): { ok: true; value:
             issues.push(`op ${opIndex + 1}: unknown layout "${String(raw.layout)}"`);
             return;
           }
+          if (slide.templateRef && raw.layout !== 'template-page') {
+            // A template slide's design is the template page itself;
+            // re-skinning it into a catalog layout would orphan the
+            // templateRef (validateDeck errors) and destroy the design.
+            issues.push(`op ${opIndex + 1}: slide "${slide.id}" is a template page (templateRef ${slide.templateRef.templateId} page ${slide.templateRef.page}) — its layout cannot change; edit its words via content {"slots": {...}} instead`);
+            return;
+          }
           slide.layout = raw.layout;
         }
         if (!isObj(raw.content)) {
@@ -589,6 +598,10 @@ export function applyDeckOps(deck: DeckSpec, value: unknown): { ok: true; value:
       case 'add_slide': {
         if (typeof raw.layout !== 'string' || !getLayout(raw.layout)) {
           issues.push(`op ${opIndex + 1}: add_slide needs a valid "layout" id`);
+          return;
+        }
+        if (raw.layout === 'template-page') {
+          issues.push(`op ${opIndex + 1}: layout "template-page" cannot be added directly — template slides are created by generating with an imported PPT template`);
           return;
         }
         const layout = getLayout(raw.layout)!;

@@ -1,0 +1,454 @@
+// PPTX template pages: parse a .pptx's actual slide DESIGNS (background,
+// text/image slots, page kind) so generation can pour prompt content into
+// the template's own layouts and only the words change (the Docmee model).
+//
+// This is deliberately a structural scrape in the same spirit as
+// pptx-template.ts: the OPC package is a zip of XML parts, so JSZip +
+// targeted regexes recover slide order (presentation.xml + rels), each
+// slide's background (slide -> layout -> master fallback), every
+// text-bearing shape as a slot (rect as slide fractions, sample text,
+// dominant-run style) and every picture as an image slot. Known limits,
+// honestly documented: group shapes (p:grpSp) and graphic frames
+// (charts/tables/SmartArt) are skipped, decorative shapes are NOT
+// reconstructed — they survive only when they are part of a slide
+// background image.
+import JSZip from 'jszip';
+
+export type PptxTemplatePageKind = 'cover' | 'toc' | 'section' | 'content' | 'closing';
+
+export interface PptxSlotRect { x: number; y: number; w: number; h: number }
+
+export interface PptxTextSlot {
+  key: string;
+  kind: 'text';
+  rect: PptxSlotRect;
+  sampleText: string;
+  fontSizePt: number;
+  bold: boolean;
+  color?: string;
+  fontFamily?: string;
+  align?: 'left' | 'center' | 'right';
+  lineCount: number;
+  maxChars: number;
+}
+
+export interface PptxImageSlot {
+  key: string;
+  kind: 'image';
+  rect: PptxSlotRect;
+  imageFile?: string;
+}
+
+export type PptxTemplateSlot = PptxTextSlot | PptxImageSlot;
+
+export interface PptxTemplatePage {
+  kind: PptxTemplatePageKind;
+  background?: { color?: string; imageFile?: string };
+  slots: PptxTemplateSlot[];
+}
+
+export interface PptxPagesExtract {
+  pages: PptxTemplatePage[];
+  /** Asset bytes keyed by the file name referenced from pages (`page-<i>…`). */
+  assets: Array<{ file: string; bytes: Uint8Array }>;
+}
+
+const MAX_CLOSING_TEXT = /terima kasih|thank you|thanks for|penutup|hubungi|kontak|contact us/i;
+const TOC_TEXT = /daftar isi|\bagenda\b|table of contents|\bcontents\b|outline/i;
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|bmp|webp)$/i;
+const EMU_PER_PT = 12700;
+
+function resolvePartPath(basePart: string, target: string): string {
+  if (target.startsWith('/')) return target.slice(1);
+  const baseDir = basePart.includes('/') ? basePart.slice(0, basePart.lastIndexOf('/') + 1) : '';
+  const parts: string[] = [];
+  for (const part of `${baseDir}${target}`.split('/')) {
+    if (part === '' || part === '.') continue;
+    if (part === '..') parts.pop();
+    else parts.push(part);
+  }
+  return parts.join('/');
+}
+
+interface Rel { id: string; type: string; target: string }
+function parseRels(xml: string): Map<string, Rel> {
+  const out = new Map<string, Rel>();
+  for (const match of xml.matchAll(/<Relationship\b[^>]*>/g)) {
+    const tag = match[0];
+    const id = /\bId="([^"]+)"/.exec(tag)?.[1];
+    const type = /\bType="([^"]+)"/.exec(tag)?.[1] ?? '';
+    const target = /\bTarget="([^"]+)"/.exec(tag)?.[1] ?? '';
+    if (id) out.set(id, { id, type, target });
+  }
+  return out;
+}
+
+function relsPathFor(part: string): string {
+  const slash = part.lastIndexOf('/');
+  return slash >= 0 ? `${part.slice(0, slash + 1)}_rels/${part.slice(slash + 1)}.rels` : `_rels/${part}.rels`;
+}
+
+function srgbOf(xmlFragment: string | undefined): string | undefined {
+  if (!xmlFragment) return undefined;
+  const srgb = /<a:srgbClr val="([0-9a-fA-F]{6})"/.exec(xmlFragment)?.[1];
+  if (srgb) return `#${srgb.toLowerCase()}`;
+  const sys = /<a:sysClr[^>]*lastClr="([0-9a-fA-F]{6})"/.exec(xmlFragment)?.[1];
+  return sys ? `#${sys.toLowerCase()}` : undefined;
+}
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+/** Rect from an <a:xfrm> off/ext pair, as slide fractions. */
+function xfrmRect(xml: string, slideCx: number, slideCy: number): PptxSlotRect | undefined {
+  const xfrm = /<a:xfrm[^>]*>([\s\S]*?)<\/a:xfrm>/.exec(xml)?.[1];
+  if (!xfrm) return undefined;
+  const off = /<a:off x="(-?\d+)" y="(-?\d+)"/.exec(xfrm);
+  const ext = /<a:ext cx="(\d+)" cy="(\d+)"/.exec(xfrm);
+  if (!off || !ext || slideCx <= 0 || slideCy <= 0) return undefined;
+  const x = Number(off[1]) / slideCx;
+  const y = Number(off[2]) / slideCy;
+  const w = Number(ext[1]) / slideCx;
+  const h = Number(ext[2]) / slideCy;
+  return { x: clamp01(x), y: clamp01(y), w: Math.max(0.01, clamp01(w)), h: Math.max(0.01, clamp01(h)) };
+}
+
+/** Placeholder identity (`type` + `idx`) of a shape, for layout fallback. */
+function placeholderKey(xml: string): string | undefined {
+  const ph = /<p:ph\b([^>]*)\/>/.exec(xml)?.[1] ?? /<p:ph\b([^>]*)>/.exec(xml)?.[1];
+  if (ph === undefined) return undefined;
+  const type = /\btype="([^"]+)"/.exec(ph)?.[1] ?? 'body';
+  const idx = /\bidx="([^"]+)"/.exec(ph)?.[1] ?? '';
+  return `${type}:${idx}`;
+}
+
+/**
+ * Deterministic slot capacity: how much copy honestly fits the box it must
+ * live in — charsPerLine from box width at ~0.5em average glyph advance,
+ * lines from box height at 1.3em line height — clamped so tiny decorative
+ * boxes still accept a short label and giant boxes stay prose-sized.
+ */
+export function slotMaxChars(rect: PptxSlotRect, fontSizePt: number, slideCxEmu: number, slideCyEmu: number, sampleText: string): number {
+  const widthPt = rect.w * (slideCxEmu / EMU_PER_PT);
+  const heightPt = rect.h * (slideCyEmu / EMU_PER_PT);
+  const fontPt = Math.max(6, fontSizePt || 18);
+  const charsPerLine = Math.max(4, Math.floor(widthPt / (0.5 * fontPt)));
+  const lines = Math.max(1, Math.floor(heightPt / (1.3 * fontPt)));
+  const fitted = Math.min(800, Math.max(10, charsPerLine * lines));
+  // The template's own sample demonstrably fit — never cap below it.
+  return Math.max(fitted, Math.min(800, sampleText.length));
+}
+
+interface ParsedShapeText {
+  text: string;
+  fontSizePt: number;
+  bold: boolean;
+  color?: string;
+  fontFamily?: string;
+  align?: 'left' | 'center' | 'right';
+  lineCount: number;
+}
+
+/** Dominant-run text/style of one <p:sp> body, or undefined when textless. */
+function shapeText(spXml: string): ParsedShapeText | undefined {
+  const txBody = /<p:txBody>([\s\S]*?)<\/p:txBody>/.exec(spXml)?.[1];
+  if (!txBody) return undefined;
+  const paragraphs = [...txBody.matchAll(/<a:p>([\s\S]*?)<\/a:p>/g)].map((m) => m[1]!);
+  if (paragraphs.length === 0) return undefined;
+  let best: { text: string; length: number; size: number; bold: boolean; color?: string; font?: string } | undefined;
+  const allText: string[] = [];
+  let align: ParsedShapeText['align'];
+  for (const paragraph of paragraphs) {
+    const algn = /<a:pPr[^>]*\balgn="([^"]+)"/.exec(paragraph)?.[1];
+    if (align === undefined && algn) align = algn === 'ctr' ? 'center' : algn === 'r' ? 'right' : 'left';
+    const paraText: string[] = [];
+    for (const run of paragraph.matchAll(/<a:r>([\s\S]*?)<\/a:r>/g)) {
+      const body = run[1]!;
+      const text = /<a:t>([^<]*)<\/a:t>/.exec(body)?.[1] ?? '';
+      if (!text) continue;
+      paraText.push(text);
+      const rPr = /<a:rPr\b([^>]*)>/.exec(body)?.[1] ?? /<a:rPr\b([^>]*)\/>/.exec(body)?.[1] ?? '';
+      const size = rPr ? Number(/\bsz="(\d+)"/.exec(rPr)?.[1] ?? NaN) : NaN;
+      const candidate = {
+        text,
+        length: text.length,
+        size: Number.isFinite(size) && size > 0 ? size / 100 : 18,
+        bold: /\bb="1"/.test(rPr),
+        color: srgbOf(body),
+        font: /<a:latin typeface="([^"]+)"/.exec(body)?.[1],
+      };
+      if (!best || candidate.length > best.length || (candidate.length === best.length && candidate.size > best.size)) best = candidate;
+    }
+    // <a:fld> fields (slide numbers, dates) also carry text.
+    for (const fld of paragraph.matchAll(/<a:fld\b[^>]*>([\s\S]*?)<\/a:fld>/g)) {
+      const text = /<a:t>([^<]*)<\/a:t>/.exec(fld[1]!)?.[1];
+      if (text) paraText.push(text);
+    }
+    if (paraText.length > 0) allText.push(paraText.join(''));
+  }
+  const joined = allText.join('\n').trim();
+  const hasPlaceholder = /<p:ph\b/.test(spXml);
+  if (!joined && !hasPlaceholder) return undefined;
+  return {
+    text: joined,
+    fontSizePt: best?.size ?? 18,
+    bold: best?.bold ?? false,
+    ...(best?.color ? { color: best.color } : {}),
+    ...(best?.font ? { fontFamily: best.font } : {}),
+    ...(align ? { align } : {}),
+    lineCount: Math.max(1, allText.length),
+  };
+}
+
+/** Remove <p:grpSp> subtrees (nested too) — their children use group-local coords. */
+function stripGroupShapes(xml: string): string {
+  let out = xml;
+  for (let guard = 0; guard < 8; guard += 1) {
+    const next = out.replace(/<p:grpSp>[\s\S]*?<\/p:grpSp>/g, '');
+    if (next === out) return out;
+    out = next;
+  }
+  return out;
+}
+
+async function backgroundOf(
+  zip: JSZip,
+  ownerPart: string,
+  xml: string,
+  rels: Map<string, Rel>,
+  assetKey: (extension: string) => string,
+  assets: Array<{ file: string; bytes: Uint8Array }>,
+): Promise<{ color?: string; imageFile?: string } | undefined> {
+  const bg = /<p:bg>([\s\S]*?)<\/p:bg>/.exec(xml)?.[1];
+  if (!bg) return undefined;
+  const color = srgbOf(bg);
+  if (color) return { color };
+  const embed = /<a:blip[^>]*r:embed="([^"]+)"/.exec(bg)?.[1];
+  const rel = embed ? rels.get(embed) : undefined;
+  if (rel && IMAGE_EXT_RE.test(rel.target)) {
+    const file = zip.file(resolvePartPath(ownerPart, rel.target));
+    if (file) {
+      const bytes = await file.async('uint8array');
+      const extension = rel.target.slice(rel.target.lastIndexOf('.')).toLowerCase();
+      const name = assetKey(extension);
+      assets.push({ file: name, bytes });
+      return { imageFile: name };
+    }
+  }
+  return undefined;
+}
+
+function classifyPage(index: number, total: number, textSlots: PptxTextSlot[]): PptxTemplatePageKind {
+  const isFirst = index === 0;
+  const isLast = index === total - 1;
+  const combined = textSlots.map((slot) => slot.sampleText).join(' \n ');
+  const maxFont = textSlots.reduce((max, slot) => Math.max(max, slot.fontSizePt), 0);
+  if (isLast && MAX_CLOSING_TEXT.test(combined)) return 'closing';
+  if (isFirst) return 'cover';
+  if (isLast && (textSlots.length <= 2 || maxFont >= 36)) return 'closing';
+  if (TOC_TEXT.test(combined)) return 'toc';
+  if (textSlots.length >= 4 && textSlots.every((slot) => slot.sampleText.length <= 90)) return 'toc';
+  if (textSlots.length <= 2 && maxFont >= 40) return 'section';
+  return 'content';
+}
+
+/**
+ * Parse every slide of a .pptx into a template page. Returned pages carry
+ * asset file names local to this extract (`page-<i>.background.png`,
+ * `page-<i>.pic-<k>.png`); the store prefixes them with the template id.
+ */
+export async function extractPptxPages(bytes: Uint8Array): Promise<PptxPagesExtract> {
+  const zip = await JSZip.loadAsync(bytes);
+  const presFile = zip.file('ppt/presentation.xml');
+  const presRelsFile = zip.file('ppt/_rels/presentation.xml.rels');
+  if (!presFile) return { pages: [], assets: [] };
+  const presXml = await presFile.async('string');
+  const presRels = presRelsFile ? parseRels(await presRelsFile.async('string')) : new Map<string, Rel>();
+  const sizeMatch = /<p:sldSz cx="(\d+)" cy="(\d+)"/.exec(presXml);
+  const slideCx = sizeMatch ? Number(sizeMatch[1]) : 12192000;
+  const slideCy = sizeMatch ? Number(sizeMatch[2]) : 6858000;
+
+  const slideParts: string[] = [];
+  for (const idMatch of presXml.matchAll(/<p:sldId[^>]*r:id="([^"]+)"/g)) {
+    const rel = presRels.get(idMatch[1]!);
+    if (rel) slideParts.push(resolvePartPath('ppt/presentation.xml', rel.target));
+  }
+  // Fallback: numeric slide order when the id list is unreadable.
+  if (slideParts.length === 0) {
+    const names = Object.keys(zip.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+      .sort((a, b) => Number(/\d+/.exec(a.slice(12))?.[0] ?? 0) - Number(/\d+/.exec(b.slice(12))?.[0] ?? 0));
+    slideParts.push(...names);
+  }
+
+  const assets: Array<{ file: string; bytes: Uint8Array }> = [];
+  const rawPages: Array<{ background?: { color?: string; imageFile?: string }; slots: PptxTemplateSlot[]; textSlots: PptxTextSlot[] }> = [];
+
+  for (let pageIndex = 0; pageIndex < slideParts.length; pageIndex += 1) {
+    const part = slideParts[pageIndex]!;
+    const file = zip.file(part);
+    if (!file) { rawPages.push({ slots: [], textSlots: [] }); continue; }
+    const xml = await file.async('string');
+    const relsFile = zip.file(relsPathFor(part));
+    const rels = relsFile ? parseRels(await relsFile.async('string')) : new Map<string, Rel>();
+
+    // Layout placeholders as rect fallback + master/layout background chain.
+    const layoutPhRects = new Map<string, PptxSlotRect>();
+    let layoutXml: string | undefined;
+    let layoutRels = new Map<string, Rel>();
+    const layoutRel = [...rels.values()].find((rel) => /slideLayout/i.test(rel.type));
+    let layoutPart = '';
+    if (layoutRel) {
+      layoutPart = resolvePartPath(part, layoutRel.target);
+      const layoutFile = zip.file(layoutPart);
+      if (layoutFile) {
+        layoutXml = await layoutFile.async('string');
+        const lrFile = zip.file(relsPathFor(layoutPart));
+        layoutRels = lrFile ? parseRels(await lrFile.async('string')) : new Map<string, Rel>();
+        for (const sp of stripGroupShapes(layoutXml).matchAll(/<p:sp>([\s\S]*?)<\/p:sp>/g)) {
+          const key = placeholderKey(sp[1]!);
+          const rect = key ? xfrmRect(sp[1]!, slideCx, slideCy) : undefined;
+          if (key && rect) layoutPhRects.set(key, rect);
+        }
+      }
+    }
+    let background = await backgroundOf(zip, part, xml, rels, (ext) => `page-${pageIndex}.background${ext}`, assets);
+    if (!background && layoutXml) {
+      background = await backgroundOf(zip, layoutPart, layoutXml, layoutRels, (ext) => `page-${pageIndex}.background${ext}`, assets);
+    }
+    if (!background) {
+      // Master chain: layout rels point at the slide master.
+      const masterRel = [...layoutRels.values()].find((rel) => /slideMaster/i.test(rel.type));
+      const masterPart = masterRel
+        ? resolvePartPath(part, masterRel.target)
+        : Object.keys(zip.files).find((name) => /^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(name));
+      if (masterPart) {
+        const masterFile = zip.file(masterPart);
+        if (masterFile) {
+          const masterRelsFile = zip.file(relsPathFor(masterPart));
+          const masterRels = masterRelsFile ? parseRels(await masterRelsFile.async('string')) : new Map<string, Rel>();
+          background = await backgroundOf(zip, masterPart, await masterFile.async('string'), masterRels, (ext) => `page-${pageIndex}.background${ext}`, assets);
+        }
+      }
+    }
+
+    const spTree = stripGroupShapes(/<p:spTree>([\s\S]*?)<\/p:spTree>/.exec(xml)?.[1] ?? xml);
+    const slots: PptxTemplateSlot[] = [];
+    const textSlots: PptxTextSlot[] = [];
+    let slotSeq = 0;
+    let picSeq = 0;
+    for (const shape of spTree.matchAll(/<p:(sp|pic)>([\s\S]*?)<\/p:\1>/g)) {
+      const kind = shape[1]!;
+      const body = shape[2]!;
+      const rect = xfrmRect(body, slideCx, slideCy)
+        ?? (kind === 'sp' ? layoutPhRects.get(placeholderKey(body) ?? '') : undefined);
+      if (!rect) continue;
+      if (kind === 'pic') {
+        const embed = /<a:blip[^>]*r:embed="([^"]+)"/.exec(body)?.[1];
+        const rel = embed ? rels.get(embed) : undefined;
+        const key = `s${slotSeq}`;
+        slotSeq += 1;
+        let imageFile: string | undefined;
+        if (rel && IMAGE_EXT_RE.test(rel.target)) {
+          const mediaPart = resolvePartPath(part, rel.target);
+          const media = zip.file(mediaPart);
+          if (media) {
+            const extension = rel.target.slice(rel.target.lastIndexOf('.')).toLowerCase();
+            imageFile = `page-${pageIndex}.pic-${picSeq}${extension}`;
+            picSeq += 1;
+            assets.push({ file: imageFile, bytes: await media.async('uint8array') });
+          }
+        }
+        slots.push(imageFile ? { key, kind: 'image', rect, imageFile } : { key, kind: 'image', rect });
+        continue;
+      }
+      const text = shapeText(body);
+      if (!text) continue;
+      const key = `s${slotSeq}`;
+      slotSeq += 1;
+      const slot: PptxTextSlot = {
+        key,
+        kind: 'text',
+        rect,
+        sampleText: text.text,
+        fontSizePt: text.fontSizePt,
+        bold: text.bold,
+        ...(text.color ? { color: text.color } : {}),
+        ...(text.fontFamily ? { fontFamily: text.fontFamily } : {}),
+        ...(text.align ? { align: text.align } : {}),
+        lineCount: text.lineCount,
+        maxChars: slotMaxChars(rect, text.fontSizePt, slideCx, slideCy, text.text),
+      };
+      slots.push(slot);
+      textSlots.push(slot);
+    }
+    rawPages.push({ ...(background ? { background } : {}), slots, textSlots });
+  }
+
+  const pages: PptxTemplatePage[] = rawPages.map((raw, index) => ({
+    kind: classifyPage(index, rawPages.length, raw.textSlots),
+    ...(raw.background ? { background: raw.background } : {}),
+    slots: raw.slots,
+  }));
+  return { pages, assets };
+}
+
+/** Renames extract-local asset names (`page-0.…`) to stored names (`<id>.page-0.…`). */
+export function prefixPageAssets(pages: PptxTemplatePage[], prefix: string): PptxTemplatePage[] {
+  return pages.map((page) => ({
+    ...page,
+    ...(page.background?.imageFile ? { background: { ...page.background, imageFile: `${prefix}${page.background.imageFile}` } } : {}),
+    slots: page.slots.map((slot) => (slot.kind === 'image' && slot.imageFile ? { ...slot, imageFile: `${prefix}${slot.imageFile}` } : slot)),
+  }));
+}
+
+/** Every asset file a stored template references (background + page assets). */
+export function pptxTemplateAssetFiles(template: { backgroundImageFile?: string; pages?: PptxTemplatePage[] }): string[] {
+  const files: string[] = [];
+  if (template.backgroundImageFile) files.push(template.backgroundImageFile);
+  for (const page of template.pages ?? []) {
+    if (page.background?.imageFile) files.push(page.background.imageFile);
+    for (const slot of page.slots) {
+      if (slot.kind === 'image' && slot.imageFile) files.push(slot.imageFile);
+    }
+  }
+  return files;
+}
+
+export function templatePageTextSlots(page: PptxTemplatePage): PptxTextSlot[] {
+  return page.slots.filter((slot): slot is PptxTextSlot => slot.kind === 'text');
+}
+
+export function templatePageImageSlots(page: PptxTemplatePage): PptxImageSlot[] {
+  return page.slots.filter((slot): slot is PptxImageSlot => slot.kind === 'image');
+}
+
+/**
+ * Slot-content issues for one template slide (shared by validateDeck and
+ * the generation pipeline so both speak the same repair language).
+ * `slots` is the slide's content.slots map; values are strings for both
+ * kinds — text copy for text slots, a deck asset name (or '') for images.
+ */
+export function validateTemplateSlideSlots(page: PptxTemplatePage, slots: unknown): string[] {
+  const issues: string[] = [];
+  if (!slots || typeof slots !== 'object' || Array.isArray(slots)) {
+    return [`slots must be an object mapping slot keys (${page.slots.map((slot) => slot.key).join(', ') || 'none'}) to strings`];
+  }
+  const map = slots as Record<string, unknown>;
+  const known = new Set(page.slots.map((slot) => slot.key));
+  for (const key of Object.keys(map)) {
+    if (!known.has(key)) issues.push(`slots.${key}: unknown slot — this template page has slots ${[...known].join(', ') || '(none)'}; remove it`);
+  }
+  for (const slot of page.slots) {
+    const value = map[slot.key];
+    if (value === undefined) continue;
+    if (typeof value !== 'string') {
+      issues.push(`slots.${slot.key}: must be a string${slot.kind === 'image' ? ' (a deck asset name, or "" for the template image)' : ''}`);
+      continue;
+    }
+    if (slot.kind === 'text' && value.length > slot.maxChars) {
+      issues.push(`slots.${slot.key}: ${value.length} chars exceeds this slot's capacity of ${slot.maxChars} — shorten the text to fit the template box`);
+    }
+  }
+  return issues;
+}

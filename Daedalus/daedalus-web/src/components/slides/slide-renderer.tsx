@@ -20,6 +20,8 @@ type Ctx = {
   muted: string
   panelBg: string
   line: string
+  /** Extracted accent ramp of an imported PPT template (accent1..accent6). */
+  series?: string[]
 }
 
 const SERIES_VARS = [
@@ -30,7 +32,11 @@ const SERIES_VARS = [
   'var(--daedalus-primary)',
 ]
 
-function seriesColor(index: number, accent: string): string {
+function seriesColor(index: number, accent: string, series?: string[]): string {
+  // An imported template's own accent ramp wins so canvas charts carry the
+  // same palette the PPTX exporter writes; built-in decks keep the app
+  // palette rotation exactly as before.
+  if (series && series.length > 1) return series[index % series.length]
   return index === 0 ? accent : SERIES_VARS[(index - 1) % SERIES_VARS.length]
 }
 
@@ -644,7 +650,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
               const y = padT + plotH - barH
               return (
                 <g key={index}>
-                  <rect x={x} y={y} width={barW} height={barH} rx="5" style={{ fill: seriesColor(index, ctx.accent) }} />
+                  <rect x={x} y={y} width={barW} height={barH} rx="5" style={{ fill: seriesColor(index, ctx.accent, ctx.series) }} />
                   <text x={x + barW / 2} y={y - 8} textAnchor="middle" fontSize="14" fontWeight="700" style={{ fill: 'currentColor' }}>
                     {d.value}
                     {str(c.unit)}
@@ -693,10 +699,10 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                   strokeLinejoin="round"
                   strokeLinecap="round"
                   points={s.points.map((p, i) => `${xAt(i, s.points.length)},${yAt(p)}`).join(' ')}
-                  style={{ stroke: seriesColor(si, ctx.accent) }}
+                  style={{ stroke: seriesColor(si, ctx.accent, ctx.series) }}
                 />
                 {s.points.map((p, i) => (
-                  <circle key={i} cx={xAt(i, s.points.length)} cy={yAt(p)} r="4.5" style={{ fill: seriesColor(si, ctx.accent) }} />
+                  <circle key={i} cx={xAt(i, s.points.length)} cy={yAt(p)} r="4.5" style={{ fill: seriesColor(si, ctx.accent, ctx.series) }} />
                 ))}
               </g>
             ))}
@@ -706,7 +712,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
             <div className="flex flex-wrap" style={{ gap: '1.6cqw' }}>
               {series.map((s, si) => (
                 <span key={si} className="inline-flex items-center" style={{ gap: '0.5cqw', fontSize: '1.2cqw' }}>
-                  <span aria-hidden style={{ width: '1.4cqw', height: '0.45cqw', borderRadius: 999, backgroundColor: seriesColor(si, ctx.accent) }} />
+                  <span aria-hidden style={{ width: '1.4cqw', height: '0.45cqw', borderRadius: 999, backgroundColor: seriesColor(si, ctx.accent, ctx.series) }} />
                   {s.name}
                   {str(c.unit) ? <span style={{ color: ctx.muted }}>({str(c.unit)})</span> : null}
                 </span>
@@ -744,7 +750,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                       strokeWidth="30"
                       strokeDasharray={`${Math.max(0, dash - 2)} ${C - dash + 2}`}
                       strokeDashoffset={-acc}
-                      style={{ stroke: seriesColor(index, ctx.accent) }}
+                      style={{ stroke: seriesColor(index, ctx.accent, ctx.series) }}
                     />
                   )
                   acc += dash
@@ -761,7 +767,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
               <ul className="flex flex-col" style={{ gap: '0.9cqw' }}>
                 {slices.map((slice, index) => (
                   <li key={index} className="flex items-center" style={{ gap: '0.7cqw', fontSize: '1.35cqw' }}>
-                    <span aria-hidden className="rounded-sm" style={{ width: '1.3cqw', height: '1.3cqw', backgroundColor: seriesColor(index, ctx.accent) }} />
+                    <span aria-hidden className="rounded-sm" style={{ width: '1.3cqw', height: '1.3cqw', backgroundColor: seriesColor(index, ctx.accent, ctx.series) }} />
                     <span>{slice.label}</span>
                     <strong>
                       {slice.value}
@@ -972,7 +978,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                       className="flex min-w-0 flex-1 flex-col items-center justify-center text-center"
                       style={{
                         clipPath: clip,
-                        backgroundColor: seriesColor(index, ctx.accent),
+                        backgroundColor: seriesColor(index, ctx.accent, ctx.series),
                         color: 'var(--daedalus-onPrimary)',
                         gap: '0.3cqw',
                         padding: '1.15cqw 1.9cqw 1.15cqw 2.2cqw',
@@ -1023,7 +1029,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                     style={{
                       width: `${widthPct}%`,
                       clipPath: 'polygon(9% 0, 91% 0, 100% 100%, 0 100%)',
-                      backgroundColor: seriesColor(index, ctx.accent),
+                      backgroundColor: seriesColor(index, ctx.accent, ctx.series),
                       color: 'var(--daedalus-onPrimary)',
                       gap: '0.25cqw',
                       padding: '1cqw 3cqw',
@@ -1064,7 +1070,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                     <span
                       aria-hidden
                       className="flex shrink-0 items-center justify-center rounded-full font-bold"
-                      style={{ width: '2.2cqw', height: '2.2cqw', backgroundColor: seriesColor(index, ctx.accent), color: 'var(--daedalus-onPrimary)', fontSize: '1.15cqw' }}
+                      style={{ width: '2.2cqw', height: '2.2cqw', backgroundColor: seriesColor(index, ctx.accent, ctx.series), color: 'var(--daedalus-onPrimary)', fontSize: '1.15cqw' }}
                     >
                       {index + 1}
                     </span>
@@ -1270,7 +1276,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                   <span
                     aria-hidden
                     className="flex items-center justify-center rounded-full font-bold"
-                    style={{ width: '4.4cqw', height: '4.4cqw', backgroundColor: seriesColor(index, ctx.accent), color: 'var(--daedalus-onPrimary)', fontSize: '1.7cqw' }}
+                    style={{ width: '4.4cqw', height: '4.4cqw', backgroundColor: seriesColor(index, ctx.accent, ctx.series), color: 'var(--daedalus-onPrimary)', fontSize: '1.7cqw' }}
                   >
                     {initialsOf(str(person.name))}
                   </span>
@@ -1441,7 +1447,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                   <div className="flex items-center" style={{ gap: '1.5cqw' }}>
                     <div
                       className="shrink-0 rounded-md"
-                      style={{ width: `${26 + pct * 0.5}%`, backgroundColor: seriesColor(index, ctx.accent), padding: '0.85cqw 1.3cqw' }}
+                      style={{ width: `${26 + pct * 0.5}%`, backgroundColor: seriesColor(index, ctx.accent, ctx.series), padding: '0.85cqw 1.3cqw' }}
                     >
                       <div className="flex items-baseline justify-between" style={{ gap: '1cqw', color: 'var(--daedalus-onPrimary)' }}>
                         <span className="truncate font-semibold" style={{ fontSize: '1.45cqw' }}>
@@ -1493,7 +1499,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                     <div className="relative flex-1 rounded-full border" style={{ height: '2.05cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}>
                       <div
                         className="absolute rounded-full"
-                        style={{ left: `${start}%`, width: `${span}%`, top: '16%', height: '68%', backgroundColor: seriesColor(index, ctx.accent) }}
+                        style={{ left: `${start}%`, width: `${span}%`, top: '16%', height: '68%', backgroundColor: seriesColor(index, ctx.accent, ctx.series) }}
                       />
                     </div>
                     <div className="shrink-0 truncate" style={{ width: '14%', fontSize: '1.05cqw', color: ctx.muted }}>
@@ -2073,7 +2079,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                   <div className="flex" style={{ gap: '1.2cqw' }}>
                     <span aria-hidden style={{ minWidth: '3cqw' }} />
                     <div className="relative flex-1 overflow-hidden rounded-full border" style={{ height: '0.95cqw', borderColor: ctx.line, backgroundColor: ctx.panelBg }}>
-                      <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.max(4, (num(entry.value) / max) * 100)}%`, backgroundColor: seriesColor(index, ctx.accent) }} />
+                      <div className="absolute inset-y-0 left-0 rounded-full" style={{ width: `${Math.max(4, (num(entry.value) / max) * 100)}%`, backgroundColor: seriesColor(index, ctx.accent, ctx.series) }} />
                     </div>
                   </div>
                 </div>
@@ -2128,7 +2134,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                     <span
                       aria-hidden
                       className="flex shrink-0 items-center justify-center rounded-full font-bold"
-                      style={{ width: '3.1cqw', height: '3.1cqw', backgroundColor: seriesColor(index, ctx.accent), color: 'var(--daedalus-onPrimary)', fontSize: '1.2cqw' }}
+                      style={{ width: '3.1cqw', height: '3.1cqw', backgroundColor: seriesColor(index, ctx.accent, ctx.series), color: 'var(--daedalus-onPrimary)', fontSize: '1.2cqw' }}
                     >
                       {initialsOf(str(quote.name))}
                     </span>
@@ -2172,7 +2178,154 @@ type DragSession = {
   moved: boolean
 }
 
-export function SlideRenderer({ slide, theme, editable = false, onPositionsChange, resolveImageSrc, onImagePick }: {
+/**
+ * One image slot of a template page: the user's picked deck asset wins,
+ * then the template's own original picture, then the standard labelled
+ * placeholder. A failed load falls back to the placeholder rather than a
+ * broken glyph. In Edit mode the whole rect is the click target that asks
+ * the stage for the image picker (the stage writes the chosen asset into
+ * content.slots[slotKey]).
+ */
+function TemplateImageSlot({ slotKey, rectStyle, chosen, chosenSrc, originalSrc, editable, onImagePick, ctx }: {
+  slotKey: string
+  rectStyle: CSSProperties
+  chosen: string
+  chosenSrc?: string
+  originalSrc?: string
+  editable: boolean
+  onImagePick?: (blockKey: string) => void
+  ctx: Ctx
+}) {
+  const src = chosenSrc ?? originalSrc
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    setFailed(false)
+  }, [src])
+  const clickable = editable && onImagePick !== undefined
+  const inner = src && !failed ? (
+    <img src={src} alt={chosen || 'gambar template'} className="absolute inset-0 h-full w-full object-cover" onError={() => setFailed(true)} />
+  ) : (
+    <span className="flex h-full w-full flex-col items-center justify-center border border-dashed text-center" style={{ borderColor: ctx.line, backgroundColor: ctx.panelBg, gap: '0.7cqw', padding: '1cqw' }}>
+      <ImageIcon aria-hidden style={{ width: '3.4cqw', height: '3.4cqw', color: ctx.accent }} />
+      <span className="break-all font-semibold" style={{ fontSize: '1.1cqw' }}>
+        {chosen || 'image'}
+      </span>
+      {clickable ? (
+        <span className="font-semibold" style={{ fontSize: '1cqw', color: ctx.accent }}>
+          Klik untuk upload gambar
+        </span>
+      ) : null}
+    </span>
+  )
+  if (!clickable) {
+    return (
+      <div className="absolute overflow-hidden" style={rectStyle} data-testid={`template-slot-${slotKey}`}>
+        {inner}
+      </div>
+    )
+  }
+  return (
+    <button
+      type="button"
+      data-testid={`slide-image-upload-${slotKey}`}
+      aria-label={`Upload gambar untuk slot ${slotKey}`}
+      className="absolute cursor-pointer overflow-hidden"
+      style={rectStyle}
+      onClick={() => onImagePick(slotKey)}
+    >
+      {inner}
+    </button>
+  )
+}
+
+/**
+ * The template slide body: the imported page's slots at their exact
+ * fractions of the slide box (960pt wide → fontSizePt/9.6 in cqw). Text
+ * renders where the template put it, with the template's own run style;
+ * image slots follow TemplateImageSlot's honest fallback chain. Slot
+ * positions are the template's design — fixed, never draggable.
+ */
+function TemplateSlots({ slide, page, assetSrc, editable, onImagePick, imageSrc, ctx }: {
+  slide: Slide
+  page: import('../../api/client').PptTemplatePageInfo
+  assetSrc: (file: string) => string
+  editable: boolean
+  onImagePick?: (blockKey: string) => void
+  imageSrc?: (name: string) => string | undefined
+  ctx: Ctx
+}) {
+  const slots = obj(slide.content.slots)
+  return (
+    <div className="absolute inset-0" style={{ zIndex: 2 }} data-testid="template-slide" data-page-kind={page.kind}>
+      {page.slots.map((slot) => {
+        const rectStyle: CSSProperties = {
+          left: `${slot.rect.x * 100}%`,
+          top: `${slot.rect.y * 100}%`,
+          width: `${slot.rect.w * 100}%`,
+          height: `${slot.rect.h * 100}%`,
+        }
+        if (slot.kind === 'text') {
+          const value = typeof slots[slot.key] === 'string' ? (slots[slot.key] as string) : ''
+          return (
+            <div
+              key={slot.key}
+              data-testid={`template-slot-${slot.key}`}
+              className="absolute overflow-hidden whitespace-pre-wrap"
+              style={{
+                ...rectStyle,
+                fontSize: `${slot.fontSizePt / 9.6}cqw`,
+                fontWeight: slot.bold ? 700 : 400,
+                ...(slot.color ? { color: slot.color } : {}),
+                ...(slot.fontFamily ? { fontFamily: slot.fontFamily } : {}),
+                textAlign: slot.align ?? 'left',
+                lineHeight: 1.25,
+                pointerEvents: 'none',
+              }}
+            >
+              {value}
+            </div>
+          )
+        }
+        const chosen = typeof slots[slot.key] === 'string' ? (slots[slot.key] as string) : ''
+        return (
+          <TemplateImageSlot
+            key={slot.key}
+            slotKey={slot.key}
+            rectStyle={rectStyle}
+            chosen={chosen}
+            chosenSrc={chosen && imageSrc ? imageSrc(chosen) : undefined}
+            originalSrc={slot.imageFile ? assetSrc(slot.imageFile) : undefined}
+            editable={editable}
+            onImagePick={onImagePick}
+            ctx={ctx}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * A template slide whose page design could not be resolved (template
+ * deleted or fetch failed): honest degradation — theme background plus
+ * the slide's own words as plain lines, never a fake design.
+ */
+function TemplateFallbackBody({ slide, ctx }: { slide: Slide; ctx: Ctx }) {
+  const slots = obj(slide.content.slots)
+  const lines = [...new Set([str(slide.content.title), ...Object.values(slots).filter((v): v is string => typeof v === 'string' && v.length > 0)])].filter((line) => line.length > 0)
+  return (
+    <div className="flex flex-1 flex-col justify-center" style={{ gap: '1.2cqw' }} data-testid="template-slide-fallback">
+      {lines.map((line, index) => (
+        <div key={index} className={index === 0 ? 'font-bold tracking-tight' : undefined} style={{ fontSize: index === 0 ? '3.3cqw' : '1.6cqw', color: index === 0 ? undefined : ctx.muted, lineHeight: 1.3 }}>
+          {line}
+        </div>
+      ))}
+      <div style={{ fontSize: '1.2cqw', color: ctx.muted }}>Desain template tidak terbaca — impor ulang template-nya dari panel Template dari PPT.</div>
+    </div>
+  )
+}
+
+export function SlideRenderer({ slide, theme, editable = false, onPositionsChange, resolveImageSrc, onImagePick, templateSlide }: {
   slide: Slide
   theme?: DeckSpec['theme']
   /** Edit mode: blocks become grabbable; drags persist via onPositionsChange. */
@@ -2182,6 +2335,12 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
   resolveImageSrc?: (name: string) => string | undefined
   /** Edit mode: an image placeholder/image was clicked (not dragged). */
   onImagePick?: (blockKey: string) => void
+  /**
+   * For templateRef slides: the imported template's parsed page this
+   * slide pours into, plus its asset URL resolver (page backgrounds and
+   * slot pictures live in the template store, not deck/assets).
+   */
+  templateSlide?: { page: import('../../api/client').PptTemplatePageInfo; assetSrc: (file: string) => string }
 }) {
   const isLight = theme?.dark === false
   const light = getPalette('light')
@@ -2194,11 +2353,27 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
     muted: theme?.muted ?? (isLight ? light.fgMoreSubtle : 'var(--daedalus-fgMoreSubtle)'),
     panelBg: theme?.surface ?? (isLight ? light.bgBase : 'var(--daedalus-bgSurface)'),
     line: 'var(--daedalus-separator)',
+    ...(Array.isArray(theme?.series) && theme.series.length > 0 ? { series: theme.series } : {}),
   }
+  // Imported-template background image (a deck asset, resolved like slide
+  // images): paints over the background color exactly as the exported
+  // PPTX paints it; without a resolver the color alone carries the theme.
+  const bgSrc = theme?.backgroundImage && resolveImageSrc ? resolveImageSrc(theme.backgroundImage) : undefined
+  // A template slide's own page design wins over the deck theme skin:
+  // its stored background image (or color) is the slide's background.
+  const tpl = slide.templateRef && templateSlide ? templateSlide : undefined
+  const tplBgSrc = tpl?.page.background?.imageFile ? tpl.assetSrc(tpl.page.background.imageFile) : undefined
   const rootStyle: CSSProperties = {
-    backgroundColor: theme?.background ?? (isLight ? light.bgSurface : 'var(--daedalus-bgBase)'),
+    backgroundColor: tpl?.page.background?.color ?? theme?.background ?? (isLight ? light.bgSurface : 'var(--daedalus-bgBase)'),
     color: theme?.text ?? (isLight ? light.fgBase : 'var(--daedalus-fgBase)'),
     ...(theme?.bodyFont ? { fontFamily: theme.bodyFont } : {}),
+    ...(tpl
+      ? tplBgSrc
+        ? { backgroundImage: `url("${tplBgSrc}")`, backgroundSize: 'cover', backgroundPosition: 'center' }
+        : {}
+      : bgSrc
+        ? { backgroundImage: `url("${bgSrc}")`, backgroundSize: 'cover', backgroundPosition: 'center' }
+        : {}),
   }
 
   const boxRef = useRef<HTMLDivElement | null>(null)
@@ -2287,12 +2462,15 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
   return (
     <div ref={boxRef} data-testid="slide-renderer" data-layout={slide.layout} className="relative flex h-full w-full flex-col overflow-hidden" style={rootStyle}>
       <BlockCtx.Provider value={{ positions: mergedPositions, editable, overlayEl, onDragStart, imageSrc: resolveImageSrc, onImagePick }}>
-        <div className="flex min-h-0 flex-1 flex-col" style={{ padding: '3cqw' }}>
-          {renderBody(slide, ctx)}
+        {tpl ? (
+          <TemplateSlots slide={slide} page={tpl.page} assetSrc={tpl.assetSrc} editable={editable} onImagePick={onImagePick} imageSrc={resolveImageSrc} ctx={ctx} />
+        ) : null}
+        <div className="flex min-h-0 flex-1 flex-col" style={{ padding: tpl ? 0 : '3cqw' }}>
+          {tpl ? null : slide.templateRef ? <TemplateFallbackBody slide={slide} ctx={ctx} /> : renderBody(slide, ctx)}
         </div>
         <div ref={setOverlayEl} data-testid="slide-overlay" className="pointer-events-none absolute inset-0" style={{ zIndex: 4 }} />
       </BlockCtx.Provider>
-      <div className="flex items-center justify-between" style={{ gap: '1cqw', padding: '0 1.6cqw 1.1cqw', fontSize: '1cqw', color: ctx.muted }}>
+      <div className="relative flex items-center justify-between" style={{ gap: '1cqw', padding: '0 1.6cqw 1.1cqw', fontSize: '1cqw', color: ctx.muted, zIndex: 3 }}>
         <span>{getLayout(slide.layout)?.label ?? slide.layout}</span>
         {slide.notes ? <span className="truncate italic">{slide.notes}</span> : <span className="truncate">{slide.id}</span>}
       </div>
