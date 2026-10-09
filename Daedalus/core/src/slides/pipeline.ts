@@ -77,6 +77,8 @@ export type ExportInfo = {
   path: string;
   bytes: number;
   slides: number;
+  /** Honest export-path note from the exporter (approximation fallback). */
+  note?: string;
 };
 
 export type OutlineStageResult = {
@@ -742,7 +744,7 @@ export async function fillDeckSlidesStage(
   if (failures.length === 0 && !hasErrors && deck.slides.length > 0) {
     try {
       const result = await exportDeckToPptx(deck, root);
-      exported = { path: result.relativePath, bytes: result.bytes, slides: result.slideCount };
+      exported = { path: result.relativePath, bytes: result.bytes, slides: result.slideCount, ...(result.note ? { note: result.note } : {}) };
     } catch (error) {
       exportError = error instanceof Error ? error.message : String(error);
     }
