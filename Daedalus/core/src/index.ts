@@ -249,6 +249,8 @@ export {
   capFetchedText,
   clampCallTimeoutMs,
   createDefaultRegistry,
+  createSlideRegistry,
+  createSlidePipelineTools,
   createDirTool,
   createDownloadFileTool,
   createFetchUrlTool,
