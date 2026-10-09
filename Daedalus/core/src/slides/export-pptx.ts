@@ -282,6 +282,11 @@ function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root:
 }
 
 export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<{ relativePath: string; bytes: number; slideCount: number }> {
+  // An empty deck is not a presentation: never emit a placeholder-title
+  // .pptx that completion checks would mistake for generated slides.
+  if (!deck.slides || deck.slides.length === 0) {
+    throw new Error('cannot export an empty deck: add at least one slide (add_slide) before exporting');
+  }
   const paths = deckPaths(root);
   await mkdir(paths.dir, { recursive: true });
 
@@ -304,11 +309,6 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<{ 
   pptx.theme = { headFontFace: deck.theme.headingFont ?? 'Arial', bodyFontFace: deck.theme.bodyFont ?? 'Arial' };
 
   for (const s of deck.slides) renderSlide(pptx, s, deck, root, ctx);
-  if (deck.slides.length === 0) {
-    const slide = pptx.addSlide();
-    slide.background = { color: ctx.bg };
-    text(slide, deck.title, { x: 0.8, y: 3.0, w: 11.7, h: 1.0, fontSize: 36, bold: true, align: 'center' }, ctx);
-  }
 
   const fileName = `${slugifyTitle(deck.title)}.pptx`;
   const outPath = join(paths.dir, fileName);

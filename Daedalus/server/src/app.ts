@@ -1959,6 +1959,18 @@ export function createApp(ctx: AppContext) {
           }
 
           if (url.pathname === "/slides/deck/export") {
+            // Same contract as the agent's export_deck tool: never export
+            // a deck core validation rejects, and never report success
+            // for an empty deck (the exporter also refuses those).
+            const exportErrors = validateDeck(deck, { root }).filter((issue) => issue.severity === "error");
+            if (deck.slides.length === 0 || exportErrors.length > 0) {
+              badDeck(422, "deck_invalid", {
+                issues: deck.slides.length === 0
+                  ? [{ code: "empty-deck", message: "deck has no slides yet — add slides before exporting", severity: "error" }, ...exportErrors]
+                  : exportErrors,
+              });
+              return;
+            }
             const result = await exportDeckToPptx(deck, root);
             sendJson(res, 200, { root, path: result.relativePath, bytes: result.bytes, slides: result.slideCount });
             return;

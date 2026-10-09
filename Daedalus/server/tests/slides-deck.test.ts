@@ -130,6 +130,23 @@ describe('/slides deck endpoints', () => {
     const deckAfterDelete = deleted.body.deck as { slides: Array<{ id: string }> }
     expect(deckAfterDelete.slides.map((s) => s.id)).toEqual(['s-1'])
   })
+
+  test('export refuses an invalid deck and an empty deck instead of reporting success', async () => {
+    const { base, root } = await listen()
+    const invalid = newDeck('Rusak')
+    invalid.slides.push({ id: 's-x', layout: 'layout-ngawur', content: { title: 'X' } })
+    await writeDeck(root, invalid)
+    const refused = await req(base, 'POST', '/slides/deck/export', { root })
+    expect(refused.status).toBe(422)
+    expect(refused.body.error).toBe('deck_invalid')
+
+    const empty = newDeck('Kosong')
+    await writeDeck(root, empty)
+    const refusedEmpty = await req(base, 'POST', '/slides/deck/export', { root })
+    expect(refusedEmpty.status).toBe(422)
+    expect(refusedEmpty.body.error).toBe('deck_invalid')
+    expect(JSON.stringify(refusedEmpty.body)).toContain('empty-deck')
+  })
 })
 
 describe('POST /tasks slide params', () => {
