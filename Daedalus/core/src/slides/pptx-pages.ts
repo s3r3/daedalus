@@ -7,12 +7,17 @@
 // targeted regexes recover slide order (presentation.xml + rels), each
 // slide's background (slide -> layout -> master fallback), every
 // text-bearing shape as a slot (rect as slide fractions, sample text,
-// dominant-run style) and every picture as an image slot. Known limits,
-// honestly documented: group shapes (p:grpSp) and graphic frames
-// (charts/tables/SmartArt) are skipped, decorative shapes are NOT
-// reconstructed — they survive only when they are part of a slide
-// background image.
+// dominant-run style) and every picture as an image slot. Decorative
+// shapes are additionally captured as flat render hints (decorShapes) so
+// the Web canvas can preview the design; the EXPORT preserves the full
+// original design by cloning the source slide XML (export-template.ts)
+// rather than by reconstructing anything parsed here. Known limits,
+// honestly documented: group shapes (p:grpSp) stay atomic (their
+// children are not scraped as separate slots or decor), and graphic
+// frames (charts/tables/SmartArt) are not poured — under clone export
+// they survive as the template's originals, untouched.
 import JSZip from 'jszip';
+import { createShapeKeyer, picEmbedId, shapeElementId, splitTopLevelElements } from './xml-shape-utils.ts';
 
 export type PptxTemplatePageKind = 'cover' | 'toc' | 'section' | 'content' | 'closing';
 
@@ -41,10 +46,37 @@ export interface PptxImageSlot {
 
 export type PptxTemplateSlot = PptxTextSlot | PptxImageSlot;
 
+/**
+ * A decorative (non-slot) top-level shape of a template page, captured so
+ * the Web canvas can PREVIEW the design honestly. Two faithful render
+ * kinds: simple preset geometry with a solid fill, and an image (a pic,
+ * or a blip-filled shape — the picture already extracted as an asset).
+ * Freeform custGeom fills are drawn as their picture in its rect (an
+ * approximation); the exported .pptx is always exact because it clones
+ * the original slide XML instead of reconstructing anything.
+ */
+export type PptxDecorShape =
+  | { type: 'shape'; rect: PptxSlotRect; fill: string; geom: 'rect' | 'roundRect' | 'ellipse' }
+  | { type: 'image'; rect: PptxSlotRect; imageFile: string }
+  | {
+      type: 'path';
+      rect: PptxSlotRect;
+      fill: string;
+      /** SVG path data converted from the custGeom pathLst (M/L/C/Q/Z subset). */
+      d: string;
+      /** The custGeom path coordinate space the `d` data lives in. */
+      box: { w: number; h: number };
+    };
+
 export interface PptxTemplatePage {
   kind: PptxTemplatePageKind;
   background?: { color?: string; imageFile?: string };
   slots: PptxTemplateSlot[];
+  /**
+   * Decorative shapes in document order (paint order), for canvas
+   * preview only. Added in v3; absent on templates stored by v2.
+   */
+  shapes?: PptxDecorShape[];
 }
 
 export interface PptxPagesExtract {
@@ -121,6 +153,87 @@ function placeholderKey(xml: string): string | undefined {
   const type = /\btype="([^"]+)"/.exec(ph)?.[1] ?? 'body';
   const idx = /\bidx="([^"]+)"/.exec(ph)?.[1] ?? '';
   return `${type}:${idx}`;
+}
+
+function solidFillColorOf(xml: string): string | undefined {
+  const fill = /<a:solidFill>([\s\S]*?)<\/a:solidFill>/.exec(xml)?.[1];
+  return fill ? srgbOf(fill) : undefined;
+}
+
+/** Simple preset geometries the canvas can draw faithfully as divs. */
+const PREVIEW_GEOMS: Record<string, 'rect' | 'roundRect' | 'ellipse'> = {
+  rect: 'rect',
+  roundRect: 'roundRect',
+  ellipse: 'ellipse',
+};
+
+/**
+ * Decorative (non-slot) shapes of one page for canvas preview: pic
+ * elements and image-filled shapes reuse their already-extracted asset,
+ * solid preset shapes reduce to a colored div. Text-bearing shapes are
+ * slots, not decor — the caller filters those out by shape id.
+ */
+function decorShapeOf(
+  elementXml: string,
+  elementTag: string,
+  slideCx: number,
+  slideCy: number,
+  imageFileByEmbed: Map<string, string>,
+): PptxDecorShape | undefined {
+  if (elementTag === 'grpSp' || elementTag === 'graphicFrame') return undefined;
+  const rect = xfrmRect(elementXml, slideCx, slideCy);
+  if (!rect) return undefined;
+  const blipEmbed = picEmbedId(elementXml);
+  const imageFile = blipEmbed ? imageFileByEmbed.get(blipEmbed) : undefined;
+  if (imageFile) return { type: 'image', rect, imageFile };
+  const fill = solidFillColorOf(elementXml);
+  const geom = /<a:prstGeom[^>]*\bprst="([^"]+)"/.exec(elementXml)?.[1];
+  if (geom && PREVIEW_GEOMS[geom]) {
+    if (fill) return { type: 'shape', rect, fill, geom: PREVIEW_GEOMS[geom]! };
+  }
+  // Freeform fills (the big blobs of downloaded templates) convert to an
+  // SVG path when they use only the straight/curve command subset; an
+  // arcTo or anything exotic skips the shape rather than faking it.
+  if (fill && elementXml.includes('<a:custGeom')) {
+    const path = custGeomPathOf(elementXml);
+    if (path) return { type: 'path', rect, fill, d: path.d, box: path.box };
+  }
+  return undefined;
+}
+
+/**
+ * Converts one `<a:pathLst>` to SVG path data. Only the command subset
+ * that maps 1:1 (moveTo/lnTo/cubicBezTo/quadBezTo/close) is supported;
+ * any other command (arcTo, …) returns undefined.
+ */
+function custGeomPathOf(xml: string): { d: string; box: { w: number; h: number } } | undefined {
+  const pathList = /<a:pathLst>([\s\S]*?)<\/a:pathLst>/.exec(xml)?.[1];
+  if (!pathList) return undefined;
+  const pathMatch = /<a:path\b([^>]*)>([\s\S]*?)<\/a:path>/.exec(pathList);
+  if (!pathMatch) return undefined;
+  const w = Number(/\bw="(\d+)"/.exec(pathMatch[1]!)?.[1] ?? NaN);
+  const h = Number(/\bh="(\d+)"/.exec(pathMatch[1]!)?.[1] ?? NaN);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return undefined;
+  const commands: string[] = [];
+  const tagRe = /<a:(moveTo|lnTo|cubicBezTo|quadBezTo|close)\s*(?:\/>|>([\s\S]*?)<\/a:\1>)/g;
+  let consumed = 0;
+  for (const match of pathMatch[2]!.matchAll(tagRe)) {
+    if (pathMatch[2]!.slice(consumed, match.index).trim() !== '') return undefined;
+    consumed = match.index + match[0].length;
+    const name = match[1]!;
+    if (name === 'close') {
+      commands.push('Z');
+      continue;
+    }
+    const pts = [...(match[2] ?? '').matchAll(/<a:pt x="(-?\d+)" y="(-?\d+)"\s*\/>/g)].map((p) => `${p[1]} ${p[2]}`);
+    if (name === 'moveTo' && pts.length === 1) commands.push(`M ${pts[0]}`);
+    else if (name === 'lnTo' && pts.length === 1) commands.push(`L ${pts[0]}`);
+    else if (name === 'cubicBezTo' && pts.length === 3) commands.push(`C ${pts.join(' ')}`);
+    else if (name === 'quadBezTo' && pts.length === 2) commands.push(`Q ${pts.join(' ')}`);
+    else return undefined;
+  }
+  if (pathMatch[2]!.slice(consumed).trim() !== '' || commands.length === 0) return undefined;
+  return { d: commands.join(' '), box: { w, h } };
 }
 
 /**
@@ -282,12 +395,12 @@ export async function extractPptxPages(bytes: Uint8Array): Promise<PptxPagesExtr
   }
 
   const assets: Array<{ file: string; bytes: Uint8Array }> = [];
-  const rawPages: Array<{ background?: { color?: string; imageFile?: string }; slots: PptxTemplateSlot[]; textSlots: PptxTextSlot[] }> = [];
+  const rawPages: Array<{ background?: { color?: string; imageFile?: string }; slots: PptxTemplateSlot[]; textSlots: PptxTextSlot[]; shapes: PptxDecorShape[] }> = [];
 
   for (let pageIndex = 0; pageIndex < slideParts.length; pageIndex += 1) {
     const part = slideParts[pageIndex]!;
     const file = zip.file(part);
-    if (!file) { rawPages.push({ slots: [], textSlots: [] }); continue; }
+    if (!file) { rawPages.push({ slots: [], textSlots: [], shapes: [] }); continue; }
     const xml = await file.async('string');
     const relsFile = zip.file(relsPathFor(part));
     const rels = relsFile ? parseRels(await relsFile.async('string')) : new Map<string, Rel>();
@@ -332,9 +445,12 @@ export async function extractPptxPages(bytes: Uint8Array): Promise<PptxPagesExtr
       }
     }
 
-    const spTree = stripGroupShapes(/<p:spTree>([\s\S]*?)<\/p:spTree>/.exec(xml)?.[1] ?? xml);
+    const spTreeInner = /<p:spTree>([\s\S]*?)<\/p:spTree>/.exec(xml)?.[1] ?? xml;
+    const spTree = stripGroupShapes(spTreeInner);
     const slots: PptxTemplateSlot[] = [];
     const textSlots: PptxTextSlot[] = [];
+    const slotShapeIds = new Set<number>();
+    const imageAssetsByEmbed = new Map<string, string>();
     let slotSeq = 0;
     let picSeq = 0;
     for (const shape of spTree.matchAll(/<p:(sp|pic)>([\s\S]*?)<\/p:\1>/g)) {
@@ -357,6 +473,7 @@ export async function extractPptxPages(bytes: Uint8Array): Promise<PptxPagesExtr
             imageFile = `page-${pageIndex}.pic-${picSeq}${extension}`;
             picSeq += 1;
             assets.push({ file: imageFile, bytes: await media.async('uint8array') });
+            if (embed) imageAssetsByEmbed.set(embed, imageFile);
           }
         }
         slots.push(imageFile ? { key, kind: 'image', rect, imageFile } : { key, kind: 'image', rect });
@@ -366,6 +483,8 @@ export async function extractPptxPages(bytes: Uint8Array): Promise<PptxPagesExtr
       if (!text) continue;
       const key = `s${slotSeq}`;
       slotSeq += 1;
+      const shapeId = shapeElementId(body);
+      if (shapeId !== undefined) slotShapeIds.add(shapeId);
       const slot: PptxTextSlot = {
         key,
         kind: 'text',
@@ -382,15 +501,81 @@ export async function extractPptxPages(bytes: Uint8Array): Promise<PptxPagesExtr
       slots.push(slot);
       textSlots.push(slot);
     }
-    rawPages.push({ ...(background ? { background } : {}), slots, textSlots });
+    // Decor capture for canvas preview: every top-level shape that is not
+    // a consumed slot and not a pic (pics are image slots). Groups and
+    // graphic frames stay atomic — the clone export preserves them as
+    // originals; the preview simply doesn't draw them.
+    const shapes: PptxDecorShape[] = [];
+    for (const element of splitTopLevelElements(spTreeInner)) {
+      if (element.tag !== 'sp') continue;
+      const elementId = shapeElementId(element.xml);
+      if (elementId !== undefined && slotShapeIds.has(elementId)) continue;
+      if (shapeText(element.xml)) continue;
+      const decor = decorShapeOf(element.xml, element.tag, slideCx, slideCy, imageAssetsByEmbed);
+      if (decor) shapes.push(decor);
+    }
+    rawPages.push({ ...(background ? { background } : {}), slots, textSlots, shapes });
   }
 
   const pages: PptxTemplatePage[] = rawPages.map((raw, index) => ({
     kind: classifyPage(index, rawPages.length, raw.textSlots),
     ...(raw.background ? { background: raw.background } : {}),
     slots: raw.slots,
+    ...(raw.shapes.length > 0 ? { shapes: raw.shapes } : {}),
   }));
   return { pages, assets };
+}
+
+/**
+ * The package's slide part names (`ppt/slides/slideN.xml`) in
+ * presentation order — the same order extractPptxPages returns pages in.
+ * Used by the template store to address slots inside the kept source
+ * file for the clone-and-rewrite export (export-template.ts).
+ */
+export async function listPptxSlideParts(bytes: Uint8Array): Promise<string[]> {
+  const zip = await JSZip.loadAsync(bytes);
+  const presFile = zip.file('ppt/presentation.xml');
+  if (!presFile) return [];
+  const presXml = await presFile.async('string');
+  const presRelsFile = zip.file('ppt/_rels/presentation.xml.rels');
+  const presRels = presRelsFile ? parseRels(await presRelsFile.async('string')) : new Map<string, Rel>();
+  const parts: string[] = [];
+  for (const idMatch of presXml.matchAll(/<p:sldId[^>]*r:id="([^"]+)"/g)) {
+    const rel = presRels.get(idMatch[1]!);
+    if (rel) parts.push(resolvePartPath('ppt/presentation.xml', rel.target));
+  }
+  if (parts.length === 0) {
+    return Object.keys(zip.files)
+      .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+      .sort((a, b) => Number(/\d+/.exec(a.slice(12))?.[0] ?? 0) - Number(/\d+/.exec(b.slice(12))?.[0] ?? 0));
+  }
+  return parts;
+}
+
+/**
+ * Per-page slot addresses for a whole template file — one entry per
+ * parsed page, in the same order extractPptxPages returns pages. The
+ * template store persists these alongside the kept source .pptx so the
+ * clone export never has to re-guess which shape owns which slot.
+ */
+export async function extractPptxPageAddresses(bytes: Uint8Array, pages: PptxTemplatePage[]): Promise<PptxTemplatePageAddress[]> {
+  const zip = await JSZip.loadAsync(bytes);
+  const parts = await listPptxSlideParts(bytes);
+  const addresses: PptxTemplatePageAddress[] = [];
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i]!;
+    const page = pages[i];
+    const slideFile = zip.file(part);
+    if (!page || !slideFile) {
+      addresses.push({ slidePart: part, slots: [] });
+      continue;
+    }
+    const slash = part.lastIndexOf('/');
+    const relsPath = slash >= 0 ? `${part.slice(0, slash + 1)}_rels/${part.slice(slash + 1)}.rels` : `_rels/${part}.rels`;
+    const relsFile = zip.file(relsPath);
+    addresses.push(matchPageAddresses(await slideFile.async('string'), relsFile ? await relsFile.async('string') : '', part, page));
+  }
+  return addresses;
 }
 
 /** Renames extract-local asset names (`page-0.…`) to stored names (`<id>.page-0.…`). */
@@ -399,6 +584,13 @@ export function prefixPageAssets(pages: PptxTemplatePage[], prefix: string): Ppt
     ...page,
     ...(page.background?.imageFile ? { background: { ...page.background, imageFile: `${prefix}${page.background.imageFile}` } } : {}),
     slots: page.slots.map((slot) => (slot.kind === 'image' && slot.imageFile ? { ...slot, imageFile: `${prefix}${slot.imageFile}` } : slot)),
+    ...(page.shapes
+      ? {
+          shapes: page.shapes.map((shape) =>
+            shape.type === 'image' ? { ...shape, imageFile: `${prefix}${shape.imageFile}` } : shape,
+          ),
+        }
+      : {}),
   }));
 }
 
@@ -411,6 +603,9 @@ export function pptxTemplateAssetFiles(template: { backgroundImageFile?: string;
     for (const slot of page.slots) {
       if (slot.kind === 'image' && slot.imageFile) files.push(slot.imageFile);
     }
+    for (const shape of page.shapes ?? []) {
+      if (shape.type === 'image' && !files.includes(shape.imageFile)) files.push(shape.imageFile);
+    }
   }
   return files;
 }
@@ -421,6 +616,74 @@ export function templatePageTextSlots(page: PptxTemplatePage): PptxTextSlot[] {
 
 export function templatePageImageSlots(page: PptxTemplatePage): PptxImageSlot[] {
   return page.slots.filter((slot): slot is PptxImageSlot => slot.kind === 'image');
+}
+
+/** One slot's address inside the template's kept source .pptx (v3). */
+export interface PptxTemplateSlotAddress {
+  /** Slot key from the parsed page (s0, s1, …). */
+  key: string;
+  kind: 'text' | 'image';
+  /** shapeKeyOf() address of the shape within the source slide part. */
+  shapeKey: string;
+  /** Text slots: how many <a:p> paragraphs the original shape carries. */
+  paragraphs?: number;
+  /** Image slots: package part holding the picture bytes. */
+  mediaPart?: string;
+  /** Image slots: the r:embed rel id of the picture in its slide. */
+  embedId?: string;
+}
+
+/** One template page's addresses inside the kept source .pptx (v3). */
+export interface PptxTemplatePageAddress {
+  /** Source slide part name, e.g. "ppt/slides/slide3.xml". */
+  slidePart: string;
+  slots: PptxTemplateSlotAddress[];
+}
+
+/**
+ * Pairs a parsed page's slots with the shapes of its source slide part
+ * (both are in document order) so the clone export can find each slot's
+ * shape again. Used at import time (stored with the template) and as a
+ * fallback at export time for templates stored before v3. Pairing is
+ * best-effort: a slot whose shape cannot be located is simply absent —
+ * the export then leaves that shape's original sample in place.
+ */
+export function matchPageAddresses(slideXml: string, slideRelsXml: string, slidePart: string, page: PptxTemplatePage): PptxTemplatePageAddress {
+  const rels = parseRels(slideRelsXml);
+  const spTreeInner = /<p:spTree>([\s\S]*?)<\/p:spTree>/.exec(slideXml)?.[1] ?? slideXml;
+  const textSlots = templatePageTextSlots(page);
+  const imageSlots = templatePageImageSlots(page);
+  const slots: PptxTemplateSlotAddress[] = [];
+  const keyer = createShapeKeyer();
+  let textIdx = 0;
+  let imageIdx = 0;
+  const elements = splitTopLevelElements(spTreeInner);
+  elements.forEach((element, ordinal) => {
+    const shapeKey = keyer(element.xml, ordinal);
+    if (element.tag === 'sp') {
+      const txBody = /<p:txBody>([\s\S]*?)<\/p:txBody>/.exec(element.xml)?.[1];
+      if (!txBody || !/<a:p(?=[\s>])/.test(txBody)) return;
+      if (!/<a:t>/.test(txBody) && !/<p:ph\b/.test(element.xml)) return;
+      const slot = textSlots[textIdx];
+      textIdx += 1;
+      if (!slot) return;
+      const paragraphs = (txBody.match(/<a:p(?=[\s>])/g) ?? []).length;
+      slots.push({ key: slot.key, kind: 'text', shapeKey, paragraphs: Math.max(1, paragraphs) });
+      return;
+    }
+    if (element.tag === 'pic') {
+      const slot = imageSlots[imageIdx];
+      imageIdx += 1;
+      if (!slot) return;
+      const address: PptxTemplateSlotAddress = { key: slot.key, kind: 'image', shapeKey };
+      const embed = picEmbedId(element.xml);
+      const rel = embed ? rels.get(embed) : undefined;
+      if (rel) address.mediaPart = resolvePartPath(slidePart, rel.target);
+      if (embed) address.embedId = embed;
+      slots.push(address);
+    }
+  });
+  return { slidePart, slots };
 }
 
 /**

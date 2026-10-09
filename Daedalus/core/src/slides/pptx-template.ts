@@ -1,14 +1,16 @@
 import JSZip from 'jszip';
 import { inflateSync } from 'node:zlib';
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, extname, join } from 'node:path';
 import { deckPaths, slugifyTitle, type DeckTheme } from './deck.ts';
 import {
+  extractPptxPageAddresses,
   extractPptxPages,
   pptxTemplateAssetFiles,
   prefixPageAssets,
   type PptxTemplatePage,
+  type PptxTemplatePageAddress,
 } from './pptx-pages.ts';
 
 /**
@@ -28,6 +30,16 @@ import {
  * all come from the template (the Docmee model). Decks whose template
  * has no pages[] (imported before v2, or unparseable slides) keep the
  * v1 skin behavior.
+ *
+ * v3 (fidelity): the uploaded .pptx itself is kept beside the JSON
+ * (`<id>.source.pptx`) together with per-page slot→shape addresses
+ * (sourceAddresses). When a deck references this template on EVERY
+ * slide, export CLONES that package and rewrites only the AI's words
+ * and the user's clicked images inside the original slide XML
+ * (export-template.ts), so decorative shapes, charts, and tables
+ * survive into the output untouched — the v2 pptxgenjs redraw only
+ * approximates them. Templates imported before v3 have no source file
+ * and keep the v2 export path; the canvas likewise only approximates.
  *
  * Extraction is deliberately per-field honest: a missing color or font
  * falls back to the bundled General tokens for that field, never a crash.
@@ -70,6 +82,17 @@ export type PptxTemplate = {
    * could be parsed — generation then falls back to the skin path.
    */
   pages?: PptxTemplatePage[];
+  /**
+   * v3: the kept source .pptx (`<id>.source.pptx` in the store) the
+   * clone-and-rewrite export clones from. Absent on templates imported
+   * before v3 — those keep the v2 pptxgenjs export path.
+   */
+  sourceFileName?: string;
+  /**
+   * v3: per-page slot→shape addresses inside the kept source file,
+   * parallel to pages[]. Present whenever sourceFileName is.
+   */
+  sourceAddresses?: PptxTemplatePageAddress[];
 };
 
 export const PPT_TEMPLATES_DIR = '.daedalus/slide-templates';
@@ -445,7 +468,9 @@ function isPptxTemplate(value: unknown): value is PptxTemplate {
     typeof t.createdAt === 'string' &&
     typeof t.theme === 'object' && t.theme !== null && !Array.isArray(t.theme) &&
     (t.backgroundImageFile === undefined || typeof t.backgroundImageFile === 'string') &&
-    (t.pages === undefined || Array.isArray(t.pages))
+    (t.pages === undefined || Array.isArray(t.pages)) &&
+    (t.sourceFileName === undefined || typeof t.sourceFileName === 'string') &&
+    (t.sourceAddresses === undefined || Array.isArray(t.sourceAddresses))
   );
 }
 
@@ -482,6 +507,23 @@ export async function savePptxTemplate(root: string, input: { fileName: string; 
       await writeFile(join(dir, `${id}.${asset.file}`), asset.bytes);
     }
   }
+  // v3: keep the source .pptx itself so export can clone its package
+  // verbatim (decorations, charts, tables survive; only slot words and
+  // clicked images change). A failure here degrades to the v2 export
+  // path instead of failing the import — the skin/page data above is
+  // already complete on its own.
+  let sourceFileName: string | undefined;
+  let sourceAddresses: PptxTemplatePageAddress[] | undefined;
+  if (pages) {
+    try {
+      sourceAddresses = await extractPptxPageAddresses(input.bytes, pagesExtract.pages);
+      sourceFileName = `${id}.source.pptx`;
+      await writeFile(join(dir, sourceFileName), input.bytes);
+    } catch {
+      sourceFileName = undefined;
+      sourceAddresses = undefined;
+    }
+  }
   const template: PptxTemplate = {
     id,
     name: stem,
@@ -491,6 +533,8 @@ export async function savePptxTemplate(root: string, input: { fileName: string; 
     ...(extracted.slideSize ? { slideSize: extracted.slideSize } : {}),
     ...(backgroundImageFile ? { backgroundImageFile } : {}),
     ...(pages ? { pages } : {}),
+    ...(sourceFileName ? { sourceFileName } : {}),
+    ...(sourceAddresses ? { sourceAddresses } : {}),
   };
   await writeFile(join(dir, `${id}.json`), `${JSON.stringify(template, null, 2)}\n`, 'utf8');
   return template;
@@ -536,6 +580,41 @@ export async function readPptxTemplateBackground(root: string, id: string): Prom
   } catch {
     return undefined;
   }
+}
+
+const sourceCache = new Map<string, { mtimeMs: number; bytes: Buffer | undefined }>();
+
+/**
+ * The kept source .pptx bytes of a v3 template (undefined for templates
+ * imported before v3 or unreadable). Memoized per (root,id) on file
+ * mtime like readPptxTemplateSync — export runs once per deck, but the
+ * fill pipeline validates repeatedly.
+ */
+export async function readPptxTemplateSource(root: string, id: string): Promise<{ bytes: Buffer; fileName: string } | undefined> {
+  if (!ID_PATTERN.test(id)) return undefined;
+  const template = await getPptxTemplate(root, id);
+  if (!template?.sourceFileName) return undefined;
+  const path = join(pptxTemplatesDir(root), template.sourceFileName);
+  let mtimeMs: number;
+  try {
+    mtimeMs = (await stat(path)).mtimeMs;
+  } catch {
+    sourceCache.delete(`${root} ${id}`);
+    return undefined;
+  }
+  const key = `${root} ${id}`;
+  const cached = sourceCache.get(key);
+  if (cached && cached.mtimeMs === mtimeMs) {
+    return cached.bytes ? { bytes: cached.bytes, fileName: template.sourceFileName } : undefined;
+  }
+  let bytes: Buffer | undefined;
+  try {
+    bytes = await readFile(path);
+  } catch {
+    bytes = undefined;
+  }
+  sourceCache.set(key, { mtimeMs, bytes });
+  return bytes ? { bytes, fileName: template.sourceFileName } : undefined;
 }
 
 export async function deletePptxTemplate(root: string, id: string): Promise<boolean> {
