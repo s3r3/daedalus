@@ -224,7 +224,7 @@ export const api = {
       body: JSON.stringify({ root, slide_id: slideId, ...input }),
     }),
 
-  deckUpdateSlide: (root: string, slideId: string, input: { content: Record<string, unknown>; layout?: string }) =>
+  deckUpdateSlide: (root: string, slideId: string, input: { content?: Record<string, unknown>; layout?: string; positions?: Record<string, import('@daedalus/core').BlockPosition> | null }) =>
     request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/slide/update', {
       method: 'POST',
       body: JSON.stringify({ root, slide_id: slideId, ...input }),

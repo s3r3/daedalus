@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { deckPaths, LONG_TEXT_CHARS, MAX_SLIDES, type DeckIssue, type DeckSpec, type Slide } from './deck.ts';
-import { getLayout, validateSlideContent } from './layouts.ts';
+import { getLayout, layoutBlockKeys, validateSlideContent } from './layouts.ts';
 
 export { MAX_SLIDES };
 
@@ -131,6 +131,56 @@ function densityIssues(slide: Slide): DeckIssue[] {
   return issues;
 }
 
+/**
+ * Drag placements (slide.positions) must name real blocks of the layout
+ * and stay inside the slide: fractions in [0,1], sizes in (0,1], never
+ * spilling past the far edge. Garbage here would silently misplace
+ * content in both renderers, so it is an error, not a warning — except
+ * an unknown block key, which renderers simply ignore (warning).
+ */
+function positionIssues(slide: Slide): DeckIssue[] {
+  const issues: DeckIssue[] = [];
+  const positions = slide.positions;
+  if (positions === undefined) return issues;
+  const bad = (field: string, message: string): void => {
+    issues.push({ slideId: slide.id, layout: slide.layout, field, code: 'invalid-position', message: `slide ${slide.id}: ${message}`, severity: 'error' });
+  };
+  if (typeof positions !== 'object' || positions === null || Array.isArray(positions)) {
+    bad('positions', 'positions must be an object keyed by block name');
+    return issues;
+  }
+  const known = new Set(layoutBlockKeys(slide.layout, slide.content ?? {}));
+  for (const [key, pos] of Object.entries(positions)) {
+    const field = `positions.${key}`;
+    if (!known.has(key)) {
+      issues.push({ slideId: slide.id, layout: slide.layout, field, code: 'unknown-block', message: `slide ${slide.id}: positions names block "${key}", which layout ${slide.layout} does not have — the placement is ignored`, severity: 'warning' });
+      continue;
+    }
+    if (typeof pos !== 'object' || pos === null || Array.isArray(pos)) {
+      bad(field, `${field} must be an object {x, y, w?, h?} of slide fractions`);
+      continue;
+    }
+    const { x, y, w, h } = pos as { x?: unknown; y?: unknown; w?: unknown; h?: unknown };
+    const frac = (value: unknown): value is number => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+    if (!frac(x) || !frac(y)) {
+      bad(field, `${field} needs finite x and y fractions in [0, 1]`);
+      continue;
+    }
+    if (w !== undefined && !(typeof w === 'number' && Number.isFinite(w) && w > 0 && w <= 1)) {
+      bad(field, `${field}.w must be a fraction in (0, 1]`);
+      continue;
+    }
+    if (h !== undefined && !(typeof h === 'number' && Number.isFinite(h) && h > 0 && h <= 1)) {
+      bad(field, `${field}.h must be a fraction in (0, 1]`);
+      continue;
+    }
+    if ((x as number) + (typeof w === 'number' ? w : 0) > 1.001 || (y as number) + (typeof h === 'number' ? h : 0) > 1.001) {
+      bad(field, `${field} spills past the slide edge (x + w and y + h must stay within 1)`);
+    }
+  }
+  return issues;
+}
+
 export function validateDeck(deck: DeckSpec, opts: ValidateDeckOptions = {}): DeckIssue[] {
   const issues: DeckIssue[] = [];
   if (!deck || typeof deck !== 'object') {
@@ -172,6 +222,7 @@ export function validateDeck(deck: DeckSpec, opts: ValidateDeckOptions = {}): De
       issues.push({ ...iss, slideId: slide.id });
     }
     issues.push(...densityIssues(slide));
+    issues.push(...positionIssues(slide));
     if (slide.layout === 'image-side' && assetExists) {
       const image = slide.content.image;
       if (typeof image === 'string' && image.length > 0 && !assetExists(image)) {

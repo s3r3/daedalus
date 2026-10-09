@@ -1443,10 +1443,21 @@ export class TaskRunner {
    * when the new content validates (see regenerateSlideStage).
    */
   async regenerateSlide(root: string, slideId: string, options: { model?: string; providerId?: string } = {}): Promise<{ deck: DeckSpec; slide: Slide }> {
-    const provider = this.#options.provider ?? this.#providerFor(
-      { ...(options.model ? { model: options.model } : {}), ...(options.providerId ? { providerId: options.providerId } : {}) } as RunOptions,
-      `slide-regenerate-${slideId}`,
-    );
+    const runOptions = { ...(options.model ? { model: options.model } : {}), ...(options.providerId ? { providerId: options.providerId } : {}) } as RunOptions;
+    if (!this.#options.provider) {
+      // Resolve the model exactly like a task run would (#providerFor
+      // below) and refuse BEFORE any request when the whole chain comes
+      // up empty — otherwise the provider call goes out with a blank
+      // model and the upstream error ("Missing model") says nothing
+      // about what to fix. Dynamic-model providers (models discovered
+      // live, e.g. 9Router) carry no stored model list, so this happens
+      // whenever the caller forgot to pass the composer's selection.
+      const model = this.#providerSelection(runOptions)?.model ?? this.#settings.llm.model;
+      if (!model || model.trim().length === 0) {
+        throw new Error('no model resolved for slide regeneration: pass the selected model (the Web editor sends the composer selection) or configure a default model, then try again');
+      }
+    }
+    const provider = this.#options.provider ?? this.#providerFor(runOptions, `slide-regenerate-${slideId}`);
     const result = await regenerateSlideStage(provider, root, slideId);
     return { deck: result.deck, slide: result.slide };
   }

@@ -72,6 +72,39 @@ describe('validateDeck', () => {
   });
 });
 
+describe('validateDeck positions (canvas drag placements)', () => {
+  test('accepts in-range placements for real blocks; decks without positions are untouched', () => {
+    const deck = newDeck('Placed');
+    deck.slides.push(
+      { id: 's-plain', layout: 'bullets', content: { title: 'Plain', points: ['a'] } },
+      {
+        id: 's-placed', layout: 'icon-grid',
+        content: { title: 'Grid', items: [{ icon: 'zap', title: 'A' }, { icon: 'shield', title: 'B' }, { icon: 'heart', title: 'C' }] },
+        positions: { title: { x: 0.1, y: 0.08 }, 'item-1': { x: 0.34, y: 0.4, w: 0.32, h: 0.3 } },
+      },
+    );
+    const issues = validateDeck(deck).filter((i) => i.slideId === 's-placed' || i.slideId === 's-plain');
+    expect(issues.filter((i) => i.severity === 'error')).toEqual([]);
+  });
+
+  test('rejects garbage coordinates as errors and unknown block keys as warnings', () => {
+    const deck = newDeck('Garbage');
+    deck.slides.push({
+      id: 's-bad', layout: 'bullets',
+      content: { title: 'Bad', points: ['a'] },
+      positions: {
+        points: { x: 1.4, y: 0.2 },
+        title: { x: 0.8, y: 0.1, w: 0.5 },
+        nope: { x: 0.1, y: 0.1 },
+      } as never,
+    });
+    const issues = validateDeck(deck).filter((i) => i.slideId === 's-bad');
+    expect(issues.some((i) => i.code === 'invalid-position' && i.field === 'positions.points' && i.severity === 'error')).toBe(true);
+    expect(issues.some((i) => i.code === 'invalid-position' && i.field === 'positions.title' && i.severity === 'error')).toBe(true);
+    expect(issues.some((i) => i.code === 'unknown-block' && i.field === 'positions.nope' && i.severity === 'warning')).toBe(true);
+  });
+});
+
 describe('slide tools end-to-end', () => {
   test('create → add → update → move → delete → validate → export produces a real pptx', async () => {
     const root = temp('daedalus-slides-tools-');

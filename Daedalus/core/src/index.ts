@@ -677,6 +677,7 @@ export {
   type DeckSpec,
   type DeckTheme,
   type Slide,
+  type BlockPosition,
   type DeckIssue,
 } from "./slides/deck.ts";
 
@@ -684,6 +685,7 @@ export {
   LAYOUTS,
   LAYOUT_IDS,
   getLayout,
+  layoutBlockKeys,
   validateSlideContent,
   type LayoutDef,
   type LayoutCategory,

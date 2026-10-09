@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'vitest'
 import { createServer, type Server as HttpServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EventBus, TaskStore, newDeck, writeDeck } from '@daedalus/core'
@@ -129,6 +129,33 @@ describe('/slides deck endpoints', () => {
     expect(deleted.status).toBe(200)
     const deckAfterDelete = deleted.body.deck as { slides: Array<{ id: string }> }
     expect(deckAfterDelete.slides.map((s) => s.id)).toEqual(['s-1'])
+  })
+
+  test('slide update carries drag positions (persist, 422 on garbage, null clears)', async () => {
+    const { base, root } = await listen()
+    await seedDeck(root)
+
+    const placed = await req(base, 'POST', '/slides/deck/slide/update', {
+      root, slide_id: 's-1',
+      positions: { title: { x: 0.34, y: 0.4, w: 0.32, h: 0.3 } },
+    })
+    expect(placed.status).toBe(200)
+    const deckAfterPlace = placed.body.deck as { slides: Array<{ id: string; positions?: Record<string, { x: number }> }> }
+    expect(deckAfterPlace.slides.find((s) => s.id === 's-1')?.positions?.title?.x).toBe(0.34)
+    const onDisk = JSON.parse(readFileSync(join(root, 'deck', 'deck.json'), 'utf8')) as { slides: Array<{ positions?: unknown }> }
+    expect(onDisk.slides[0]?.positions).toEqual({ title: { x: 0.34, y: 0.4, w: 0.32, h: 0.3 } })
+
+    const garbage = await req(base, 'POST', '/slides/deck/slide/update', {
+      root, slide_id: 's-1',
+      positions: { title: { x: 7, y: 0.4 } },
+    })
+    expect(garbage.status).toBe(422)
+    expect(garbage.body.error).toBe('deck_invalid')
+
+    const cleared = await req(base, 'POST', '/slides/deck/slide/update', { root, slide_id: 's-1', positions: null })
+    expect(cleared.status).toBe(200)
+    const deckAfterClear = cleared.body.deck as { slides: Array<{ id: string; positions?: unknown }> }
+    expect(deckAfterClear.slides.find((s) => s.id === 's-1')?.positions).toBeUndefined()
   })
 
   test('export refuses an invalid deck and an empty deck instead of reporting success', async () => {

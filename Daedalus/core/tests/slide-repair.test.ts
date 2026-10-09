@@ -103,6 +103,70 @@ describe('empty deck export', () => {
   });
 });
 
+/** Minimal zip reader (same approach as slide-engine.test.ts): part name → text. */
+function unzipText(file: string): Map<string, string> {
+  const buf = readFileSync(file);
+  const out = new Map<string, string>();
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('not a zip: no end-of-central-directory');
+  const count = buf.readUInt16LE(eocd + 10);
+  let offset = buf.readUInt32LE(eocd + 16);
+  for (let n = 0; n < count; n++) {
+    if (buf.readUInt32LE(offset) !== 0x02014b50) break;
+    const method = buf.readUInt16LE(offset + 10);
+    const size = buf.readUInt32LE(offset + 20);
+    const nameLen = buf.readUInt16LE(offset + 28);
+    const extraLen = buf.readUInt16LE(offset + 30);
+    const commentLen = buf.readUInt16LE(offset + 32);
+    const localOffset = buf.readUInt32LE(offset + 42);
+    const name = buf.toString('utf8', offset + 46, offset + 46 + nameLen);
+    const localNameLen = buf.readUInt16LE(localOffset + 26);
+    const localExtraLen = buf.readUInt16LE(localOffset + 28);
+    const dataStart = localOffset + 30 + localNameLen + localExtraLen;
+    const raw = buf.subarray(dataStart, dataStart + size);
+    out.set(name, method === 8 ? inflateRawSync(raw).toString('utf8') : raw.toString('utf8'));
+    offset += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}
+
+function shapeOffsets(slideXml: string): Array<{ x: number; y: number }> {
+  return [...slideXml.matchAll(/<a:off x="(\d+)" y="(\d+)"\/>/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]) }));
+}
+
+describe('positioned export (canvas drag placements)', () => {
+  test('a dragged block exports at its slide fractions; unplaced blocks keep layout geometry', async () => {
+    const root = temp('daedalus-repair-placed-');
+    const deck = newDeck('Seret');
+    deck.slides.push({
+      id: 's-grid', layout: 'icon-grid',
+      content: {
+        title: 'Fitur',
+        items: [
+          { icon: 'zap', title: 'Cepat', desc: 'a' },
+          { icon: 'shield', title: 'Aman', desc: 'b' },
+          { icon: 'heart', title: 'Disukai', desc: 'c' },
+        ],
+      },
+      // item-1 dragged to center-ish: x=0.34 of 13.333in, y=0.40 of 7.5in.
+      positions: { 'item-1': { x: 0.34, y: 0.4, w: 0.32, h: 0.3 } },
+    });
+    await writeDeck(root, deck);
+    const result = await exportDeckToPptx(deck, root);
+    const parts = unzipText(join(root, result.relativePath));
+    const xml = parts.get('ppt/slides/slide1.xml') ?? '';
+    expect(xml).not.toBe('');
+    const offs = shapeOffsets(xml);
+    // 0.34 * 12192000 EMU = 4145280 (the placed card's shape offset).
+    expect(offs.some((o) => Math.abs(o.x - 4145280) < 3000 && Math.abs(o.y - 2743200) < 3000)).toBe(true);
+    // item-0 stays at the layout default: x = 0.6in = 548640 EMU.
+    expect(offs.some((o) => Math.abs(o.x - 548640) < 100)).toBe(true);
+  });
+});
+
 type RawStep = { tool: string; rawArgs: string } | { text: string };
 
 /** Scripted provider that can emit raw (even malformed) argument strings. */
