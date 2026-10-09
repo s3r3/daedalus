@@ -73,6 +73,8 @@ export type SlideTaskParams = {
   slideCount?: number;
   language?: string;
   templateId?: string;
+  /** Imported PPT template (Template dari PPT) whose parsed pages the deck is poured into. */
+  customTemplateId?: string;
 };
 
 

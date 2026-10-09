@@ -3,6 +3,14 @@ import { MAX_SLIDES, type DeckIssue, type DeckSpec, type Slide } from './deck.ts
 import { getLayout, LAYOUTS, summarizeLayoutSchema, validateSlideContent, type LayoutDef } from './layouts.ts';
 import { newDeck, newSlideId, readDeck, validateDeck, writeDeck } from './store.ts';
 import { getSlideTemplate, SLIDE_TEMPLATES } from './templates.ts';
+import { applyPptxTemplateTheme, getPptxTemplate, type PptxTemplate } from './pptx-template.ts';
+import {
+  templatePageTextSlots,
+  validateTemplateSlideSlots,
+  type PptxTemplatePage,
+  type PptxTemplatePageKind,
+  type PptxTextSlot,
+} from './pptx-pages.ts';
 import { exportDeckToPptx } from './export-pptx.ts';
 
 /**
@@ -39,6 +47,13 @@ export type DeckBrief = {
   slideCount?: number;
   language?: string;
   templateId?: string;
+  /**
+   * Imported PPT template (Template dari PPT panel) to generate with:
+   * when it has parsed pages, the deck is poured into those designs and
+   * only the words are generated; skin-only templates fall back to the
+   * v1 skin path (catalog layouts + extracted palette/fonts).
+   */
+  customTemplateId?: string;
   /** Objective / audience, when the composer or user supplied one. */
   purpose?: string;
 };
@@ -172,12 +187,16 @@ export function normalizeBrief(brief: DeckBrief): NormalizedBrief {
   if (brief.templateId !== undefined && !getSlideTemplate(brief.templateId)) {
     throw new SlidePipelineError(`unknown templateId "${brief.templateId}" — warna & font bawaan: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
   }
+  if (brief.templateId && brief.customTemplateId) {
+    throw new SlidePipelineError('pilih satu: Warna & Font bawaan atau template dari PPT — keduanya tidak bisa dipakai bersamaan');
+  }
   const count = typeof brief.slideCount === 'number' && Number.isFinite(brief.slideCount) ? Math.floor(brief.slideCount) : 8;
   return {
     topic,
     slideCount: Math.max(1, Math.min(MAX_SLIDES, count)),
     ...(typeof brief.language === 'string' && brief.language.trim() ? { language: brief.language.trim() } : {}),
     ...(brief.templateId ? { templateId: brief.templateId } : {}),
+    ...(typeof brief.customTemplateId === 'string' && brief.customTemplateId.trim() ? { customTemplateId: brief.customTemplateId.trim() } : {}),
     ...(typeof brief.purpose === 'string' && brief.purpose.trim() ? { purpose: brief.purpose.trim() } : {}),
   };
 }
@@ -200,7 +219,12 @@ function outlineUser(brief: NormalizedBrief): string {
   if (brief.purpose) lines.push(`purpose/audience: ${brief.purpose}`);
   if (brief.language) lines.push(`language: write every title and keyMessage in ${brief.language}`);
   lines.push('layout catalog (id (category): label):');
-  for (const layout of LAYOUTS) lines.push(`- ${layout.id} (${layout.category}): ${layout.label}`);
+  // 'template-page' is not a choosable design — it belongs to imported
+  // PPT templates and is created only by the template pipeline.
+  for (const layout of LAYOUTS) {
+    if (layout.id === 'template-page') continue;
+    lines.push(`- ${layout.id} (${layout.category}): ${layout.label}`);
+  }
   lines.push(`Return exactly ${brief.slideCount} outline items as a JSON array.`);
   return lines.join('\n');
 }
@@ -225,9 +249,10 @@ function validateOutline(value: unknown, count: number): Verdict<OutlineItem[]> 
     const layoutId = typeof raw.layoutId === 'string' ? raw.layoutId : typeof raw.layout === 'string' ? raw.layout : '';
     const keyMessage = typeof raw.keyMessage === 'string' ? raw.keyMessage.trim() : '';
     if (!title) issues.push(`item ${i + 1}: title must be a non-empty string`);
-    if (!LAYOUT_ID_SET.has(layoutId)) issues.push(`item ${i + 1}: unknown layoutId "${layoutId}" — use one of: ${[...LAYOUT_ID_SET].join(', ')}`);
+    if (layoutId === 'template-page') issues.push(`item ${i + 1}: layoutId "template-page" belongs to imported PPT templates — pick a catalog layout id instead`);
+    else if (!LAYOUT_ID_SET.has(layoutId)) issues.push(`item ${i + 1}: unknown layoutId "${layoutId}" — use one of: ${[...LAYOUT_ID_SET].filter((id) => id !== 'template-page').join(', ')}`);
     if (!keyMessage) issues.push(`item ${i + 1}: keyMessage must be a non-empty string stating what the slide establishes`);
-    if (title && LAYOUT_ID_SET.has(layoutId) && keyMessage) items.push({ title, layoutId, keyMessage });
+    if (title && layoutId !== 'template-page' && LAYOUT_ID_SET.has(layoutId) && keyMessage) items.push({ title, layoutId, keyMessage });
   });
   if (issues.length > 0) return { ok: false, issues };
   return { ok: true, value: items };
@@ -237,6 +262,206 @@ function skeletonContent(layout: LayoutDef, title: string): Record<string, unkno
   const content = clone(layout.defaults);
   if ('title' in layout.schema.properties) content.title = title;
   return content;
+}
+
+/* ------------------------------------------- template mode (PPT pages)
+ * When an imported PPT template with parsed pages is selected, the deck
+ * is poured into the template's own designs: the outline proposes page
+ * roles, code maps them onto the template's pages, and each slide's fill
+ * writes ONLY the words of that page's text slots (capped per slot).
+ * Fonts, colors, geometry, and image slots come from the template; the
+ * model never sees — and cannot change — the design. */
+
+export type TemplateOutlineItem = {
+  title: string;
+  keyMessage: string;
+  role: PptxTemplatePageKind;
+};
+
+const TEMPLATE_ROLES: readonly PptxTemplatePageKind[] = ['cover', 'toc', 'section', 'content', 'closing'];
+
+const TEMPLATE_OUTLINE_SYSTEM = [
+  'You are the OUTLINE stage of a slide-generation pipeline working in TEMPLATE MODE: the deck is poured into an imported PowerPoint template whose page designs (backgrounds, text boxes, fonts, colors) are fixed — you only decide the words.',
+  'Answer with ONLY a JSON array — no prose, no markdown fences. Each item: {"title": string, "keyMessage": string, "role": "cover"|"toc"|"section"|"content"|"closing"}.',
+  'Rules:',
+  '- The array length is locked to the requested slide_count: exactly that many items.',
+  '- The first item has role "cover". Use "toc" only when slide_count >= 4 and an agenda page genuinely helps. Use "section" for part dividers in longer decks. The last item has role "closing" when the template offers a closing design and slide_count >= 3. Everything else is "content".',
+  '- Every title and keyMessage is about the requested topic only. Never invent statistics, quotes, dates, names, or facts.',
+  '- No filler: every slide advances the topic.',
+].join('\n');
+
+function templateOutlineUser(brief: NormalizedBrief, template: PptxTemplate, pages: PptxTemplatePage[]): string {
+  const lines = [`topic: ${brief.topic}`, `slide_count: ${brief.slideCount}`];
+  if (brief.purpose) lines.push(`purpose/audience: ${brief.purpose}`);
+  if (brief.language) lines.push(`language: write every title and keyMessage in ${brief.language}`);
+  lines.push(`template: "${template.name}" — page designs available (role: how many, with the design's own sample wording):`);
+  for (const role of TEMPLATE_ROLES) {
+    const ofRole = pages.filter((page) => page.kind === role);
+    if (ofRole.length === 0) continue;
+    const sample = templatePageTextSlots(ofRole[0]!)[0]?.sampleText.replace(/\s+/g, ' ').slice(0, 60) ?? '';
+    lines.push(`- ${role}: ${ofRole.length} design${ofRole.length === 1 ? '' : 's'}${sample ? ` (e.g. "${sample}")` : ''}`);
+  }
+  lines.push(`Return exactly ${brief.slideCount} outline items as a JSON array.`);
+  return lines.join('\n');
+}
+
+function validateTemplateOutline(value: unknown, count: number): Verdict<TemplateOutlineItem[]> {
+  const issues: string[] = [];
+  let rawItems: unknown[] | undefined;
+  if (Array.isArray(value)) rawItems = value;
+  else if (isObj(value)) {
+    for (const key of ['slides', 'outline', 'items']) {
+      if (Array.isArray(value[key])) { rawItems = value[key] as unknown[]; break; }
+    }
+  }
+  if (!rawItems) return { ok: false, issues: ['output must be a JSON array of outline items (or an object with a "slides" array)'] };
+  if (rawItems.length !== count) issues.push(`expected exactly ${count} outline items, got ${rawItems.length}`);
+  const items: TemplateOutlineItem[] = [];
+  rawItems.forEach((raw, i) => {
+    if (!isObj(raw)) { issues.push(`item ${i + 1} must be an object {title, keyMessage, role}`); return; }
+    const title = typeof raw.title === 'string' ? raw.title.trim() : '';
+    const keyMessage = typeof raw.keyMessage === 'string' ? raw.keyMessage.trim() : '';
+    const role = typeof raw.role === 'string' ? raw.role : '';
+    if (!title) issues.push(`item ${i + 1}: title must be a non-empty string`);
+    if (!(TEMPLATE_ROLES as readonly string[]).includes(role)) issues.push(`item ${i + 1}: role must be one of ${TEMPLATE_ROLES.join(', ')}`);
+    if (!keyMessage) issues.push(`item ${i + 1}: keyMessage must be a non-empty string stating what the slide establishes`);
+    if (title && keyMessage && (TEMPLATE_ROLES as readonly string[]).includes(role)) {
+      items.push({ title, keyMessage, role: role as PptxTemplatePageKind });
+    }
+  });
+  if (issues.length > 0) return { ok: false, issues };
+  return { ok: true, value: items };
+}
+
+/**
+ * Map outline roles onto template pages, deterministically:
+ * - the first item takes the template's first cover page (the first page
+ *   overall when no cover was classified);
+ * - the last item takes the closing page when the template has one and
+ *   the deck has at least 3 slides;
+ * - toc/section roles take pages of their kind (cycling when several);
+ * - content items cycle through the distinct content designs, always
+ *   picking the least-used variant, so a design repeats beyond twice
+ *   only once every variant has been used that often;
+ * - a role whose kind the template lacks falls back to the content pool,
+ *   then to any page. The result always has one page index per item.
+ */
+export function assignTemplatePages(items: Array<{ role: PptxTemplatePageKind }>, pages: PptxTemplatePage[]): number[] {
+  const indexesOf = (kind: PptxTemplatePageKind): number[] => pages.map((page, i) => (page.kind === kind ? i : -1)).filter((i) => i >= 0);
+  const covers = indexesOf('cover');
+  const closings = indexesOf('closing');
+  const tocs = indexesOf('toc');
+  const sections = indexesOf('section');
+  let contentPool = indexesOf('content');
+  if (contentPool.length === 0) {
+    contentPool = pages.map((_, i) => i).filter((i) => !covers.includes(i));
+    if (contentPool.length === 0) contentPool = pages.map((_, i) => i);
+  }
+  const useCount = new Array<number>(pages.length).fill(0);
+  const pickLeastUsed = (pool: number[]): number => {
+    let best = pool[0]!;
+    for (const candidate of pool) if (useCount[candidate]! < useCount[best]!) best = candidate;
+    useCount[best] = (useCount[best] ?? 0) + 1;
+    return best;
+  };
+  return items.map((item, index) => {
+    const isFirst = index === 0;
+    const isLast = index === items.length - 1;
+    if (isFirst) {
+      const pageIndex = covers[0] ?? 0;
+      useCount[pageIndex] = (useCount[pageIndex] ?? 0) + 1;
+      return pageIndex;
+    }
+    if (isLast && closings.length > 0 && items.length >= 3) return pickLeastUsed(closings);
+    if (item.role === 'toc' && tocs.length > 0) return pickLeastUsed(tocs);
+    if (item.role === 'section' && sections.length > 0) return pickLeastUsed(sections);
+    return pickLeastUsed(contentPool);
+  });
+}
+
+/**
+ * The skeleton content of a template slide: every text slot starts as the
+ * template's own sample wording, the largest text slot (the design's
+ * title position) takes the outline title, image slots start empty
+ * (rendered as the template's original picture until the user clicks
+ * one). Hand-edit detection compares against exactly this shape.
+ */
+export function templateSkeletonContent(page: PptxTemplatePage, outlineTitle: string): { title: string; slots: Record<string, string> } {
+  const slots: Record<string, string> = {};
+  let titleSlot: PptxTextSlot | undefined;
+  for (const slot of page.slots) {
+    if (slot.kind === 'image') {
+      slots[slot.key] = '';
+      continue;
+    }
+    slots[slot.key] = slot.sampleText;
+    if (!titleSlot || slot.fontSizePt > titleSlot.fontSizePt) titleSlot = slot;
+  }
+  if (titleSlot) slots[titleSlot.key] = outlineTitle;
+  return { title: outlineTitle, slots };
+}
+
+function isUntouchedTemplateSkeleton(slide: Slide, page: PptxTemplatePage): boolean {
+  const title = typeof slide.content.title === 'string' ? slide.content.title : '';
+  return JSON.stringify(slide.content) === JSON.stringify(templateSkeletonContent(page, title));
+}
+
+const TEMPLATE_FILL_SYSTEM = [
+  'You are the FILL stage of a slide-generation pipeline working in TEMPLATE MODE. The slide design (background, boxes, fonts, colors) comes from an imported PowerPoint template and is FIXED — you write only the words that go into its text boxes.',
+  'Answer with ONLY a JSON object mapping slot keys to replacement text — no prose, no markdown fences: {"s0": "...", "s1": "..."}.',
+  'Rules:',
+  '- Return exactly the listed text slots, each a string no longer than its stated character capacity (the text must fit the box it lives in).',
+  '- Write real presentation content about the topic that establishes the slide key message; keep the slide title\'s meaning in the largest slot.',
+  '- Image slots are not yours: never return them (they keep the template picture until the user replaces it).',
+  '- Never invent statistics, quotes, dates, names, or facts.',
+].join('\n');
+
+function templateFillUser(deck: DeckSpec, slide: Slide, page: PptxTemplatePage, language?: string): string {
+  const lines = [
+    `presentation topic: ${deck.title}`,
+    `slide title: ${slideTitle(slide)}`,
+  ];
+  if (slide.keyMessage) lines.push(`key message this slide must establish: ${slide.keyMessage}`);
+  if (language) lines.push(`language: write all slot text in ${language}`);
+  lines.push('Text slots of this template page (key — capacity — the design\'s own sample wording to replace):');
+  for (const slot of templatePageTextSlots(page)) {
+    const sample = slot.sampleText.replace(/\s+/g, ' ').slice(0, 80);
+    lines.push(`- ${slot.key}: max ${slot.maxChars} chars${sample ? ` — sample: "${sample}"` : ''}`);
+  }
+  const imageCount = page.slots.length - templatePageTextSlots(page).length;
+  if (imageCount > 0) lines.push(`(plus ${imageCount} image slot${imageCount === 1 ? '' : 's'} — leave those out of your answer)`);
+  lines.push('Return the JSON object of slot texts now.');
+  return lines.join('\n');
+}
+
+function validateTemplateFill(page: PptxTemplatePage): (value: unknown) => Verdict<Record<string, string>> {
+  return (value) => {
+    let map: unknown = value;
+    if (isObj(map) && isObj(map.slots)) map = map.slots;
+    if (!isObj(map)) return { ok: false, issues: ['output must be a JSON object mapping slot keys to text, e.g. {"s0": "..."}'] };
+    const textSlots = templatePageTextSlots(page);
+    const known = new Set(textSlots.map((slot) => slot.key));
+    const issues: string[] = [];
+    for (const key of Object.keys(map)) {
+      if (!known.has(key)) issues.push(`"${key}" is not a text slot of this page (text slots: ${[...known].join(', ') || 'none'}) — image slots and unknown keys must be left out`);
+    }
+    const filled: Record<string, string> = {};
+    for (const slot of textSlots) {
+      const raw = map[slot.key];
+      if (raw === undefined) {
+        issues.push(`${slot.key}: missing — every text slot needs replacement text (max ${slot.maxChars} chars)`);
+        continue;
+      }
+      if (typeof raw !== 'string') {
+        issues.push(`${slot.key}: must be a string`);
+        continue;
+      }
+      filled[slot.key] = raw;
+    }
+    issues.push(...validateTemplateSlideSlots(page, filled));
+    if (issues.length > 0) return { ok: false, issues };
+    return { ok: true, value: filled };
+  };
 }
 
 export async function generateDeckOutlineStage(
@@ -252,11 +477,63 @@ export async function generateDeckOutlineStage(
       `a deck already exists in this workspace (${existing.slides.length} slides: "${existing.title}") — generate_deck_outline starts a new deck. Continue the existing deck with generate_deck_slides, edit it with the deck tools, or remove deck/deck.json to start over.`,
     );
   }
+  // Template selection: an explicit brief id wins; otherwise a template
+  // the user already applied to this (still empty) deck via the panel
+  // carries into generation. A bundled Warna & Font pick replaces both.
+  const customTemplateId = brief.customTemplateId ?? (brief.templateId ? undefined : existing?.theme.customTemplateId);
+  let pptTemplate: PptxTemplate | undefined;
+  let templatePages: PptxTemplatePage[] | undefined;
+  if (customTemplateId) {
+    pptTemplate = await getPptxTemplate(root, customTemplateId);
+    if (!pptTemplate) {
+      throw new SlidePipelineError(`template PPT "${customTemplateId}" tidak ditemukan di workspace ini — impor dari panel "Template dari PPT" atau pilih Warna & Font bawaan`);
+    }
+    if (pptTemplate.pages && pptTemplate.pages.length > 0) templatePages = pptTemplate.pages;
+  }
+
+  if (templatePages && pptTemplate) {
+    // TEMPLATE MODE: outline by page role, code maps roles onto the
+    // template's pages, skeletons carry the template's own sample words.
+    const items = await structuredCall(
+      provider,
+      TEMPLATE_OUTLINE_SYSTEM,
+      templateOutlineUser(brief, pptTemplate, templatePages),
+      (value) => validateTemplateOutline(value, brief.slideCount),
+      options.signal,
+    );
+    const pageIndexes = assignTemplatePages(items, templatePages);
+    const deck = existing ?? newDeck(brief.topic);
+    const { theme } = await applyPptxTemplateTheme(root, pptTemplate.id);
+    deck.theme = theme;
+    deck.slides = items.map((item, index) => {
+      const pageIndex = pageIndexes[index]!;
+      return {
+        id: newSlideId(),
+        layout: 'template-page',
+        content: templateSkeletonContent(templatePages[pageIndex]!, item.title),
+        status: 'skeleton' as const,
+        keyMessage: item.keyMessage,
+        templateRef: { templateId: pptTemplate.id, page: pageIndex },
+      };
+    });
+    await writeDeck(root, deck);
+    return {
+      deck,
+      outline: items.map((item) => ({ title: item.title, layoutId: 'template-page', keyMessage: item.keyMessage })),
+      createdDeck: !existing,
+    };
+  }
+
   const outline = await structuredCall(provider, OUTLINE_SYSTEM, outlineUser(brief), (value) => validateOutline(value, brief.slideCount), options.signal);
   const deck = existing ?? newDeck(brief.topic);
   if (brief.templateId) {
     const template = getSlideTemplate(brief.templateId)!;
     deck.theme = { ...template.theme, templateId: template.id };
+  } else if (pptTemplate) {
+    // Skin-only imported template (no parsed pages): v1 behavior — the
+    // extracted palette/fonts/background dress the catalog layouts.
+    const { theme } = await applyPptxTemplateTheme(root, pptTemplate.id);
+    deck.theme = theme;
   }
   deck.slides = outline.map((item) => {
     const layout = getLayout(item.layoutId)!;
@@ -339,6 +616,20 @@ export async function fillDeckSlidesStage(
     await writeDeck(root, deck);
   }
 
+  // Template-page resolution (imported PPT designs), memoized per run:
+  // a template slide's design comes from its templateRef, never from
+  // the layout catalog.
+  const pageCache = new Map<string, PptxTemplatePage | undefined>();
+  const resolvePage = async (slide: Slide): Promise<PptxTemplatePage | undefined> => {
+    if (!slide.templateRef) return undefined;
+    const key = `${slide.templateRef.templateId}:${slide.templateRef.page}`;
+    if (!pageCache.has(key)) {
+      const template = await getPptxTemplate(root, slide.templateRef.templateId).catch(() => undefined);
+      pageCache.set(key, template?.pages?.[slide.templateRef.page]);
+    }
+    return pageCache.get(key);
+  };
+
   if (options.stagedGenerate) {
     // Staged generate (the Outline panel's Buat button): a skeleton the
     // user already edited in the panel is theirs. Hand-written content
@@ -347,7 +638,16 @@ export async function fillDeckSlidesStage(
     // skeletons and schema-failing slides go through the fill below.
     let adopted = false;
     for (const slide of deck.slides) {
-      if (slide.status !== 'skeleton' || isUntouchedSkeleton(slide)) continue;
+      if (slide.status !== 'skeleton') continue;
+      if (slide.templateRef) {
+        const page = await resolvePage(slide);
+        if (page && !isUntouchedTemplateSkeleton(slide, page) && isObj(slide.content.slots) && validateTemplateSlideSlots(page, slide.content.slots).length === 0) {
+          slide.status = 'filled';
+          adopted = true;
+        }
+        continue;
+      }
+      if (isUntouchedSkeleton(slide)) continue;
       const layout = getLayout(slide.layout);
       if (!layout) continue;
       if (validateSlideContent(layout, slide.content).every((issue) => issue.severity !== 'error')) {
@@ -365,10 +665,43 @@ export async function fillDeckSlidesStage(
   );
   // Resume semantics: fill exactly the slides that still need it —
   // untouched skeletons plus any slide currently failing validation.
+  const untouchedById = new Map<string, boolean>();
+  for (const slide of deck.slides) {
+    if (slide.status !== 'skeleton') continue;
+    if (slide.templateRef) {
+      const page = await resolvePage(slide);
+      untouchedById.set(slide.id, page ? isUntouchedTemplateSkeleton(slide, page) : false);
+    } else {
+      untouchedById.set(slide.id, isUntouchedSkeleton(slide));
+    }
+  }
   const targets = deck.slides.filter(
-    (slide) => (slide.status === 'skeleton' && isUntouchedSkeleton(slide)) || errorIds.has(slide.id),
+    (slide) => (slide.status === 'skeleton' && untouchedById.get(slide.id) === true) || errorIds.has(slide.id),
   );
   for (const slide of targets) {
+    if (slide.templateRef) {
+      const page = await resolvePage(slide);
+      if (!page) {
+        attemptIssues.set(slide.id, [`template page ${slide.templateRef.page} of "${slide.templateRef.templateId}" not found — re-import the template from the "Template dari PPT" panel or remove this slide`]);
+        continue;
+      }
+      try {
+        const filled = await structuredCall(provider, TEMPLATE_FILL_SYSTEM, templateFillUser(deck, slide, page, options.language), validateTemplateFill(page), options.signal);
+        const currentSlots = isObj(slide.content.slots) ? (slide.content.slots as Record<string, unknown>) : {};
+        const slots: Record<string, unknown> = { ...currentSlots };
+        // Image slots are never filled by the model: keep the user's
+        // picked asset, or '' (the template's own picture).
+        for (const slot of page.slots) if (slot.kind === 'image' && !(slot.key in slots)) slots[slot.key] = '';
+        Object.assign(slots, filled);
+        slide.content = { ...(typeof slide.content.title === 'string' ? { title: slide.content.title } : {}), slots };
+        slide.status = 'filled';
+        filledNow.push(slide.id);
+        await writeDeck(root, deck);
+      } catch (error) {
+        attemptIssues.set(slide.id, error instanceof SlidePipelineError ? error.issues : [error instanceof Error ? error.message : String(error)]);
+      }
+      continue;
+    }
     const layout = getLayout(slide.layout);
     if (!layout) {
       attemptIssues.set(slide.id, [`unknown layout "${slide.layout}" — change the slide layout before filling`]);
@@ -445,6 +778,25 @@ export async function regenerateSlideStage(
   const slide = deck.slides.find((entry) => entry.id === slideId);
   if (!slide) {
     throw new SlidePipelineError(`slide "${slideId}" not found in this deck (${deck.slides.length} slides) — refresh the deck and pick an existing slide`);
+  }
+  if (slide.templateRef) {
+    // Template slide: regenerate the WORDS only, into the same page —
+    // the design (and any user-picked slot images) stay untouched.
+    const template = await getPptxTemplate(root, slide.templateRef.templateId).catch(() => undefined);
+    const page = template?.pages?.[slide.templateRef.page];
+    if (!page) {
+      throw new SlidePipelineError(`template page ${slide.templateRef.page} of "${slide.templateRef.templateId}" not found — re-import the template from the "Template dari PPT" panel before regenerating`);
+    }
+    const user = `${templateFillUser(deck, slide, page, options.language)}\nThis is a REGENERATION: produce a fresh, different take on the wording — do not repeat the current slot texts.`;
+    const filled = await structuredCall(provider, TEMPLATE_FILL_SYSTEM, user, validateTemplateFill(page), options.signal);
+    const currentSlots = isObj(slide.content.slots) ? (slide.content.slots as Record<string, unknown>) : {};
+    const slots: Record<string, unknown> = { ...currentSlots };
+    for (const slot of page.slots) if (slot.kind === 'image' && !(slot.key in slots)) slots[slot.key] = '';
+    Object.assign(slots, filled);
+    slide.content = { ...(typeof slide.content.title === 'string' ? { title: slide.content.title } : {}), slots };
+    slide.status = 'filled';
+    await writeDeck(root, deck);
+    return { deck, slide, deckIssues: validateDeck(deck, { root }) };
   }
   const layout = getLayout(slide.layout);
   if (!layout) {
