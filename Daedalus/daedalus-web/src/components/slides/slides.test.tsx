@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import type { DeckSpec } from '@daedalus/core'
+import type { DeckSpec, Slide } from '@daedalus/core'
 import { useDaedalusStore } from '../../state/taskStore'
 import { DOMAIN_PREFS_KEY, loadDomain } from '../../state/prefs'
 import { DomainSwitch } from '../layout/domain-switch'
@@ -163,6 +163,162 @@ describe('SlideRenderer', () => {
     expect(screen.getByText('Feb')).toBeTruthy()
     expect(screen.getByText('Mar')).toBeTruthy()
     expect(screen.getByText(/25/)).toBeTruthy()
+  })
+})
+
+describe('SlideRenderer new layouts (library expansion)', () => {
+  const renderLayout = (layout: string, content: Record<string, unknown>): void => {
+    const slide: Slide = { id: `t-${layout}`, layout, content }
+    render(<SlideRenderer slide={slide} theme={{}} />)
+    expect(screen.getByTestId('slide-renderer').getAttribute('data-layout')).toBe(layout)
+  }
+
+  test('numbered-steps renders zero-padded numbers and step copy', () => {
+    renderLayout('numbered-steps', {
+      title: 'Agenda Rapat',
+      steps: [
+        { title: 'Pembukaan', desc: 'Sambutan ketua' },
+        { title: 'Pembahasan', desc: 'Materi utama' },
+      ],
+    })
+    expect(screen.getByText('01')).toBeTruthy()
+    expect(screen.getByText('02')).toBeTruthy()
+    expect(screen.getByText('Pembukaan')).toBeTruthy()
+    expect(screen.getByText('Materi utama')).toBeTruthy()
+  })
+
+  test('code-focus renders the code text and language tag', () => {
+    renderLayout('code-focus', { title: 'Inti Kode', code: 'const jawaban = 42;', language: 'ts', points: ['Konstanta murni'] })
+    expect(screen.getByText(/const jawaban = 42;/)).toBeTruthy()
+    expect(screen.getByText('ts')).toBeTruthy()
+    expect(screen.getByText('Konstanta murni')).toBeTruthy()
+  })
+
+  test('chevron-process renders every stage title and description', () => {
+    renderLayout('chevron-process', {
+      title: 'Alur',
+      steps: [{ title: 'Pengajuan', desc: 'Usulan masuk' }, { title: 'Telaah', desc: 'Diperiksa tim' }, { title: 'Sah', desc: 'Diterbitkan' }],
+    })
+    expect(screen.getByText('Pengajuan')).toBeTruthy()
+    expect(screen.getByText('Telaah')).toBeTruthy()
+    expect(screen.getByText('Diperiksa tim')).toBeTruthy()
+  })
+
+  test('diagram-pyramid renders tier labels top to bottom', () => {
+    renderLayout('diagram-pyramid', { title: 'Tingkatan', tiers: [{ label: 'Visi' }, { label: 'Strategi' }, { label: 'Operasi' }] })
+    expect(screen.getByText('Visi')).toBeTruthy()
+    expect(screen.getByText('Strategi')).toBeTruthy()
+    expect(screen.getByText('Operasi')).toBeTruthy()
+  })
+
+  test('roadmap renders phase labels and their items', () => {
+    renderLayout('roadmap', {
+      title: 'Peta Jalan',
+      phases: [
+        { label: 'Fase Fondasi', items: ['Riset awal'] },
+        { label: 'Fase Bangun', items: ['Fitur inti'] },
+        { label: 'Fase Rilis', items: ['Beta publik'] },
+      ],
+    })
+    expect(screen.getByText('Fase Fondasi')).toBeTruthy()
+    expect(screen.getByText('Riset awal')).toBeTruthy()
+    expect(screen.getByText('Beta publik')).toBeTruthy()
+  })
+
+  test('versus renders both panels, the VS badge and the verdict', () => {
+    renderLayout('versus', {
+      title: 'Duel',
+      left: { title: 'Opsi Lama', points: ['Manual'] },
+      right: { title: 'Opsi Baru', points: ['Otomatis'] },
+      verdict: 'Opsi baru menang',
+    })
+    expect(screen.getByText('Opsi Lama')).toBeTruthy()
+    expect(screen.getByText('Opsi Baru')).toBeTruthy()
+    expect(screen.getByText('VS')).toBeTruthy()
+    expect(screen.getByText('Opsi baru menang')).toBeTruthy()
+  })
+
+  test('matrix-quadrant renders axes and quadrant content', () => {
+    renderLayout('matrix-quadrant', {
+      title: 'Matriks',
+      xAxis: 'Sumbu dampak',
+      yAxis: 'Sumbu upaya',
+      quadrants: [
+        { label: 'Kerjakan Dulu', items: ['Perbaikan kritis'] },
+        { label: 'Jadwalkan', items: ['Fitur besar'] },
+        { label: 'Delegasikan', items: ['Tugas rutin'] },
+        { label: 'Singkirkan', items: ['Eksperimen lama'] },
+      ],
+    })
+    expect(screen.getByText('Sumbu dampak')).toBeTruthy()
+    expect(screen.getByText('Sumbu upaya')).toBeTruthy()
+    expect(screen.getByText('Kerjakan Dulu')).toBeTruthy()
+    expect(screen.getByText('Eksperimen lama')).toBeTruthy()
+  })
+
+  test('big-stat renders the hero value, label and supporting points', () => {
+    renderLayout('big-stat', { title: 'Hasil', value: '92%', label: 'Tugas tuntas', points: ['Konteks angka'] })
+    expect(screen.getByText('92%')).toBeTruthy()
+    expect(screen.getByText('Tugas tuntas')).toBeTruthy()
+    expect(screen.getByText('Konteks angka')).toBeTruthy()
+  })
+
+  test('testimonial renders quote, person and metric chips', () => {
+    renderLayout('testimonial', {
+      text: 'Alurnya mengubah cara kami bekerja.',
+      name: 'Andini Prameswari',
+      role: 'Ketua Tim',
+      metrics: [{ value: '3x', label: 'Lebih cepat' }],
+    })
+    expect(screen.getByText(/mengubah cara kami bekerja/)).toBeTruthy()
+    expect(screen.getByText('Andini Prameswari')).toBeTruthy()
+    expect(screen.getByText('AP')).toBeTruthy()
+    expect(screen.getByText(/Lebih cepat/)).toBeTruthy()
+  })
+
+  test('profile-cards renders names, roles, notes and initials', () => {
+    renderLayout('profile-cards', {
+      title: 'Tim',
+      people: [
+        { name: 'Andini Prameswari', role: 'Ketua Tim', note: 'Menjaga arah' },
+        { name: 'Bagas Nugraha', role: 'Insinyur', note: 'Memegang inti' },
+        { name: 'Citra Lestari', role: 'Desainer', note: 'Merancang alur' },
+      ],
+    })
+    expect(screen.getByText('Bagas Nugraha')).toBeTruthy()
+    expect(screen.getByText('BN')).toBeTruthy()
+    expect(screen.getByText('Merancang alur')).toBeTruthy()
+  })
+
+  test('glossary renders terms and definitions', () => {
+    renderLayout('glossary', {
+      title: 'Istilah',
+      terms: [
+        { term: 'Agent', definition: 'Pelaksana langkah kerja' },
+        { term: 'Prompt', definition: 'Instruksi pengguna' },
+        { term: 'Deck', definition: 'Kumpulan slide' },
+        { term: 'Layout', definition: 'Tata letak slide' },
+      ],
+    })
+    expect(screen.getByText('Agent')).toBeTruthy()
+    expect(screen.getByText('Pelaksana langkah kerja')).toBeTruthy()
+    expect(screen.getByText('Tata letak slide')).toBeTruthy()
+  })
+
+  test('mosaic renders honest placeholders and the caption', () => {
+    renderLayout('mosaic', {
+      title: 'Galeri',
+      caption: 'Dokumentasi lapangan',
+      tiles: [
+        { image: 'utama.png', alt: 'Tampilan utama' },
+        { image: 'detail.png', alt: 'Detail' },
+        { image: 'proses.png', alt: 'Proses' },
+        { image: 'hasil.png', alt: 'Hasil' },
+      ],
+    })
+    expect(screen.getByText('utama.png')).toBeTruthy()
+    expect(screen.getByText('Tampilan utama')).toBeTruthy()
+    expect(screen.getByText('Dokumentasi lapangan')).toBeTruthy()
   })
 })
 
