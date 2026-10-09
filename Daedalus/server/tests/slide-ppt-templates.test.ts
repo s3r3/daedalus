@@ -229,6 +229,47 @@ describe('/slides/ppt-templates v2 (pages)', () => {
     expect(unknownTemplate.status).toBe(404)
   })
 
+  test('a template larger than the old 26 MiB body cap still uploads (100 MB cap)', async () => {
+    const { base, root } = await listen()
+    // Pad a media entry with incompressible bytes: a realistic fat
+    // downloaded template (~32 MB) — a real parseable PPTX, not junk.
+    const zip = new JSZip()
+    zip.file('ppt/presentation.xml', `<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldSz cx="12192000" cy="6858000"/></p:presentation>`)
+    zip.file('ppt/theme/theme1.xml', THEME_XML)
+    zip.file(
+      'ppt/slideMasters/slideMaster1.xml',
+      `<p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:bg><p:bgPr><a:solidFill><a:srgbClr val="0F2D1E"/></a:solidFill></p:bgPr></p:bg></p:sldMaster>`,
+    )
+    zip.file(
+      'ppt/slideMasters/_rels/slideMaster1.xml.rels',
+      `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="../theme/theme1.xml"/></Relationships>`,
+    )
+    const { randomBytes } = await import('node:crypto')
+    zip.file('ppt/media/padding.bin', randomBytes(32 * 1024 * 1024), { compression: 'STORE' })
+    const padded = await zip.generateAsync({ type: 'nodebuffer' })
+    expect(padded.length).toBeGreaterThan(27262976)
+
+    const uploaded = await uploadPptx(base, root, 'Template Besar.pptx', padded)
+    expect(uploaded.status).toBe(201)
+    const template = uploaded.body.template as { id: string; theme: { accent?: string } }
+    expect(template.id).toBe('template-besar')
+    expect(template.theme.accent).toBe('#c59a46')
+  }, 60_000)
+
+  test('a template over the 100 MB cap gets the specific 413 message', async () => {
+    const { base, root } = await listen()
+    const { randomBytes } = await import('node:crypto')
+    const zip = new JSZip()
+    zip.file('ppt/presentation.xml', `<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:sldSz cx="12192000" cy="6858000"/></p:presentation>`)
+    zip.file('ppt/media/padding.bin', randomBytes(101 * 1024 * 1024), { compression: 'STORE' })
+    const padded = await zip.generateAsync({ type: 'nodebuffer' })
+
+    const uploaded = await uploadPptx(base, root, 'Raksasa.pptx', padded)
+    expect(uploaded.status).toBe(413)
+    expect(uploaded.body.error).toBe('pptx_too_large')
+    expect(uploaded.body.message).toBe('Template PPTX terlalu besar (maks 100 MB)')
+  }, 120_000)
+
   test('task submit refuses bundled+imported template together, and unknown imported templates', async () => {
     const { base, root } = await listen()
     await seedDeck(root)

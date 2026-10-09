@@ -2025,8 +2025,20 @@ export function createApp(ctx: AppContext) {
             sendJson(res, 400, { error: "multipart_required", request_id: requestId });
             return;
           }
-          // Room for the file cap plus multipart framing.
-          const body = await readRawBody(req, MAX_PPTX_TEMPLATE_BYTES + 1024 * 1024);
+          // Room for the file cap plus multipart framing. A body past
+          // that allowance means the template itself is over the cap —
+          // answer with the template-specific 413, not the generic
+          // raw-body error text.
+          let body: Buffer;
+          try {
+            body = await readRawBody(req, MAX_PPTX_TEMPLATE_BYTES + 1024 * 1024);
+          } catch (bodyError) {
+            if (errorMessage(bodyError).startsWith("request body too large")) {
+              sendJson(res, 413, { error: "pptx_too_large", message: `Template PPTX terlalu besar (maks ${Math.round(MAX_PPTX_TEMPLATE_BYTES / (1024 * 1024))} MB)`, request_id: requestId });
+              return;
+            }
+            throw bodyError;
+          }
           const parts = parseMultipart(body, contentType);
           const filePart = parts.find((part) => part.filename !== undefined && part.filename.length > 0);
           if (!filePart) {
@@ -2036,7 +2048,7 @@ export function createApp(ctx: AppContext) {
           const rootField = parts.find((part) => part.name === "root" && part.filename === undefined)?.data.toString("utf8");
           const root = resolveAllowedRoot(ctx, rootField || url.searchParams.get("root") || ctx.cwd);
           if (filePart.data.length > MAX_PPTX_TEMPLATE_BYTES) {
-            sendJson(res, 413, { error: "pptx_too_large", message: `Berkas PPTX melebihi batas ${Math.round(MAX_PPTX_TEMPLATE_BYTES / (1024 * 1024))} MB.`, request_id: requestId });
+            sendJson(res, 413, { error: "pptx_too_large", message: `Template PPTX terlalu besar (maks ${Math.round(MAX_PPTX_TEMPLATE_BYTES / (1024 * 1024))} MB)`, request_id: requestId });
             return;
           }
           const template = await savePptxTemplate(root, { fileName: filePart.filename ?? "template.pptx", bytes: filePart.data });

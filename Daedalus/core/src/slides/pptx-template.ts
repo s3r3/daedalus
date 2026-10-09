@@ -73,8 +73,8 @@ export type PptxTemplate = {
 };
 
 export const PPT_TEMPLATES_DIR = '.daedalus/slide-templates';
-/** Upload cap for one .pptx (the server enforces the same number on the wire). */
-export const MAX_PPTX_TEMPLATE_BYTES = 25 * 1024 * 1024;
+/** Upload cap for one .pptx (the server enforces the same number on the wire). Downloaded templates (Docmee etc.) routinely run 30–80 MB, so the cap sits well above the old 25 MB that rejected them. */
+export const MAX_PPTX_TEMPLATE_BYTES = 100 * 1024 * 1024;
 
 export function pptxTemplatesDir(root: string): string {
   return join(root, PPT_TEMPLATES_DIR);
@@ -455,7 +455,7 @@ export async function savePptxTemplate(root: string, input: { fileName: string; 
     throw new PptxTemplateError('not_a_pptx', 'hanya berkas .pptx yang bisa dijadikan template');
   }
   if (input.bytes.length > MAX_PPTX_TEMPLATE_BYTES) {
-    throw new PptxTemplateError('pptx_too_large', `berkas PPTX melebihi batas ${Math.round(MAX_PPTX_TEMPLATE_BYTES / (1024 * 1024))} MB`);
+    throw new PptxTemplateError('pptx_too_large', `Template PPTX terlalu besar (maks ${Math.round(MAX_PPTX_TEMPLATE_BYTES / (1024 * 1024))} MB)`);
   }
   const extracted = await extractPptxDesign(input.bytes);
   const dir = pptxTemplatesDir(root);
