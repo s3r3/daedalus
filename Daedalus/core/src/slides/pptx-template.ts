@@ -40,6 +40,11 @@ import {
  * survive into the output untouched — the v2 pptxgenjs redraw only
  * approximates them. Templates imported before v3 have no source file
  * and keep the v2 export path; the canvas likewise only approximates.
+ * That fallback is never silent: every record exposes `hasSource`
+ * (derived from the store at read time, below), the panel badges
+ * sourceless templates, the export result carries the approximation
+ * note, and re-uploading the same file refreshes the record in place
+ * so the clone path attaches to the same template id.
  *
  * Extraction is deliberately per-field honest: a missing color or font
  * falls back to the bundled General tokens for that field, never a crash.
@@ -93,6 +98,17 @@ export type PptxTemplate = {
    * parallel to pages[]. Present whenever sourceFileName is.
    */
   sourceAddresses?: PptxTemplatePageAddress[];
+  /**
+   * Whether the kept source .pptx (`<id>.source.pptx`) is actually on
+   * disk beside the JSON — derived from the store at read time, never
+   * persisted (the file's existence is the truth; a record field alone
+   * must not promise clone fidelity the disk cannot deliver). False
+   * for templates imported before v3 and for skin-only imports whose
+   * slides did not parse: their exports approximate the design and the
+   * result says so (export-pptx.ts), and the panel badges the card.
+   * Always recomputed by save/list/get/readPptxTemplateSync.
+   */
+  hasSource: boolean;
 };
 
 export const PPT_TEMPLATES_DIR = '.daedalus/slide-templates';
@@ -474,6 +490,22 @@ function isPptxTemplate(value: unknown): value is PptxTemplate {
   );
 }
 
+/** The kept source .pptx is always stored under this one name (save writes it, delete removes it). */
+function sourceFileNameFor(id: string): string {
+  return `${id}.source.pptx`;
+}
+
+/**
+ * hasSource derivation: the source file's EXISTENCE beside the JSON is
+ * the truth. A record written before v3 (or whose source file was lost)
+ * reports false even if its JSON still carries v3-era fields, so the
+ * panel badge and the export honesty never promise clone fidelity the
+ * disk cannot deliver.
+ */
+function templateHasSource(dir: string, id: string): boolean {
+  return existsSync(join(dir, sourceFileNameFor(id)));
+}
+
 export async function savePptxTemplate(root: string, input: { fileName: string; bytes: Uint8Array }): Promise<PptxTemplate> {
   const sourceFile = basename(input.fileName.replace(/\\+/g, '/'));
   if (!sourceFile.toLowerCase().endsWith('.pptx')) {
@@ -487,48 +519,87 @@ export async function savePptxTemplate(root: string, input: { fileName: string; 
   await mkdir(dir, { recursive: true });
 
   const stem = sourceFile.slice(0, -'.pptx'.length).trim() || 'Template PPT';
-  let id = slugifyTitle(stem);
-  for (let suffix = 2; existsSync(join(dir, `${id}.json`)); suffix += 1) {
-    id = `${slugifyTitle(stem)}-${suffix}`;
+  const baseId = slugifyTitle(stem);
+  // Re-import semantics: uploading the same file again refreshes the
+  // existing record IN PLACE — same id, no "-2" duplicate card. Its
+  // pages/addresses are re-parsed and the kept source .pptx attached,
+  // so decks already referencing this template id gain the v3 clone
+  // export path immediately (the pre-v3 → full-fidelity upgrade path).
+  // The match is the uploaded file name itself (what the user picked
+  // again); when older suffixed duplicates of that same file exist,
+  // the base-id record is the one refreshed. A different file whose
+  // name merely slugs to the same id (e.g. punctuation variants)
+  // still gets a suffixed id: an import must never clobber a
+  // different file's template.
+  const nameMatches = (await listPptxTemplates(root)).filter((t) => t.sourceFile.toLowerCase() === sourceFile.toLowerCase());
+  const reimport = nameMatches.find((t) => t.id === baseId) ?? (nameMatches.length === 1 ? nameMatches[0] : undefined);
+  let id = reimport?.id ?? baseId;
+  if (!reimport) {
+    for (let suffix = 2; existsSync(join(dir, `${id}.json`)); suffix += 1) {
+      id = `${baseId}-${suffix}`;
+    }
   }
+
+  // Parse everything before touching the store, so a failed re-import
+  // leaves the previous record fully intact.
+  // v2: the source's slide designs (page assets — background images,
+  // slot pictures — are stored beside the JSON with the template id as
+  // filename prefix; a source whose slides parse to nothing stays a v1
+  // skin-only template).
+  const pagesExtract = await extractPptxPages(input.bytes).catch((): Awaited<ReturnType<typeof extractPptxPages>> => ({ pages: [], assets: [] }));
+  const pages = pagesExtract.pages.length > 0 ? prefixPageAssets(pagesExtract.pages, `${id}.`) : undefined;
+  // v3: keep the source .pptx itself so export can clone its package
+  // verbatim (decorations, charts, tables survive; only slot words and
+  // clicked images change). Address extraction failing degrades to the
+  // v2 export path instead of failing the import — the skin/page data
+  // is already complete on its own.
+  let sourceAddresses: PptxTemplatePageAddress[] | undefined;
+  if (pages) {
+    try {
+      sourceAddresses = await extractPptxPageAddresses(input.bytes, pagesExtract.pages);
+    } catch {
+      sourceAddresses = undefined;
+    }
+  }
+  const sourceFileName = pages && sourceAddresses ? sourceFileNameFor(id) : undefined;
+
+  if (reimport) {
+    // Drop every stored asset of the previous version first: stale page
+    // pictures/backgrounds must not leak into the refresh. The JSON
+    // itself is rewritten last.
+    let entries: string[] = [];
+    try {
+      entries = await readdir(dir);
+    } catch {
+      entries = [];
+    }
+    for (const entry of entries) {
+      if (entry.startsWith(`${id}.`) && entry !== `${id}.json`) {
+        await rm(join(dir, entry), { force: true });
+      }
+    }
+  }
+
   let backgroundImageFile: string | undefined;
   if (extracted.backgroundImage) {
     backgroundImageFile = `${id}.background${extracted.backgroundImage.extension}`;
     await writeFile(join(dir, backgroundImageFile), extracted.backgroundImage.bytes);
   }
-  // v2: parse the source's slide designs so generation can pour words
-  // into them. Page assets (background images, slot pictures) are stored
-  // beside the JSON with the template id as filename prefix; a source
-  // whose slides parse to nothing stays a v1 skin-only template.
-  const pagesExtract = await extractPptxPages(input.bytes).catch((): Awaited<ReturnType<typeof extractPptxPages>> => ({ pages: [], assets: [] }));
-  const pages = pagesExtract.pages.length > 0 ? prefixPageAssets(pagesExtract.pages, `${id}.`) : undefined;
   if (pages) {
     for (const asset of pagesExtract.assets) {
       await writeFile(join(dir, `${id}.${asset.file}`), asset.bytes);
     }
   }
-  // v3: keep the source .pptx itself so export can clone its package
-  // verbatim (decorations, charts, tables survive; only slot words and
-  // clicked images change). A failure here degrades to the v2 export
-  // path instead of failing the import — the skin/page data above is
-  // already complete on its own.
-  let sourceFileName: string | undefined;
-  let sourceAddresses: PptxTemplatePageAddress[] | undefined;
-  if (pages) {
-    try {
-      sourceAddresses = await extractPptxPageAddresses(input.bytes, pagesExtract.pages);
-      sourceFileName = `${id}.source.pptx`;
-      await writeFile(join(dir, sourceFileName), input.bytes);
-    } catch {
-      sourceFileName = undefined;
-      sourceAddresses = undefined;
-    }
+  if (sourceFileName) {
+    await writeFile(join(dir, sourceFileName), input.bytes);
   }
-  const template: PptxTemplate = {
+  // The persisted JSON never carries hasSource — it is derived at read
+  // time from the file this save just wrote (or failed to write).
+  const record: Omit<PptxTemplate, 'hasSource'> = {
     id,
     name: stem,
     sourceFile,
-    createdAt: new Date().toISOString(),
+    createdAt: reimport ? reimport.createdAt : new Date().toISOString(),
     theme: extracted.theme,
     ...(extracted.slideSize ? { slideSize: extracted.slideSize } : {}),
     ...(backgroundImageFile ? { backgroundImageFile } : {}),
@@ -536,8 +607,8 @@ export async function savePptxTemplate(root: string, input: { fileName: string; 
     ...(sourceFileName ? { sourceFileName } : {}),
     ...(sourceAddresses ? { sourceAddresses } : {}),
   };
-  await writeFile(join(dir, `${id}.json`), `${JSON.stringify(template, null, 2)}\n`, 'utf8');
-  return template;
+  await writeFile(join(dir, `${id}.json`), `${JSON.stringify(record, null, 2)}\n`, 'utf8');
+  return { ...record, hasSource: templateHasSource(dir, id) };
 }
 
 export async function listPptxTemplates(root: string): Promise<PptxTemplate[]> {
@@ -553,7 +624,7 @@ export async function listPptxTemplates(root: string): Promise<PptxTemplate[]> {
     if (!entry.endsWith('.json')) continue;
     try {
       const parsed: unknown = JSON.parse(await readFile(join(dir, entry), 'utf8'));
-      if (isPptxTemplate(parsed)) templates.push(parsed);
+      if (isPptxTemplate(parsed)) templates.push({ ...parsed, hasSource: templateHasSource(dir, parsed.id) });
     } catch {
       // A corrupt stored template is skipped, never fatal to the list.
     }
@@ -564,8 +635,9 @@ export async function listPptxTemplates(root: string): Promise<PptxTemplate[]> {
 export async function getPptxTemplate(root: string, id: string): Promise<PptxTemplate | undefined> {
   assertTemplateId(id);
   try {
-    const parsed: unknown = JSON.parse(await readFile(join(pptxTemplatesDir(root), `${id}.json`), 'utf8'));
-    return isPptxTemplate(parsed) ? parsed : undefined;
+    const dir = pptxTemplatesDir(root);
+    const parsed: unknown = JSON.parse(await readFile(join(dir, `${id}.json`), 'utf8'));
+    return isPptxTemplate(parsed) ? { ...parsed, hasSource: templateHasSource(dir, parsed.id) } : undefined;
   } catch {
     return undefined;
   }
@@ -663,7 +735,7 @@ export function readPptxTemplateSync(root: string, id: string): PptxTemplate | u
   let template: PptxTemplate | undefined;
   try {
     const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'));
-    template = isPptxTemplate(parsed) ? parsed : undefined;
+    template = isPptxTemplate(parsed) ? { ...parsed, hasSource: templateHasSource(pptxTemplatesDir(root), parsed.id) } : undefined;
   } catch {
     template = undefined;
   }

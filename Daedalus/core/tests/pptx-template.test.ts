@@ -178,14 +178,39 @@ describe('pptx template store', () => {
     expect(existsSync(join(root, '.daedalus', 'slide-templates', 'photo-deck.background.png'))).toBe(false);
   });
 
-  test('same filename twice gets a suffixed id, never an overwrite; non-pptx names refused', async () => {
+  test('the same file uploaded again refreshes its record in place — same id, no duplicate card; non-pptx names refused', async () => {
     const root = temp('daedalus-ppttpl-dup-');
     const bytes = await syntheticPptx('solid-bg');
     const first = await savePptxTemplate(root, { fileName: 'Deck.pptx', bytes });
     const second = await savePptxTemplate(root, { fileName: 'Deck.pptx', bytes });
     expect(first.id).toBe('deck');
-    expect(second.id).toBe('deck-2');
+    expect(second.id).toBe('deck');
+    expect(second.createdAt).toBe(first.createdAt);
+    expect((await listPptxTemplates(root)).map((t) => t.id)).toEqual(['deck']);
     await expect(savePptxTemplate(root, { fileName: 'Deck.pdf', bytes })).rejects.toMatchObject({ code: 'not_a_pptx' });
+  });
+
+  test('a different file whose name slugs to the same id still gets a suffixed id, never a clobber', async () => {
+    const root = temp('daedalus-ppttpl-collision-');
+    const bytes = await syntheticPptx('solid-bg');
+    const first = await savePptxTemplate(root, { fileName: 'Deck.pptx', bytes });
+    const second = await savePptxTemplate(root, { fileName: 'Deck!.pptx', bytes });
+    expect(first.id).toBe('deck');
+    expect(second.id).toBe('deck-2');
+    expect((await listPptxTemplates(root)).map((t) => t.id).sort()).toEqual(['deck', 'deck-2']);
+    // …and re-uploading THAT file refreshes deck-2 in place, not deck.
+    const third = await savePptxTemplate(root, { fileName: 'Deck!.pptx', bytes });
+    expect(third.id).toBe('deck-2');
+    expect((await listPptxTemplates(root))).toHaveLength(2);
+  });
+
+  test('skin-only imports report hasSource false (no source .pptx is kept when no pages parse)', async () => {
+    const root = temp('daedalus-ppttpl-hassource-');
+    const saved = await savePptxTemplate(root, { fileName: 'Emerald Gold.pptx', bytes: await syntheticPptx('solid-bg') });
+    expect(saved.pages).toBeUndefined();
+    expect(saved.hasSource).toBe(false);
+    expect((await listPptxTemplates(root))[0]?.hasSource).toBe(false);
+    expect((await getPptxTemplate(root, saved.id))?.hasSource).toBe(false);
   });
 });
 
