@@ -17,6 +17,7 @@ const deckThemeMock = vi.fn()
 const deckUpdateSlideMock = vi.fn()
 const deckAddSlideMock = vi.fn()
 const deckExportMock = vi.fn()
+const deckRegenerateSlideMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
   api: {
@@ -29,7 +30,7 @@ vi.mock('../../api/client', () => ({
     deckMoveSlide: vi.fn(async () => ({ root: '/ws', deck: { version: 1, id: 'd', title: 't', theme: {}, slides: [] } })),
     deckExport: (...args: unknown[]) => deckExportMock(...args),
     deckDownloadUrl: (root: string, path: string) => `/slides/deck/download?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
-    createTask: vi.fn(async () => ({ id: 'task-varian', goal: 'varian', repo_path: '/ws', created_at: '' })),
+    deckRegenerateSlide: (...args: unknown[]) => deckRegenerateSlideMock(...args),
     list: vi.fn(async () => ({ path: 'deck', items: [] })),
   },
 }))
@@ -93,6 +94,8 @@ beforeEach(() => {
   deckAddSlideMock.mockResolvedValue({ root: '/ws', deck: fixtureDeck, slide_id: 's-copy' })
   deckExportMock.mockReset()
   deckExportMock.mockResolvedValue({ root: '/ws', path: 'deck/deck-uji.pptx', bytes: 2048, slides: 3 })
+  deckRegenerateSlideMock.mockReset()
+  deckRegenerateSlideMock.mockResolvedValue({ root: '/ws', deck: fixtureDeck, slide_id: 's1' })
   useDaedalusStore.getState().reset()
 })
 
@@ -251,6 +254,22 @@ describe('SlideStage editing', () => {
     const [, slideId, payload] = deckUpdateSlideMock.mock.calls[0] as [string, string, { content: Record<string, unknown>; layout?: string }]
     expect(slideId).toBe('s1')
     expect(payload.content.title).toBe('Judul Baru')
+  })
+
+  test('the variant button regenerates the slide through the engine endpoint, not a task', async () => {
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-edit-toggle'))
+    await user.click(screen.getByTestId('slide-variant'))
+
+    expect(deckRegenerateSlideMock).toHaveBeenCalledTimes(1)
+    expect(deckRegenerateSlideMock.mock.calls[0]?.[0]).toBe('/ws')
+    expect(deckRegenerateSlideMock.mock.calls[0]?.[1]).toBe('s1')
+    // The run settles: the button is usable again and no error is shown.
+    expect((screen.getByTestId('slide-variant') as HTMLButtonElement).disabled).toBe(false)
   })
 
   test('duplicate copies the current slide right after itself and selects the copy', async () => {
