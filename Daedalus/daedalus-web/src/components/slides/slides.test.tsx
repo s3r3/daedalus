@@ -10,6 +10,7 @@ import { SlideStage } from './slide-stage'
 import { DeckOutlinePanel } from './deck-outline'
 import { SlideTemplatesPanel } from './slide-templates'
 import { SlideComposerControls } from '../composer/slide-controls'
+import { SlideWorkspacePanel } from './slide-workspace'
 
 const fileMock = vi.fn()
 const slideTemplatesMock = vi.fn()
@@ -18,6 +19,7 @@ const deckUpdateSlideMock = vi.fn()
 const deckAddSlideMock = vi.fn()
 const deckExportMock = vi.fn()
 const deckRegenerateSlideMock = vi.fn()
+const listMock = vi.fn()
 const deckGenerateMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
@@ -33,7 +35,7 @@ vi.mock('../../api/client', () => ({
     deckGenerate: (...args: unknown[]) => deckGenerateMock(...args),
     deckDownloadUrl: (root: string, path: string) => `/slides/deck/download?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
     deckRegenerateSlide: (...args: unknown[]) => deckRegenerateSlideMock(...args),
-    list: vi.fn(async () => ({ path: 'deck', items: [] })),
+    list: (...args: unknown[]) => listMock(...args),
   },
 }))
 
@@ -98,6 +100,30 @@ beforeEach(() => {
   deckExportMock.mockResolvedValue({ root: '/ws', path: 'deck/deck-uji.pptx', bytes: 2048, slides: 3 })
   deckRegenerateSlideMock.mockReset()
   deckRegenerateSlideMock.mockResolvedValue({ root: '/ws', deck: fixtureDeck, slide_id: 's1' })
+  listMock.mockReset()
+  listMock.mockImplementation(async (_root: string, path = '.') => {
+    if (path === 'deck') {
+      return {
+        path,
+        items: [
+          { name: 'deck.json', path: 'deck/deck.json', isDirectory: false, size: 1024 },
+          { name: 'deck-uji.pptx', path: 'deck/deck-uji.pptx', isDirectory: false, size: 2048 },
+        ],
+      }
+    }
+    if (path === 'src') {
+      return { path, items: [{ name: 'index.ts', path: 'src/index.ts', isDirectory: false, size: 512 }] }
+    }
+    return {
+      path,
+      items: [
+        { name: 'deck', path: 'deck', isDirectory: true },
+        { name: 'src', path: 'src', isDirectory: true },
+        { name: 'README.md', path: 'README.md', isDirectory: false, size: 2048 },
+        { name: 'notes.pptx', path: 'notes.pptx', isDirectory: false, size: 4096 },
+      ],
+    }
+  })
   deckGenerateMock.mockReset()
   deckGenerateMock.mockResolvedValue({
     root: '/ws',
@@ -415,5 +441,75 @@ describe('SlideComposerControls', () => {
 
     await user.selectOptions(screen.getByTestId('slide-count-select'), 'auto')
     expect(useDaedalusStore.getState().slideOptions.slideCount).toBeNull()
+  })
+})
+
+describe('SlideWorkspacePanel', () => {
+  test('lists the whole workspace tree, with deck/ open and only presentation artifacts openable', async () => {
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideWorkspacePanel />)
+
+    // Non-deck entries are listed: folders and plain files alike.
+    const filePaths = (await screen.findAllByTestId('slide-ws-file')).map((el) => el.getAttribute('data-path'))
+    expect(filePaths).toContain('README.md')
+    expect(filePaths).toContain('notes.pptx')
+    const dirPaths = (await screen.findAllByTestId('slide-ws-dir')).map((el) => el.getAttribute('data-path'))
+    expect(dirPaths).toContain('deck')
+    expect(dirPaths).toContain('src')
+
+    // deck/ auto-expands: the deck opens the canvas, the pptx downloads.
+    expect(await screen.findByTestId('slide-ws-open-deck')).toBeTruthy()
+    const download = screen.getByTestId('slide-download-deck-uji.pptx')
+    expect(download.getAttribute('href')).toContain('/slides/deck/download')
+    expect(download.getAttribute('href')).toContain(encodeURIComponent('deck/deck-uji.pptx'))
+    expect(download.getAttribute('download')).toBe('deck-uji.pptx')
+  })
+
+  test('folders expand on demand and their files stay listed-only', async () => {
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideWorkspacePanel />)
+
+    const dirs = await screen.findAllByTestId('slide-ws-dir')
+    const src = dirs.find((el) => el.getAttribute('data-path') === 'src')
+    expect(src).toBeTruthy()
+    await user.click(src as HTMLElement)
+    expect(listMock).toHaveBeenCalledWith('/ws', 'src')
+
+    const files = await screen.findAllByTestId('slide-ws-file')
+    const index = files.find((el) => el.getAttribute('data-path') === 'src/index.ts')
+    expect(index).toBeTruthy()
+    // Listed but not openable: a plain row, not a button, clicking reads no file.
+    expect((index as HTMLElement).closest('button')).toBeNull()
+    await user.click(index as HTMLElement)
+    expect(fileMock).not.toHaveBeenCalled()
+    expect(useDaedalusStore.getState().openFilePath).toBeNull()
+  })
+
+  test('a pptx outside deck/ is listed but gets no download affordance', async () => {
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideWorkspacePanel />)
+
+    const files = await screen.findAllByTestId('slide-ws-file')
+    const notes = files.find((el) => el.getAttribute('data-path') === 'notes.pptx')
+    expect(notes).toBeTruthy()
+    expect(screen.queryByTestId('slide-download-notes.pptx')).toBeNull()
+  })
+
+  test('the deck row focuses the canvas: deck re-reads and selection returns to slide 1', async () => {
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    useDaedalusStore.getState().setSlideIndex(2)
+    render(<SlideWorkspacePanel />)
+
+    const revisionBefore = useDaedalusStore.getState().workspaceRevision
+    await userEvent.click(await screen.findByTestId('slide-ws-open-deck'))
+    expect(useDaedalusStore.getState().slideIndex).toBe(0)
+    expect(useDaedalusStore.getState().workspaceRevision).toBeGreaterThan(revisionBefore)
+  })
+
+  test('without a workspace the panel explains itself and lists nothing', () => {
+    render(<SlideWorkspacePanel />)
+    expect(screen.getByTestId('slide-workspace').textContent).toContain('Buka workspace dulu')
+    expect(listMock).not.toHaveBeenCalled()
   })
 })
