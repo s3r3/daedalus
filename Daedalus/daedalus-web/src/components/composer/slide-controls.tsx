@@ -1,9 +1,15 @@
 import { useState } from 'react'
 import { X } from 'lucide-react'
+import { getBuiltinTemplate } from '@daedalus/core/slides/builtin-templates'
 import { useDaedalusStore } from '../../state/taskStore'
 import { cn } from '../../lib/utils'
 
 const COUNT_PRESETS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
+
+/** Display name of the picked built-in design (registry is the single source; the id is the honest fallback). */
+function designName(id: string): string {
+  return getBuiltinTemplate(id)?.name ?? id
+}
 const LANGUAGES = ['', 'Bahasa Indonesia', 'English', 'Bahasa Melayu', 'العربية']
 
 /**
@@ -114,15 +120,32 @@ export function SlideComposerControls() {
             <X className="size-3" aria-hidden />
           </button>
         </span>
-      ) : slideOptions.templateId ? (
-        <span className="inline-flex items-center gap-1 rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] text-muted" data-testid="slide-template-chip">
-          warna & font: {slideOptions.templateId}
-          <button type="button" aria-label="hapus pilihan warna & font" onClick={() => setSlideOptions({ templateId: null })} className="hover:text-foreground">
-            <X className="size-3" aria-hidden />
-          </button>
-        </span>
-      ) : null}
-      <span className="text-[10px] text-muted">Standard berhenti di outline untuk pilih warna & font · Enter mengirim</span>
+      ) : (
+        <>
+          {slideOptions.designId ? (
+            <span className="inline-flex items-center gap-1 rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] text-muted" data-testid="slide-design-chip">
+              template: {designName(slideOptions.designId)}
+              <button
+                type="button"
+                aria-label="kembali ke template bawaan standar"
+                onClick={() => setSlideOptions({ designId: 'standar' })}
+                className="hover:text-foreground"
+              >
+                <X className="size-3" aria-hidden />
+              </button>
+            </span>
+          ) : null}
+          {slideOptions.templateId ? (
+            <span className="inline-flex items-center gap-1 rounded border border-line bg-surface px-1.5 py-0.5 text-[10px] text-muted" data-testid="slide-template-chip">
+              warna & font: {slideOptions.templateId}
+              <button type="button" aria-label="hapus pilihan warna & font" onClick={() => setSlideOptions({ templateId: null })} className="hover:text-foreground">
+                <X className="size-3" aria-hidden />
+              </button>
+            </span>
+          ) : null}
+        </>
+      )}
+      <span className="text-[10px] text-muted">Standard berhenti di outline untuk pilih template · Enter mengirim</span>
     </>
   )
 }

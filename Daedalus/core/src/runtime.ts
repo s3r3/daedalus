@@ -1469,7 +1469,7 @@ export class TaskRunner {
    * — the original task completes through its own run. Null when no
    * staged run waits on this runner for that workspace.
    */
-  async releaseStagedDeck(root: string, input: { templateId?: string } = {}): Promise<{ taskId: string; outcome: SlideEngineOutcome; summary: string; exported?: ExportInfo } | null> {
+  async releaseStagedDeck(root: string, input: { templateId?: string; designId?: string } = {}): Promise<{ taskId: string; outcome: SlideEngineOutcome; summary: string; exported?: ExportInfo } | null> {
     for (const engine of this.#activeEngines.values()) {
       if (engine.workspaceRoot !== root) continue;
       const completion = engine.generateStagedDeck(input);
@@ -1508,7 +1508,7 @@ export class TaskRunner {
    * directly, editor-seam style — not a task; no events, no task
    * state. Null when there is no deck or nothing is at skeleton status.
    */
-  async fillStagedDeck(root: string, options: { templateId?: string; model?: string; providerId?: string } = {}): Promise<FillStageResult | null> {
+  async fillStagedDeck(root: string, options: { templateId?: string; designId?: string; model?: string; providerId?: string } = {}): Promise<FillStageResult | null> {
     const deck = await readDeck(root).catch(() => null);
     if (!deck || !deck.slides.some((slide) => slide.status === 'skeleton')) return null;
     const provider = this.#options.provider ?? this.#providerFor(
@@ -1518,6 +1518,7 @@ export class TaskRunner {
     return fillDeckSlidesStage(provider, root, {
       stagedGenerate: true,
       ...(options.templateId ? { templateId: options.templateId } : {}),
+      ...(options.designId ? { designId: options.designId } : {}),
     });
   }
 

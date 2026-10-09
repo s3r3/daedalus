@@ -12,6 +12,14 @@ import {
   type PptxTextSlot,
 } from './pptx-pages.ts';
 import { exportDeckToPptx } from './export-pptx.ts';
+import {
+  assignBuiltinLayouts,
+  BUILTIN_TEMPLATES,
+  builtinDeckTheme,
+  emptyImageFields,
+  getBuiltinTemplate,
+  type BuiltinTemplate,
+} from './builtin-templates.ts';
 
 /**
  * Slide-domain generation pipeline: the Slide backend does NOT inherit
@@ -47,6 +55,15 @@ export type DeckBrief = {
   slideCount?: number;
   language?: string;
   templateId?: string;
+  /**
+   * Built-in design template ("Template bawaan", slides/builtin-templates.ts)
+   * to generate with: the outline is re-mapped through the template's
+   * per-kind layout pools and the deck carries its furniture +
+   * typography. A Warna & Font `templateId` may ride along as a skin
+   * override on top of the design; an imported PPT template
+   * (customTemplateId) is an exclusive alternative design source.
+   */
+  designId?: string;
   /**
    * Imported PPT template (Template dari PPT panel) to generate with:
    * when it has parsed pages, the deck is poured into those designs and
@@ -189,8 +206,14 @@ export function normalizeBrief(brief: DeckBrief): NormalizedBrief {
   if (brief.templateId !== undefined && !getSlideTemplate(brief.templateId)) {
     throw new SlidePipelineError(`unknown templateId "${brief.templateId}" — warna & font bawaan: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
   }
+  if (brief.designId !== undefined && !getBuiltinTemplate(brief.designId)) {
+    throw new SlidePipelineError(`unknown designId "${brief.designId}" — template bawaan: ${BUILTIN_TEMPLATES.map((t) => t.id).join(', ')}`);
+  }
   if (brief.templateId && brief.customTemplateId) {
     throw new SlidePipelineError('pilih satu: Warna & Font bawaan atau template dari PPT — keduanya tidak bisa dipakai bersamaan');
+  }
+  if (brief.designId && brief.customTemplateId) {
+    throw new SlidePipelineError('pilih satu sumber desain: template bawaan atau template impor (dari PPT) — keduanya tidak bisa dipakai bersamaan');
   }
   const count = typeof brief.slideCount === 'number' && Number.isFinite(brief.slideCount) ? Math.floor(brief.slideCount) : 8;
   return {
@@ -198,6 +221,7 @@ export function normalizeBrief(brief: DeckBrief): NormalizedBrief {
     slideCount: Math.max(1, Math.min(MAX_SLIDES, count)),
     ...(typeof brief.language === 'string' && brief.language.trim() ? { language: brief.language.trim() } : {}),
     ...(brief.templateId ? { templateId: brief.templateId } : {}),
+    ...(brief.designId ? { designId: brief.designId } : {}),
     ...(typeof brief.customTemplateId === 'string' && brief.customTemplateId.trim() ? { customTemplateId: brief.customTemplateId.trim() } : {}),
     ...(typeof brief.purpose === 'string' && brief.purpose.trim() ? { purpose: brief.purpose.trim() } : {}),
   };
@@ -216,15 +240,21 @@ const OUTLINE_SYSTEM = [
   '- No filler: every slide advances the topic — no generic padding slides. Use image-side only when the topic plainly calls for a photograph the user can supply.',
 ].join('\n');
 
-function outlineUser(brief: NormalizedBrief): string {
+function outlineUser(brief: NormalizedBrief, builtin?: BuiltinTemplate): string {
   const lines = [`topic: ${brief.topic}`, `slide_count: ${brief.slideCount}`];
   if (brief.purpose) lines.push(`purpose/audience: ${brief.purpose}`);
   if (brief.language) lines.push(`language: write every title and keyMessage in ${brief.language}`);
+  // With a built-in design template picked, the catalog narrows to the
+  // layouts that template speaks (its per-kind pools) — the design
+  // language stays coherent instead of sampling the whole library.
+  const allowed = builtin ? new Set(Object.values(builtin.design).flat()) : undefined;
+  if (builtin) lines.push(`design template: "${builtin.name}" — choose layoutIds from its design set below; vary them across the deck (never the same layout three slides in a row).`);
   lines.push('layout catalog (id (category): label):');
   // 'template-page' is not a choosable design — it belongs to imported
   // PPT templates and is created only by the template pipeline.
   for (const layout of LAYOUTS) {
     if (layout.id === 'template-page') continue;
+    if (allowed && !allowed.has(layout.id)) continue;
     lines.push(`- ${layout.id} (${layout.category}): ${layout.label}`);
   }
   lines.push(`Return exactly ${brief.slideCount} outline items as a JSON array.`);
@@ -483,12 +513,18 @@ export async function generateDeckOutlineStage(
   // the user already applied to this (still empty) deck via the panel
   // carries into generation. A bundled Warna & Font pick replaces both.
   const customTemplateId = brief.customTemplateId ?? (brief.templateId ? undefined : existing?.theme.customTemplateId);
+  // Built-in design template ("Template bawaan"): same carry rule — an
+  // explicit brief wins, else the design the panel stamped on this deck.
+  // An imported-PPT brief retires it (one design source per deck); a
+  // bare Warna & Font skin pick leaves the design in place.
+  const designId = brief.designId ?? (brief.customTemplateId ? undefined : existing?.theme.designId);
+  const builtin = designId ? getBuiltinTemplate(designId) : undefined;
   let pptTemplate: PptxTemplate | undefined;
   let templatePages: PptxTemplatePage[] | undefined;
   if (customTemplateId) {
     pptTemplate = await getPptxTemplate(root, customTemplateId);
     if (!pptTemplate) {
-      throw new SlidePipelineError(`template PPT "${customTemplateId}" tidak ditemukan di workspace ini — impor dari panel "Template dari PPT" atau pilih Warna & Font bawaan`);
+      throw new SlidePipelineError(`template PPT "${customTemplateId}" tidak ditemukan di workspace ini — impor dari panel "Template impor" atau pilih Template bawaan`);
     }
     if (pptTemplate.pages && pptTemplate.pages.length > 0) templatePages = pptTemplate.pages;
   }
@@ -526,9 +562,17 @@ export async function generateDeckOutlineStage(
     };
   }
 
-  const outline = await structuredCall(provider, OUTLINE_SYSTEM, outlineUser(brief), (value) => validateOutline(value, brief.slideCount), options.signal);
+  const outline = await structuredCall(provider, OUTLINE_SYSTEM, outlineUser(brief, builtin), (value) => validateOutline(value, brief.slideCount), options.signal);
   const deck = existing ?? newDeck(brief.topic);
-  if (brief.templateId) {
+  if (builtin) {
+    deck.theme = builtinDeckTheme(builtin);
+    if (brief.templateId) {
+      // Warna & Font rides along as a skin override on top of the
+      // design: colors/fonts change, the design language does not.
+      const skin = getSlideTemplate(brief.templateId)!;
+      deck.theme = { ...skin.theme, templateId: skin.id, designId: builtin.id };
+    }
+  } else if (brief.templateId) {
     const template = getSlideTemplate(brief.templateId)!;
     deck.theme = { ...template.theme, templateId: template.id };
   } else if (pptTemplate) {
@@ -537,18 +581,27 @@ export async function generateDeckOutlineStage(
     const { theme } = await applyPptxTemplateTheme(root, pptTemplate.id);
     deck.theme = theme;
   }
-  deck.slides = outline.map((item) => {
-    const layout = getLayout(item.layoutId)!;
+  // Built-in design mapping: the model's layout picks are re-poured
+  // through the template's per-kind pools (kind kept, layout rotated
+  // deterministically, never three identical slides in a row).
+  const mappedIds = builtin ? assignBuiltinLayouts(outline, builtin) : outline.map((item) => item.layoutId);
+  deck.slides = outline.map((item, index) => {
+    const layoutId = mappedIds[index]!;
+    const layout = getLayout(layoutId)!;
     return {
       id: newSlideId(),
-      layout: item.layoutId,
+      layout: layoutId,
       content: skeletonContent(layout, item.title),
       status: 'skeleton' as const,
       keyMessage: item.keyMessage,
     };
   });
   await writeDeck(root, deck);
-  return { deck, outline, createdDeck: !existing };
+  return {
+    deck,
+    outline: outline.map((item, index) => ({ ...item, layoutId: mappedIds[index]! })),
+    createdDeck: !existing,
+  };
 }
 
 /* ------------------------------------------------------------- fill */
@@ -605,16 +658,32 @@ function isUntouchedSkeleton(slide: Slide): boolean {
 export async function fillDeckSlidesStage(
   provider: LLMProvider,
   root: string,
-  options: { language?: string; templateId?: string; signal?: AbortSignal; stagedGenerate?: boolean } = {},
+  options: { language?: string; templateId?: string; designId?: string; signal?: AbortSignal; stagedGenerate?: boolean } = {},
 ): Promise<FillStageResult> {
   const deck = await readDeck(root);
   if (!deck) {
     throw new SlidePipelineError('no deck yet: run generate_deck_outline (or create_deck) first (deck/deck.json does not exist)');
   }
-  if (options.templateId) {
+  if (options.designId) {
+    // The panel's settled built-in design is (re)asserted at generate
+    // time: it may have changed while the outline waited at the Buat
+    // gate. A Warna & Font skin settled alongside overrides colors and
+    // fonts only — the design (furniture, layout pools) stays.
+    const builtin = getBuiltinTemplate(options.designId);
+    if (!builtin) throw new SlidePipelineError(`unknown designId "${options.designId}" — template bawaan: ${BUILTIN_TEMPLATES.map((t) => t.id).join(', ')}`);
+    deck.theme = builtinDeckTheme(builtin);
+    if (options.templateId) {
+      const skin = getSlideTemplate(options.templateId);
+      if (!skin) throw new SlidePipelineError(`unknown templateId "${options.templateId}" — warna & font bawaan: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
+      deck.theme = { ...skin.theme, templateId: skin.id, designId: builtin.id };
+    }
+    await writeDeck(root, deck);
+  } else if (options.templateId) {
     const template = getSlideTemplate(options.templateId);
     if (!template) throw new SlidePipelineError(`unknown templateId "${options.templateId}" — warna & font bawaan: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
-    deck.theme = { ...template.theme, templateId: template.id };
+    // A skin pick re-skins the deck; a design the deck already carries
+    // (built-in template) survives — skin is a layer, not a reset.
+    deck.theme = { ...template.theme, templateId: template.id, ...(deck.theme.designId ? { designId: deck.theme.designId } : {}) };
     await writeDeck(root, deck);
   }
 
@@ -684,7 +753,7 @@ export async function fillDeckSlidesStage(
     if (slide.templateRef) {
       const page = await resolvePage(slide);
       if (!page) {
-        attemptIssues.set(slide.id, [`template page ${slide.templateRef.page} of "${slide.templateRef.templateId}" not found — re-import the template from the "Template dari PPT" panel or remove this slide`]);
+        attemptIssues.set(slide.id, [`template page ${slide.templateRef.page} of "${slide.templateRef.templateId}" not found — re-import the template from the "Template impor" panel or remove this slide`]);
         continue;
       }
       try {
@@ -711,7 +780,10 @@ export async function fillDeckSlidesStage(
     }
     try {
       const content = await structuredCall(provider, fillSystem(layout), fillUser(deck, slide, options.language), validateFill(layout), options.signal);
-      slide.content = content;
+      // Picture slots are never filled by the model: a generated image
+      // name would be a fabrication (and fail asset validation); '' is
+      // the click-to-upload placeholder the canvas renders.
+      slide.content = emptyImageFields(layout.id, content);
       slide.status = 'filled';
       filledNow.push(slide.id);
       // Persist after every slide: a crash or a later failure leaves a
@@ -787,7 +859,7 @@ export async function regenerateSlideStage(
     const template = await getPptxTemplate(root, slide.templateRef.templateId).catch(() => undefined);
     const page = template?.pages?.[slide.templateRef.page];
     if (!page) {
-      throw new SlidePipelineError(`template page ${slide.templateRef.page} of "${slide.templateRef.templateId}" not found — re-import the template from the "Template dari PPT" panel before regenerating`);
+      throw new SlidePipelineError(`template page ${slide.templateRef.page} of "${slide.templateRef.templateId}" not found — re-import the template from the "Template impor" panel before regenerating`);
     }
     const user = `${templateFillUser(deck, slide, page, options.language)}\nThis is a REGENERATION: produce a fresh, different take on the wording — do not repeat the current slot texts.`;
     const filled = await structuredCall(provider, TEMPLATE_FILL_SYSTEM, user, validateTemplateFill(page), options.signal);
@@ -806,7 +878,7 @@ export async function regenerateSlideStage(
   }
   const user = `${fillUser(deck, slide, options.language)}\nThis is a REGENERATION: produce a fresh, different take on this slide (different angle, wording, and structure) — do not repeat the current content.`;
   const content = await structuredCall(provider, fillSystem(layout), user, validateFill(layout), options.signal);
-  slide.content = content;
+  slide.content = emptyImageFields(layout.id, content);
   slide.status = 'filled';
   await writeDeck(root, deck);
   return { deck, slide, deckIssues: validateDeck(deck, { root }) };

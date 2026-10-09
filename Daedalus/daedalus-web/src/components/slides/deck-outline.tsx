@@ -32,6 +32,7 @@ export function DeckOutlinePanel() {
   const { deck, loading, error, safeIndex, root, refresh } = useDeck()
   const setSlideIndex = useDaedalusStore((state) => state.setSlideIndex)
   const pendingTemplateId = useDaedalusStore((state) => state.slideOptions.templateId)
+  const pendingDesignId = useDaedalusStore((state) => state.slideOptions.designId)
   const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
   const [generating, setGenerating] = useState(false)
   const [generateError, setGenerateError] = useState<string | null>(null)
@@ -46,7 +47,11 @@ export function DeckOutlinePanel() {
     setGenerateNote(null)
     try {
       const templateId = deck?.theme.templateId ?? pendingTemplateId ?? undefined
-      const result = await api.deckGenerate(root, templateId ? { template_id: templateId } : {})
+      const designId = deck?.theme.designId ?? pendingDesignId ?? undefined
+      const result = await api.deckGenerate(root, {
+        ...(templateId ? { template_id: templateId } : {}),
+        ...(designId ? { design_id: designId } : {}),
+      })
       setGenerateNote(result.summary)
       refresh()
       bumpWorkspaceRevision()

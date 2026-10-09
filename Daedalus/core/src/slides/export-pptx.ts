@@ -31,9 +31,18 @@ interface PptxInstance {
 }
 type PptxCtor = new () => PptxInstance;
 const PptxGenJS = ((PptxGenJSModule as unknown as { default?: unknown }).default ?? PptxGenJSModule) as unknown as PptxCtor;
-import { deckPaths, slugifyTitle, type DeckSpec, type Slide } from './deck.ts';
+import { deckPaths, slugifyTitle, type DeckSpec, type DeckTheme, type Slide } from './deck.ts';
 import { exportTemplateDeckToPptx } from './export-template.ts';
 import { pptxTemplatesDir, readPptxTemplateSync } from './pptx-template.ts';
+import {
+  builtinKindOfLayout,
+  builtinTemplateForTheme,
+  furnitureRect,
+  pageChipRect,
+  type BuiltinSlideKind,
+  type FurnitureColorRole,
+  type FurnitureSpec,
+} from './builtin-templates.ts';
 
 const W = 13.333;
 const H = 7.5;
@@ -41,6 +50,11 @@ const SERIES_COLORS = ['68FFD6', '00A4FF', 'FF985A', 'FF60FF', '00FFB2', 'F5EF34
 
 type Ctx = {
   bg: string; fg: string; sub: string; surface: string; accent: string; dark: boolean; colors: string[];
+  /** Built-in design furniture (slides/builtin-templates.ts); null on legacy/imported decks. */
+  furniture: FurnitureSpec | null;
+  /** Built-in typography: title size multiplier + heading case transform. */
+  titleScale: number;
+  headingTransform: 'none' | 'uppercase';
 };
 
 function hex(v: string | undefined, fallback: string): string {
@@ -70,10 +84,75 @@ function bullets(slide: PptxSlide, points: string[], o: PptxTextOptions, ctx: Ct
   );
 }
 
+/** Heading text under the template's typography treatment (case transform). */
+function displayTitle(title: string, ctx: Ctx): string {
+  return ctx.headingTransform === 'uppercase' ? title.toUpperCase() : title;
+}
+
+function furnitureColor(role: FurnitureColorRole, ctx: Ctx): string {
+  switch (role) {
+    case 'accent': return ctx.accent;
+    case 'surface': return ctx.surface;
+    case 'text': return ctx.fg;
+    case 'muted': return ctx.sub;
+    case 'background': return ctx.bg;
+  }
+}
+
+/** Blend a 6-hex color toward the slide background by (1 - opacity) — canvas uses CSS opacity for the same spec. */
+function blendHex(color: string, bg: string, opacity: number): string {
+  const mix = (a: number, b: number): number => Math.round(a * opacity + b * (1 - opacity));
+  const pair = (hexValue: string, i: number): number => parseInt(hexValue.slice(i, i + 2), 16);
+  const out = [0, 2, 4].map((i) => mix(pair(color, i), pair(bg, i)).toString(16).padStart(2, '0').toUpperCase());
+  return out.join('');
+}
+
+/**
+ * The built-in template's decorative furniture for one slide: spec
+ * shapes at the margins (never under content boxes), plus the numbered
+ * page chip on non-cover slides. Drawn before the layout blocks so a
+ * dragged block always paints above it; template-page slides skip it —
+ * their design lives in the imported file, not in this spec.
+ */
+function drawFurniture(slide: PptxSlide, kind: BuiltinSlideKind, slideIndex: number, ctx: Ctx): void {
+  const spec = ctx.furniture;
+  if (!spec) return;
+  for (const el of spec.elements) {
+    if (el.kinds && !el.kinds.includes(kind)) continue;
+    const r = furnitureRect(el);
+    const x = r.x * W;
+    const y = r.y * H;
+    const w = Math.abs(r.w) * W;
+    const h = Math.max(0.012, Math.abs(r.h) * H);
+    if (x >= W || y >= H || x + w <= 0 || y + h <= 0) continue;
+    const base = furnitureColor(el.color, ctx);
+    const opacity = el.opacity ?? 1;
+    const color = opacity >= 1 ? base : blendHex(base, ctx.bg, Math.max(0, opacity));
+    const shape = el.shape === 'line' ? 'rect' : el.shape;
+    slide.addShape(shape, { x, y, w, h, fill: { color }, line: { type: 'none' } });
+  }
+  const chip = spec.pageChip;
+  if (chip && kind !== 'cover' && slideIndex > 0) {
+    const r = pageChipRect(chip);
+    slide.addShape(chip.style === 'circle' ? 'ellipse' : 'roundRect', {
+      x: r.x * W, y: r.y * H, w: r.w * W, h: r.h * H, fill: { color: ctx.accent }, line: { type: 'none' },
+    });
+    text(slide, String(slideIndex + 1), {
+      x: r.x * W, y: r.y * H, w: r.w * W, h: r.h * H, fontSize: 11, bold: true, align: 'center', valign: 'middle', color: ctx.bg,
+    }, ctx);
+  }
+}
+
 export function addTitleBar(slide: PptxSlide, title: string, ctx?: Ctx): void {
-  const c: Ctx = ctx ?? { bg: '201F26', fg: 'ECEBF0', sub: 'BFBCC8', surface: '2D2C36', accent: '6B50FF', dark: true, colors: SERIES_COLORS };
+  const c: Ctx = ctx ?? { bg: '201F26', fg: 'ECEBF0', sub: 'BFBCC8', surface: '2D2C36', accent: '6B50FF', dark: true, colors: SERIES_COLORS, furniture: null, titleScale: 1, headingTransform: 'none' };
+  const fontSize = Math.round(28 * c.titleScale);
+  if (c.furniture?.titleTreatment === 'underline') {
+    text(slide, displayTitle(title, c), { x: 0.8, y: 0.35, w: 11.9, h: 0.75, fontSize, bold: true, valign: 'middle' }, c);
+    slide.addShape('rect', { x: 0.82, y: 1.13, w: 1.7, h: 0.045, fill: { color: c.accent }, line: { type: 'none' } });
+    return;
+  }
   slide.addShape('rect', { x: 0.55, y: 0.42, w: 0.09, h: 0.62, fill: { color: c.accent }, line: { type: 'none' } });
-  text(slide, title, { x: 0.8, y: 0.35, w: 11.9, h: 0.75, fontSize: 28, bold: true, valign: 'middle' }, c);
+  text(slide, displayTitle(title, c), { x: 0.8, y: 0.35, w: 11.9, h: 0.75, fontSize, bold: true, valign: 'middle' }, c);
 }
 
 function boxText(slide: PptxSlide, txt: string, o: PptxTextOptions, ctx: Ctx, fill?: string): void {
@@ -112,7 +191,7 @@ function hasPos(slideSpec: Slide, key: string): boolean {
 function titleBlock(slide: PptxSlide, slideSpec: Slide, title: string, ctx: Ctx): void {
   if (hasPos(slideSpec, 'title')) {
     const r = rectFor(slideSpec, 'title', { x: 0.8, y: 0.35, w: 11.9, h: 0.75 });
-    text(slide, title, { x: r.x, y: r.y, w: r.w, h: r.h, fontSize: 28, bold: true, valign: 'middle' }, ctx);
+    text(slide, displayTitle(title, ctx), { x: r.x, y: r.y, w: r.w, h: r.h, fontSize: Math.round(28 * ctx.titleScale), bold: true, valign: 'middle' }, ctx);
     return;
   }
   addTitleBar(slide, title, ctx);
@@ -211,7 +290,7 @@ function renderTemplateSlide(slide: PptxSlide, slideSpec: Slide, deck: DeckSpec,
   }
 }
 
-function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root: string, ctx: Ctx): void {
+function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root: string, ctx: Ctx, slideIndex: number): void {
   const slide = pptx.addSlide();
   if (slideSpec.templateRef) {
     slide.color = ctx.fg;
@@ -226,13 +305,16 @@ function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root:
   const bgImagePath = deck.theme.backgroundImage ? join(deckPaths(root).assetsDir, basename(deck.theme.backgroundImage)) : '';
   slide.background = bgImagePath && existsSync(bgImagePath) ? { path: bgImagePath } : { color: ctx.bg };
   slide.color = ctx.fg;
+  // The built-in template's furniture paints above the background and
+  // below every content block (spec margins never meet content boxes).
+  drawFurniture(slide, builtinKindOfLayout(slideSpec.layout), slideIndex, ctx);
   const c = slideSpec.content;
   const title = str(c.title);
 
   switch (slideSpec.layout) {
     case 'title': {
       const tr = rectFor(slideSpec, 'title', { x: 0.8, y: 2.2, w: 11.7, h: 1.6 });
-      text(slide, title, { x: tr.x, y: tr.y, w: tr.w, h: tr.h, fontSize: 44, bold: true, align: 'center', valign: 'middle' }, ctx);
+      text(slide, displayTitle(title, ctx), { x: tr.x, y: tr.y, w: tr.w, h: tr.h, fontSize: Math.round(44 * ctx.titleScale), bold: true, align: 'center', valign: 'middle' }, ctx);
       if (str(c.subtitle)) {
         const sr = rectFor(slideSpec, 'subtitle', { x: 1.3, y: 3.95, w: 10.7, h: 0.9 });
         text(slide, str(c.subtitle), { x: sr.x, y: sr.y, w: sr.w, h: sr.h, fontSize: 22, align: 'center', color: ctx.sub }, ctx);
@@ -248,7 +330,7 @@ function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root:
       }
       const titleX = numLabel && !hasPos(slideSpec, 'number') ? 3.0 : 0.8;
       const tr = rectFor(slideSpec, 'title', { x: titleX, y: 2.55, w: 9.5, h: 1.4 });
-      text(slide, title, { x: tr.x, y: tr.y, w: tr.w, h: tr.h, fontSize: 40, bold: true, valign: 'middle' }, ctx);
+      text(slide, displayTitle(title, ctx), { x: tr.x, y: tr.y, w: tr.w, h: tr.h, fontSize: Math.round(40 * ctx.titleScale), bold: true, valign: 'middle' }, ctx);
       break;
     }
     case 'bullets': {
@@ -454,7 +536,7 @@ function renderSlide(pptx: PptxInstance, slideSpec: Slide, deck: DeckSpec, root:
     }
     case 'closing': {
       const tr = rectFor(slideSpec, 'title', { x: 0.8, y: 2.45, w: 11.7, h: 1.4 });
-      text(slide, title, { x: tr.x, y: tr.y, w: tr.w, h: tr.h, fontSize: 42, bold: true, align: 'center', valign: 'middle' }, ctx);
+      text(slide, displayTitle(title, ctx), { x: tr.x, y: tr.y, w: tr.w, h: tr.h, fontSize: Math.round(42 * ctx.titleScale), bold: true, align: 'center', valign: 'middle' }, ctx);
       if (str(c.cta)) {
         const cr = rectFor(slideSpec, 'cta', { x: 1.3, y: 4.1, w: 10.7, h: 0.8 });
         text(slide, str(c.cta), { x: cr.x, y: cr.y, w: cr.w, h: cr.h, fontSize: 20, align: 'center', color: ctx.accent }, ctx);
@@ -1004,12 +1086,25 @@ export interface PptxExportResult {
   note?: string;
 }
 
-export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<PptxExportResult> {
+export interface ExportDeckOptions {
+  /**
+   * Render with this theme instead of the deck's own (the Export
+   * picker's "wear another design" path): the deck on disk is never
+   * modified, and the clone-fidelity path is skipped — a deliberate
+   * re-dress through the pptxgenjs renderer, furniture included.
+   */
+  themeOverride?: DeckTheme;
+  /** Distinguishes the output file (deck/<title>-<suffix>.pptx) from the canonical export. */
+  fileSuffix?: string;
+}
+
+export async function exportDeckToPptx(deckInput: DeckSpec, root: string, options: ExportDeckOptions = {}): Promise<PptxExportResult> {
   // An empty deck is not a presentation: never emit a placeholder-title
   // .pptx that completion checks would mistake for generated slides.
-  if (!deck.slides || deck.slides.length === 0) {
+  if (!deckInput.slides || deckInput.slides.length === 0) {
     throw new Error('cannot export an empty deck: add at least one slide (add_slide) before exporting');
   }
+  const deck: DeckSpec = options.themeOverride ? { ...deckInput, theme: options.themeOverride } : deckInput;
   // Template fidelity (v3): when EVERY slide references the SAME imported
   // template that kept its source .pptx, the output clones that package
   // and rewrites only slot words/clicked images — the template's
@@ -1019,14 +1114,14 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<Pp
   // note says so plainly.
   let templateNote: string | undefined;
   const refs = deck.slides.map((s) => s.templateRef);
-  if (refs.every((ref) => ref !== undefined)) {
+  if (!options.themeOverride && refs.every((ref) => ref !== undefined)) {
     const templateIds = new Set(refs.map((ref) => ref!.templateId));
     if (templateIds.size === 1) {
       const templateId = refs[0]!.templateId;
       const template = readPptxTemplateSync(root, templateId);
       if (template?.sourceFileName) {
         try {
-          return await exportTemplateDeckToPptx(deck, root, template);
+          return await exportTemplateDeckToPptx(deck, root, template, { ...(options.fileSuffix ? { fileSuffix: options.fileSuffix } : {}) });
         } catch (error) {
           templateNote = `Ekspor fidelitas penuh gagal (${error instanceof Error ? error.message : String(error)}); slide template digambar ulang via ekspor aproksimasi.`;
         }
@@ -1039,7 +1134,9 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<Pp
       templateNote = 'Deck ini memakai lebih dari satu template PPT; slide template digambar via ekspor aproksimasi.';
     }
   } else if (refs.some((ref) => ref !== undefined)) {
-    templateNote = 'Sebagian slide memakai template PPT dan sebagian tidak; slide template digambar via ekspor aproksimasi (desain template tidak dipertahankan penuh).';
+    templateNote = options.themeOverride
+      ? 'Deck template PPT diekspor dengan kulit lain: desain template digambar ulang via ekspor aproksimasi, bukan kloning fidelitas penuh.'
+      : 'Sebagian slide memakai template PPT dan sebagian tidak; slide template digambar via ekspor aproksimasi (desain template tidak dipertahankan penuh).';
   }
   const paths = deckPaths(root);
   await mkdir(paths.dir, { recursive: true });
@@ -1050,6 +1147,7 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<Pp
   // series when it carries one; otherwise the built-in series follows the
   // accent exactly as before.
   const themeSeries = (deck.theme.series ?? []).filter((c) => /^#[0-9a-fA-F]{6}$/.test(c)).map((c) => c.replace(/^#/, '').toUpperCase());
+  const builtin = builtinTemplateForTheme(deck.theme);
   const ctx: Ctx = {
     dark,
     bg: hex(deck.theme.background, dark ? '201F26' : 'F4F2FA'),
@@ -1058,6 +1156,9 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<Pp
     surface: hex(deck.theme.surface, dark ? '2D2C36' : 'FFFFFF'),
     accent,
     colors: themeSeries.length > 0 ? themeSeries : [accent, ...SERIES_COLORS],
+    furniture: builtin?.furniture ?? null,
+    titleScale: builtin?.typography.titleScale ?? 1,
+    headingTransform: builtin?.typography.headingTransform ?? 'none',
   };
 
   const pptx = new PptxGenJS();
@@ -1066,9 +1167,9 @@ export async function exportDeckToPptx(deck: DeckSpec, root: string): Promise<Pp
   pptx.title = deck.title;
   pptx.theme = { headFontFace: deck.theme.headingFont ?? 'Arial', bodyFontFace: deck.theme.bodyFont ?? 'Arial' };
 
-  for (const s of deck.slides) renderSlide(pptx, s, deck, root, ctx);
+  deck.slides.forEach((s, index) => renderSlide(pptx, s, deck, root, ctx, index));
 
-  const fileName = `${slugifyTitle(deck.title)}.pptx`;
+  const fileName = `${slugifyTitle(deck.title)}${options.fileSuffix ? `-${options.fileSuffix}` : ''}.pptx`;
   const outPath = join(paths.dir, fileName);
   const data = await pptx.write({ outputType: 'nodebuffer' });
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);

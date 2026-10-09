@@ -99,7 +99,7 @@ export type CreateTaskInput = {
   /** Skill names explicitly invoked for this task (composer `/skill <name>`); the server validates them and core force-loads their bodies. */
   skills?: string[]
   /** Slide composer parameters (Agentic Slide v2); only sent in the slide domain, validated by the server. */
-  slide?: { generation?: 'smart' | 'standard'; slide_count?: number; language?: string; template_id?: string; custom_template_id?: string }
+  slide?: { generation?: 'smart' | 'standard'; slide_count?: number; language?: string; template_id?: string; design_id?: string; custom_template_id?: string }
 }
 
 /** One bundled slide template (design direction) from GET /slides/templates. */
@@ -161,7 +161,29 @@ export type PptTemplateInfo = {
   pages?: PptTemplatePageInfo[]
 }
 
-export type DeckExportResult = { root: string; path: string; bytes: number; slides: number }
+/**
+ * One built-in design template ("Template bawaan") from GET
+ * /slides/builtin-templates: name, vibe, base skin, token theme,
+ * per-kind preferred layout ids, the decorative furniture spec and
+ * typography — the same registry core, the canvas, and the exporter
+ * resolve, so card previews draw real slides.
+ */
+export type BuiltinTemplateInfo = {
+  id: string
+  name: string
+  description: string
+  skinId: string
+  theme: { accent?: string; dark?: boolean; background?: string; surface?: string; text?: string; muted?: string; headingFont?: string; bodyFont?: string; templateId?: string; designId?: string; series?: string[] }
+  design: Record<'cover' | 'toc' | 'section' | 'content' | 'visual' | 'chart' | 'closing', string[]>
+  furniture: {
+    elements: Array<{ shape: string; anchor: string; dx?: number; dy?: number; w?: number; h?: number; color: string; opacity?: number; kinds?: string[] }>
+    pageChip?: { anchor: 'top-right' | 'bottom-right' | 'bottom-left' | 'top-left'; style: 'circle' | 'square' } | null
+    titleTreatment: 'bar' | 'underline'
+  }
+  typography: { titleScale: number; headingTransform?: 'none' | 'uppercase' }
+}
+
+export type DeckExportResult = { root: string; path: string; bytes: number; slides: number; note?: string }
 /** A deck image asset saved through POST /slides/deck/asset (deck/assets/). */
 export type DeckAssetUploadResult = { root: string; name: string; path: string; size: number }
 
@@ -255,6 +277,9 @@ export const api = {
   /** Bundled slide templates (design directions) shipped with the install. */
   slideTemplates: () => request<{ templates: SlideTemplateInfo[] }>('/slides/templates'),
 
+  /** Built-in design templates ("Template bawaan") from core's registry. */
+  builtinTemplates: () => request<{ templates: BuiltinTemplateInfo[] }>('/slides/builtin-templates'),
+
   /** The workspace deck via the core-gated slide API (404 when no deck exists). */
   deck: (root: string) => request<{ root: string; deck: import('@daedalus/core').DeckSpec }>(`/slides/deck${query({ root })}`),
 
@@ -283,7 +308,7 @@ export const api = {
   pptTemplateAssetUrl: (root: string, id: string, file: string) => `/slides/ppt-templates/asset${query({ root, id, file })}`,
 
   /** Apply a bundled or imported template (or accent/dark) to the open deck; the server validates and returns the fresh deck. */
-  deckTheme: (root: string, input: { template_id?: string; custom_template_id?: string; accent?: string; dark?: boolean }) =>
+  deckTheme: (root: string, input: { template_id?: string; custom_template_id?: string; design_id?: string; accent?: string; dark?: boolean }) =>
     request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/theme', {
       method: 'POST',
       body: JSON.stringify({ root, ...input }),
@@ -332,15 +357,22 @@ export const api = {
    * (fill → validate → export) with the settled template. The server
    * answers with the run's verdict once generation settles.
    */
-  deckGenerate: (root: string, input: { template_id?: string } = {}) =>
+  deckGenerate: (root: string, input: { template_id?: string; design_id?: string } = {}) =>
     request<DeckGenerateResult>('/slides/deck/generate', {
       method: 'POST',
-      body: JSON.stringify({ root, ...(input.template_id ? { template_id: input.template_id } : {}) }),
+      body: JSON.stringify({ root, ...(input.template_id ? { template_id: input.template_id } : {}), ...(input.design_id ? { design_id: input.design_id } : {}) }),
     }),
 
-  /** Export the open deck to .pptx through core's native exporter. */
-  deckExport: (root: string) =>
-    request<DeckExportResult>('/slides/deck/export', { method: 'POST', body: JSON.stringify({ root }) }),
+  /**
+   * Export the open deck to .pptx through core's native exporter. A
+   * choice wears another design for this file only (built-in re-dress
+   * or imported-template pour); the deck on disk never changes.
+   */
+  deckExport: (root: string, choice?: { design_id?: string; custom_template_id?: string }) =>
+    request<DeckExportResult>('/slides/deck/export', {
+      method: 'POST',
+      body: JSON.stringify({ root, ...(choice?.design_id ? { design_id: choice.design_id } : {}), ...(choice?.custom_template_id ? { custom_template_id: choice.custom_template_id } : {}) }),
+    }),
 
   /** Direct download URL for an exported deck file (deck/*.pptx). */
   deckDownloadUrl: (root: string, path: string) => `/slides/deck/download${query({ root, path })}`,

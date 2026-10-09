@@ -73,6 +73,8 @@ export type SlideTaskParams = {
   slideCount?: number;
   language?: string;
   templateId?: string;
+  /** Built-in design template ("Template bawaan") the deck is poured into (layout pools + furniture + typography). */
+  designId?: string;
   /** Imported PPT template (Template dari PPT) whose parsed pages the deck is poured into. */
   customTemplateId?: string;
 };

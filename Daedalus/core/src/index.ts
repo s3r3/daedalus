@@ -708,7 +708,7 @@ export {
   type ValidateDeckOptions,
 } from "./slides/store.ts";
 
-export { exportDeckToPptx, type PptxExportResult } from "./slides/export-pptx.ts";
+export { exportDeckToPptx, type PptxExportResult, type ExportDeckOptions } from "./slides/export-pptx.ts";
 export {
   exportTemplateDeckToPptx,
   rewriteTemplateSlideText,
@@ -789,6 +789,36 @@ export {
   type PptxTemplatePageAddress,
   type PptxTemplateSlotAddress,
 } from "./slides/pptx-pages.ts";
+
+export {
+  BUILTIN_TEMPLATES,
+  BUILTIN_KINDS,
+  DEFAULT_BUILTIN_TEMPLATE_ID,
+  IMAGE_LAYOUT_IDS,
+  getBuiltinTemplate,
+  listBuiltinTemplates,
+  builtinDeckTheme,
+  builtinTemplateForTheme,
+  builtinKindOfLayout,
+  assignBuiltinLayouts,
+  emptyImageFields,
+  furnitureRect,
+  pageChipRect,
+  type BuiltinTemplate,
+  type BuiltinSlideKind,
+  type FurnitureSpec,
+  type FurnitureElement,
+  type FurnitureColorRole,
+  type FurnitureAnchor,
+  type BuiltinTypography,
+} from "./slides/builtin-templates.ts";
+
+export {
+  extractSlideWords,
+  pourDeckIntoTemplate,
+  type SlideWords,
+  type PourDeckResult,
+} from "./slides/pour.ts";
 
 export {
   createDeckTool,

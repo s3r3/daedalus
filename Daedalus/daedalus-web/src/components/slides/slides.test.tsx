@@ -18,6 +18,7 @@ const deckThemeMock = vi.fn()
 const deckUpdateSlideMock = vi.fn()
 const deckAddSlideMock = vi.fn()
 const deckExportMock = vi.fn()
+const builtinTemplatesMock = vi.fn()
 const deckRegenerateSlideMock = vi.fn()
 const listMock = vi.fn()
 const deckGenerateMock = vi.fn()
@@ -34,6 +35,7 @@ vi.mock('../../api/client', () => ({
     deckDeleteSlide: vi.fn(async () => ({ root: '/ws', deck: { version: 1, id: 'd', title: 't', theme: {}, slides: [] } })),
     deckMoveSlide: vi.fn(async () => ({ root: '/ws', deck: { version: 1, id: 'd', title: 't', theme: {}, slides: [] } })),
     deckExport: (...args: unknown[]) => deckExportMock(...args),
+    builtinTemplates: (...args: unknown[]) => builtinTemplatesMock(...args),
     deckGenerate: (...args: unknown[]) => deckGenerateMock(...args),
     deckDownloadUrl: (root: string, path: string) => `/slides/deck/download?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
     deckRegenerateSlide: (...args: unknown[]) => deckRegenerateSlideMock(...args),
@@ -104,6 +106,21 @@ beforeEach(() => {
   deckAddSlideMock.mockResolvedValue({ root: '/ws', deck: fixtureDeck, slide_id: 's-copy' })
   deckExportMock.mockReset()
   deckExportMock.mockResolvedValue({ root: '/ws', path: 'deck/deck-uji.pptx', bytes: 2048, slides: 3 })
+  builtinTemplatesMock.mockReset()
+  builtinTemplatesMock.mockResolvedValue({
+    templates: [
+      {
+        id: 'galeri',
+        name: 'Galeri Mono',
+        description: 'Hitam-putih tegas, bingkai emas tipis.',
+        skinId: 'mono-luxe',
+        theme: { background: '#101014', accent: '#d4af37', text: '#f4f1ea', headingFont: 'Georgia', bodyFont: 'Arial' },
+        design: { cover: ['title'], toc: ['agenda-toc'], section: ['section'], content: ['bullets'], visual: ['image-side'], chart: ['chart-bar'], closing: ['closing'] },
+        furniture: { elements: [], pageChip: null, titleTreatment: 'underline' },
+        typography: { titleScale: 1.15 },
+      },
+    ],
+  })
   deckRegenerateSlideMock.mockReset()
   deckRegenerateSlideMock.mockResolvedValue({ root: '/ws', deck: fixtureDeck, slide_id: 's1' })
   listMock.mockReset()
@@ -671,7 +688,7 @@ describe('DeckOutlinePanel Buat (staged outline-first generate)', () => {
     await user.click(button)
 
     expect(deckGenerateMock).toHaveBeenCalledTimes(1)
-    expect(deckGenerateMock).toHaveBeenCalledWith('/ws', { template_id: 'ocean' })
+    expect(deckGenerateMock).toHaveBeenCalledWith('/ws', { template_id: 'ocean', design_id: 'standar' })
     expect((screen.getByTestId('deck-generate') as HTMLButtonElement).disabled).toBe(true)
 
     await act(async () => {
@@ -696,7 +713,7 @@ describe('DeckOutlinePanel Buat (staged outline-first generate)', () => {
     render(<DeckOutlinePanel />)
 
     await user.click(await screen.findByTestId('deck-generate'))
-    expect(deckGenerateMock).toHaveBeenCalledWith('/ws', { template_id: 'general' })
+    expect(deckGenerateMock).toHaveBeenCalledWith('/ws', { template_id: 'general', design_id: 'standar' })
   })
 })
 
@@ -1015,6 +1032,19 @@ describe('SlideStage editing', () => {
     const note = await screen.findByTestId('slide-exported')
     expect(deckExportMock).toHaveBeenCalledWith('/ws')
     expect(note.textContent).toContain('deck/deck-uji.pptx')
+  })
+
+  test('export picker exports through a picked built-in design without touching the plain button contract', async () => {
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-export-menu'))
+    await user.click(await screen.findByTestId('slide-export-builtin-galeri'))
+
+    expect(deckExportMock).toHaveBeenCalledWith('/ws', { design_id: 'galeri' })
+    expect(await screen.findByTestId('slide-exported')).toBeTruthy()
   })
 })
 

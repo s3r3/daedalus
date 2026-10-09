@@ -40,7 +40,7 @@ function pageSummary(template: PptTemplateInfo): string | null {
 }
 
 /**
- * "Template dari PPT" panel (Slide domain, under the Warna & Font panel):
+ * "Template impor" panel (Slide domain, under the Warna & Font panel):
  * a downloaded .pptx is uploaded once and its design is extracted by
  * core into a reusable template stored in this workspace — the theme
  * skin (palette, fonts, master background) AND the file's parsed slide
@@ -155,7 +155,7 @@ export function SlidePptTemplatesPanel() {
 
   return (
     <Panel
-      title="Template dari PPT"
+      title="Template impor"
       data-testid="slide-ppt-templates"
       action={
         <>
@@ -258,7 +258,7 @@ export function SlidePptTemplatesPanel() {
         })}
       </div>
       <p className="px-1 pt-1.5 text-[10px] text-muted">
-        Pakai template PPT: font, warna, dan layout halaman ikut template — AI hanya mengganti kata-katanya. Slot gambar tidak diisi AI: klik placeholder gambar di canvas (mode Edit) untuk menggantinya. File .pptx hasil Export mempertahankan seluruh elemen desain template (bentuk vektor, grafik, tabel) persis seperti aslinya; tampilan canvas hanya perkiraan. Tanpa template PPT, Warna &amp; Font bawaan tetap pilihan bawaan.
+        Pakai template PPT: font, warna, dan layout halaman ikut template — AI hanya mengganti kata-katanya. Slot gambar tidak diisi AI: klik placeholder gambar di canvas (mode Edit) untuk menggantinya. File .pptx hasil Export mempertahankan seluruh elemen desain template (bentuk vektor, grafik, tabel) persis seperti aslinya; tampilan canvas hanya perkiraan. Template bawaan dan Warna &amp; Font di atas tetap pilihan tanpa impor.
       </p>
     </Panel>
   )

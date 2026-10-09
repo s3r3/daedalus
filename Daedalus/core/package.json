@@ -10,7 +10,8 @@
     "./version": "./src/version.ts",
     "./interaction/modes": "./src/interaction/modes.ts",
     "./interaction/slash-commands": "./src/interaction/slash-commands.ts",
-    "./slides/layouts": "./src/slides/layouts.ts"
+    "./slides/layouts": "./src/slides/layouts.ts",
+    "./slides/builtin-templates": "./src/slides/builtin-templates.ts"
   },
   "engines": {
     "node": ">=22"

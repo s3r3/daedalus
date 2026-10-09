@@ -13,6 +13,15 @@ export type DeckTheme = {
   /** Id of the bundled template these tokens came from (set_deck_theme/create_deck templateId). */
   templateId?: string;
   /**
+   * Id of the built-in design template (slides/builtin-templates.ts)
+   * this deck is poured into: per-kind layout pools, layered furniture,
+   * and typography, on top of the skin tokens above. Set at generation
+   * from the panel pick and preserved when a Warna & Font skin is
+   * re-picked (skin is a layer over the design, not a replacement).
+   * Absent on decks made before built-in templates existed.
+   */
+  designId?: string;
+  /**
    * Id of the imported PPT template these tokens were extracted from
    * (slides/pptx-template.ts, stored under .daedalus/slide-templates/).
    * Mutually exclusive with templateId in practice: applying one kind

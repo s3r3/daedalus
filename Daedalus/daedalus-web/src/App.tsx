@@ -18,6 +18,7 @@ import { AttachmentsPanel, ChildTasksPanel, FinalReportView } from './components
 import { ScrollArea } from './components/ui/scroll-area'
 import { SlideStage } from './components/slides/slide-stage'
 import { DeckOutlinePanel } from './components/slides/deck-outline'
+import { SlideBuiltinTemplatesPanel } from './components/slides/slide-builtin-templates'
 import { SlideTemplatesPanel } from './components/slides/slide-templates'
 import { SlidePptTemplatesPanel } from './components/slides/slide-ppt-templates'
 import { SlideWorkspacePanel } from './components/slides/slide-workspace'
@@ -326,6 +327,7 @@ export function App() {
           <ScrollArea className="min-h-[240px] lg:min-h-0 lg:flex-1">
             <div className="flex flex-col gap-2 pr-1">
               {domain === 'slide' ? <DeckOutlinePanel /> : null}
+              {domain === 'slide' ? <SlideBuiltinTemplatesPanel /> : null}
               {domain === 'slide' ? <SlideTemplatesPanel /> : null}
               {domain === 'slide' ? <SlidePptTemplatesPanel /> : null}
               {domain === 'slide' ? null : <ExtensionsPanel />}
