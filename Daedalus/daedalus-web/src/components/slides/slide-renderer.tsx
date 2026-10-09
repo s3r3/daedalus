@@ -533,12 +533,12 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       const plotH = H - padB - padT
       const slot = data.length > 0 ? plotW / data.length : plotW
       return (
-        <div className="flex flex-1 flex-col" style={{ gap: '1.2cqw' }}>
+        <div className="flex min-h-0 flex-1 flex-col" style={{ gap: '1.2cqw' }}>
           <Block blockKey="title">
             <SlideTitle>{str(c.title)}</SlideTitle>
           </Block>
           <Block blockKey="chart">
-          <svg viewBox={`0 0 ${W} ${H}`} className="w-full flex-1" role="img" aria-label={str(c.title)}>
+          <svg viewBox={`0 0 ${W} ${H}`} className="min-h-0 w-full flex-1" role="img" aria-label={str(c.title)}>
             <line x1={padL} y1={padT + plotH} x2={W - 12} y2={padT + plotH} strokeWidth="1.5" style={{ stroke: ctx.line }} />
             {data.map((d, index) => {
               const barH = (d.value / max) * plotH
@@ -580,12 +580,12 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       const xAt = (i: number, n: number): number => pad + (n <= 1 ? plotW / 2 : (i / (n - 1)) * plotW)
       const yAt = (v: number): number => pad + plotH - ((v - min) / span) * plotH
       return (
-        <div className="flex flex-1 flex-col" style={{ gap: '1cqw' }}>
+        <div className="flex min-h-0 flex-1 flex-col" style={{ gap: '1cqw' }}>
           <Block blockKey="title">
             <SlideTitle>{str(c.title)}</SlideTitle>
           </Block>
           <Block blockKey="chart">
-          <svg viewBox={`0 0 ${W} ${H}`} className="w-full flex-1" role="img" aria-label={str(c.title)}>
+          <svg viewBox={`0 0 ${W} ${H}`} className="min-h-0 w-full flex-1" role="img" aria-label={str(c.title)}>
             <line x1={pad} y1={pad + plotH} x2={W - pad} y2={pad + plotH} strokeWidth="1.5" style={{ stroke: ctx.line }} />
             <line x1={pad} y1={pad} x2={pad} y2={pad + plotH} strokeWidth="1.5" style={{ stroke: ctx.line }} />
             {series.map((s, si) => (
