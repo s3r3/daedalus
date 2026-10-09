@@ -759,9 +759,7 @@ export class AgentLoop {
     await this.#emit(state.id, turnId, 'MODEL_REQUEST_STARTED', { provider: this.#provider.name, messages: messages.length, tools: visibleTools?.length ?? 0, mode: turnMode, phase, ...meter });
     let response;
     try {
-      response = this.#streamText
-        ? await this.#chatStreamed(state.id, turnId, messages, visibleTools, phase)
-        : await this.#provider.chat(messages, visibleTools, { ...this.#chatOptions, phase });
+      response = await this.#chatWithEmptyRetry(state.id, turnId, messages, visibleTools, phase);
       await this.#emit(state.id, turnId, 'MODEL_REQUEST_FINISHED', { message: response.message, usage: response.usage, finish_reason: response.finish_reason, phase, ...this.#servedModelFields(state), ...meter });
       await this.#emitThought(state.id, turnId, response.message);
       this.#modelFailures.delete(state.id);
@@ -1789,6 +1787,37 @@ export class AgentLoop {
    * the identical plain request; a stream that dies mid-text throws
    * its real error into the caller's failure accounting.
    */
+  /**
+   * One model request with empty-response resilience. Providers (routed
+   * upstreams especially) intermittently return an empty/malformed body
+   * — "provider response has no choice message" — and a streak of those
+   * used to burn the consecutive-error budget and kill nearly-finished
+   * tasks (the 2026-10-08 live slide run died one step before export,
+   * the deck already valid). Empty/format failures retry inside the
+   * turn with backoff and never reach the error budget; every other
+   * failure surfaces immediately, exactly as before.
+   */
+  async #chatWithEmptyRetry(
+    taskId: string,
+    turnId: string,
+    messages: Message[],
+    tools: import('../providers/llm/types.ts').ToolDefinition[] | undefined,
+    phase: ModelPhase | undefined,
+  ): Promise<import('../providers/llm/types.ts').ChatResponse> {
+    const backoffMs = [600, 1800, 4000];
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return this.#streamText
+          ? await this.#chatStreamed(taskId, turnId, messages, tools, phase)
+          : await this.#provider.chat(messages, tools, { ...this.#chatOptions, phase });
+      } catch (error) {
+        if (modelPoolFailureReason(error) !== 'format_or_empty' || attempt >= backoffMs.length) throw error;
+        await this.#emit(taskId, turnId, 'LOOP_WARNING', { tool: '', repeats: attempt + 1, suppressed: false, kind: 'empty_response_retry', attempt: attempt + 1 });
+        await new Promise((resolve) => setTimeout(resolve, backoffMs[attempt]));
+      }
+    }
+  }
+
   async #chatStreamed(
     taskId: string,
     turnId: string,
@@ -1849,13 +1878,13 @@ export class AgentLoop {
    * scaffold marker on disk, and whether the task delegated.
    */
   /**
-   * Slide completion gate: a slide task that built deck content may not
-   * finish "done" while no successful export_deck is on record — the
-   * deck would exist only as deck.json and the user would get no .pptx
-   * (the exact shape of the owner's first successful build, which
-   * stopped one step early despite the contract). The trigger is the
-   * task's own deck work, not goal wording: read-only slide questions
-   * never build, so they are never gated, and Ask/Plan keep their own
+   * Slide completion gate: a slide task may not finish "done" while no
+   * successful export_deck is on record — the deck would exist only as
+   * deck.json (or worse, as a markdown draft) and the user would get no
+   * .pptx. Two triggers arm it: the task's own deck work, or a goal
+   * that asks for a presentation to be produced (which also catches
+   * the markdown-shortcut run that never touches the deck tools).
+   * Read-only slide questions arm neither, and Ask/Plan keep their own
    * semantics.
    */
   #slideExportRefusal(state: TaskState): { reason: string; detail: string } | undefined {
@@ -1863,10 +1892,13 @@ export class AgentLoop {
     const mode = state.mode ?? this.#modeController.mode;
     if (mode === 'ask' || mode === 'plan') return undefined;
     if (this.#slideExports.has(state.id)) return undefined;
-    if (!this.#slideDeckWork.has(state.id)) return undefined;
+    const builtDeck = this.#slideDeckWork.has(state.id);
+    if (!builtDeck && !presentationCreationGoal(state.goal)) return undefined;
     return {
       reason: 'slide_export_missing',
-      detail: 'this slide task has not produced a .pptx yet — no successful export_deck call is on record. A slide task is complete only when the deck is exported: call validate_deck, fix every error it reports, then call export_deck',
+      detail: builtDeck
+        ? 'this slide task has not produced a .pptx yet — no successful export_deck call is on record. A slide task is complete only when the deck is exported: call validate_deck, fix every error it reports, then call export_deck'
+        : 'this slide task has not built a deck yet — no create_deck/add_slide call is on record, and a markdown file or a script-converted file is not a deck. Build the deck with the built-in deck tools (create_deck, then add_slide once per slide), then call validate_deck and export_deck',
     };
   }
 
@@ -2143,6 +2175,14 @@ export class AgentLoop {
   }
 
   #done(state: TaskState): boolean {
+    // Slide domain: the deliverable is the exported .pptx. Plan steps
+    // advance one per mutating result and read-only calls (validate_deck
+    // in the contract's validate→export order) cannot check one off, so
+    // once a successful export is on record the steps must not veto
+    // completion — the DeckValidator judges the artifact itself. Until
+    // an export lands this stays false and the export gate below keeps
+    // the task working.
+    if (state.domain === 'slide' && this.#slideExports.has(state.id)) return true;
     return state.steps.length > 0 && state.steps.every((s) => s.status === 'done' || s.status === 'skipped');
   }
 }
@@ -2151,6 +2191,20 @@ const MAX_THOUGHT_CHARS = 4_000;
 
 /** Deck-building slide tools: one successful call means the task built deck content (the slide completion gate's trigger). */
 const SLIDE_DECK_WORK_TOOLS = new Set(['create_deck', 'add_slide', 'update_slide', 'move_slide', 'delete_slide', 'set_deck_theme']);
+
+const SLIDE_GOAL_NOUN = /\b(slide|slides|pptx|powerpoint|presentasi|presentation|deck)\b/i;
+const SLIDE_GOAL_VERB = /\b(buat|buatkan|bikin|membuat|membuatkan|create|make|generate|build|convert|konversi|ubah|jadikan|susun)\b/i;
+
+/**
+ * A goal that asks for a presentation to be produced. Arms the slide
+ * gate even when the model never touched the deck tools — the markdown
+ * shortcut (write a .md draft, report "Selesai") otherwise completes a
+ * slide task with zero deck evidence. Question-shaped goals are exempt.
+ */
+function presentationCreationGoal(goal: string): boolean {
+  if (goal.trim().endsWith('?')) return false;
+  return SLIDE_GOAL_NOUN.test(goal) && SLIDE_GOAL_VERB.test(goal);
+}
 
 /** Cheap content fingerprint for the stall tracker's "new observation" test. */
 function observationHash(text: string): string {

@@ -8,12 +8,28 @@ import { DomainSwitch } from '../layout/domain-switch'
 import { SlideRenderer } from './slide-renderer'
 import { SlideStage } from './slide-stage'
 import { DeckOutlinePanel } from './deck-outline'
+import { SlideTemplatesPanel } from './slide-templates'
+import { SlideComposerControls } from '../composer/slide-controls'
 
 const fileMock = vi.fn()
+const slideTemplatesMock = vi.fn()
+const deckThemeMock = vi.fn()
+const deckUpdateSlideMock = vi.fn()
+const deckExportMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
   api: {
     file: (...args: unknown[]) => fileMock(...args),
+    slideTemplates: (...args: unknown[]) => slideTemplatesMock(...args),
+    deckTheme: (...args: unknown[]) => deckThemeMock(...args),
+    deckUpdateSlide: (...args: unknown[]) => deckUpdateSlideMock(...args),
+    deckAddSlide: vi.fn(async () => ({ root: '/ws', deck: { version: 1, id: 'd', title: 't', theme: {}, slides: [] }, slide_id: 'baru' })),
+    deckDeleteSlide: vi.fn(async () => ({ root: '/ws', deck: { version: 1, id: 'd', title: 't', theme: {}, slides: [] } })),
+    deckMoveSlide: vi.fn(async () => ({ root: '/ws', deck: { version: 1, id: 'd', title: 't', theme: {}, slides: [] } })),
+    deckExport: (...args: unknown[]) => deckExportMock(...args),
+    deckDownloadUrl: (root: string, path: string) => `/slides/deck/download?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
+    createTask: vi.fn(async () => ({ id: 'task-varian', goal: 'varian', repo_path: '/ws', created_at: '' })),
+    list: vi.fn(async () => ({ path: 'deck', items: [] })),
   },
 }))
 
@@ -61,6 +77,19 @@ beforeEach(() => {
   localStorage.clear()
   fileMock.mockReset()
   fileMock.mockResolvedValue(deckFile())
+  slideTemplatesMock.mockReset()
+  slideTemplatesMock.mockResolvedValue({
+    templates: [
+      { id: 'general', name: 'General', description: 'Default', theme: { background: '#201f26', accent: '#6b50ff', text: '#ecebf0', headingFont: 'Arial', bodyFont: 'Arial' } },
+      { id: 'ocean', name: 'Ocean', description: 'Biru laut', theme: { background: '#0e2a47', accent: '#2dd4bf', text: '#e8f4ff', headingFont: 'Verdana', bodyFont: 'Arial' } },
+    ],
+  })
+  deckThemeMock.mockReset()
+  deckThemeMock.mockResolvedValue({ root: '/ws', deck: fixtureDeck })
+  deckUpdateSlideMock.mockReset()
+  deckUpdateSlideMock.mockResolvedValue({ root: '/ws', deck: fixtureDeck })
+  deckExportMock.mockReset()
+  deckExportMock.mockResolvedValue({ root: '/ws', path: 'deck/deck-uji.pptx', bytes: 2048, slides: 3 })
   useDaedalusStore.getState().reset()
 })
 
@@ -169,5 +198,87 @@ describe('SlideStage', () => {
     render(<SlideStage />)
     expect(screen.getByTestId('slide-stage').textContent).toContain('Buka workspace dulu')
     expect(fileMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('SlideTemplatesPanel', () => {
+  test('lists bundled templates and applies the pick to the open deck through the API', async () => {
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideTemplatesPanel />)
+
+    const ocean = await screen.findByTestId('slide-template-ocean')
+    expect(screen.getByTestId('slide-template-general')).toBeTruthy()
+    await user.click(ocean)
+
+    expect(deckThemeMock).toHaveBeenCalledWith('/ws', { template_id: 'ocean' })
+    expect(useDaedalusStore.getState().slideOptions.templateId).toBe('ocean')
+  })
+
+  test('without a deck the pick stays pending for the next task', async () => {
+    const user = userEvent.setup()
+    fileMock.mockRejectedValue(new Error('404 Not Found'))
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideTemplatesPanel />)
+
+    const general = await screen.findByTestId('slide-template-general')
+    await user.click(general)
+
+    expect(deckThemeMock).not.toHaveBeenCalled()
+    expect(useDaedalusStore.getState().slideOptions.templateId).toBe('general')
+  })
+})
+
+describe('SlideStage editing', () => {
+  test('the Edit toggle opens the editor and saving writes through the slide API', async () => {
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-edit-toggle'))
+    expect(screen.getByTestId('slide-editor')).toBeTruthy()
+
+    const title = screen.getByTestId('slide-editor-title') as HTMLInputElement
+    await user.clear(title)
+    await user.type(title, 'Judul Baru')
+    await user.click(screen.getByTestId('slide-editor-save'))
+
+    expect(deckUpdateSlideMock).toHaveBeenCalledTimes(1)
+    const [, slideId, payload] = deckUpdateSlideMock.mock.calls[0] as [string, string, { content: Record<string, unknown>; layout?: string }]
+    expect(slideId).toBe('s1')
+    expect(payload.content.title).toBe('Judul Baru')
+  })
+
+  test('Export calls the deck export endpoint and offers the download', async () => {
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-export'))
+
+    const note = await screen.findByTestId('slide-exported')
+    expect(deckExportMock).toHaveBeenCalledWith('/ws')
+    expect(note.textContent).toContain('deck/deck-uji.pptx')
+  })
+})
+
+describe('SlideComposerControls', () => {
+  test('generation, count and language are explicit store-backed controls', async () => {
+    const user = userEvent.setup()
+    render(<SlideComposerControls />)
+
+    await user.click(screen.getByTestId('slide-gen-smart'))
+    expect(useDaedalusStore.getState().slideOptions.generation).toBe('smart')
+
+    await user.selectOptions(screen.getByTestId('slide-count-select'), '10')
+    expect(useDaedalusStore.getState().slideOptions.slideCount).toBe(10)
+
+    await user.selectOptions(screen.getByTestId('slide-language-select'), 'Bahasa Indonesia')
+    expect(useDaedalusStore.getState().slideOptions.language).toBe('Bahasa Indonesia')
+
+    await user.selectOptions(screen.getByTestId('slide-count-select'), 'auto')
+    expect(useDaedalusStore.getState().slideOptions.slideCount).toBeNull()
   })
 })

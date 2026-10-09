@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { deckPaths, MAX_SLIDES, type DeckIssue, type DeckSpec, type Slide } from './deck.ts';
+import { deckPaths, LONG_TEXT_CHARS, MAX_SLIDES, type DeckIssue, type DeckSpec, type Slide } from './deck.ts';
 import { getLayout, validateSlideContent } from './layouts.ts';
 
 export { MAX_SLIDES };
@@ -81,6 +81,56 @@ export type ValidateDeckOptions = {
   root?: string;
 };
 
+/** Per-layout item caps: beyond these a slide stops reading as a slide (mk-present's density doctrine — overflow splits the slide, never compresses it). */
+const DENSITY_CAPS: Record<string, number> = {
+  bullets: 6,
+  'two-column': 5,
+  'icon-grid': 6,
+  stats: 4,
+  timeline: 6,
+  'diagram-flow': 6,
+  'diagram-cycle': 6,
+  'diagram-hierarchy': 6,
+  comparison: 5,
+  'chart-bar': 8,
+  'chart-line': 8,
+  'chart-donut': 6,
+};
+
+function densityIssues(slide: Slide): DeckIssue[] {
+  const issues: DeckIssue[] = [];
+  const cap = DENSITY_CAPS[slide.layout] ?? 8;
+  const lists: Array<{ field: string; items: unknown[] }> = [];
+  const content = slide.content ?? {};
+  for (const field of ['points', 'items', 'steps', 'events', 'stats', 'cards']) {
+    if (Array.isArray(content[field])) lists.push({ field, items: content[field] as unknown[] });
+  }
+  for (const side of ['left', 'right'] as const) {
+    const sideContent = content[side] as { points?: unknown } | undefined;
+    if (sideContent && Array.isArray(sideContent.points)) lists.push({ field: `${side}.points`, items: sideContent.points as unknown[] });
+  }
+  if (slide.layout === 'table' && Array.isArray(content.rows) && (content.rows as unknown[]).length > 8) {
+    issues.push({ slideId: slide.id, layout: slide.layout, field: 'rows', code: 'too-dense', message: `slide ${slide.id}: table has ${(content.rows as unknown[]).length} rows (max 8) — split it into two slides`, severity: 'error' });
+  }
+  for (const { field, items } of lists) {
+    if (items.length > cap) {
+      issues.push({ slideId: slide.id, layout: slide.layout, field, code: 'too-dense', message: `slide ${slide.id}: ${field} has ${items.length} items (max ${cap} for ${slide.layout}) — split the content across two slides instead of compressing it`, severity: 'error' });
+    }
+    for (const item of items) {
+      const text = typeof item === 'string' ? item : typeof (item as { text?: unknown })?.text === 'string' ? String((item as { text: string }).text) : typeof (item as { title?: unknown })?.title === 'string' ? String((item as { title: string }).title) : '';
+      if (text.length > LONG_TEXT_CHARS) {
+        issues.push({ slideId: slide.id, layout: slide.layout, field, code: 'text-long', message: `slide ${slide.id}: a ${field} item is ${text.length} chars (over ${LONG_TEXT_CHARS}) — shorten it or split the slide`, severity: 'warning' });
+        break;
+      }
+    }
+  }
+  const title = content.title;
+  if (typeof title === 'string' && title.length > 110) {
+    issues.push({ slideId: slide.id, layout: slide.layout, field: 'title', code: 'text-long', message: `slide ${slide.id}: title is ${title.length} chars (over 110) — shorten it`, severity: 'warning' });
+  }
+  return issues;
+}
+
 export function validateDeck(deck: DeckSpec, opts: ValidateDeckOptions = {}): DeckIssue[] {
   const issues: DeckIssue[] = [];
   if (!deck || typeof deck !== 'object') {
@@ -107,6 +157,7 @@ export function validateDeck(deck: DeckSpec, opts: ValidateDeckOptions = {}): De
     for (const iss of validateSlideContent(layout, slide.content)) {
       issues.push({ ...iss, slideId: slide.id });
     }
+    issues.push(...densityIssues(slide));
     if (slide.layout === 'image-side' && assetExists) {
       const image = slide.content.image;
       if (typeof image === 'string' && image.length > 0 && !assetExists(image)) {

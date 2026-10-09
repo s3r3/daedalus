@@ -96,7 +96,7 @@ function skillLoadedEvents(store: TaskStore, taskId: string): unknown[] {
 }
 
 describe('task domain: slide', () => {
-  test('slide domain pins the deck contract and hides presentation skills from the index', async () => {
+  test('slide domain pins the deck contract and advertises no skills at all', async () => {
     const workspace = temp('daedalus-slide-ws-');
     writeSkill(workspace, 'ppt-maker', 'Generate slides and presentations via external API', PPT_MARKER);
     writeSkill(workspace, 'deploy', 'Deploy the thing', DEPLOY_MARKER);
@@ -110,7 +110,7 @@ describe('task domain: slide', () => {
     expect(system).toContain('create_deck');
     expect(system).toContain('export_deck');
     expect(system).not.toContain('ppt-maker');
-    expect(system).toContain('deploy');
+    expect(system).not.toContain('deploy');
   });
 
   test('without a domain there is no slide block and presentation skills stay listed', async () => {
@@ -127,7 +127,7 @@ describe('task domain: slide', () => {
     expect(system).toContain('ppt-maker');
   });
 
-  test('slide domain redirects a presentation read_skill to the built-in deck tools and records no SKILL_LOADED', async () => {
+  test('slide domain has no read_skill to call: the locked registry answers unknown tool and no SKILL_LOADED is recorded', async () => {
     const workspace = temp('daedalus-slide-ws-');
     writeSkill(workspace, 'ppt-maker', 'Generate slides and presentations via external API', PPT_MARKER);
     const { provider, seen } = fakeProvider([{ read: 'ppt-maker' }, 'done']);
@@ -136,8 +136,7 @@ describe('task domain: slide', () => {
     await runner.run({ goal: 'siapkan materi keamanan anak\ndone: deck selesai', taskId: 'slide-c', domain: 'slide' });
 
     const next = requestText(seen[1]);
-    expect(next).toContain('create_deck');
-    expect(next).toContain('export_deck');
+    expect(next.toLowerCase()).toContain('not available in this run');
     expect(next).not.toContain(PPT_MARKER);
     expect(skillLoadedEvents(store, 'slide-c')).toEqual([]);
   });

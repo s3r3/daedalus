@@ -425,6 +425,7 @@ export {
   REPEAT_SUPPRESSED_OUTPUT,
   REVIEW_READ_ONLY_TOOLS,
   type ContextManagerOptions,
+  type SlideTaskParams,
   type CreationCompletionEvidence,
   type CreationGoal,
   type CreationRefusal,
@@ -705,6 +706,13 @@ export {
 } from "./slides/store.ts";
 
 export { exportDeckToPptx } from "./slides/export-pptx.ts";
+
+export {
+  SLIDE_TEMPLATES,
+  getSlideTemplate,
+  listSlideTemplates,
+  type SlideTemplate,
+} from "./slides/templates.ts";
 
 export {
   createDeckTool,

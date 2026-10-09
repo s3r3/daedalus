@@ -3,6 +3,15 @@ import { join } from 'node:path';
 export type DeckTheme = {
   accent?: string;
   dark?: boolean;
+  /** Template tokens (slides/templates.ts). All optional; renderers fall back to the built-in palette. Hex colors as #rrggbb. */
+  background?: string;
+  surface?: string;
+  text?: string;
+  muted?: string;
+  headingFont?: string;
+  bodyFont?: string;
+  /** Id of the bundled template these tokens came from (set_deck_theme/create_deck templateId). */
+  templateId?: string;
 };
 
 export type Slide = {

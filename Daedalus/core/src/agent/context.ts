@@ -4,16 +4,19 @@ import type { ContentBlock, Message, ToolDefinition } from '../providers/llm/typ
 import type { Attachment, PromptFamily, TaskDomain, TaskState } from '../contracts.ts';
 import { buildPrompt, estimateTokens, systemMessage, userMessage } from '../providers/index.ts';
 import { modePromptContract } from '../interaction/modes.ts';
-import { MAX_SKILLS_IN_PROMPT, dedupeSkillsByName, formatSkillOrigin, isPresentationSkill, type SkillInfo, type SkillOrigin } from '../skills/index.ts';
+import { MAX_SKILLS_IN_PROMPT, dedupeSkillsByName, formatSkillOrigin, type SkillInfo, type SkillOrigin } from '../skills/index.ts';
 import { walkTreeLines } from '../tools/filesystem/index.ts';
 import { promptFamilyFragment } from './prompt-dialects.ts';
 import { resolveMentionSection } from './mentions.ts';
+import { SLIDE_TEMPLATES } from '../slides/templates.ts';
 import type { ContextManager, Observation } from './types.ts';
 
 export type ContextManagerOptions = {
   budget?: number;
   /** Product domain of this task; 'slide' pins the deck-only contract and hides presentation-maker skills. Absent = coding. */
   domain?: TaskDomain;
+  /** Slide composer parameters (generation flow, target count, language, template); rendered into the slide contract. */
+  slide?: SlideTaskParams;
   workspaceRoot?: string;
   visionEnabled?: boolean;
   maxImageBytes?: number;
@@ -72,12 +75,32 @@ export const MAX_PINNED_TOTAL_CHARS = 2_400;
  * slide task: deck production runs on the built-in deck tools alone, in
  * outline-first order. Coding tasks never see this section.
  */
-export const SLIDE_DOMAIN_PROMPT = [
-  'Slide domain: this task produces a presentation deck.',
-  'Use ONLY the built-in deck tools (create_deck, read_deck, add_slide, update_slide, move_slide, delete_slide, set_deck_theme, validate_deck, export_deck); never use an external presentation service or API, and never load a presentation-maker skill.',
-  "Workflow: (1) OUTLINE FIRST — call create_deck, then add_slide once per outline item (title + layout) so the complete outline is visible before any content is filled in; prefer visual layouts (diagram, chart, icon-grid, stats, timeline, comparison) over plain bullet lists. (2) Fill in each slide's content with update_slide. (3) Call validate_deck and fix every error it reports. (4) Call export_deck to produce the .pptx file.",
-  'Do not write deck JSON by hand with write_file, and do not report done before export_deck succeeds.',
-].join('\n');
+/** Slide task parameters chosen in the Slide composer (generation flow, target count, content language, pre-picked template). */
+export type SlideTaskParams = {
+  generation?: 'smart' | 'standard';
+  slideCount?: number;
+  language?: string;
+  templateId?: string;
+};
+
+export function buildSlideDomainPrompt(params: SlideTaskParams = {}): string {
+  const generation = params.generation ?? 'standard';
+  return [
+    'Slide domain (slide mode): this task produces a presentation deck. Slide mode is the only mode in this domain; Ask/Manual/Auto/Plan belong to the Coding domain and do not exist here.',
+    'You have ONLY the built-in deck tools (create_deck, read_deck, add_slide, update_slide, move_slide, delete_slide, set_deck_theme, validate_deck, export_deck) plus ask_user for substantive clarifications. There are no coding tools in this domain, no skills to load, and no external presentation service or API — the deck tools are the whole surface.',
+    generation === 'standard'
+      ? 'STANDARD flow: (1) Call create_deck, then add_slide once per outline item (title + layout skeleton only) so the complete outline exists before any content is filled in. (2) CHECKPOINT: call ask_user presenting the outline (the slide titles in order) and asking the user to pick a design direction; the choices are the bundled templates listed below (offer up to four, by template id) plus continuing without a template. This is a hard pause: wait for the answer. (3) Apply the chosen template with set_deck_theme {templateId} (skip when the user chose none). (4) Fill each slide with update_slide, preferring visual layouts (diagram, chart, icon-grid, stats, timeline, comparison) over plain bullet lists. (5) Call validate_deck and fix every error it reports. (6) Call export_deck.'
+      : 'SMART flow: build the deck in one pass — create_deck, add_slide with full content per slide (prefer visual layouts over plain bullets), then validate_deck, fix every error, then export_deck. Use ask_user only when the topic or audience is genuinely ambiguous, never for slide count or language (those are UI controls).',
+    `Bundled templates (design directions): ${SLIDE_TEMPLATES.map((t) => `${t.id} — ${t.name}: ${t.description}`).join(' | ')}`,
+    ...(params.templateId ? [`The user already picked template "${params.templateId}" in the UI: pass it as templateId to create_deck (or set_deck_theme immediately after) and do not ask about design direction again.`] : []),
+    ...(params.slideCount ? [`Target exactly ${params.slideCount} slides — the user chose this count in the UI — unless their message explicitly says otherwise.`] : []),
+    ...(params.language ? [`Write all deck content (titles, points, notes) in this language: ${params.language}.`] : []),
+    'The deliverable is the exported .pptx file, not a document: never write slide content as .md/.txt files and never build or convert slides with scripts. If deck/deck.json already exists in this workspace, continue that deck with read_deck instead of starting over.',
+    'Do not report done before export_deck succeeds.',
+  ].join('\n');
+}
+
+export const SLIDE_DOMAIN_PROMPT = buildSlideDomainPrompt();
 
 /**
  * Context Manager: ordered prompt sections (role, task, plan, constraints),
@@ -104,10 +127,12 @@ export class DefaultContextManager implements ContextManager {
   readonly #promptFamily: PromptFamily;
   readonly #pins: string[];
   readonly #scaffoldPlaybook?: string;
+  readonly #slide?: SlideTaskParams;
 
   constructor(options: number | ContextManagerOptions = 16_000) {
     const resolved = typeof options === 'number' ? { budget: options } : options;
     this.#domain = resolved.domain;
+    this.#slide = resolved.slide;
     this.#budget = resolved.budget ?? 16_000;
     this.#workspaceRoot = resolved.workspaceRoot;
     this.#visionEnabled = resolved.visionEnabled === true;
@@ -116,12 +141,10 @@ export class DefaultContextManager implements ContextManager {
     // Deduped by name at the door: whatever list a caller hands in, the
     // prompt advertises each skill once (the loader already dedupes, this
     // keeps the guarantee for direct/raw feeds too). In the Slide domain
-    // presentation-maker skills leave the index entirely — the built-in
-    // deck tools are the only presentation surface there.
+    // no skills are advertised at all: the slide registry has no
+    // read_skill, so an index would advertise a door that does not exist.
     const listedSkills = dedupeSkillsByName(resolved.skills ?? []);
-    this.#skills = resolved.domain === 'slide'
-      ? listedSkills.filter((skill) => !isPresentationSkill(skill.name, skill.description))
-      : listedSkills;
+    this.#skills = resolved.domain === 'slide' ? [] : listedSkills;
     this.#invokedSkills = resolved.invokedSkills ?? [];
     this.#rules = resolved.rules;
     this.#rulesFiles = resolved.rulesFiles ?? [];
@@ -158,13 +181,14 @@ export class DefaultContextManager implements ContextManager {
         { id: 'plan', content: state.steps.map((s) => `- [${s.status}] ${s.intent}`).join('\n') || '(no plan yet)' },
         { id: 'mode', content: modePromptContract(state.mode ?? 'auto') },
         ...(this.#domain === 'slide'
-          ? [{ id: 'domain', content: SLIDE_DOMAIN_PROMPT }]
+          ? [{ id: 'domain', content: buildSlideDomainPrompt(this.#slide) }]
           : []),
         { id: 'constraints', content: state.constraints.join('\n') || '(none)' },
         {
           id: 'protocol',
-          content:
-            'Respond with a tool call to act, or reply starting with "done: <summary>" when every plan step is satisfied, "replan: <reason>" to amend the plan, or "stop: <reason>" to abort. Read-only inspection (list/read/search) is evidence only: it finishes an inspection step, never an implementation criterion. Before "done:" on a mutating task, call a mutating tool (write_file, edit_file, create_dir) or run_command and let validation prove it. If a previous model response was invalid prose, answer with a concrete tool call next. Do not repeat list_dir/read on the same path: the workspace overview below (and any listing already returned) is your structure reference — with enough structure, mutate (create_dir, write_file, edit_file) instead of exploring further. Bias to action: deliver the working result, not a plan about it; create the folder/file as soon as you know where it goes, and finish with "done: <what you made and where>".',
+          content: this.#domain === 'slide'
+            ? 'Respond with a tool call to act, or reply starting with "done: <summary>" only after export_deck has succeeded, "replan: <reason>" to amend the plan, or "stop: <reason>" to abort. read_deck is evidence only; before "done:" the deck must exist, validate clean, and be exported. If a previous model response was invalid prose, answer with a concrete deck tool call next. Bias to action: build the deck, do not narrate it.'
+            : 'Respond with a tool call to act, or reply starting with "done: <summary>" when every plan step is satisfied, "replan: <reason>" to amend the plan, or "stop: <reason>" to abort. Read-only inspection (list/read/search) is evidence only: it finishes an inspection step, never an implementation criterion. Before "done:" on a mutating task, call a mutating tool (write_file, edit_file, create_dir) or run_command and let validation prove it. If a previous model response was invalid prose, answer with a concrete tool call next. Do not repeat list_dir/read on the same path: the workspace overview below (and any listing already returned) is your structure reference — with enough structure, mutate (create_dir, write_file, edit_file) instead of exploring further. Bias to action: deliver the working result, not a plan about it; create the folder/file as soon as you know where it goes, and finish with "done: <what you made and where>".',
         },
         // Prompt dialect (tailor suite): framing conventions per model
         // family. `generic` contributes no section at all, keeping the

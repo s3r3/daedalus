@@ -4,6 +4,7 @@ import type { ToolDefinition, ToolExecutionContext } from './registry.ts';
 import { deckPaths, type DeckSpec, type Slide } from '../slides/deck.ts';
 import { getLayout, LAYOUTS, validateSlideContent, type PropSchema } from '../slides/layouts.ts';
 import { ensureDeckDir, newDeck, newSlideId, readDeck, summarizeDeck, validateDeck, writeDeck } from '../slides/store.ts';
+import { getSlideTemplate, SLIDE_TEMPLATES } from '../slides/templates.ts';
 import { exportDeckToPptx } from '../slides/export-pptx.ts';
 import type { ToolResult } from '../contracts.ts';
 
@@ -71,20 +72,23 @@ function formatIssues(deck: DeckSpec, root: string): string {
 
 export const createDeckTool: ToolDefinition = {
   name: 'create_deck',
-  description: `Create a new slide deck (deck/deck.json) in this workspace. Fails if a deck already exists. ${WORKFLOW}`,
-  inputSchema: { type: 'object', required: ['title'], properties: { title: { type: 'string' } }, additionalProperties: false },
+  description: `Create a new slide deck (deck/deck.json) in this workspace. Fails if a deck already exists. Optional templateId applies a bundled template's theme (see the template list in the task context). ${WORKFLOW}`,
+  inputSchema: { type: 'object', required: ['title'], properties: { title: { type: 'string' }, templateId: { type: 'string' } }, additionalProperties: false },
   mutating: true,
   async execute(args, context) {
-    const a = args as { title?: unknown };
+    const a = args as { title?: unknown; templateId?: unknown };
     if (typeof a.title !== 'string' || a.title.trim().length === 0) return err('title must be a non-empty string');
+    const template = getSlideTemplate(typeof a.templateId === 'string' ? a.templateId : undefined);
+    if (a.templateId !== undefined && !template) return err(`unknown templateId "${String(a.templateId)}" — bundled templates: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
     const root = context.workspaceRoot;
     const paths = deckPaths(root);
     if (existsSync(paths.file)) return err('deck already exists (deck/deck.json). Use read_deck to inspect it, or delete it manually before creating a new one.');
     try {
       await ensureDeckDir(root);
       const deck = newDeck(a.title.trim());
+      if (template) deck.theme = { ...template.theme, templateId: template.id };
       await writeDeck(root, deck);
-      return ok(`created deck at deck/deck.json\n${summarizeDeck(deck)}`, { deck_id: deck.id, path: 'deck/deck.json' });
+      return ok(`created deck at deck/deck.json${template ? ` with template ${template.id}` : ''}\n${summarizeDeck(deck)}`, { deck_id: deck.id, path: 'deck/deck.json' });
     } catch (e) { return err(String(e)); }
   },
 };
@@ -205,21 +209,24 @@ export const deleteSlideTool: ToolDefinition = {
 
 export const setDeckThemeTool: ToolDefinition = {
   name: 'set_deck_theme',
-  description: 'Set deck theme: accent as #rrggbb and/or dark boolean. Deck title is not changed here.',
-  inputSchema: { type: 'object', properties: { accent: { type: 'string' }, dark: { type: 'boolean' } }, additionalProperties: false },
+  description: 'Set deck theme: templateId applies a bundled template (palette + fonts); or set accent (#rrggbb) and/or dark boolean directly. Deck title is not changed here.',
+  inputSchema: { type: 'object', properties: { templateId: { type: 'string' }, accent: { type: 'string' }, dark: { type: 'boolean' } }, additionalProperties: false },
   mutating: true,
   async execute(args, context) {
-    const a = args as { accent?: unknown; dark?: unknown };
+    const a = args as { templateId?: unknown; accent?: unknown; dark?: unknown };
+    const template = getSlideTemplate(typeof a.templateId === 'string' ? a.templateId : undefined);
+    if (a.templateId !== undefined && !template) return err(`unknown templateId "${String(a.templateId)}" — bundled templates: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}`);
     if (a.accent !== undefined && (typeof a.accent !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(a.accent))) return err('accent must be a #rrggbb hex color');
     if (a.dark !== undefined && typeof a.dark !== 'boolean') return err('dark must be a boolean');
-    if (a.accent === undefined && a.dark === undefined) return err('provide accent and/or dark');
+    if (!template && a.accent === undefined && a.dark === undefined) return err('provide templateId, accent and/or dark');
     const loaded = await loadDeckOrError(context.workspaceRoot);
     if ('error' in loaded) return loaded.error;
     const deck = loaded.deck;
+    if (template) deck.theme = { ...template.theme, templateId: template.id };
     if (typeof a.accent === 'string') deck.theme.accent = a.accent;
     if (typeof a.dark === 'boolean') deck.theme.dark = a.dark;
     await writeDeck(context.workspaceRoot, deck);
-    return ok(`theme updated: accent=${deck.theme.accent ?? '(default)'} dark=${deck.theme.dark ?? true}\n${summarizeDeck(deck)}`, { theme: deck.theme });
+    return ok(`theme updated: template=${deck.theme.templateId ?? '(none)'} accent=${deck.theme.accent ?? '(default)'} dark=${deck.theme.dark ?? true}\n${summarizeDeck(deck)}`, { theme: deck.theme });
   },
 };
 

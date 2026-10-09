@@ -624,15 +624,19 @@ export function SlideRenderer({ slide, theme }: { slide: Slide; theme?: DeckSpec
   const isLight = theme?.dark === false
   const light = getPalette('light')
   const accent = typeof theme?.accent === 'string' && theme.accent.trim() !== '' ? theme.accent : 'var(--daedalus-accent)'
+  // Template tokens (slides/templates.ts) win over the app palette when
+  // the deck carries them — the canvas then matches the exported PPTX,
+  // which resolves the same tokens in core's exporter.
   const ctx: Ctx = {
     accent,
-    muted: isLight ? light.fgMoreSubtle : 'var(--daedalus-fgMoreSubtle)',
-    panelBg: isLight ? light.bgBase : 'var(--daedalus-bgSurface)',
+    muted: theme?.muted ?? (isLight ? light.fgMoreSubtle : 'var(--daedalus-fgMoreSubtle)'),
+    panelBg: theme?.surface ?? (isLight ? light.bgBase : 'var(--daedalus-bgSurface)'),
     line: 'var(--daedalus-separator)',
   }
   const rootStyle: CSSProperties = {
-    backgroundColor: isLight ? light.bgSurface : 'var(--daedalus-bgBase)',
-    color: isLight ? light.fgBase : 'var(--daedalus-fgBase)',
+    backgroundColor: theme?.background ?? (isLight ? light.bgSurface : 'var(--daedalus-bgBase)'),
+    color: theme?.text ?? (isLight ? light.fgBase : 'var(--daedalus-fgBase)'),
+    ...(theme?.bodyFont ? { fontFamily: theme.bodyFont } : {}),
   }
 
   return (

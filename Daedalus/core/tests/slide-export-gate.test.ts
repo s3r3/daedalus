@@ -126,6 +126,37 @@ describe('slide completion gate in the agent loop', () => {
     expect(pptxFiles(root)).toHaveLength(1);
   });
 
+  test('a presentation goal with zero deck work is refused: the markdown shortcut cannot report success', async () => {
+    const root = temp('daedalus-slide-gate-markdown-');
+    const provider = scriptedProvider([
+      { tool: 'write_file', args: { path: 'slides.md', content: '# Slide draft\n' } },
+      { text: 'done: slide selesai' },
+      { text: 'done: slide selesai' },
+    ]);
+    const { loop, store } = makeLoop(root, provider);
+    const state = await loop.run(spec(root, 'gate-markdown', 'buatkan slide tentang keamanan anak', 'slide'));
+    expect(state.status).toBe('failed');
+    expect(state.last_error).toBe('slide_export_missing');
+    const recoveries = store.replay('gate-markdown').filter((event) => event.type === 'RECOVERY_STARTED');
+    expect(recoveries).toHaveLength(1);
+    expect(JSON.stringify(recoveries[0]?.payload ?? {})).toContain('slide_export_missing');
+  });
+
+  test('after a markdown refusal, building and exporting the deck still succeeds', async () => {
+    const root = temp('daedalus-slide-gate-markdown-fix-');
+    const provider = scriptedProvider([
+      { tool: 'write_file', args: { path: 'slides.md', content: '# Slide draft\n' } },
+      { text: 'done: slide selesai' },
+      { tool: 'create_deck', args: { title: 'Keamanan Anak' } },
+      { tool: 'add_slide', args: { layout: 'bullets', content: { title: 'Poin', points: ['satu'] } } },
+      { tool: 'export_deck', args: {} },
+    ]);
+    const { loop } = makeLoop(root, provider);
+    const state = await loop.run(spec(root, 'gate-markdown-fix', 'buatkan slide tentang keamanan anak', 'slide'));
+    expect(state.status).toBe('done');
+    expect(pptxFiles(root)).toHaveLength(1);
+  });
+
   test('a read-only slide question is never export-gated', async () => {
     const root = temp('daedalus-slide-gate-question-');
     mkdirSync(join(root, 'deck'), { recursive: true });
