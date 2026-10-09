@@ -111,41 +111,87 @@ function CheckList({ items, ctx, size = '1.35cqw', marker = '✓', markerColor }
 }
 
 /**
- * One image area of a slide: the real picture when the content references
- * a remote/data URL, an honest labelled placeholder otherwise (local deck
- * assets resolve through the stage in Part B — the placeholder stays the
- * same visual either way, so layouts never branch on upload state).
+ * One image area of a slide (`blockKey` = the draggable block it fills).
+ * Remote/data URLs render directly; a local deck-asset name renders the
+ * real bytes when the stage's resolver maps it to a URL; anything else
+ * is an honest labelled placeholder. In Edit mode the slot is a button:
+ * a click (not a drag — movement past a few px belongs to the block
+ * drag session) asks the stage to open the image picker for this block.
  */
-function ImageSlot({ image, alt, caption, ctx, style }: {
+function ImageSlot({ blockKey, image, alt, caption, ctx, style }: {
+  blockKey: string
   image: string
   alt: string
   caption?: string
   ctx: Ctx
   style?: CSSProperties
 }) {
+  const blocks = useContext(BlockCtx)
   const isRemote = /^(https?:|data:)/i.test(image)
+  const resolved = !isRemote && blocks.imageSrc ? blocks.imageSrc(image) : undefined
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    setFailed(false)
+  }, [image, resolved])
+  const showImg = isRemote || (resolved !== undefined && !failed)
+  const clickable = blocks.editable && blocks.onImagePick !== undefined && !isRemote
+  const downAt = useRef<{ x: number; y: number } | null>(null)
+
+  const content = showImg ? (
+    <img
+      src={isRemote ? image : resolved}
+      alt={alt}
+      className="absolute inset-0 h-full w-full object-cover"
+      onError={isRemote ? undefined : () => setFailed(true)}
+    />
+  ) : (
+    <>
+      <ImageIcon aria-hidden style={{ width: '3.4cqw', height: '3.4cqw', color: ctx.accent }} />
+      <div className="break-all font-semibold" style={{ fontSize: '1.1cqw' }}>
+        {image || 'image'}
+      </div>
+      {alt ? <div style={{ fontSize: '1cqw', color: ctx.muted }}>{alt}</div> : null}
+      {caption ? (
+        <div className="font-medium" style={{ fontSize: '1.05cqw', color: ctx.accent }}>
+          {caption}
+        </div>
+      ) : null}
+      {clickable ? (
+        <div className="font-semibold" style={{ fontSize: '1cqw', color: ctx.accent }}>
+          Klik untuk upload gambar
+        </div>
+      ) : null}
+    </>
+  )
+
+  const boxStyle: CSSProperties = { borderColor: ctx.line, backgroundColor: ctx.panelBg, gap: '0.7cqw', padding: '1cqw', ...style }
+  const boxClass = 'relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-md border text-center'
+  if (!clickable) {
+    return (
+      <div className={boxClass} style={boxStyle}>
+        {content}
+      </div>
+    )
+  }
   return (
-    <div
-      className="relative flex h-full w-full flex-col items-center justify-center overflow-hidden rounded-md border text-center"
-      style={{ borderColor: ctx.line, backgroundColor: ctx.panelBg, gap: '0.7cqw', padding: '1cqw', ...style }}
+    <button
+      type="button"
+      data-testid={`slide-image-upload-${blockKey}`}
+      aria-label={`Upload gambar${image ? `: ${image}` : ''}`}
+      className={`${boxClass} cursor-pointer`}
+      style={boxStyle}
+      onPointerDown={(event) => {
+        downAt.current = { x: event.clientX, y: event.clientY }
+      }}
+      onClick={(event) => {
+        const down = downAt.current
+        downAt.current = null
+        if (down && Math.abs(event.clientX - down.x) + Math.abs(event.clientY - down.y) > 4) return
+        blocks.onImagePick?.(blockKey)
+      }}
     >
-      {isRemote ? (
-        <img src={image} alt={alt} className="absolute inset-0 h-full w-full object-cover" />
-      ) : (
-        <>
-          <ImageIcon aria-hidden style={{ width: '3.4cqw', height: '3.4cqw', color: ctx.accent }} />
-          <div className="break-all font-semibold" style={{ fontSize: '1.1cqw' }}>
-            {image || 'image'}
-          </div>
-          {alt ? <div style={{ fontSize: '1cqw', color: ctx.muted }}>{alt}</div> : null}
-          {caption ? (
-            <div className="font-medium" style={{ fontSize: '1.05cqw', color: ctx.accent }}>
-              {caption}
-            </div>
-          ) : null}
-        </>
-      )}
-    </div>
+      {content}
+    </button>
   )
 }
 
@@ -181,6 +227,10 @@ type BlockCtxValue = {
   editable: boolean
   overlayEl: HTMLElement | null
   onDragStart: (key: string, event: ReactPointerEvent) => void
+  /** Resolves a local deck-asset name to a displayable URL (stage-provided). */
+  imageSrc?: (name: string) => string | undefined
+  /** Edit mode: a placeholder (or placed image) was clicked, not dragged. */
+  onImagePick?: (blockKey: string) => void
 }
 
 const BlockCtx = createContext<BlockCtxValue>({ positions: {}, editable: false, overlayEl: null, onDragStart: () => {} })
@@ -384,7 +434,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       )
     }
     case 'image-side': {
-      const imageBox = <ImageSlot image={str(c.image)} alt={str(c.alt)} ctx={ctx} style={{ width: '36%', flexShrink: 0 }} />
+      const imageBox = <ImageSlot blockKey="image" image={str(c.image)} alt={str(c.alt)} ctx={ctx} style={{ width: '36%', flexShrink: 0 }} />
       const textCol = (
         <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '1.6cqw' }}>
           <Block blockKey="title">
@@ -1288,7 +1338,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
                 index === 0 ? { gridRow: '1 / span 2' } : index === 1 ? { gridColumn: '2 / span 2' } : {}
               return (
                 <Block key={index} blockKey={`tile-${index}`}>
-                  <ImageSlot image={str(tile.image)} alt={str(tile.alt)} caption={str(tile.caption)} ctx={ctx} style={cellStyle} />
+                  <ImageSlot blockKey={`tile-${index}`} image={str(tile.image)} alt={str(tile.alt)} caption={str(tile.caption)} ctx={ctx} style={cellStyle} />
                 </Block>
               )
             })}
@@ -1700,7 +1750,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       )
     }
     case 'split-visual-quote': {
-      const imageBox = <ImageSlot image={str(c.image)} alt={str(c.alt)} ctx={ctx} style={{ width: '40%', flexShrink: 0 }} />
+      const imageBox = <ImageSlot blockKey="image" image={str(c.image)} alt={str(c.alt)} ctx={ctx} style={{ width: '40%', flexShrink: 0 }} />
       const quoteCol = (
         <div className="flex min-w-0 flex-1 flex-col justify-center" style={{ gap: '1.4cqw' }}>
           <Block blockKey="quote">
@@ -2037,7 +2087,7 @@ function renderBody(slide: Slide, ctx: Ctx): ReactNode {
       return (
         <div className="flex flex-1 flex-col" style={{ gap: '1.4cqw' }}>
           <Block blockKey="image">
-            <ImageSlot image={str(c.image)} alt={str(c.alt)} ctx={ctx} style={{ height: '56%', flexShrink: 0 }} />
+            <ImageSlot blockKey="image" image={str(c.image)} alt={str(c.alt)} ctx={ctx} style={{ height: '56%', flexShrink: 0 }} />
           </Block>
           <Block blockKey="title">
             <div className="line-clamp-2 font-bold tracking-tight" style={{ fontSize: '3.3cqw', lineHeight: 1.15 }}>
@@ -2122,12 +2172,16 @@ type DragSession = {
   moved: boolean
 }
 
-export function SlideRenderer({ slide, theme, editable = false, onPositionsChange }: {
+export function SlideRenderer({ slide, theme, editable = false, onPositionsChange, resolveImageSrc, onImagePick }: {
   slide: Slide
   theme?: DeckSpec['theme']
   /** Edit mode: blocks become grabbable; drags persist via onPositionsChange. */
   editable?: boolean
   onPositionsChange?: (slideId: string, positions: Record<string, BlockPosition>) => void
+  /** Maps a local deck-asset name to a displayable URL (uploaded images). */
+  resolveImageSrc?: (name: string) => string | undefined
+  /** Edit mode: an image placeholder/image was clicked (not dragged). */
+  onImagePick?: (blockKey: string) => void
 }) {
   const isLight = theme?.dark === false
   const light = getPalette('light')
@@ -2228,7 +2282,7 @@ export function SlideRenderer({ slide, theme, editable = false, onPositionsChang
 
   return (
     <div ref={boxRef} data-testid="slide-renderer" data-layout={slide.layout} className="relative flex h-full w-full flex-col overflow-hidden" style={rootStyle}>
-      <BlockCtx.Provider value={{ positions: mergedPositions, editable, overlayEl, onDragStart }}>
+      <BlockCtx.Provider value={{ positions: mergedPositions, editable, overlayEl, onDragStart, imageSrc: resolveImageSrc, onImagePick }}>
         <div className="flex min-h-0 flex-1 flex-col" style={{ padding: '3cqw' }}>
           {renderBody(slide, ctx)}
         </div>

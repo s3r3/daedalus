@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState, type ChangeEvent } from 'react'
 import { ChevronLeft, ChevronRight, FileDown, Pencil, Presentation, RefreshCw } from 'lucide-react'
 import type { BlockPosition } from '@daedalus/core'
 import { getLayout } from '@daedalus/core/slides/layouts'
@@ -47,6 +47,53 @@ export function SlideStage() {
       onDeckChanged()
     } catch (dragErr: unknown) {
       setDragError(`Posisi tidak tersimpan: ${dragErr instanceof Error ? dragErr.message : String(dragErr)}`)
+    }
+  }
+
+  // Clickable image placeholders (Edit mode): a placeholder click opens
+  // the file picker; the picked file is saved under deck/assets/ by the
+  // deck-scoped upload endpoint, then the slide's content references
+  // the stored name through the same validateDeck-gated update endpoint
+  // as every other edit — so the canvas, a reload, and the PPTX export
+  // all show the real image, and an invalid reference can never land.
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const pendingImageBlock = useRef<string | null>(null)
+  const [uploadingImage, setUploadingImage] = useState(false)
+  const [uploadError, setUploadError] = useState<string | null>(null)
+
+  const resolveImageSrc = root ? (name: string): string | undefined => (name ? api.deckAssetUrl(root, name) : undefined) : undefined
+
+  const handleImagePick = (blockKey: string): void => {
+    pendingImageBlock.current = blockKey
+    fileInputRef.current?.click()
+  }
+
+  const onImageFileChosen = async (event: ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    const blockKey = pendingImageBlock.current
+    pendingImageBlock.current = null
+    if (!file || !root || !slide || !blockKey) return
+    setUploadingImage(true)
+    setUploadError(null)
+    try {
+      const uploaded = await api.deckUploadAsset(root, file)
+      const content: Record<string, unknown> = {}
+      if (slide.layout === 'mosaic') {
+        const tileIndex = Number(/^tile-(\d+)$/.exec(blockKey)?.[1] ?? -1)
+        const tiles = Array.isArray(slide.content.tiles) ? [...(slide.content.tiles as Array<Record<string, unknown>>)] : []
+        if (tileIndex < 0 || tileIndex >= tiles.length) throw new Error(`Blok gambar tidak dikenal: ${blockKey}`)
+        tiles[tileIndex] = { ...tiles[tileIndex], image: uploaded.name }
+        content.tiles = tiles
+      } else {
+        content.image = uploaded.name
+      }
+      await api.deckUpdateSlide(root, slide.id, { content })
+      onDeckChanged()
+    } catch (uploadErr: unknown) {
+      setUploadError(`Upload gambar gagal: ${uploadErr instanceof Error ? uploadErr.message : String(uploadErr)}`)
+    } finally {
+      setUploadingImage(false)
     }
   }
 
@@ -132,6 +179,21 @@ export function SlideStage() {
           {dragError}
         </p>
       ) : null}
+      {uploadingImage ? <p className="text-[11px] text-muted">Mengunggah gambar…</p> : null}
+      {uploadError ? (
+        <p data-testid="slide-upload-error" className="text-[11px] text-error">
+          {uploadError}
+        </p>
+      ) : null}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        className="hidden"
+        data-testid="slide-image-input"
+        aria-label="upload gambar untuk placeholder"
+        onChange={(event) => void onImageFileChosen(event)}
+      />
 
       {!root ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-1 px-3 py-6 text-center text-muted">
@@ -151,7 +213,14 @@ export function SlideStage() {
             className={`flex items-center justify-center [container-type:size] ${editing ? 'min-h-48 shrink-0' : 'min-h-0 flex-1'}`}
           >
             <div className="aspect-video w-[min(1100px,100%,177.78cqh)] overflow-hidden rounded-md border border-line [container-type:inline-size]">
-              <SlideRenderer slide={slide} theme={deck.theme} editable={editing} onPositionsChange={(id, positions) => void persistPositions(id, positions)} />
+              <SlideRenderer
+                slide={slide}
+                theme={deck.theme}
+                editable={editing}
+                onPositionsChange={(id, positions) => void persistPositions(id, positions)}
+                resolveImageSrc={resolveImageSrc}
+                onImagePick={handleImagePick}
+              />
             </div>
           </div>
 
@@ -171,7 +240,7 @@ export function SlideStage() {
                 >
                   <span className="relative block aspect-video w-full [container-type:inline-size]">
                     <span className="pointer-events-none absolute inset-0">
-                      <SlideRenderer slide={entry} theme={deck.theme} />
+                      <SlideRenderer slide={entry} theme={deck.theme} resolveImageSrc={resolveImageSrc} />
                     </span>
                   </span>
                   <span className="block truncate px-1.5 py-1 text-[10px] text-muted">

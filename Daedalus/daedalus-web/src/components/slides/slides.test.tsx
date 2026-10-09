@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { DeckSpec, Slide } from '@daedalus/core'
 import { useDaedalusStore } from '../../state/taskStore'
@@ -21,6 +21,7 @@ const deckExportMock = vi.fn()
 const deckRegenerateSlideMock = vi.fn()
 const listMock = vi.fn()
 const deckGenerateMock = vi.fn()
+const deckUploadAssetMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
   api: {
@@ -35,6 +36,8 @@ vi.mock('../../api/client', () => ({
     deckGenerate: (...args: unknown[]) => deckGenerateMock(...args),
     deckDownloadUrl: (root: string, path: string) => `/slides/deck/download?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
     deckRegenerateSlide: (...args: unknown[]) => deckRegenerateSlideMock(...args),
+    deckUploadAsset: (...args: unknown[]) => deckUploadAssetMock(...args),
+    deckAssetUrl: (root: string, name: string) => `/slides/deck/asset?root=${encodeURIComponent(root)}&name=${encodeURIComponent(name)}`,
     list: (...args: unknown[]) => listMock(...args),
   },
 }))
@@ -124,6 +127,8 @@ beforeEach(() => {
       ],
     }
   })
+  deckUploadAssetMock.mockReset()
+  deckUploadAssetMock.mockResolvedValue({ root: '/ws', name: 'foto-unggahan.png', path: 'deck/assets/foto-unggahan.png', size: 4321 })
   deckGenerateMock.mockReset()
   deckGenerateMock.mockResolvedValue({
     root: '/ws',
@@ -937,6 +942,110 @@ describe('SlideStage editing', () => {
     const note = await screen.findByTestId('slide-exported')
     expect(deckExportMock).toHaveBeenCalledWith('/ws')
     expect(note.textContent).toContain('deck/deck-uji.pptx')
+  })
+})
+
+describe('Slide image upload (clickable placeholders)', () => {
+  const imageDeck: DeckSpec = {
+    version: 1,
+    id: 'd-img',
+    title: 'Deck Bergambar',
+    theme: {},
+    slides: [
+      { id: 's-img', layout: 'image-side', content: { title: 'Bergambar', points: ['Poin satu'], image: 'foto-lama.png', alt: 'Foto lama' } },
+      {
+        id: 's-mz',
+        layout: 'mosaic',
+        content: {
+          title: 'Galeri',
+          tiles: [
+            { image: 'a.png', alt: 'A' },
+            { image: 'b.png', alt: 'B' },
+            { image: 'c.png', alt: 'C' },
+            { image: 'd.png', alt: 'D' },
+          ],
+        },
+      },
+    ],
+  }
+
+  test('renderer shows the real image when the resolver maps the asset name', () => {
+    const slide = imageDeck.slides[0]!
+    render(<SlideRenderer slide={slide} theme={{}} resolveImageSrc={(name) => `/slides/deck/asset?name=${name}`} />)
+    const img = screen.getByAltText('Foto lama') as HTMLImageElement
+    expect(img.src).toContain('/slides/deck/asset?name=foto-lama.png')
+  })
+
+  test('without a resolver the local asset stays an honest placeholder', () => {
+    const slide = imageDeck.slides[0]!
+    render(<SlideRenderer slide={slide} theme={{}} />)
+    expect(screen.getByText('foto-lama.png')).toBeTruthy()
+    expect(screen.queryByAltText('Foto lama')).toBeNull()
+  })
+
+  test('edit-mode placeholder click reports the block, a drag does not', async () => {
+    const user = userEvent.setup()
+    const onImagePick = vi.fn()
+    const slide = imageDeck.slides[0]!
+    render(<SlideRenderer slide={slide} theme={{}} editable onImagePick={onImagePick} />)
+    await user.click(screen.getByTestId('slide-image-upload-image'))
+    expect(onImagePick).toHaveBeenCalledTimes(1)
+    expect(onImagePick).toHaveBeenCalledWith('image')
+  })
+
+  const pickAndUpload = async (user: ReturnType<typeof userEvent.setup>, testId: string): Promise<File> => {
+    await user.click(screen.getByTestId('slide-edit-toggle'))
+    await user.click(screen.getByTestId(testId))
+    const input = screen.getByTestId('slide-image-input') as HTMLInputElement
+    const file = new File([new Uint8Array([137, 80, 78, 71])], 'foto.png', { type: 'image/png' })
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    fireEvent.change(input)
+    return file
+  }
+
+  test('stage flow: clicking the placeholder uploads and points the slide at the stored asset', async () => {
+    const user = userEvent.setup()
+    fileMock.mockResolvedValue(deckFile(imageDeck))
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    const file = await pickAndUpload(user, 'slide-image-upload-image')
+
+    await waitFor(() => expect(deckUpdateSlideMock).toHaveBeenCalled())
+    expect(deckUploadAssetMock).toHaveBeenCalledWith('/ws', file)
+    expect(deckUpdateSlideMock).toHaveBeenCalledWith('/ws', 's-img', { content: { image: 'foto-unggahan.png' } })
+  })
+
+  test('stage flow: a mosaic tile upload rewrites only that tile', async () => {
+    const user = userEvent.setup()
+    fileMock.mockResolvedValue(deckFile(imageDeck))
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-thumb-1'))
+    await pickAndUpload(user, 'slide-image-upload-tile-1')
+
+    await waitFor(() => expect(deckUpdateSlideMock).toHaveBeenCalled())
+    const call = deckUpdateSlideMock.mock.calls.at(-1) as unknown as [string, string, { content: { tiles: Array<{ image: string }> } }]
+    expect(call[1]).toBe('s-mz')
+    expect(call[2].content.tiles.map((tile) => tile.image)).toEqual(['a.png', 'foto-unggahan.png', 'c.png', 'd.png'])
+  })
+
+  test('stage flow: a rejected upload surfaces the error and never touches the slide', async () => {
+    const user = userEvent.setup()
+    fileMock.mockResolvedValue(deckFile(imageDeck))
+    deckUploadAssetMock.mockRejectedValue(new Error('unsupported_image_type'))
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await pickAndUpload(user, 'slide-image-upload-image')
+
+    const error = await screen.findByTestId('slide-upload-error')
+    expect(error.textContent).toContain('Upload gambar gagal')
+    expect(deckUpdateSlideMock).not.toHaveBeenCalled()
   })
 })
 
