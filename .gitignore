@@ -1,0 +1,12 @@
+# dependencies
+node_modules/
+
+# build output
+dist/
+*.tsbuildinfo
+
+# Daedalus runtime state (tasks, conversations, plans, attachments)
+.daedalus/
+
+# local test workspace
+tesvite/
