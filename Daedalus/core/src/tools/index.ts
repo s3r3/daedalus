@@ -80,7 +80,7 @@ import { globTool, grepTool } from './search/index.ts';
 import { fetchUrlTool, webSearchTool } from './web/index.ts';
 import { screenshotTool, viewImageTool } from './media/index.ts';
 import { downloadFileTool, searchImagesTool } from './images/index.ts';
-import { createDeckTool, readDeckTool, addSlideTool, updateSlideTool, moveSlideTool, deleteSlideTool, setDeckThemeTool, validateDeckTool, exportDeckTool, SLIDE_TOOLS } from './slides.ts';
+import { createDeckTool, readDeckTool, addSlideTool, updateSlideTool, moveSlideTool, deleteSlideTool, setDeckThemeTool, validateDeckTool, exportDeckTool } from './slides.ts';
 import { ToolRegistry, type ToolDefinition } from './registry.ts';
 
 export const DEFAULT_TOOLS: ToolDefinition[] = [readFileTool, writeFileTool, editFileTool, createDirTool, listDirTool, grepTool, globTool, runCommandTool, commandStatusTool, commandKillTool, gitDiffTool, gitStatusTool, fetchUrlTool, webSearchTool, viewImageTool, screenshotTool, searchImagesTool, downloadFileTool, createDeckTool, readDeckTool, addSlideTool, updateSlideTool, moveSlideTool, deleteSlideTool, setDeckThemeTool, validateDeckTool, exportDeckTool];
@@ -88,17 +88,5 @@ export const DEFAULT_TOOLS: ToolDefinition[] = [readFileTool, writeFileTool, edi
 export function createDefaultRegistry(): ToolRegistry {
   const registry = new ToolRegistry();
   for (const tool of DEFAULT_TOOLS) registry.register(tool);
-  return registry;
-}
-
-/**
- * The Slide domain's locked registry: deck tools ONLY. Coding tools are
- * not merely hidden from the prompt — they are not registered, so they
- * cannot execute in a slide task (the structural fix for the markdown /
- * python-pptx detours: there is no other road to take).
- */
-export function createSlideRegistry(): ToolRegistry {
-  const registry = new ToolRegistry();
-  for (const tool of SLIDE_TOOLS) registry.register(tool);
   return registry;
 }

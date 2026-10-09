@@ -200,6 +200,12 @@ export const api = {
       body: JSON.stringify({ root, ...input }),
     }),
 
+  deckRegenerateSlide: (root: string, slideId: string, input: { model?: string; provider_id?: string } = {}) =>
+    request<{ root: string; deck: import('@daedalus/core').DeckSpec; slide_id: string }>('/slides/deck/regenerate', {
+      method: 'POST',
+      body: JSON.stringify({ root, slide_id: slideId, ...input }),
+    }),
+
   deckUpdateSlide: (root: string, slideId: string, input: { content: Record<string, unknown>; layout?: string }) =>
     request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/slide/update', {
       method: 'POST',

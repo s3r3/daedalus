@@ -10,7 +10,7 @@ import { guardEditedFile } from './agent/edit-guard.ts';
 import { loadHooksConfig, runPostToolHooks, runPreToolHooks, type HooksConfig } from './agent/hooks.ts';
 import { loadAgents, workspaceAgentsDir, type AgentDefinition } from './agents/index.ts';
 import { createTaskWorktree, worktreeChangedFiles } from './worktree.ts';
-import { createDefaultRegistry, createSlideRegistry, editSearchReplaceTool } from './tools/index.ts';
+import { createDefaultRegistry, editSearchReplaceTool } from './tools/index.ts';
 import { pathInWorkspace } from './tools/filesystem/index.ts';
 import type { ToolDefinition } from './tools/registry.ts';
 import { existsSync } from 'node:fs';
@@ -20,10 +20,9 @@ import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { changedLineCounts, diffLines, renderPatch } from './tools/filesystem/diff.ts';
 import { ApprovalBroker, ExecutionHarness, commandLineOf, resolveApprovalTimeoutMs, type ApprovalDecision, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
 import { CommandValidator, type ValidationCommand, type Validator } from './validation/index.ts';
-import { DeckValidator } from './slides/deck-validator.ts';
-
-/** Slide tasks validate their deck, never the workspace's coding checks. */
-const deckValidator = new DeckValidator();
+import { SlideEngine } from './slides/engine.ts';
+import { regenerateSlideStage } from './slides/pipeline.ts';
+import type { DeckSpec, Slide } from './slides/deck.ts';
 import { createProviderFromSettings } from './providers/index.ts';
 import { OpenAICompatProvider } from './providers/llm/openai-compat.ts';
 import { ModelPoolProvider, asModelController, normalizeModelList } from './providers/llm/model-pool.ts';
@@ -417,6 +416,8 @@ export class TaskRunner {
   readonly #workspaceRoot: string;
   readonly #options: TaskRunnerOptions;
   readonly #activeLoops = new Map<string, AgentLoop>();
+  /** Slide-domain tasks run on the SlideEngine, never on AgentLoop: task id → its engine (cancel seam). */
+  readonly #activeEngines = new Map<string, SlideEngine>();
   /** Child task id → orchestrator parent task id, for approval surfacing. */
   readonly #taskParents = new Map<string, string>();
   /** Parent task id → its live subagent tooling, so cancel() can stop background children. */
@@ -678,6 +679,9 @@ export class TaskRunner {
     // A runner executes one user task at a time (plus its orchestrator
     // children), so cancelling it stops every loop currently active here.
     for (const [activeTaskId, loop] of this.#activeLoops) loop.stop(activeTaskId);
+    // Slide-engine tasks stop through their own engine (provider abort +
+    // pending checkpoint question settled by the cancelTasks call above).
+    for (const engine of this.#activeEngines.values()) engine.stop();
   }
 
   async run(options: RunOptions): Promise<RunResult> {
@@ -815,6 +819,14 @@ export class TaskRunner {
     };
     this.bus.on('*', listener);
 
+    // Slide domain: the SlideEngine owns the task end to end (its own
+    // executor, checkpoint channel, and completion verdict). The coding
+    // machinery below — extensions, registries, AgentLoop — is never
+    // constructed for a slide task.
+    if (options.domain === 'slide') {
+      return this.#runSlideEngine(spec, effectiveOptions, collected, startedAt);
+    }
+
     const isolation = options.isolation ?? this.#options.isolation;
     if (isolation === 'worktree') {
       return this.#runInWorktree(options, spec, agent);
@@ -848,16 +860,15 @@ export class TaskRunner {
       await extensions.close().catch(() => undefined);
       throw new Error(invocationProblems.join('; '));
     }
-    // Slide domain: the locked slide registry (deck tools only — coding
-    // tools are not registered and cannot execute) and no extension tools.
-    const registry = options.domain === 'slide' ? createSlideRegistry() : createDefaultRegistry();
-    if (options.domain !== 'slide') {
-      for (const tool of extensions.tools) {
-        try {
-          registry.register(tool);
-        } catch {
-          // A name collision with a built-in tool is skipped, never fatal.
-        }
+    // Coding runs get the default registry plus extension tools. (Slide
+    // tasks returned earlier, into the SlideEngine — no registry is ever
+    // built for them.)
+    const registry = createDefaultRegistry();
+    for (const tool of extensions.tools) {
+      try {
+        registry.register(tool);
+      } catch {
+        // A name collision with a built-in tool is skipped, never fatal.
       }
     }
     // The interactive question tool (Plan mode's ask_user): one instance
@@ -879,7 +890,7 @@ export class TaskRunner {
     // Child runs are built WITHOUT it, so subagents can never delegate
     // further (depth 1 hard stop, by construction rather than by check).
     let subagentTooling: SubagentTooling | undefined;
-    if (!options.parentTaskId && options.domain !== 'slide') {
+    if (!options.parentTaskId) {
       subagentTooling = this.#createSubagentTooling({
         spec,
         options,
@@ -985,7 +996,6 @@ export class TaskRunner {
         visionEnabled,
         skills: extensions.skills.list(),
         ...(options.domain ? { domain: options.domain } : {}),
-        ...(options.slide ? { slide: options.slide } : {}),
         ...(invokedSkills.length > 0 ? { invokedSkills } : {}),
         rules: rules.text ? rules.text : undefined,
         rulesFiles: rules.files,
@@ -995,7 +1005,7 @@ export class TaskRunner {
         pins,
         ...(scaffoldPlaybook ? { scaffoldPlaybook } : {}),
       }),
-      validator: options.domain === 'slide' ? deckValidator : this.validator,
+      validator: this.validator,
       tools: toolSchemas,
       stopPolicy: { max_iterations: options.maxIterations ?? this.#options.maxIterations ?? 25, max_errors: options.maxErrors ?? 5 },
       chatOptions: this.#chatOptions(),
@@ -1356,6 +1366,91 @@ export class TaskRunner {
   }
 
   /**
+   * Slide-domain execution: the SlideEngine (slides/engine.ts) runs the
+   * task — generation stages, its Standard checkpoint over the shared
+   * question broker, edit ops, and its own completion verdict — while
+   * this layer only supplies the run's provider, collects the events
+   * for the report, and records the same FinalReport shape coding runs
+   * produce. No AgentLoop, registry, or mode policy is constructed.
+   */
+  async #runSlideEngine(spec: TaskSpec, options: RunOptions, collected: Event[], startedAt: number): Promise<RunResult> {
+    let provider: LLMProvider;
+    try {
+      provider = this.#options.provider ?? this.#providerFor(options, spec.id);
+    } catch (error) {
+      // Keep the task record honest even when no provider can be built:
+      // the run ends as a failed slide task, never a hung "created" one.
+      const message = error instanceof Error ? error.message : String(error);
+      const state: TaskState = {
+        ...spec,
+        plan: { id: `${spec.id}-plan`, task_id: spec.id, steps: [], version: 0, status: 'draft' },
+        steps: [],
+        status: 'failed',
+        mode: 'auto',
+        last_error: message,
+      };
+      this.store.saveState(spec.id, state);
+      emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'TASK_STARTED', { spec });
+      emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: 'provider_unavailable' });
+      const report: FinalReport = { task_id: spec.id, outcome: 'failed', diff: '', evidence: [`Gagal: ${message}`], metrics: { duration_ms: Date.now() - startedAt } };
+      this.store.saveReport(spec.id, report);
+      return { state, events: collected, outcome: 'failed', report };
+    }
+    const engine = new SlideEngine({
+      provider,
+      bus: this.bus,
+      store: this.store,
+      questions: this.questions,
+      workspaceRoot: this.#workspaceRoot,
+    });
+    this.#activeEngines.set(spec.id, engine);
+    try {
+      const result = await engine.run(spec, options.slide);
+      const usageTotals = accumulateUsage(collected);
+      const report: FinalReport = {
+        task_id: spec.id,
+        outcome: result.outcome,
+        diff: '',
+        evidence: [result.summary],
+        metrics: {
+          turns: result.state.turns ?? 0,
+          model_requests: usageTotals.requests,
+          ...(usageTotals.reported > 0
+            ? {
+                tokens_input: usageTotals.input_tokens,
+                tokens_output: usageTotals.output_tokens,
+                tokens_total: usageTotals.total_tokens,
+                token_requests_reported: usageTotals.reported,
+              }
+            : {}),
+          ...(result.exported ? { slides_exported: result.exported.slides } : {}),
+          duration_ms: Date.now() - startedAt,
+        },
+      };
+      this.store.saveReport(spec.id, report);
+      return { state: result.state, events: collected, validation: result.validation, outcome: result.outcome, report };
+    } finally {
+      this.#activeEngines.delete(spec.id);
+      this.questions.cancelTasks([spec.id]);
+    }
+  }
+
+  /**
+   * Editor seam (the Web slide editor's per-slide variant): regenerate
+   * ONE slide of a workspace deck with this runner's provider selection.
+   * Not a task — no events, no task state; the deck on disk changes only
+   * when the new content validates (see regenerateSlideStage).
+   */
+  async regenerateSlide(root: string, slideId: string, options: { model?: string; providerId?: string } = {}): Promise<{ deck: DeckSpec; slide: Slide }> {
+    const provider = this.#options.provider ?? this.#providerFor(
+      { ...(options.model ? { model: options.model } : {}), ...(options.providerId ? { providerId: options.providerId } : {}) } as RunOptions,
+      `slide-regenerate-${slideId}`,
+    );
+    const result = await regenerateSlideStage(provider, root, slideId);
+    return { deck: result.deck, slide: result.slide };
+  }
+
+  /**
    * Cross-model review gate (tailor suite, default off): when a task that
    * changed files was driven by a non-strongest pool model, the pool's
    * strongest model reviews the diff before completion is declared. The
@@ -1501,7 +1596,7 @@ export class TaskRunner {
       approvalMemory: this.#options.approvalMemory,
       approvalTimeoutMs: this.#options.approvalTimeoutMs,
       harness: this.#options.harness,
-      validator: options.domain === 'slide' ? deckValidator : this.validator,
+      validator: this.validator,
       approvalPolicy: this.#options.approvalPolicy,
       autoApprove: this.#options.autoApprove,
       thinking: this.#options.thinking,

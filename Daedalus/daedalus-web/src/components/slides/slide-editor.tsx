@@ -13,7 +13,7 @@ function messageOf(error: unknown): string {
 /**
  * In-canvas slide editor (Slide domain): the deck is editable by hand,
  * not preview-only — layout, title, points and the full content JSON of
- * the selected slide, plus add/duplicate/delete/move and a per-slide variant task.
+ * the selected slide, plus add/duplicate/delete/move and a per-slide regenerate.
  * Every write goes through the server's core gate (validateDeck), so an
  * edit that would corrupt the deck is refused with the issues shown.
  * The JSON box is the source of truth; the quick fields write into it.
@@ -26,7 +26,6 @@ export function SlideEditor({ root, deck, slide, index, onChanged }: {
   onChanged: () => void
 }) {
   const setSlideIndex = useDaedalusStore((state) => state.setSlideIndex)
-  const setTask = useDaedalusStore((state) => state.setTask)
   const [layout, setLayout] = useState(slide.layout)
   const [json, setJson] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -103,17 +102,9 @@ export function SlideEditor({ root, deck, slide, index, onChanged }: {
   }
 
   const variant = (): void => {
-    const title = typeof slide.content.title === 'string' ? slide.content.title : slide.id
-    const goal = `Buatkan varian slide ${index + 1} ([${slide.layout}] "${title}") dengan pendekatan konten/visual yang berbeda. Baca deck saat ini dengan read_deck, lalu update_slide HANYA slide id ${slide.id} — jangan mengubah slide lain, jangan mengubah tema. Setelah itu validate_deck dan export_deck.`
-    void run(async () => {
-      const created = await api.createTask({
-        goal,
-        repo_path: root,
-        domain: 'slide',
-        slide: { generation: 'smart' },
-      })
-      setTask(created.id, goal)
-    }, 'Task varian dibuat — lihat panel chat.')
+    // Engine endpoint, not a task: the slide engine regenerates this one
+    // slide in place and the fresh deck comes back in the response.
+    void run(() => api.deckRegenerateSlide(root, slide.id), 'Slide diganti dengan varian baru.')
   }
 
   return (

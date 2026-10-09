@@ -412,7 +412,6 @@ export {
   PROMPT_FAMILIES,
   QUESTION_SYSTEM_PROMPT,
   SCAFFOLD_RECIPES,
-  SLIDE_DOMAIN_PROMPT,
   UNSUPPORTED_FRAMEWORK_MENTIONS,
   DefaultContextManager,
   GLOBAL_RULES_LABEL,
@@ -706,6 +705,27 @@ export {
 } from "./slides/store.ts";
 
 export { exportDeckToPptx } from "./slides/export-pptx.ts";
+
+export {
+  generateDeckOutlineStage,
+  fillDeckSlidesStage,
+  generateDeckFullStage,
+  regenerateSlideStage,
+  normalizeBrief,
+  SlidePipelineError,
+  type DeckBrief,
+  type OutlineItem,
+  type FillStageResult,
+  type ExportInfo,
+} from "./slides/pipeline.ts";
+
+export {
+  SlideEngine,
+  applyDeckOps,
+  type SlideEngineDeps,
+  type SlideEngineOutcome,
+  type SlideEngineRunResult,
+} from "./slides/engine.ts";
 
 export {
   SLIDE_TEMPLATES,

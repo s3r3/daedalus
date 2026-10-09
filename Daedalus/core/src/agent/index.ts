@@ -54,8 +54,7 @@ export { DEFAULT_PLAN_STEPS, createPlan, isDefaultPipeline, replan, scaffoldPlan
 export {
   DefaultContextManager,
   CONDENSED_TOOL_OUTPUT,
-  SLIDE_DOMAIN_PROMPT,
-  buildSlideDomainPrompt,
+
   type SlideTaskParams,
   MAX_PINNED_FILES_IN_PROMPT,
   MAX_PINNED_LINES_PER_FILE,
