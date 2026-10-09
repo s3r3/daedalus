@@ -39,9 +39,11 @@ import {
   deckPaths,
   deletePptxTemplate,
   exportDeckToPptx,
+  getPptxTemplate,
   getSlideTemplate,
   listPptxTemplates,
   listSlideTemplates,
+  readPptxTemplateAsset,
   readPptxTemplateBackground,
   savePptxTemplate,
   newSlideId,
@@ -1294,11 +1296,20 @@ export function createApp(ctx: AppContext) {
               sendJson(res, 400, { error: "unknown_slide_template", request_id: requestId });
               return;
             }
+            const customRaw = raw.custom_template_id ?? raw.customTemplateId;
+            const customTemplateId = typeof customRaw === "string" && customRaw.trim() ? customRaw.trim() : undefined;
+            if (templateId && customTemplateId) {
+              // One design source per deck: bundled Warna & Font skin OR
+              // an imported PPT template (whose pages carry the design).
+              sendJson(res, 400, { error: "slide_template_conflict", request_id: requestId });
+              return;
+            }
             const parsed2: SlideTaskParams = {
               ...(generation ? { generation } : {}),
               ...(slideCount ? { slideCount } : {}),
               ...(language ? { language } : {}),
               ...(templateId ? { templateId } : {}),
+              ...(customTemplateId ? { customTemplateId } : {}),
             };
             slide = Object.keys(parsed2).length > 0 ? parsed2 : undefined;
           }
@@ -1306,6 +1317,16 @@ export function createApp(ctx: AppContext) {
           await ensureProvidersLoaded(ctx);
           const taskId = crypto.randomUUID();
           const repoPath = resolveTaskRepo(ctx, parsed.repo_path ?? parsed.repoPath);
+          if (slide?.customTemplateId) {
+            // The imported-template pick must name a template stored in
+            // THIS workspace — a stale panel selection gets a named 400
+            // here, not a failed task after the model already ran.
+            const stored = await getPptxTemplate(repoPath, slide.customTemplateId).catch(() => undefined);
+            if (!stored) {
+              sendJson(res, 400, { error: "unknown_ppt_template", request_id: requestId });
+              return;
+            }
+          }
           const constraints = stringList(parsed.constraints);
           const doneCriteria = stringList(parsed.done_criteria ?? parsed.doneCriteria);
           const mode = parseMode(parsed.mode) ?? ctx.session.mode;
@@ -1962,6 +1983,33 @@ export function createApp(ctx: AppContext) {
             ...CORS_HEADERS,
           });
           res.end(background.bytes);
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // One stored asset of an imported template (v2 page backgrounds and
+    // slot pictures), served so the canvas can draw template slides.
+    // Core only serves file names the template actually references.
+    if (method === "GET" && url.pathname === "/slides/ppt-templates/asset") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const id = url.searchParams.get("id") || "";
+          const file = url.searchParams.get("file") || "";
+          const asset = await readPptxTemplateAsset(root, id, file);
+          if (!asset) {
+            sendJson(res, 404, { error: "ppt_template_asset_not_found", request_id: requestId });
+            return;
+          }
+          res.writeHead(200, {
+            "content-type": guessMimeType(asset.fileName),
+            "content-length": asset.bytes.length,
+            ...CORS_HEADERS,
+          });
+          res.end(asset.bytes);
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
