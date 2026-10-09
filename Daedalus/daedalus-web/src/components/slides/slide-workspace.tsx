@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
-import { ChevronDown, ChevronRight, Download, File as FileIcon, FileJson2, FileType2, Folder, FolderOpen } from 'lucide-react'
+import { ChevronDown, ChevronRight, Download, File as FileIcon, FileJson2, FileType2, Folder, FolderOpen, RefreshCw } from 'lucide-react'
 import { api } from '../../api/client'
+import { Button } from '../ui/button'
 import type { WorkspaceEntry } from '../../api/types'
 import { useDaedalusStore } from '../../state/taskStore'
 import { cn } from '../../lib/utils'
@@ -111,6 +112,18 @@ export function SlideWorkspacePanel({ className, style }: { className?: string; 
       <header className="flex items-center gap-2 border-b border-line px-3 py-2">
         <FolderOpen className="size-3.5 text-primary" aria-hidden />
         <strong className="text-[11px] uppercase tracking-wide text-muted">Deck workspace</strong>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={bumpWorkspaceRevision}
+          disabled={!root}
+          data-testid="slide-ws-refresh"
+          className="ml-auto"
+          aria-label="refresh workspace"
+        >
+          <RefreshCw /> refresh
+        </Button>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {!root ? (
