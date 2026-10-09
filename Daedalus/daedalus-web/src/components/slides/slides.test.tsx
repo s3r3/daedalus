@@ -268,6 +268,23 @@ describe('SlideStage', () => {
     expect(useDaedalusStore.getState().slideIndex).toBe(2)
   })
 
+  test('the filmstrip stays in view: the preview region flexes and the strip cannot shrink away', async () => {
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    const preview = screen.getByTestId('slide-preview')
+    const strip = screen.getByTestId('slide-filmstrip')
+    // The preview region is the flexible, height-constrained one, so
+    // header + preview + filmstrip always fit the stage cell.
+    expect(preview.className).toContain('min-h-0')
+    expect(preview.className).toContain('flex-1')
+    expect(strip.className).toContain('shrink-0')
+    // The filmstrip still follows the preview in flow order.
+    expect(preview.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(screen.getAllByTestId(/^slide-thumb-/)).toHaveLength(3)
+  })
+
   test('a missing deck shows the honest empty state with a working refresh', async () => {
     fileMock.mockRejectedValue(new Error('404 Not Found'))
     useDaedalusStore.getState().setWorkspace({ root: '/ws' })

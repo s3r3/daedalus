@@ -48,7 +48,7 @@ export function SlideStage() {
   }
 
   return (
-    <div data-testid="slide-stage" className="flex h-full min-h-0 flex-col gap-2 p-3">
+    <div data-testid="slide-stage" className={`flex h-full min-h-0 flex-col gap-2 p-3 ${editing ? 'overflow-y-auto' : 'overflow-hidden'}`}>
       <div className="flex flex-wrap items-center gap-2">
         <Presentation className="size-4 text-primary" aria-hidden />
         <strong className="min-w-0 truncate text-xs">{deck ? deck.title : 'Slide'}</strong>
@@ -123,13 +123,16 @@ export function SlideStage() {
         </div>
       ) : slide ? (
         <>
-          <div className="mx-auto w-full max-w-[1100px]">
-            <div className="aspect-video w-full overflow-hidden rounded-md border border-line [container-type:inline-size]">
+          <div
+            data-testid="slide-preview"
+            className={`flex items-center justify-center [container-type:size] ${editing ? 'min-h-48 shrink-0' : 'min-h-0 flex-1'}`}
+          >
+            <div className="aspect-video w-[min(1100px,100%,177.78cqh)] overflow-hidden rounded-md border border-line [container-type:inline-size]">
               <SlideRenderer slide={slide} theme={deck.theme} />
             </div>
           </div>
 
-          <div className="flex gap-2 overflow-x-auto pb-1" data-testid="slide-filmstrip" aria-label="filmstrip slide">
+          <div className="flex shrink-0 gap-2 overflow-x-auto pb-1" data-testid="slide-filmstrip" aria-label="filmstrip slide">
             {deck.slides.map((entry, index) => {
               const active = index === safeIndex
               return (
