@@ -197,6 +197,23 @@ export type DeckExportResult = { root: string; path: string; bytes: number; slid
 /** A deck image asset saved through POST /slides/deck/asset (deck/assets/). */
 export type DeckAssetUploadResult = { root: string; name: string; path: string; size: number }
 
+/**
+ * Pratinjau Asli status: the exported .pptx rendered by a local
+ * LibreOffice into per-page images, cached under a hash of the deck
+ * state. `unavailable` means soffice/pdftoppm is not installed;
+ * `stale` means the deck changed since the cached render.
+ */
+export type DeckPreviewStatus = {
+  root: string
+  available: boolean
+  status: 'unavailable' | 'idle' | 'rendering' | 'ready' | 'stale' | 'error'
+  key: string | null
+  pages: number
+  pageUrls?: string[]
+  error?: string
+  renderedAt?: string
+}
+
 /** Verdict of POST /slides/deck/reset (Slide new chat's deck reset). */
 export type DeckResetResult = {
   root: string
@@ -386,6 +403,16 @@ export const api = {
 
   /** Direct download URL for an exported deck file (deck/*.pptx). */
   deckDownloadUrl: (root: string, path: string) => `/slides/deck/download${query({ root, path })}`,
+
+  /** Pratinjau Asli: status of the LibreOffice render of the current deck state. */
+  deckPreview: (root: string) => request<DeckPreviewStatus>(`/slides/deck/preview${query({ root })}`),
+
+  /** Pratinjau Asli: queue a render of the current deck state (returns immediately; poll deckPreview). */
+  deckPreviewRender: (root: string) =>
+    request<DeckPreviewStatus>('/slides/deck/preview', { method: 'POST', body: JSON.stringify({ root }) }),
+
+  /** Cache-busting URL of one rendered preview page (server-provided pageUrls already carry the key). */
+  deckPreviewPageUrl: (root: string, key: string, page: number) => `/slides/deck/preview/page${query({ root, key, page: String(page) })}`,
   deckAssetUrl: (root: string, name: string) => `/slides/deck/asset${query({ root, name })}`,
   deckUploadAsset: (root: string, file: File) => {
     const form = new FormData()

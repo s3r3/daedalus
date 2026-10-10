@@ -24,6 +24,8 @@ const listMock = vi.fn()
 const deckGenerateMock = vi.fn()
 const deckUploadAssetMock = vi.fn()
 const pptTemplatesMock = vi.fn()
+const deckPreviewMock = vi.fn()
+const deckPreviewRenderMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
   api: {
@@ -41,6 +43,9 @@ vi.mock('../../api/client', () => ({
     deckRegenerateSlide: (...args: unknown[]) => deckRegenerateSlideMock(...args),
     deckUploadAsset: (...args: unknown[]) => deckUploadAssetMock(...args),
     deckAssetUrl: (root: string, name: string) => `/slides/deck/asset?root=${encodeURIComponent(root)}&name=${encodeURIComponent(name)}`,
+    deckPreview: (...args: unknown[]) => deckPreviewMock(...args),
+    deckPreviewRender: (...args: unknown[]) => deckPreviewRenderMock(...args),
+    deckPreviewPageUrl: (root: string, key: string, page: number) => `/slides/deck/preview/page?root=${encodeURIComponent(root)}&key=${key}&page=${page}`,
     pptTemplates: (...args: unknown[]) => pptTemplatesMock(...args),
     pptTemplateAssetUrl: (root: string, id: string, file: string) => `/slides/ppt-templates/asset?root=${encodeURIComponent(root)}&id=${encodeURIComponent(id)}&file=${encodeURIComponent(file)}`,
     list: (...args: unknown[]) => listMock(...args),
@@ -151,6 +156,10 @@ beforeEach(() => {
   deckUploadAssetMock.mockResolvedValue({ root: '/ws', name: 'foto-unggahan.png', path: 'deck/assets/foto-unggahan.png', size: 4321 })
   pptTemplatesMock.mockReset()
   pptTemplatesMock.mockResolvedValue({ root: '/ws', templates: [] })
+  deckPreviewMock.mockReset()
+  deckPreviewMock.mockResolvedValue({ root: '/ws', available: true, status: 'idle', key: 'c'.repeat(64), pages: 0 })
+  deckPreviewRenderMock.mockReset()
+  deckPreviewRenderMock.mockResolvedValue({ root: '/ws', available: true, status: 'rendering', key: 'c'.repeat(64), pages: 0 })
   deckGenerateMock.mockReset()
   deckGenerateMock.mockResolvedValue({
     root: '/ws',
@@ -835,6 +844,76 @@ describe('SlideStage', () => {
     render(<SlideStage />)
     expect(screen.getByTestId('slide-stage').textContent).toContain('Buka workspace dulu')
     expect(fileMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('SlideStage Pratinjau Asli', () => {
+  test('toggle switches to the true-preview view; without LibreOffice it shows the honest unavailable state and no edit affordances', async () => {
+    deckPreviewMock.mockResolvedValue({ root: '/ws', available: false, status: 'unavailable', key: 'a'.repeat(64), pages: 0 })
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    expect(screen.getByTestId('slide-preview')).toBeTruthy()
+    await user.click(screen.getByTestId('slide-view-preview'))
+
+    const unavailable = await screen.findByTestId('slide-preview-unavailable')
+    expect(unavailable.textContent).toContain('LibreOffice')
+    expect(deckPreviewMock).toHaveBeenCalledWith('/ws')
+    // The editable canvas and its edit affordances leave the stage.
+    expect(screen.queryByTestId('slide-preview')).toBeNull()
+    expect(screen.queryByTestId('slide-edit-toggle')).toBeNull()
+    expect(screen.queryByTestId('slide-preview-render')).toBeNull()
+    expect(screen.getByTestId('slide-preview-caption').textContent).toContain('LibreOffice')
+  })
+
+  test('ready render shows page images; filmstrip switches pages; Perbarui re-renders on demand', async () => {
+    const key = 'b'.repeat(64)
+    const pageUrls = [1, 2, 3].map((page) => `/slides/deck/preview/page?root=%2Fws&key=${key}&page=${page}`)
+    const ready = { root: '/ws', available: true, status: 'ready', key, pages: 3, pageUrls }
+    deckPreviewMock.mockResolvedValue(ready)
+    deckPreviewRenderMock.mockResolvedValue(ready)
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-view-preview'))
+
+    const image = (await screen.findByTestId('slide-preview-image')) as HTMLImageElement
+    expect(image.getAttribute('src')).toContain('page=1')
+    expect(screen.getAllByTestId(/^slide-preview-thumb-/)).toHaveLength(3)
+
+    await user.click(screen.getByTestId('slide-preview-thumb-2'))
+    const switched = screen.getByTestId('slide-preview-image') as HTMLImageElement
+    expect(switched.getAttribute('src')).toContain('page=3')
+
+    const renderButton = screen.getByTestId('slide-preview-render')
+    expect(renderButton.textContent).toContain('Perbarui pratinjau')
+    await user.click(renderButton)
+    expect(deckPreviewRenderMock).toHaveBeenCalledWith('/ws')
+
+    // Back to Edit: the canvas returns.
+    await user.click(screen.getByTestId('slide-view-edit'))
+    expect(await screen.findByTestId('slide-preview')).toBeTruthy()
+  })
+
+  test('an idle preview offers Buat pratinjau and starts the render from the button only', async () => {
+    deckPreviewRenderMock.mockResolvedValue({ root: '/ws', available: true, status: 'rendering', key: 'c'.repeat(64), pages: 0 })
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-view-preview'))
+
+    const button = await screen.findByTestId('slide-preview-render')
+    expect(button.textContent).toContain('Buat pratinjau')
+    expect(deckPreviewRenderMock).not.toHaveBeenCalled()
+    await user.click(button)
+    expect(deckPreviewRenderMock).toHaveBeenCalledWith('/ws')
+    expect(await screen.findByTestId('slide-preview-rendering')).toBeTruthy()
   })
 })
 

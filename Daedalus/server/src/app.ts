@@ -80,6 +80,7 @@ import {
 } from "./conversations.ts";
 import { TerminalError, TerminalManager } from "./terminals.ts";
 import { UPLOAD_LIMITS, extractZipEntries, guessMimeType, parseMultipart, sanitizeRelativePath, type UploadPart } from "./uploads.ts";
+import { SlidePreviewService } from "./slide-preview.ts";
 
 /**
  * REST + WebSocket gateway (PLAN.md §3.0, §3.6). Commands and reads only —
@@ -144,6 +145,8 @@ export type AppContext = {
   taskStoresCache?: { expiresAt: number; stores: TaskStore[] };
   /** Per-task summary memo, keyed by a stat fingerprint of the task's files (see summarizeFrom). */
   taskSummaryCache?: Map<string, { fingerprint: string; summary: Record<string, unknown> }>;
+  /** Pratinjau Asli renderer (LibreOffice raster preview of the exported deck); tests inject a fake-backed service. */
+  slidePreview?: SlidePreviewService;
 };
 
 export function createContext(overrides: Partial<AppContext> = {}): AppContext {
@@ -169,6 +172,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     workspaces: overrides.workspaces ?? new Set<string>([resolve(cwd), resolve(session.workspaceRoot)]),
     webDist: overrides.webDist,
     extensionStatusCache: overrides.extensionStatusCache ?? new Map(),
+    slidePreview: overrides.slidePreview,
   };
 }
 
@@ -1000,6 +1004,9 @@ async function extensionStatus(ctx: AppContext, rootValue: unknown): Promise<Ext
 }
 
 export function createApp(ctx: AppContext) {
+  const slidePreview = ctx.slidePreview ?? new SlidePreviewService();
+  const previewPageUrl = (root: string, key: string, page: number): string =>
+    `/slides/deck/preview/page?root=${encodeURIComponent(root)}&key=${key}&page=${page}`;
   // Mirror the harness' command lifecycle into the per-workspace agent
   // terminal sink (the root is resolved from the owning task's state —
   // event payloads do not carry it).
@@ -2129,6 +2136,78 @@ export function createApp(ctx: AppContext) {
             return;
           }
           sendJson(res, 200, { root, deck });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Pratinjau Asli status: is a LibreOffice render of the CURRENT
+    // deck state cached, rendering, stale, or impossible on this
+    // machine? Always 200 with an honest state (deck missing is 404,
+    // as everywhere else here).
+    if (method === "GET" && url.pathname === "/slides/deck/preview") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const deck = await readDeck(root);
+          if (!deck) {
+            sendJson(res, 404, { error: "deck_not_found", request_id: requestId });
+            return;
+          }
+          const status = await slidePreview.status(root, deck, (key, page) => previewPageUrl(root, key, page));
+          sendJson(res, 200, { root, ...status });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // One cached Pratinjau Asli page image. The key is a content hash
+    // (64 hex chars); anything else never reaches the filesystem.
+    if (method === "GET" && url.pathname === "/slides/deck/preview/page") {
+      try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+        const key = url.searchParams.get("key") || "";
+        const page = Number(url.searchParams.get("page") || "");
+        if (!key || !Number.isInteger(page) || page < 1) {
+          sendJson(res, 400, { error: "invalid_preview_page", request_id: requestId });
+          return;
+        }
+        const data = slidePreview.readPageBytes(root, key, page);
+        if (!data) {
+          sendJson(res, 404, { error: "preview_page_not_found", request_id: requestId });
+          return;
+        }
+        res.writeHead(200, { "content-type": "image/png", "content-length": data.length, ...CORS_HEADERS });
+        res.end(data);
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    // Queue a Pratinjau Asli render of the current deck state (serial,
+    // deduped per state hash). Returns the status immediately; the web
+    // polls GET /slides/deck/preview until ready/error.
+    if (method === "POST" && url.pathname === "/slides/deck/preview") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const deck = await readDeck(root);
+          if (!deck) {
+            sendJson(res, 404, { error: "deck_not_found", request_id: requestId });
+            return;
+          }
+          const status = await slidePreview.render(root, deck, (key, page) => previewPageUrl(root, key, page));
+          sendJson(res, 200, { root, ...status });
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
