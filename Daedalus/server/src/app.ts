@@ -116,7 +116,7 @@ import { TerminalError, TerminalManager } from "./terminals.ts";
 import { UPLOAD_LIMITS, extractZipEntries, guessMimeType, parseMultipart, sanitizeRelativePath, type UploadPart } from "./uploads.ts";
 import { SlidePreviewService } from "./slide-preview.ts";
 import { SheetPreviewService } from "./sheet-preview.ts";
-
+import { DokumenPreviewService, type DocPreviewKind } from "./dokumen-preview.ts";
 /**
  * REST + WebSocket gateway (PLAN.md §3.0, §3.6). Commands and reads only —
  * no agent, tool, or LLM logic lives here; the core owns execution.
@@ -184,7 +184,8 @@ export type AppContext = {
   slidePreview?: SlidePreviewService;
   /** Pratinjau renderer (raster preview of the exported workbook; Excel on Windows, or LibreOffice); tests inject a fake-backed service. */
   sheetPreview?: SheetPreviewService;
-};
+  /** Dokumen Pratinjau renderer (raster preview of the composed/re-laid-out DOCX; Word on Windows, else LibreOffice); tests inject a fake-backed service. */
+  dokumenPreview?: DokumenPreviewService;};
 
 export function createContext(overrides: Partial<AppContext> = {}): AppContext {
   const settings = overrides.settings ?? loadSettings();
@@ -211,7 +212,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     extensionStatusCache: overrides.extensionStatusCache ?? new Map(),
     slidePreview: overrides.slidePreview,
     sheetPreview: overrides.sheetPreview,
-  };
+    dokumenPreview: overrides.dokumenPreview,  };
 }
 
 export async function ensureProvidersLoaded(ctx: AppContext): Promise<void> {
@@ -1105,7 +1106,9 @@ export function createApp(ctx: AppContext) {
   const sheetPreview = ctx.sheetPreview ?? new SheetPreviewService();
   const sheetPreviewPageUrl = (root: string, key: string, page: number): string =>
     `/sheets/workbook/preview/page?root=${encodeURIComponent(root)}&key=${key}&page=${page}`;
-  // Mirror the harness' command lifecycle into the per-workspace agent
+  const dokumenPreview = ctx.dokumenPreview ?? new DokumenPreviewService();
+  const dokumenPreviewPageUrl = (root: string, key: string, page: number): string =>
+    `/dokumen/preview/page?root=${encodeURIComponent(root)}&key=${key}&page=${page}`;  // Mirror the harness' command lifecycle into the per-workspace agent
   // terminal sink (the root is resolved from the owning task's state —
   // event payloads do not carry it).
   ctx.terminals.attach(ctx.bus, (taskId) => {
@@ -2669,6 +2672,59 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
+    // Pratinjau status: is a render (Word on Windows, else
+    // LibreOffice) of the composed DOCX (Susun) or the Tata ulang
+    // result cached, rendering, stale, or impossible on this machine?
+    // Always 200 with an honest state (document missing is 404, as
+    // everywhere else here).
+    if (method === "GET" && url.pathname === "/dokumen/preview") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const rawKind = url.searchParams.get("kind");
+          if (rawKind !== null && rawKind !== "compose" && rawKind !== "style") {
+            sendJson(res, 400, { error: "invalid_preview_kind", request_id: requestId });
+            return;
+          }
+          const kind: DocPreviewKind = rawKind === "style" ? "style" : "compose";
+          const document = await readActiveDocument(root);
+          if (!document) {
+            sendJson(res, 404, { error: "document_not_found", request_id: requestId });
+            return;
+          }
+          const status = await dokumenPreview.status(root, document, kind, (key, page) => dokumenPreviewPageUrl(root, key, page));
+          sendJson(res, 200, { root, ...status });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // One cached Pratinjau page image. The key is a content hash
+    // (64 hex chars); anything else never reaches the filesystem.
+    if (method === "GET" && url.pathname === "/dokumen/preview/page") {
+      try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+        const key = url.searchParams.get("key") || "";
+        const page = Number(url.searchParams.get("page") || "");
+        if (!key || !Number.isInteger(page) || page < 1) {
+          sendJson(res, 400, { error: "invalid_preview_page", request_id: requestId });
+          return;
+        }
+        const data = dokumenPreview.readPageBytes(root, key, page);
+        if (!data) {
+          sendJson(res, 404, { error: "preview_page_not_found", request_id: requestId });
+          return;
+        }
+        res.writeHead(200, { "content-type": "image/png", "content-length": data.length, ...CORS_HEADERS });
+        res.end(data);
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
     if (method === "POST" && url.pathname.startsWith("/dokumen/")) {
       void (async () => {
         const parsed = await readJson(req);
@@ -2897,6 +2953,23 @@ export function createApp(ctx: AppContext) {
             const target = instruction ? parseStyleInstruction(instruction) : null;
             const ops = target ? proposeStyleOps(state, target) : [];
             sendJson(res, 200, { root, state, ops });
+            return;
+          }
+
+          if (url.pathname === "/dokumen/preview") {
+            // Queue a Pratinjau render of the composed DOCX (or the
+            // Tata ulang result) — serial, deduped per state hash.
+            // Returns the status immediately; the web polls
+            // GET /dokumen/preview until ready/error.
+            if (parsed.kind !== undefined && parsed.kind !== "compose" && parsed.kind !== "style") {
+              sendJson(res, 400, { error: "invalid_preview_kind", request_id: requestId });
+              return;
+            }
+            const document = await needDocument();
+            if (!document) return;
+            const kind: DocPreviewKind = parsed.kind === "style" ? "style" : "compose";
+            const status = await dokumenPreview.render(root, document, kind, (key, page) => dokumenPreviewPageUrl(root, key, page));
+            sendJson(res, 200, { root, ...status });
             return;
           }
 
