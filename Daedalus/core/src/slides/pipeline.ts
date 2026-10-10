@@ -833,7 +833,6 @@ export async function fillDeckSlidesStage(
   // runs only inside the serialized writer below.
   type SlideFillOutcome = { ok: true; apply: () => void } | { ok: false; issues: string[] };
   const fillOne = async (slide: Slide, index: number, total: number): Promise<SlideFillOutcome> => {
-    const title = slideTitle(slide);
     const onAttempt = (attempt: number): void => {
       if (attempt > 1) {
         options.onProgress?.({ type: 'slide-retry', slideId: slide.id, index, total, attempt, maxAttempts: MAX_STAGE_ATTEMPTS });
