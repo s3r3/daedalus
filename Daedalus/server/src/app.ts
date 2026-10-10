@@ -145,7 +145,7 @@ export type AppContext = {
   taskStoresCache?: { expiresAt: number; stores: TaskStore[] };
   /** Per-task summary memo, keyed by a stat fingerprint of the task's files (see summarizeFrom). */
   taskSummaryCache?: Map<string, { fingerprint: string; summary: Record<string, unknown> }>;
-  /** Pratinjau Asli renderer (LibreOffice raster preview of the exported deck); tests inject a fake-backed service. */
+  /** Pratinjau Asli renderer (raster preview of the exported deck; LibreOffice, or PowerPoint on Windows); tests inject a fake-backed service. */
   slidePreview?: SlidePreviewService;
 };
 
@@ -2143,10 +2143,10 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
-    // Pratinjau Asli status: is a LibreOffice render of the CURRENT
-    // deck state cached, rendering, stale, or impossible on this
-    // machine? Always 200 with an honest state (deck missing is 404,
-    // as everywhere else here).
+    // Pratinjau Asli status: is a render (LibreOffice, or PowerPoint
+    // on Windows) of the CURRENT deck state cached, rendering, stale,
+    // or impossible on this machine? Always 200 with an honest state
+    // (deck missing is 404, as everywhere else here).
     if (method === "GET" && url.pathname === "/slides/deck/preview") {
       void (async () => {
         try {

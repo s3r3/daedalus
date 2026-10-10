@@ -199,14 +199,17 @@ export type DeckAssetUploadResult = { root: string; name: string; path: string; 
 
 /**
  * Pratinjau Asli status: the exported .pptx rendered by a local
- * LibreOffice into per-page images, cached under a hash of the deck
- * state. `unavailable` means soffice/pdftoppm is not installed;
- * `stale` means the deck changed since the cached render.
+ * engine into per-page images, cached under a hash of the deck
+ * state. Engines: LibreOffice (soffice/pdftoppm) anywhere, or
+ * Microsoft PowerPoint (COM) on Windows — server-selected, named in
+ * `engine`. `unavailable` means neither is installed; `stale` means
+ * the deck changed since the cached render.
  */
 export type DeckPreviewStatus = {
   root: string
   available: boolean
   status: 'unavailable' | 'idle' | 'rendering' | 'ready' | 'stale' | 'error'
+  engine: 'libreoffice' | 'powerpoint' | null
   key: string | null
   pages: number
   pageUrls?: string[]

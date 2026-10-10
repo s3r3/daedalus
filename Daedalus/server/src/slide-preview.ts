@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
@@ -9,30 +9,54 @@ import { deckPaths, exportDeckToPptx, pptxTemplatesDir, validateDeck, type DeckS
 /**
  * Pratinjau Asli (True Preview): renders the .pptx that Export would
  * produce from the CURRENT deck state through a locally installed
- * LibreOffice, so the user sees inside Daedalus exactly what
- * LibreOffice/PowerPoint draws — gradients, shadows, and all — without
- * opening another app. The editable canvas stays an approximation;
- * these page images are the exported file itself, rasterised.
+ * presentation engine, so the user sees inside Daedalus exactly what
+ * that engine draws — gradients, shadows, and all — without opening
+ * another app. The editable canvas stays an approximation; these page
+ * images are the exported file itself, rasterised.
  *
- * Pipeline (on demand, never per edit): core export → temp .pptx →
- * `soffice --headless --convert-to pdf` (dedicated user profile) →
- * `pdftoppm -png`. Results are cached under
+ * Two engines sit behind one small interface, chosen at runtime:
+ *   1. LibreOffice (any platform): core export → temp .pptx →
+ *      `soffice --headless --convert-to pdf` (dedicated user profile)
+ *      → `pdftoppm -png`.
+ *   2. PowerPoint (Windows only): the same exported .pptx opened by
+ *      Microsoft PowerPoint itself via COM from a PowerShell script,
+ *      each slide exported to PNG. This is the most faithful raster
+ *      there is — Microsoft's own renderer — but COM only exists on
+ *      Windows, so detection gates on `win32`.
+ * Selection order is LibreOffice first (headless, singleton-safe),
+ * PowerPoint second. When neither is present the service reports a
+ * distinct `unavailable` state — never a crash.
+ *
+ * PowerPoint cleanup semantics (see buildPowerPointExportScript):
+ * PowerPoint is a single-instance COM server, so `New-Object
+ * -ComObject` may hand back the USER's already-running instance. The
+ * script snapshots POWERPNT pids before activation, writes any pid it
+ * started to a pid file, and only calls `Application.Quit()` when no
+ * PowerPoint process existed before the render; a pre-existing
+ * instance only loses our presentation (closed normally), never the
+ * app. On Node-side timeout we taskkill exactly the pids recorded in
+ * that pid file — never a process we did not start.
+ *
+ * Results are cached under
  * `<workspace>/.daedalus/slide-preview/<key>/page-N.png`, where the key
  * hashes everything the export depends on (deck.json bytes, deck
  * assets, referenced template records + source .pptx). A deck change
  * therefore yields a new key and the old render reports as stale
- * instead of silently showing pages of an older deck.
- *
- * Renders are serialised (LibreOffice is a per-profile singleton) and
- * hard-timed-out. When `soffice`/`pdftoppm` are absent the service
- * reports a distinct `unavailable` state — never a crash.
+ * instead of silently showing pages of an older deck. Renders are
+ * serialised (one render at a time across both engines) and
+ * hard-timed-out.
  */
 
 export type TruePreviewStatusName = "unavailable" | "idle" | "rendering" | "ready" | "stale" | "error";
 
+/** A render engine that can rasterise the exported .pptx on this machine. */
+export type PreviewEngineId = "libreoffice" | "powerpoint";
+
 export type TruePreviewStatus = {
   available: boolean;
   status: TruePreviewStatusName;
+  /** Engine that would render (or rendered) this deck; null when unavailable. */
+  engine: PreviewEngineId | null;
   /** Hash of the current deck state the status refers to (null without a deck). */
   key: string | null;
   /** Pages ready for `key` (0 unless status is ready). */
@@ -46,15 +70,35 @@ export type TruePreviewStatus = {
 /** Converts one exported .pptx into per-page PNGs inside `workDir`; returns the PNG paths in page order. */
 export type PreviewConverter = (input: { pptxPath: string; workDir: string; profileDir: string }) => Promise<string[]>;
 
-export type ConverterAvailability = { soffice: boolean; pdftoppm: boolean };
+/** Which engines are usable on this machine. Detection is cached per service instance. */
+export type PreviewEngineAvailability = {
+  /** LibreOffice pipeline usable: soffice + pdftoppm found on PATH. */
+  libreOffice: boolean;
+  /** PowerPoint usable: win32 + a PowerShell host + the PowerPoint COM progid registered. */
+  powerPoint: boolean;
+};
+
+/** Filesystem/platform seams for engine detection, injected by tests to stay deterministic. */
+export type PreviewEngineSeams = {
+  platform?: NodeJS.Platform;
+  env?: NodeJS.ProcessEnv;
+  /** "Does this absolute path exist?" — defaults to an executable check on posix, plain existence on win32. */
+  fileExists?: (path: string) => boolean;
+  /** COM probe seam (win32 only in production): true when PowerPoint.Application is registered. */
+  probePowerPointCom?: (shell: string) => Promise<boolean>;
+};
 
 export type SlidePreviewDeps = {
-  /** Converter detection (PATH scan, cached per service instance). */
-  availability?: () => ConverterAvailability;
-  /** The pptx → PNGs step. Tests inject a fake; production uses LibreOffice. */
+  /** Engine detection. Tests inject a fixed verdict; production detects + caches. */
+  availability?: () => PreviewEngineAvailability | Promise<PreviewEngineAvailability>;
+  /** The pptx → PNGs step for whichever engine is selected. Tests inject a fake. */
   converter?: PreviewConverter;
+  /** Per-engine converters; wins over `converter` for that engine. Tests use these to see which engine ran. */
+  converters?: Partial<Record<PreviewEngineId, PreviewConverter>>;
   /** The deck → temp .pptx step. Tests inject a fake; production reuses core's exporter. */
   exportPptx?: (root: string, deck: DeckSpec) => Promise<{ path: string; cleanup?: () => Promise<void> }>;
+  /** Detection seams (platform/env/probes). Production defaults; tests simulate win32. */
+  engineSeams?: PreviewEngineSeams;
 };
 
 const PREVIEW_DIR = join(".daedalus", "slide-preview");
@@ -62,6 +106,11 @@ const KEY_SALT = "true-preview:v1:r100";
 const PAGE_DPI = 100;
 const SOFFICE_TIMEOUT_MS = 90_000;
 const PDFTOPPM_TIMEOUT_MS = 30_000;
+/** Whole PowerPoint render (app start + per-slide export) gets one budget; on expiry we kill only the instance we started. */
+const POWERPOINT_TIMEOUT_MS = 120_000;
+const POWERSHELL_PROBE_TIMEOUT_MS = 8_000;
+/** Page width (px) for PowerPoint slide exports; height follows the deck's own aspect. Matches ~100 DPI at 16:9. */
+export const POWERPOINT_PAGE_WIDTH_PX = 1280;
 const KEY_PATTERN = /^[a-f0-9]{64}$/;
 
 type RenderJob = {
@@ -75,23 +124,116 @@ function cacheRoot(root: string): string {
   return join(root, PREVIEW_DIR);
 }
 
-function executableOnPath(name: string): boolean {
-  const pathEnv = process.env.PATH ?? "";
-  for (const dir of pathEnv.split(":")) {
-    if (!dir) continue;
-    try {
-      accessSync(join(dir, name), constants.X_OK);
-      return true;
-    } catch {
-      // keep scanning
+// ---------------------------------------------------------------------------
+// Engine detection
+// ---------------------------------------------------------------------------
+
+/** Executable file names to try for a tool, per platform (Windows carries .exe/.com variants). */
+export function executableCandidates(tool: "soffice" | "pdftoppm" | "powershell", platform: NodeJS.Platform): string[] {
+  if (platform === "win32") {
+    switch (tool) {
+      case "soffice":
+        return ["soffice.exe", "soffice.com", "soffice"];
+      case "pdftoppm":
+        return ["pdftoppm.exe", "pdftoppm"];
+      case "powershell":
+        return ["powershell.exe", "pwsh.exe"];
     }
   }
-  return false;
+  switch (tool) {
+    case "soffice":
+      return ["soffice"];
+    case "pdftoppm":
+      return ["pdftoppm"];
+    case "powershell":
+      return ["pwsh", "powershell"];
+  }
 }
 
-function defaultAvailability(): ConverterAvailability {
-  return { soffice: executableOnPath("soffice"), pdftoppm: executableOnPath("pdftoppm") };
+function defaultFileExists(platform: NodeJS.Platform): (path: string) => boolean {
+  return (path: string): boolean => {
+    try {
+      // Windows filesystems do not model X_OK; plain existence is the honest check there.
+      accessSync(path, platform === "win32" ? constants.F_OK : constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  };
 }
+
+/** First PATH hit (full path) among `names`, or null. Splits PATH with the platform separator. */
+export function findExecutableOnPath(names: string[], seams: PreviewEngineSeams = {}): string | null {
+  const platform = seams.platform ?? process.platform;
+  const env = seams.env ?? process.env;
+  const fileExists = seams.fileExists ?? defaultFileExists(platform);
+  const pathEnv = env.PATH ?? env.Path ?? "";
+  for (const dir of pathEnv.split(platform === "win32" ? ";" : ":")) {
+    if (!dir) continue;
+    for (const name of names) {
+      const candidate = join(dir, name);
+      if (fileExists(candidate)) return candidate;
+    }
+  }
+  return null;
+}
+
+function toolOnPath(tool: "soffice" | "pdftoppm" | "powershell", seams: PreviewEngineSeams): boolean {
+  const platform = seams.platform ?? process.platform;
+  return findExecutableOnPath(executableCandidates(tool, platform), seams) !== null;
+}
+
+/** PowerShell host usable for the PowerPoint engine, or null. Only ever consulted on win32. */
+export function findPowerShell(seams: PreviewEngineSeams = {}): string | null {
+  const platform = seams.platform ?? process.platform;
+  return findExecutableOnPath(executableCandidates("powershell", platform), seams);
+}
+
+/** Default COM probe: a registry-only lookup (GetTypeFromProgID never launches PowerPoint). */
+function defaultProbePowerPointCom(shell: string): Promise<boolean> {
+  return new Promise((resolvePromise) => {
+    execFile(
+      shell,
+      ["-NoProfile", "-NonInteractive", "-Command", "if ([Type]::GetTypeFromProgID('PowerPoint.Application')) { exit 0 } else { exit 2 }"],
+      { timeout: POWERSHELL_PROBE_TIMEOUT_MS, windowsHide: true },
+      (error) => resolvePromise(!error),
+    );
+  });
+}
+
+/**
+ * Detect usable engines. LibreOffice needs soffice + pdftoppm on PATH
+ * (any platform). PowerPoint is Windows-only: a PowerShell host plus
+ * the PowerPoint COM progid — probed, never assumed from the shell
+ * alone. Never throws: any failure reads as "not available".
+ */
+export async function detectPreviewEngines(seams: PreviewEngineSeams = {}): Promise<PreviewEngineAvailability> {
+  const platform = seams.platform ?? process.platform;
+  const libreOffice = toolOnPath("soffice", seams) && toolOnPath("pdftoppm", seams);
+  let powerPoint = false;
+  if (platform === "win32") {
+    const shell = findPowerShell(seams);
+    if (shell) {
+      try {
+        powerPoint = await (seams.probePowerPointCom ?? defaultProbePowerPointCom)(shell);
+      } catch {
+        powerPoint = false;
+      }
+    }
+  }
+  return { libreOffice, powerPoint };
+}
+
+/** Selection order: LibreOffice (headless, singleton-safe) before PowerPoint (Windows COM). */
+export function resolvePreviewEngine(availability: PreviewEngineAvailability): PreviewEngineId | null {
+  if (availability.libreOffice) return "libreoffice";
+  if (availability.powerPoint) return "powerpoint";
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Converters
+// ---------------------------------------------------------------------------
 
 function runCommand(command: string, args: string[], timeoutMs: number): Promise<void> {
   return new Promise((resolvePromise, reject) => {
@@ -106,7 +248,19 @@ function runCommand(command: string, args: string[], timeoutMs: number): Promise
   });
 }
 
-/** Production converter: LibreOffice headless → PDF → per-page PNGs. */
+/** Per-page PNGs a converter left in `workDir`, in page order; throws when empty. */
+async function collectPages(workDir: string, emptyMessage: string): Promise<string[]> {
+  const entries = await readdir(workDir);
+  const pages = entries
+    .map((name) => /^page-(\d+)\.png$/.exec(name))
+    .filter((match): match is RegExpExecArray => match !== null)
+    .sort((a, b) => Number(a[1]) - Number(b[1]))
+    .map((match) => join(workDir, match[0]));
+  if (pages.length === 0) throw new Error(emptyMessage);
+  return pages;
+}
+
+/** Production converter, LibreOffice engine: headless → PDF → per-page PNGs. */
 export const libreOfficeConverter: PreviewConverter = async ({ pptxPath, workDir, profileDir }) => {
   await runCommand(
     "soffice",
@@ -116,15 +270,136 @@ export const libreOfficeConverter: PreviewConverter = async ({ pptxPath, workDir
   const pdfPath = join(workDir, `${basename(pptxPath).replace(/\.pptx$/i, "")}.pdf`);
   if (!existsSync(pdfPath)) throw new Error("LibreOffice tidak menghasilkan PDF dari berkas .pptx ini.");
   await runCommand("pdftoppm", ["-png", "-r", String(PAGE_DPI), pdfPath, join(workDir, "page")], PDFTOPPM_TIMEOUT_MS);
-  const entries = await readdir(workDir);
-  const pages = entries
-    .map((name) => /^page-(\d+)\.png$/.exec(name))
-    .filter((match): match is RegExpExecArray => match !== null)
-    .sort((a, b) => Number(a[1]) - Number(b[1]))
-    .map((match) => join(workDir, match[0]));
-  if (pages.length === 0) throw new Error("pdftoppm tidak menghasilkan gambar halaman dari PDF ini.");
-  return pages;
+  return collectPages(workDir, "pdftoppm tidak menghasilkan gambar halaman dari PDF ini.");
 };
+
+/**
+ * The PowerShell script driving PowerPoint via COM (Windows only).
+ * Pure string generation so tests can assert its exact semantics:
+ *  - snapshots POWERPNT pids before activation and records any pid it
+ *    started into `pidFile` (the Node runner taskkills exactly those
+ *    on timeout — a pre-existing user PowerPoint is never force-killed);
+ *  - opens the .pptx read-only, windowless, and exports every slide
+ *    to page-N.png at `widthPx` wide, height from the deck's aspect;
+ *  - always closes the presentation, and only Quit()s PowerPoint when
+ *    no POWERPNT process existed before the render;
+ *  - failures go to stderr with exit 1 (ErrorActionPreference Stop).
+ * ASCII-only on purpose: PowerShell 5.1 misreads UTF-8-no-BOM scripts
+ * containing non-ASCII characters.
+ */
+export function buildPowerPointExportScript(input: { pptxPath: string; outDir: string; pidFile: string; widthPx?: number }): string {
+  const psString = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+  const widthPx = input.widthPx ?? POWERPOINT_PAGE_WIDTH_PX;
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "$ProgressPreference = 'SilentlyContinue'",
+    `$pptxPath = ${psString(input.pptxPath)}`,
+    `$outDir = ${psString(input.outDir)}`,
+    `$pidFile = ${psString(input.pidFile)}`,
+    `$widthPx = ${widthPx}`,
+    "function Get-PowerPointPids {",
+    "  try { return @((Get-Process -Name POWERPNT -ErrorAction Stop).Id) } catch { return @() }",
+    "}",
+    "$preExisting = @(Get-PowerPointPids)",
+    "$app = $null",
+    "$presentation = $null",
+    "try {",
+    "  $app = New-Object -ComObject PowerPoint.Application",
+    "  $startedByUs = @(Get-PowerPointPids | Where-Object { $preExisting -notcontains $_ })",
+    "  if ($startedByUs.Count -gt 0) { [IO.File]::WriteAllLines($pidFile, [string[]]$startedByUs) }",
+    "  try { $app.DisplayAlerts = 1 } catch { }",
+    "  $presentation = $app.Presentations.Open($pptxPath, $true, $false, $false)",
+    "  $heightPx = [int][Math]::Round($widthPx * [double]$presentation.PageSetup.SlideHeight / [double]$presentation.PageSetup.SlideWidth)",
+    "  $index = 0",
+    "  foreach ($slide in $presentation.Slides) {",
+    "    $index += 1",
+    "    $slide.Export((Join-Path $outDir ('page-{0}.png' -f $index)), 'PNG', $widthPx, $heightPx)",
+    "  }",
+    "  if ($index -eq 0) { throw 'PowerPoint membuka berkas .pptx ini tanpa slide.' }",
+    "} catch {",
+    "  [Console]::Error.WriteLine('Render PowerPoint gagal: ' + $_.Exception.Message)",
+    "  exit 1",
+    "} finally {",
+    "  if ($null -ne $presentation) {",
+    "    try { $presentation.Close() } catch { }",
+    "    try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($presentation) } catch { }",
+    "  }",
+    "  if ($null -ne $app) {",
+    "    if ($preExisting.Count -eq 0) { try { $app.Quit() } catch { } }",
+    "    try { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($app) } catch { }",
+    "  }",
+    "  [GC]::Collect()",
+    "  [GC]::WaitForPendingFinalizers()",
+    "}",
+    "",
+  ].join("\r\n");
+}
+
+/** Runs the generated PowerShell script; injected by tests. */
+export type PowerPointScriptRunner = (input: { shell: string; scriptPath: string; pidFile: string; timeoutMs: number }) => Promise<void>;
+
+/**
+ * Production runner: spawns the shell hidden, enforces the timeout,
+ * and on timeout kills — in order — the PowerPoint pids the script
+ * recorded (instances THIS render started) and then the shell itself.
+ * A user's pre-existing PowerPoint process is never in that pid file.
+ */
+export const defaultPowerPointScriptRunner: PowerPointScriptRunner = ({ shell, scriptPath, pidFile, timeoutMs }) =>
+  new Promise((resolvePromise, reject) => {
+    const child = spawn(shell, ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath], { windowsHide: true });
+    let stderr = "";
+    let timedOut = false;
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        const pids = readFileSync(pidFile, "utf8").split(/\s+/).map((part) => part.trim()).filter((part) => /^\d+$/.test(part));
+        for (const pid of pids) {
+          execFile("taskkill", ["/F", "/PID", pid], () => undefined);
+        }
+      } catch {
+        // no pid file yet: PowerPoint may not even have started
+      }
+      child.kill();
+    }, timeoutMs);
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(new Error(`PowerShell tidak bisa dijalankan: ${error.message}`));
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        reject(new Error(`Render PowerPoint melewati batas ${Math.round(timeoutMs / 1000)} detik; instance PowerPoint yang dimulai render ini sudah dihentikan.`));
+        return;
+      }
+      if (code !== 0) {
+        const detail = stderr.trim().split("\n").slice(-2).join(" ");
+        reject(new Error(detail || `Render PowerPoint gagal (kode keluar ${code ?? "?"}).`));
+        return;
+      }
+      resolvePromise();
+    });
+  });
+
+/** Production converter, PowerPoint engine (Windows): temp script → COM export of each slide. The shell resolver is injectable for tests. */
+export function createPowerPointConverter(
+  runner: PowerPointScriptRunner = defaultPowerPointScriptRunner,
+  resolveShell: () => string | null = () => findPowerShell(),
+): PreviewConverter {
+  return async ({ pptxPath, workDir }) => {
+    const shell = resolveShell();
+    if (!shell) throw new Error("PowerShell tidak ditemukan di mesin ini — engine PowerPoint tidak tersedia.");
+    const scriptPath = join(workDir, "render-powerpoint.ps1");
+    const pidFile = join(workDir, "powerpoint-pids.txt");
+    await writeFile(scriptPath, buildPowerPointExportScript({ pptxPath, outDir: workDir, pidFile }), "utf8");
+    await runner({ shell, scriptPath, pidFile, timeoutMs: POWERPOINT_TIMEOUT_MS });
+    return collectPages(workDir, "PowerPoint tidak menghasilkan gambar halaman dari berkas .pptx ini.");
+  };
+}
+
+export const powerPointConverter: PreviewConverter = createPowerPointConverter();
 
 async function defaultExportPptx(root: string, deck: DeckSpec): Promise<{ path: string; cleanup: () => Promise<void> }> {
   const result = await exportDeckToPptx(deck, root, { fileSuffix: "pratinjau-asli" });
@@ -133,22 +408,46 @@ async function defaultExportPptx(root: string, deck: DeckSpec): Promise<{ path: 
 }
 
 export class SlidePreviewService {
-  readonly #deps: Required<SlidePreviewDeps>;
-  #availabilityCache: ConverterAvailability | undefined;
+  readonly #deps: Required<Omit<SlidePreviewDeps, "availability" | "converter" | "converters" | "engineSeams">> & {
+    availability?: SlidePreviewDeps["availability"];
+    converter?: PreviewConverter;
+    converters: Partial<Record<PreviewEngineId, PreviewConverter>>;
+    engineSeams: PreviewEngineSeams;
+  };
+  #enginesCache: Promise<{ availability: PreviewEngineAvailability; engine: PreviewEngineId | null }> | undefined;
   #jobs = new Map<string, RenderJob>();
   #queue: Promise<unknown> = Promise.resolve();
 
   constructor(deps: SlidePreviewDeps = {}) {
     this.#deps = {
-      availability: deps.availability ?? (() => (this.#availabilityCache ??= defaultAvailability())),
-      converter: deps.converter ?? libreOfficeConverter,
+      availability: deps.availability,
+      converter: deps.converter,
+      converters: deps.converters ?? {},
+      engineSeams: deps.engineSeams ?? {},
       exportPptx: deps.exportPptx ?? defaultExportPptx,
     };
   }
 
-  get available(): boolean {
-    const found = this.#deps.availability();
-    return found.soffice && found.pdftoppm;
+  /** Engine verdict for this machine, detected once and cached (detection includes a PATH scan + at most one COM probe). */
+  #engines(): Promise<{ availability: PreviewEngineAvailability; engine: PreviewEngineId | null }> {
+    if (!this.#enginesCache) {
+      this.#enginesCache = (async () => {
+        const availability = this.#deps.availability
+          ? await this.#deps.availability()
+          : await detectPreviewEngines(this.#deps.engineSeams);
+        return { availability, engine: resolvePreviewEngine(availability) };
+      })();
+    }
+    return this.#enginesCache;
+  }
+
+  /** The converter that runs for the selected engine: per-engine dep, else the shared dep, else production. */
+  #converterFor(engine: PreviewEngineId): PreviewConverter {
+    return (
+      this.#deps.converters[engine] ??
+      this.#deps.converter ??
+      (engine === "libreoffice" ? libreOfficeConverter : powerPointConverter)
+    );
   }
 
   /**
@@ -199,12 +498,14 @@ export class SlidePreviewService {
 
   async status(root: string, deck: DeckSpec, pageUrlFor: (key: string, page: number) => string): Promise<TruePreviewStatus> {
     const key = await this.computeKey(root, deck);
-    if (!this.available) return { available: false, status: "unavailable", key, pages: 0 };
+    const { engine } = await this.#engines();
+    if (!engine) return { available: false, status: "unavailable", engine: null, key, pages: 0 };
     const manifest = await this.#readManifest(root, key);
     if (manifest) {
       return {
         available: true,
         status: "ready",
+        engine,
         key,
         pages: manifest.pages,
         pageUrls: Array.from({ length: manifest.pages }, (_, i) => pageUrlFor(key, i + 1)),
@@ -212,18 +513,19 @@ export class SlidePreviewService {
       };
     }
     const job = this.#jobs.get(`${root}::${key}`);
-    if (job?.state === "rendering") return { available: true, status: "rendering", key, pages: 0 };
-    if (job?.state === "error") return { available: true, status: "error", key, pages: 0, error: job.error };
+    if (job?.state === "rendering") return { available: true, status: "rendering", engine, key, pages: 0 };
+    if (job?.state === "error") return { available: true, status: "error", engine, key, pages: 0, error: job.error };
     // A render of an older deck state on disk means this exact state
     // has no faithful pages yet: stale, not ready.
-    if (await this.#hasAnyManifest(root)) return { available: true, status: "stale", key, pages: 0 };
-    return { available: true, status: "idle", key, pages: 0 };
+    if (await this.#hasAnyManifest(root)) return { available: true, status: "stale", engine, key, pages: 0 };
+    return { available: true, status: "idle", engine, key, pages: 0 };
   }
 
   /** Queue a render of the deck's current state (deduped per key, fully serialised). */
   async render(root: string, deck: DeckSpec, pageUrlFor: (key: string, page: number) => string): Promise<TruePreviewStatus> {
     const key = await this.computeKey(root, deck);
-    if (!this.available) return { available: false, status: "unavailable", key, pages: 0 };
+    const { engine } = await this.#engines();
+    if (!engine) return { available: false, status: "unavailable", engine: null, key, pages: 0 };
     if (await this.#readManifest(root, key)) return this.status(root, deck, pageUrlFor);
     const jobKey = `${root}::${key}`;
     if (this.#jobs.get(jobKey)?.state !== "rendering") {
@@ -231,7 +533,7 @@ export class SlidePreviewService {
       this.#jobs.set(jobKey, job);
       const run = async (): Promise<void> => {
         try {
-          await this.#renderNow(root, deck, key);
+          await this.#renderNow(root, deck, key, this.#converterFor(engine));
           this.#jobs.delete(jobKey);
         } catch (error) {
           job.state = "error";
@@ -240,10 +542,10 @@ export class SlidePreviewService {
       };
       this.#queue = this.#queue.then(run, run);
     }
-    return { available: true, status: "rendering", key, pages: 0 };
+    return { available: true, status: "rendering", engine, key, pages: 0 };
   }
 
-  async #renderNow(root: string, deck: DeckSpec, key: string): Promise<void> {
+  async #renderNow(root: string, deck: DeckSpec, key: string, converter: PreviewConverter): Promise<void> {
     // Mirror the Export route's contract: an invalid or empty deck is
     // refused here exactly as it is there, with the issue in the open.
     const issues = validateDeck(deck, { root }).filter((issue) => issue.severity === "error");
@@ -257,7 +559,7 @@ export class SlidePreviewService {
     try {
       await rm(workDir, { recursive: true, force: true });
       await mkdir(workDir, { recursive: true });
-      const pages = await this.#deps.converter({ pptxPath: exported.path, workDir, profileDir: join(dir, ".lo-profile") });
+      const pages = await converter({ pptxPath: exported.path, workDir, profileDir: join(dir, ".lo-profile") });
       if (pages.length === 0) throw new Error("render tidak menghasilkan halaman apa pun.");
       await rm(finalDir, { recursive: true, force: true });
       await mkdir(finalDir, { recursive: true });
