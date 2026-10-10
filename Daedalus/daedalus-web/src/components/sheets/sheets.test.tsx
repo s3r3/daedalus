@@ -14,6 +14,8 @@ const workbookSaveMock = vi.fn()
 const workbookExportMock = vi.fn()
 const workbookOpenMock = vi.fn()
 const workbookSidecarMock = vi.fn()
+const workbookPreviewMock = vi.fn()
+const workbookPreviewRenderMock = vi.fn()
 const listMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
@@ -25,6 +27,9 @@ vi.mock('../../api/client', () => ({
     workbookOpen: (...args: unknown[]) => workbookOpenMock(...args),
     workbookSidecar: (...args: unknown[]) => workbookSidecarMock(...args),
     workbookDownloadUrl: (root: string, path: string) => `/sheets/workbook/download?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
+    workbookPreview: (...args: unknown[]) => workbookPreviewMock(...args),
+    workbookPreviewRender: (...args: unknown[]) => workbookPreviewRenderMock(...args),
+    workbookPreviewPageUrl: (root: string, key: string, page: number) => `/sheets/workbook/preview/page?root=${encodeURIComponent(root)}&key=${key}&page=${page}`,
     list: (...args: unknown[]) => listMock(...args),
   },
 }))
@@ -82,6 +87,8 @@ beforeEach(() => {
   workbookSaveMock.mockResolvedValue({ root: '/ws', workbook: fixtureWorkbook })
   workbookExportMock.mockResolvedValue({ root: '/ws', records: [{ at: 'x', path: '/ws/workbook/rekap-uji.xlsx', format: 'xlsx', bytes: 2048, via: 'exceljs' }] })
   workbookSidecarMock.mockResolvedValue({ available: false, version: null, path: null })
+  workbookPreviewMock.mockResolvedValue({ root: '/ws', available: true, status: 'idle', engine: 'libreoffice', engineLabel: 'LibreOffice', key: null, pages: 0 })
+  workbookPreviewRenderMock.mockResolvedValue({ root: '/ws', available: true, status: 'rendering', engine: 'libreoffice', engineLabel: 'LibreOffice', key: 'abc', pages: 0 })
   listMock.mockResolvedValue({ path: '.', items: [] })
   useDaedalusStore.getState().setWorkspace({ root: '/ws' })
   useDaedalusStore.getState().setDomain('spreadsheet')
@@ -292,4 +299,78 @@ describe('SheetWorkspacePanel', () => {
     fireEvent.click(openButtons[0] as HTMLElement)
     await waitFor(() => expect(workbookOpenMock).toHaveBeenCalledWith('/ws', 'jualan.csv'))
   })
+})
+
+describe('SheetStage Pratinjau (engine-named workbook preview)', () => {
+  test('toggle exists; unavailable engine state is honest and canvas-honest', async () => {
+    workbookPreviewMock.mockResolvedValue({ root: '/ws', available: false, status: 'unavailable', engine: null, engineLabel: null, key: null, pages: 0 })
+    render(<SheetStage />)
+    await waitFor(() => expect(screen.getByTestId('sheet-stage-title')).toBeTruthy())
+    expect(screen.getByTestId('sheet-view-edit')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('sheet-view-preview'))
+    await waitFor(() => expect(screen.getByTestId('sheet-preview-unavailable')).toBeTruthy())
+    expect(screen.getByTestId('sheet-preview-unavailable').textContent).toContain('Microsoft Excel')
+    expect(screen.getByTestId('sheet-preview-unavailable').textContent).toContain('LibreOffice')
+    expect(screen.queryByTestId('sheet-preview-render')).toBeNull()
+    expect(workbookPreviewMock).toHaveBeenCalledWith('/ws')
+  })
+
+  test('ready render shows the pages and names LibreOffice; Edit returns to the grid', async () => {
+    workbookPreviewMock.mockResolvedValue({
+      root: '/ws', available: true, status: 'ready', engine: 'libreoffice', engineLabel: 'LibreOffice', key: 'k1', pages: 2,
+      pageUrls: ['/sheets/workbook/preview/page?root=%2Fws&key=k1&page=1', '/sheets/workbook/preview/page?root=%2Fws&key=k1&page=2'],
+    })
+    render(<SheetStage />)
+    await waitFor(() => expect(screen.getByTestId('sheet-stage-title')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('sheet-view-preview'))
+    await waitFor(() => expect(screen.getByTestId('sheet-preview-image')).toBeTruthy())
+    expect(screen.getByTestId('sheet-preview-title').textContent).toBe('Pratinjau · LibreOffice')
+    expect(screen.getByTestId('sheet-preview').getAttribute('data-engine')).toBe('libreoffice')
+    expect(screen.getByTestId('sheet-preview-thumb-1')).toBeTruthy()
+    expect(screen.getByTestId('sheet-preview-thumb-1').textContent).toContain('halaman 2')
+    expect(screen.getByTestId('sheet-preview-caption').textContent).toContain('Slicer')
+    expect(screen.queryByTestId('sheet-cell-A1')).toBeNull()
+    fireEvent.click(screen.getByTestId('sheet-view-edit'))
+    await waitFor(() => expect(screen.getByTestId('sheet-cell-A1')).toBeTruthy())
+  })
+
+  test('an Excel render is named Excel, never LibreOffice', async () => {
+    workbookPreviewMock.mockResolvedValue({
+      root: '/ws', available: true, status: 'ready', engine: 'excel', engineLabel: 'Excel', key: 'k2', pages: 1,
+      pageUrls: ['/sheets/workbook/preview/page?root=%2Fws&key=k2&page=1'],
+    })
+    render(<SheetStage />)
+    await waitFor(() => expect(screen.getByTestId('sheet-stage-title')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('sheet-view-preview'))
+    await waitFor(() => expect(screen.getByTestId('sheet-preview-image')).toBeTruthy())
+    expect(screen.getByTestId('sheet-preview-title').textContent).toBe('Pratinjau · Excel')
+    expect(screen.getByTestId('sheet-preview').getAttribute('data-engine')).toBe('excel')
+  })
+
+  test('stale shows the badge + note (no old pages) and Perbarui re-renders', async () => {
+    workbookPreviewMock.mockResolvedValue({ root: '/ws', available: true, status: 'stale', engine: 'libreoffice', engineLabel: 'LibreOffice', key: 'k1', pages: 0 })
+    render(<SheetStage />)
+    await waitFor(() => expect(screen.getByTestId('sheet-stage-title')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('sheet-view-preview'))
+    await waitFor(() => expect(screen.getByTestId('sheet-preview-stale')).toBeTruthy())
+    expect(screen.getByTestId('sheet-preview-stale-note')).toBeTruthy()
+    expect(screen.queryByTestId('sheet-preview-image')).toBeNull()
+    fireEvent.click(screen.getByTestId('sheet-preview-render'))
+    await waitFor(() => expect(workbookPreviewRenderMock).toHaveBeenCalledWith('/ws'))
+  })
+
+  test('Buat pratinjau from idle renders then polls to ready', async () => {
+    workbookPreviewMock.mockResolvedValue({ root: '/ws', available: true, status: 'idle', engine: 'libreoffice', engineLabel: 'LibreOffice', key: null, pages: 0 })
+    render(<SheetStage />)
+    await waitFor(() => expect(screen.getByTestId('sheet-stage-title')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('sheet-view-preview'))
+    await waitFor(() => expect(screen.getByTestId('sheet-preview-idle')).toBeTruthy())
+    workbookPreviewMock.mockResolvedValue({
+      root: '/ws', available: true, status: 'ready', engine: 'libreoffice', engineLabel: 'LibreOffice', key: 'k3', pages: 1,
+      pageUrls: ['/sheets/workbook/preview/page?root=%2Fws&key=k3&page=1'],
+    })
+    fireEvent.click(screen.getByTestId('sheet-preview-render'))
+    await waitFor(() => expect(workbookPreviewRenderMock).toHaveBeenCalledWith('/ws'))
+    await waitFor(() => expect(screen.getByTestId('sheet-preview-image')).toBeTruthy(), { timeout: 4000 })
+  }, 15000)
 })
