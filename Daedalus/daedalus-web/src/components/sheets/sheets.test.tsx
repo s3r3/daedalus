@@ -174,6 +174,102 @@ describe('SheetReportPanel', () => {
   })
 })
 
+const dashboardWorkbookFixture: WorkbookSpec = {
+  version: 1,
+  id: 'wb-dash',
+  title: 'Dashboard Penjualan',
+  stage: 'ready',
+  sheets: [
+    {
+      id: 's-data',
+      name: 'Data',
+      cells: {
+        A1: { v: 'Bulan', bold: true },
+        B1: { v: 'Region', bold: true },
+        C1: { v: 'Total', bold: true },
+        A2: { v: 'Jan' },
+        B2: { v: 'Barat' },
+        C2: { v: 100 },
+        A3: { v: 'Feb' },
+        B3: { v: 'Timur' },
+        C3: { v: 200 },
+      },
+    },
+    {
+      id: 's-dash',
+      name: 'Dashboard',
+      kind: 'dashboard',
+      cells: {
+        B2: { v: 'Total Revenue', bold: true, fill: '#6B50FF', color: '#FFFFFF' },
+        B3: { f: '=SUM(Data!C2:C3)', fmt: '#,##0', bold: true },
+      },
+      merges: ['B2:D2', 'B3:D4'],
+      tiles: [{ id: 'tile-total', label: 'Total Revenue', formula: '=SUM(Data!C2:C3)', fmt: '#,##0', anchor: 'B2', cols: 3, rows: 3 }],
+      charts: [{ id: 'chart-region', type: 'column', range: 'Data!A1:C3', sheet: 'Dashboard', anchor: 'B8', title: 'Revenue per Region' }],
+      slicers: [{ id: 'slicer-region', field: 'Region', source: 'Data!A1:C3', anchor: 'B24', pivot: 'pivot-region' }],
+      pivots: [{ id: 'pivot-region', source: 'Data!A1:C3', target: '_PivotData', anchor: 'A1', rows: ['Region'], values: [{ field: 'Total', agg: 'sum' }] }],
+    },
+  ],
+  blueprint: undefined,
+  exports: [{
+    at: 'x', path: '/ws/workbook/dashboard-penjualan.xlsx', format: 'xlsx', bytes: 4096, via: 'exceljs+sidecar',
+    dashboard: { sheet: 'Dashboard', tiles: 1, charts: 1, slicers: 1 },
+    note: '1 chart native + 1 pivot native + 1 slicer native disuntikkan Go sidecar',
+  }],
+  meta: { createdBy: 'test' },
+}
+
+describe('Dashboard canvas (Kanvas Grid, dashboard sheet)', () => {
+  test('tiles show evaluated KPI values; charts/slicers render as honest placeholders', async () => {
+    workbookMock.mockResolvedValue({ root: '/ws', workbook: dashboardWorkbookFixture })
+    render(<SheetStage />)
+    fireEvent.click(await screen.findByTestId('sheet-tab-Dashboard'))
+    await waitFor(() => expect(screen.getByTestId('sheet-dash-canvas')).toBeTruthy())
+    // KPI value is computed live by the evaluator (100 + 200), not frozen text.
+    expect(screen.getByTestId('sheet-tile-value-tile-total').textContent).toContain('300')
+    expect(screen.getByTestId('sheet-tile-tile-total').textContent).toContain('=SUM(Data!C2:C3)')
+    // Chart is named as an export-rendered native, never drawn on canvas.
+    expect(screen.getByTestId('sheet-chart-chart-region').textContent).toContain('Dirender sebagai chart native di file .xlsx')
+    expect(screen.getByTestId('sheet-slicer-slicer-region').textContent).toContain('Region')
+    expect(screen.getByTestId('sheet-dash-pivots').textContent).toContain('_PivotData')
+    // Grid remains reachable for raw cell edits.
+    fireEvent.click(screen.getByTestId('sheet-dash-view-grid'))
+    await waitFor(() => expect(screen.getByTestId('sheet-grid')).toBeTruthy())
+  })
+})
+
+describe('Dashboard in Panel Blueprint + Laporan', () => {
+  test('blueprint dashboard section lists tiles and natives; report counts composed pieces', async () => {
+    const staged: WorkbookSpec = {
+      ...dashboardWorkbookFixture,
+      stage: 'blueprint',
+      blueprint: {
+        goal: 'buatkan dashboard penjualan',
+        sources: ['penjualan.csv'],
+        assumptions: [],
+        sheets: [{ name: 'Data', columns: [{ name: 'Total', type: 'currency', source: 'input' }] }],
+        dashboard: {
+          sheet: 'Dashboard',
+          tiles: [{ id: 'tile-total', label: 'Total Revenue', formula: '=SUM(Data!C2:C3)', anchor: 'B2' }],
+          charts: [{ id: 'chart-region', type: 'column', range: 'Data!A1:C3', anchor: 'B8', title: 'Revenue per Region' }],
+          slicers: [{ id: 'slicer-region', field: 'Region', source: 'Data!A1:C3', anchor: 'B24' }],
+        },
+      },
+    }
+    workbookMock.mockResolvedValue({ root: '/ws', workbook: staged })
+    render(<BlueprintPanel />)
+    await waitFor(() => expect(screen.getByTestId('sheet-blueprint-dashboard')).toBeTruthy())
+    expect(screen.getByTestId('sheet-blueprint-dashboard-tiles').textContent).toContain('Total Revenue')
+    expect(screen.getByTestId('sheet-blueprint-dashboard-natives').textContent).toContain('1 chart')
+    expect(screen.getByTestId('sheet-blueprint-dashboard-natives').textContent).toContain('1 slicer (Region)')
+
+    workbookMock.mockResolvedValue({ root: '/ws', workbook: dashboardWorkbookFixture })
+    render(<SheetReportPanel />)
+    await waitFor(() => expect(screen.getByTestId('sheet-report-dashboard')).toBeTruthy())
+    expect(screen.getByTestId('sheet-report-dashboard').textContent).toContain('1 kartu KPI · 1 chart · 1 slicer')
+  })
+})
+
 describe('SheetWorkspacePanel', () => {
   test('lists everything but only spreadsheet files can be opened', async () => {
     listMock.mockImplementation(async (_root: string, path: string) => {
