@@ -73,6 +73,17 @@ export function BlueprintPanel() {
           {blueprint.sources.length > 0 ? (
             <p className="text-[10px] text-muted">Sumber: {blueprint.sources.join(', ')}</p>
           ) : null}
+          {staged ? (
+            <>
+              <Button type="button" size="sm" onClick={() => void buat()} disabled={building} data-testid="sheet-blueprint-buat" className="w-full">
+                <Hammer className="size-3.5" aria-hidden />
+                {building ? 'Membangun…' : 'Buat workbook ini'}
+              </Button>
+              <p className="text-[10px] text-muted">
+                Blueprint di atas belum jadi file. Periksa sheet, kolom, dan formula kuncinya di bawah — Buat membangun workbook, menjalankan verify, lalu mengekspor XLSX.
+              </p>
+            </>
+          ) : null}
           <ul className="flex flex-col gap-1.5" data-testid="sheet-blueprint-sheets">
             {blueprint.sheets.map((sheet) => (
               <li key={sheet.name} className="rounded border border-line bg-surface px-2 py-1.5">
@@ -115,17 +126,6 @@ export function BlueprintPanel() {
             </div>
           ) : null}
           {blueprint.notes ? <p className="text-[10px] text-muted">{blueprint.notes}</p> : null}
-          {staged ? (
-            <>
-              <Button type="button" size="sm" onClick={() => void buat()} disabled={building} data-testid="sheet-blueprint-buat" className="w-full">
-                <Hammer className="size-3.5" aria-hidden />
-                {building ? 'Membangun…' : 'Buat'}
-              </Button>
-              <p className="text-[10px] text-muted">
-                Blueprint di atas belum jadi file. Periksa sheet, kolom, dan formula kuncinya — Buat membangun workbook, menjalankan verify, lalu mengekspor XLSX.
-              </p>
-            </>
-          ) : null}
           {buildNote ? (
             <p className="rounded border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-[10px] text-emerald-200" data-testid="sheet-blueprint-note">
               {buildNote}

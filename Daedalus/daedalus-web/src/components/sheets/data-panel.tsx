@@ -70,7 +70,7 @@ export function SheetDataPanel() {
             void refs
             return (
               <li key={sheet.id} className="flex items-baseline justify-between rounded border border-line bg-surface px-2 py-1 text-[10px]">
-                <span className="font-semibold text-foreground">{sheet.name}</span>
+                <span className="mr-1 font-semibold text-foreground">{sheet.name}</span>
                 <span className="text-muted">
                   {maxRow} baris × {maxCol} kolom · {formulas} formula · {Object.keys(sheet.cells).length - formulas} nilai
                 </span>
