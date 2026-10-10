@@ -77,6 +77,17 @@ import {
   type DocumentState,
   validateDeck,
   writeDeck,
+  readWorkbook,
+  writeWorkbook,
+  validateWorkbook,
+  workbookPaths,
+  exportWorkbookToXlsx,
+  exportWorkbookCsv,
+  exportSheetToCsvText,
+  importCsvToWorkbook,
+  importXlsxToWorkbook,
+  probeSheetSidecar,
+  type WorkbookSpec,
   type DeckSpec,
   type Slide,
   type SlideTaskParams,
@@ -218,7 +229,8 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(data);
 }
 
-const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workspace", "/slides", "/dokumen", "/uploads", "/upload", "/attachments", "/extensions", "/review", "/terminals"];
+const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workspace", "/slides", "/dokumen", "/sheets", "/uploads", "/upload", "/attachments", "/extensions", "/review", "/terminals"];
+const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workspace", "/slides", "/sheets", "/uploads", "/upload", "/attachments", "/extensions", "/review", "/terminals"];
 
 function webContentType(path: string): string {
   switch (extname(path).toLowerCase()) {
@@ -1354,11 +1366,11 @@ export function createApp(ctx: AppContext) {
             return;
           }
           const isolation = parsed.isolation === "worktree" ? ("worktree" as const) : undefined;
-          if (parsed.domain !== undefined && parsed.domain !== "coding" && parsed.domain !== "slide" && parsed.domain !== "dokumen") {
+          if (parsed.domain !== undefined && parsed.domain !== "coding" && parsed.domain !== "slide" && parsed.domain !== "dokumen" && parsed.domain !== "spreadsheet") {
             sendJson(res, 400, { error: "invalid_domain", request_id: requestId });
             return;
           }
-          const domain = parsed.domain === "slide" || parsed.domain === "coding" || parsed.domain === "dokumen" ? parsed.domain : undefined;
+          const domain = parsed.domain === "slide" || parsed.domain === "coding" || parsed.domain === "dokumen" || parsed.domain === "spreadsheet" ? parsed.domain : undefined;
 
           // Dokumen composer parameters: Ekstrak|Susun sub-mode, source
           // files to ingest, DOCX to re-layout. Only meaningful in the
@@ -1382,7 +1394,6 @@ export function createApp(ctx: AppContext) {
               ...(docxPath ? { docxPath } : {}),
             };
           }
-
           // Slide composer parameters (Agentic Slide v2): generation flow,
           // target slide count, content language, pre-picked template. The
           // Web sends snake_case; camelCase is accepted too. They only take
@@ -1522,6 +1533,11 @@ export function createApp(ctx: AppContext) {
             sendJson(res, 400, { error: domain === "dokumen" ? "skills_not_in_dokumen_domain" : "skills_not_in_slide_domain", request_id: requestId });
             return;
           }
+          if (domain === "spreadsheet" && skillNames.length > 0) {
+            // Spreadsheet is likewise locked (sheet ops + ask_user).
+            sendJson(res, 400, { error: "skills_not_in_spreadsheet_domain", request_id: requestId });
+            return;
+          }
           if (skillNames.length > 0) {
             const skillConfig = await loadSkillConfig(repoPath);
             const inventory = await loadSkillInventory(resolveSkillSearchDirs(repoPath), { disabledNames: skillConfig.disabled });
@@ -1549,8 +1565,8 @@ export function createApp(ctx: AppContext) {
           // attachments/worktrees always take the task path. Slide-domain
           // submits also always take the full task path: the fast answer
           // paths have no tool loop, so they could never touch the deck.
-          const intent = attachments.length || isolation || skillNames.length || domain === "slide" || domain === "dokumen" ? "task" : classifyWebIntent(goal);
-          if (intent !== "task") {
+          const intent = attachments.length || isolation || skillNames.length || domain === "slide" || domain === "dokumen" || domain === "spreadsheet" ? "task" : classifyWebIntent(goal);
+                    if (intent !== "task") {
             const task = {
               id: taskId,
               goal,
@@ -1630,6 +1646,12 @@ export function createApp(ctx: AppContext) {
             // schema/outline/style gate still waiting in this workspace.
             for (const [otherId, other] of ctx.activeRunners) {
               if (otherId !== taskId) other.abandonDokumenGate(repoPath);
+            }
+          }
+          if (domain === "spreadsheet") {
+            // Same staging discipline for blueprints.
+            for (const [otherId, other] of ctx.activeRunners) {
+              if (otherId !== taskId) other.abandonStagedWorkbook(repoPath);
             }
           }
 
@@ -3185,6 +3207,275 @@ export function createApp(ctx: AppContext) {
           }
 
           badDeck(404, "unknown_slides_route");
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Agentic Spreadsheet routes — the workbook analog of the deck
+    // routes above. workbook/workbook.json is the source of truth; the
+    // engine (core) owns its content, these routes only read, persist
+    // validated canvas saves, release the staged blueprint (Buat),
+    // archive on new-chat reset, import source files, and serve
+    // on-demand exports.
+    if (method === "GET" && url.pathname === "/sheets/workbook") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const workbook = await readWorkbook(root);
+          if (!workbook) {
+            sendJson(res, 404, { error: "workbook_not_found", request_id: requestId });
+            return;
+          }
+          sendJson(res, 200, { root, workbook });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/sheets/workbook/sidecar") {
+      void (async () => {
+        try {
+          const probe = await probeSheetSidecar();
+          sendJson(res, 200, { available: probe.available, version: probe.version, path: probe.path });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/sheets/workbook/download") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const rel = url.searchParams.get("path") || "";
+          // Only exports inside workbook/ are downloadable.
+          if (!rel.startsWith("workbook/") || !/\.(xlsx|csv)$/i.test(rel) || rel.includes("..")) {
+            sendJson(res, 400, { error: "invalid_download_path", request_id: requestId });
+            return;
+          }
+          const absolute = resolveInside(root, rel);
+          const data = readFileSync(absolute);
+          const isXlsx = rel.toLowerCase().endsWith(".xlsx");
+          res.writeHead(200, {
+            "content-type": isXlsx ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "text/csv; charset=utf-8",
+            "content-length": data.length,
+            "content-disposition": `attachment; filename="${basename(rel)}"`,
+            ...CORS_HEADERS,
+          });
+          res.end(data);
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/sheets/workbook") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const candidate = parsed.workbook as WorkbookSpec | undefined;
+          if (!candidate || typeof candidate !== "object") {
+            sendJson(res, 400, { error: "workbook_required", request_id: requestId });
+            return;
+          }
+          // Canvas/editor saves are validated exactly like engine
+          // writes: structural errors respond 422 and nothing lands.
+          const errors = validateWorkbook(candidate).filter((issue) => issue.severity === "error");
+          if (errors.length > 0) {
+            sendJson(res, 422, { error: "invalid_workbook", issues: errors, request_id: requestId });
+            return;
+          }
+          await writeWorkbook(root, candidate);
+          sendJson(res, 200, { root, workbook: candidate });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/sheets/workbook/generate") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          await ensureProvidersLoaded(ctx);
+          const input = {
+            ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
+            ...(typeof parsed.provider_id === "string" ? { providerId: parsed.provider_id } : {}),
+          };
+          // The staged run completes through its own task: release it
+          // and answer with that task's own verdict.
+          for (const runner of ctx.activeRunners.values()) {
+            const released = await runner.releaseStagedWorkbook(root);
+            if (released) {
+              sendJson(res, 200, { root, task_id: released.taskId, outcome: released.outcome, summary: released.summary, exported: released.exported ?? null });
+              return;
+            }
+          }
+          for (const runner of ctx.activeRunners.values()) {
+            if (runner.hasSpreadsheetEngineFor(root)) {
+              sendJson(res, 409, { error: "sheet_run_in_progress", message: "Tugas spreadsheet sedang berjalan di workspace ini — tunggu selesai sebelum menekan Buat.", request_id: requestId });
+              return;
+            }
+          }
+          const workbook = await readWorkbook(root).catch(() => null);
+          if (!workbook) {
+            sendJson(res, 404, { error: "workbook_not_found", request_id: requestId });
+            return;
+          }
+          if (workbook.stage !== "blueprint" || !workbook.blueprint) {
+            sendJson(res, 409, { error: "no_staged_blueprint", message: "Tidak ada blueprint yang menunggu dibangun di workspace ini.", request_id: requestId });
+            return;
+          }
+          const runner = new TaskRunner({
+            workspaceRoot: root,
+            bus: ctx.bus,
+            store: ctx.store,
+            settings: ctx.settings,
+            providerRegistry: ctx.providerStore.registry,
+          });
+          const built = await runner.buildStagedWorkbook(root, input);
+          if (!built) {
+            sendJson(res, 409, { error: "no_staged_blueprint", message: "Tidak ada blueprint yang menunggu dibangun di workspace ini.", request_id: requestId });
+            return;
+          }
+          sendJson(res, 200, { root, outcome: built.outcome, summary: built.summary, exported: null });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/sheets/workbook/reset") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          let stagedAbandoned = false;
+          for (const runner of ctx.activeRunners.values()) {
+            if (!runner.hasSpreadsheetEngineFor(root)) continue;
+            if (runner.abandonStagedWorkbook(root)) {
+              stagedAbandoned = true;
+              continue;
+            }
+            sendJson(res, 409, { error: "sheet_run_in_progress", message: "Tugas spreadsheet sedang berjalan di workspace ini — tunggu selesai sebelum memulai chat baru.", request_id: requestId });
+            return;
+          }
+          const workbookDir = workbookPaths(root).dir;
+          const dirStat = await stat(workbookDir).catch(() => null);
+          if (!dirStat?.isDirectory()) {
+            sendJson(res, 200, { root, archived: null, staged_abandoned: stagedAbandoned });
+            return;
+          }
+          const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+          const archiveParent = join(root, ".daedalus", "workbook-archive");
+          await mkdir(archiveParent, { recursive: true });
+          let name = stamp;
+          for (let suffix = 2; await stat(join(archiveParent, name)).then(() => true, () => false); suffix += 1) {
+            name = `${stamp}-${suffix}`;
+          }
+          await rename(workbookDir, join(archiveParent, name));
+          sendJson(res, 200, { root, archived: `.daedalus/workbook-archive/${name}`, staged_abandoned: stagedAbandoned });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/sheets/workbook/open") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const rel = typeof parsed.path === "string" ? parsed.path : "";
+          if (!rel || rel.includes("..") || !/\.(csv|xlsx)$/i.test(rel)) {
+            sendJson(res, 400, { error: "invalid_open_path", message: "path harus file .csv/.xlsx di dalam workspace", request_id: requestId });
+            return;
+          }
+          const absolute = resolveInside(root, rel);
+          const title = basename(rel).replace(/\.(csv|xlsx)$/i, "");
+          let workbook: WorkbookSpec;
+          if (rel.toLowerCase().endsWith(".csv")) {
+            const text = await readFile(absolute, "utf8");
+            workbook = importCsvToWorkbook(title, text, { createdBy: "daedalus-web-open" });
+          } else {
+            const buffer = await readFile(absolute);
+            workbook = await importXlsxToWorkbook(title, buffer, { createdBy: "daedalus-web-open" });
+          }
+          // Opening a file makes it the editable workbook: fully built
+          // (stage ready) with an auto-derived blueprint describing
+          // its structure, so chat tasks can audit/edit it directly.
+          workbook.stage = "ready";
+          await writeWorkbook(root, workbook);
+          sendJson(res, 200, { root, workbook });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/sheets/workbook/export") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const workbook = await readWorkbook(root);
+          if (!workbook) {
+            sendJson(res, 404, { error: "workbook_not_found", request_id: requestId });
+            return;
+          }
+          const format = parsed.format === "csv" ? "csv" : "xlsx";
+          const sheetName = typeof parsed.sheet === "string" ? parsed.sheet : undefined;
+          if (format === "csv") {
+            if (sheetName) {
+              const single = exportSheetToCsvText(workbook, sheetName);
+              if (!single.ok) {
+                sendJson(res, 400, { error: "export_failed", issues: single.issues, request_id: requestId });
+                return;
+              }
+            }
+            const records = await exportWorkbookCsv(workbook, root, sheetName);
+            workbook.exports = [...records, ...(workbook.exports ?? [])].slice(0, 10);
+            await writeWorkbook(root, workbook);
+            sendJson(res, 200, { root, records });
+            return;
+          }
+          const record = await exportWorkbookToXlsx(workbook, root);
+          workbook.exports = [record, ...(workbook.exports ?? [])].slice(0, 10);
+          await writeWorkbook(root, workbook);
+          sendJson(res, 200, { root, records: [record] });
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }

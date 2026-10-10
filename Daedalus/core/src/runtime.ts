@@ -845,6 +845,8 @@ export class TaskRunner {
     // machinery below is never constructed for a dokumen task.
     if (options.domain === 'dokumen') {
       return this.#runDokumenEngine(spec, effectiveOptions, collected, startedAt);
+    }
+
     // Spreadsheet domain: the SpreadsheetEngine owns the task end to
     // end (its own executor, blueprint checkpoint, verify gate, and
     // completion verdict). No coding machinery is constructed either.
