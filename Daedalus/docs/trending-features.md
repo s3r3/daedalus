@@ -154,7 +154,7 @@ Five original starter skills ship in `Daedalus/skills/`:
 ## Launcher menu, workspace anchoring, packaging
 
 Running bare `daedalus` in a terminal shows the launcher (arrow keys
-↑/↓ + Enter, number keys 1–4, `q` to quit; a numbered text menu when
+↑/↓ + Enter, number keys 1–6, `q` to quit; a numbered text menu when
 stdin/stdout are not a TTY):
 
 ```
@@ -163,22 +163,23 @@ stdin/stdout are not a TTY):
 │  Workspace: /home/you/project
 │  Tray: …
 │  Tray icon: …/cli/assets/tray-icon.svg (placeholder "D" — Farid's final design comes later)
-│  ❯ 1  Web UI (Open in Browser)
-│    2  Terminal UI (Interactive CLI)
-│    3  Hide to Tray (Background)
-│    4  Exit
-╰─ ↑/↓ select · Enter confirm · 1–4 jump · q quit
+│  ❯ 1  Daedalus Coding (Web UI)
+│    2  Daedalus Slide (Web UI)
+│    3  Daedalus Dokumen (Web UI)
+│    4  Daedalus Spreadsheet (Web UI)
+│    5  Hide to Tray (Background)
+│    6  Exit
+╰─ ↑/↓ select · Enter confirm · 1–6 jump · q quit
 ```
 
-- **1 Web UI** ensures the background daemon, opens the browser, prints the
-  URL, and leaves the menu — the server keeps running in the background.
-- **2 Terminal UI** ensures the daemon, then opens the interactive CLI
-  anchored at the current directory. When the CLI exits, the server keeps
-  running; `daedalus stop` stops it.
-- **3 Hide to Tray** ensures the daemon and leaves only the background
+- **1–4 (the four domains)** ensure the background daemon, open the
+  browser at that domain's route (`/`, `/slide`, `/dokumen`,
+  `/spreadsheet`), print the URL, and leave the menu — the server keeps
+  running in the background.
+- **5 Hide to Tray** ensures the daemon and leaves only the background
   server running (honest tray note below).
-- **4 Exit** just leaves the menu; the server state is unchanged and the
-  menu says so.
+- **6 Exit** shuts the background server down through the same stop
+  mechanism as `daedalus stop` and says what happened.
 
 **Workspace anchoring.** The directory where `daedalus` is invoked becomes
 the daemon session's workspace (the server is spawned with

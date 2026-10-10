@@ -409,7 +409,7 @@ export async function fetchDaemonWorkspace(url: string, fetchImpl: typeof fetch 
   }
 }
 
-export type MenuAction = 'coding' | 'slide' | 'tray' | 'exit' | 'invalid';
+export type MenuAction = 'coding' | 'slide' | 'dokumen' | 'spreadsheet' | 'tray' | 'exit' | 'invalid';
 export type LauncherAction = Exclude<MenuAction, 'invalid'>;
 
 export type LauncherMenuItem = {
@@ -420,9 +420,10 @@ export type LauncherMenuItem = {
 };
 
 /**
- * The four launcher choices, in display order (keys 1–4). The launcher
- * starts the harness and opens its Web workspace — Daedalus Coding at
- * `/` or Daedalus Slide at `/slide`; the interactive terminal UI was
+ * The six launcher choices, in display order (keys 1–6). The launcher
+ * starts the harness and opens its Web workspace — one entry per
+ * domain: Coding at `/`, Slide at `/slide`, Dokumen at `/dokumen`,
+ * Spreadsheet at `/spreadsheet`; the interactive terminal UI was
  * removed (2026-10-08, Farid's decision) because the harness loses
  * nothing without it — every capability lives in core and the Web
  * carries the surfaces a terminal cannot.
@@ -430,16 +431,20 @@ export type LauncherMenuItem = {
 export const LAUNCHER_MENU_ITEMS: LauncherMenuItem[] = [
   { key: '1', action: 'coding', label: 'Daedalus Coding', description: 'Web UI' },
   { key: '2', action: 'slide', label: 'Daedalus Slide', description: 'Web UI' },
-  { key: '3', action: 'tray', label: 'Hide to Tray', description: 'Background' },
-  { key: '4', action: 'exit', label: 'Exit', description: '' },
+  { key: '3', action: 'dokumen', label: 'Daedalus Dokumen', description: 'Web UI' },
+  { key: '4', action: 'spreadsheet', label: 'Daedalus Spreadsheet', description: 'Web UI' },
+  { key: '5', action: 'tray', label: 'Hide to Tray', description: 'Background' },
+  { key: '6', action: 'exit', label: 'Exit', description: '' },
 ];
 
 export function parseMenuChoice(input: string | null | undefined): MenuAction {
   const normalized = (input ?? '').trim().toLowerCase();
   if (normalized === '1') return 'coding';
   if (normalized === '2') return 'slide';
-  if (normalized === '3') return 'tray';
-  if (normalized === '4' || normalized === '0' || normalized === 'q' || normalized === 'quit' || normalized === 'exit') return 'exit';
+  if (normalized === '3') return 'dokumen';
+  if (normalized === '4') return 'spreadsheet';
+  if (normalized === '5') return 'tray';
+  if (normalized === '6' || normalized === '0' || normalized === 'q' || normalized === 'quit' || normalized === 'exit') return 'exit';
   return 'invalid';
 }
 
@@ -480,7 +485,7 @@ export function launcherMenuFrame(selection: number, status: DaemonStatus): stri
       const label = `${item.key}  ${item.label}${item.description ? ` (${item.description})` : ''}`;
       return `│  ${index === clamped ? '❯' : ' '} ${label}`;
     }),
-    '╰─ ↑/↓ select · Enter confirm · 1–4 jump · q quit',
+    '╰─ ↑/↓ select · Enter confirm · 1–6 jump · q quit',
   ];
   return lines.join('\n');
 }
@@ -583,6 +588,14 @@ export async function runLauncherChoice(action: LauncherAction, deps: LauncherCh
       await deps.openWeb('/slide');
       deps.print(`Slide UI: ${joinServerUrl(url, '/slide')} (server keeps running in the background; \`daedalus stop\` stops it).\n`);
       return 'slide';
+    case 'dokumen':
+      await deps.openWeb('/dokumen');
+      deps.print(`Dokumen UI: ${joinServerUrl(url, '/dokumen')} (server keeps running in the background; \`daedalus stop\` stops it).\n`);
+      return 'dokumen';
+    case 'spreadsheet':
+      await deps.openWeb('/spreadsheet');
+      deps.print(`Spreadsheet UI: ${joinServerUrl(url, '/spreadsheet')} (server keeps running in the background; \`daedalus stop\` stops it).\n`);
+      return 'spreadsheet';
     case 'tray':
       await deps.hideToTray?.();
       deps.print(`Background mode: only the server keeps running at ${url}. Tray: ${deps.status.tray.reason}\n`);
@@ -611,7 +624,7 @@ export async function runStartupMenu(deps: LauncherChoiceDeps & {
   for (;;) {
     const action = parseMenuChoice(await deps.readChoice());
     if (action === 'invalid') {
-      deps.print('Please choose 1, 2, 3, 4, or q.\n');
+      deps.print('Please choose 1, 2, 3, 4, 5, 6, or q.\n');
       continue;
     }
     return runLauncherChoice(action, deps);
