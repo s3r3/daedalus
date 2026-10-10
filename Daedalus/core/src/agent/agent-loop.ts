@@ -347,6 +347,15 @@ export class AgentLoop {
   /** Tasks with a hard-pause question awaiting the user right now; resolves when it settles. */
   readonly #pendingQuestions = new Map<string, Promise<void>>();
   #cancelled = new Set<string>();
+  /**
+   * Per-task model-request cancellation: one AbortController per live
+   * task, created when the task starts and aborted by stop(). The
+   * controller's signal rides every provider call for the task (chat
+   * and streaming), so a Stop press aborts the in-flight model request
+   * instead of waiting for it to finish. Controllers are per task —
+   * stopping one task never aborts another task's requests.
+   */
+  readonly #taskAbort = new Map<string, AbortController>();
   readonly #invalidActions = new Map<string, number>();
 
   constructor(options: AgentLoopOptions) {
@@ -388,6 +397,12 @@ export class AgentLoop {
 
   stop(taskId: string): void {
     this.#cancelled.add(taskId);
+    // Abort the in-flight model request for this task, if any. A Stop
+    // press during a long model call must end the call now — the
+    // checkpoint at the top of the run loop only catches stops that
+    // arrive between calls. Per-task controllers only: other tasks'
+    // controllers are untouched, so concurrent tasks keep running.
+    this.#taskAbort.get(taskId)?.abort();
   }
 
   async run(input: string | TaskSpec): Promise<TaskState> {
@@ -396,6 +411,7 @@ export class AgentLoop {
       return await this.#runTask(spec);
     } finally {
       this.#loopGuards.delete(spec.id);
+      this.#taskAbort.delete(spec.id);
       this.#pendingGuidance.delete(spec.id);
       this.#pendingImages.delete(spec.id);
       this.#modelFailures.delete(spec.id);
@@ -432,6 +448,13 @@ export class AgentLoop {
 
   async #runTask(spec: TaskSpec): Promise<TaskState> {
     if (spec.mode) this.#modeController.set(spec.mode);
+    // The task's model-request cancellation seam: every provider call
+    // this task makes carries this controller's signal, so stop()
+    // aborts the in-flight request (no orphaned request keeps running
+    // after the task is gone). A stop() that arrived before the task
+    // started is already recorded in #cancelled and caught at the
+    // loop-top checkpoint below.
+    this.#taskAbort.set(spec.id, new AbortController());
     let state: TaskState = { ...spec, mode: spec.mode ?? this.#modeController.mode, turns: 0, plan: { id: `${spec.id}-plan`, task_id: spec.id, steps: [], version: 0, status: 'draft' }, steps: [], status: 'active' };
     await this.#emit(state.id, undefined, 'TASK_STARTED', { spec });
     this.#store.saveState(state.id, state);
@@ -811,6 +834,17 @@ export class AgentLoop {
         }
       }
     } catch (error) {
+      // A Stop press aborts the in-flight model call via the task's
+      // AbortController: the provider surfaces that as a failure
+      // (typically an LLMTimeoutError), but it is a user cancellation —
+      // the task ends promptly as cancelled, without touching the
+      // consecutive-failure or timeout budgets and without emitting a
+      // MODEL_REQUEST_FAILED for a request that never really failed.
+      // The run loop emits the single TASK_COMPLETED and persists the
+      // checkpoint for any step that returns status 'failed'.
+      if (this.#taskSignalAborted(state.id)) {
+        return { ...state, status: 'failed', last_error: 'aborted' };
+      }
       const errorText = formatError(error);
       const kind = classifyLLMError(error);
       const reason = error instanceof LLMAuthError
@@ -1881,13 +1915,36 @@ export class AgentLoop {
       try {
         return this.#streamText
           ? await this.#chatStreamed(taskId, turnId, messages, tools, phase)
-          : await this.#provider.chat(messages, tools, { ...this.#chatOptions, phase, cachePrefix: true });
+          : await this.#provider.chat(messages, tools, this.#chatRequestOptions(taskId, phase));
       } catch (error) {
+        // A stop during the empty-response backoff must not sleep out
+        // the remaining delay before the turn notices the cancellation.
+        if (this.#taskSignalAborted(taskId)) throw error;
         if (modelPoolFailureReason(error) !== 'format_or_empty' || attempt >= backoffMs.length) throw error;
         await this.#emit(taskId, turnId, 'LOOP_WARNING', { tool: '', repeats: attempt + 1, suppressed: false, kind: 'empty_response_retry', attempt: attempt + 1 });
         await new Promise((resolve) => setTimeout(resolve, backoffMs[attempt]));
       }
     }
+  }
+
+  /**
+   * Provider-call options for one task turn: the configured chat options
+   * plus the task's cancellation signal. The task signal is the Stop
+   * seam — it wins over any host-supplied signal, because a host signal
+   * cannot distinguish this task's requests from any other's.
+   */
+  #chatRequestOptions(taskId: string, phase: ModelPhase | undefined): import('../providers/llm/types.ts').ChatOptions {
+    return { ...this.#chatOptions, phase, signal: this.#taskSignal(taskId), cachePrefix: true };
+  }
+
+  /** The task's cancellation signal, if the task has started. */
+  #taskSignal(taskId: string): AbortSignal | undefined {
+    return this.#taskAbort.get(taskId)?.signal;
+  }
+
+  /** Whether stop() aborted this task's in-flight model request. */
+  #taskSignalAborted(taskId: string): boolean {
+    return this.#taskAbort.get(taskId)?.signal.aborted === true;
   }
 
   async #chatStreamed(
@@ -1901,7 +1958,7 @@ export class AgentLoop {
     let lastEmitAt = 0;
     let emitted = false;
     try {
-      for await (const chunk of this.#provider.stream(messages, tools, { ...this.#chatOptions, phase, cachePrefix: true })) {
+      for await (const chunk of this.#provider.stream(messages, tools, this.#chatRequestOptions(taskId, phase))) {
         assembler.push(chunk);
         if (chunk.type === 'delta' && chunk.content) {
           const now = Date.now();
@@ -1914,12 +1971,12 @@ export class AgentLoop {
       }
     } catch (error) {
       if (!emitted && assembler.empty) {
-        return this.#provider.chat(messages, tools, { ...this.#chatOptions, phase, cachePrefix: true });
+        return this.#provider.chat(messages, tools, this.#chatRequestOptions(taskId, phase));
       }
       throw error;
     }
     if (assembler.empty) {
-      return this.#provider.chat(messages, tools, { ...this.#chatOptions, phase, cachePrefix: true });
+      return this.#provider.chat(messages, tools, this.#chatRequestOptions(taskId, phase));
     }
     // Only text turns produce delta events: a tool-call turn with no
     // prose must leave the event sequence exactly as it was before

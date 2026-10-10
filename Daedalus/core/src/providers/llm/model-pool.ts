@@ -245,6 +245,10 @@ export class ModelPoolProvider implements LLMProvider, ModelController {
         return response;
       } catch (error) {
         lastError = error;
+        // The caller cancelled (Stop): failing over to another model
+        // cannot help and would only penalise healthy models with
+        // cooldowns, so surface the abort immediately.
+        if (options.signal?.aborted) throw error;
         if (!isModelPoolRetryableError(error)) throw error;
         this.#startCooldown(model);
         const next = order[attempt + 1];
@@ -274,8 +278,9 @@ export class ModelPoolProvider implements LLMProvider, ModelController {
       } catch (error) {
         lastError = error;
         // Once bytes have been yielded, restarting on another model could
-        // duplicate output/tool fragments. Only pre-output failures fail over.
-        if (yielded || !isModelPoolRetryableError(error)) throw error;
+        // duplicate output/tool fragments. Only pre-output failures fail
+        // over — and never on a cancelled caller (see chat()).
+        if (yielded || options.signal?.aborted || !isModelPoolRetryableError(error)) throw error;
         this.#startCooldown(model);
         const next = order[attempt + 1];
         if (next) await this.#emitSwitch(model, next, error, attempt + 1);

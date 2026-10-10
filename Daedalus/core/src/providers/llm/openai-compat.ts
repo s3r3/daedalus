@@ -216,6 +216,15 @@ function reasoningFields(message: { reasoning_content?: unknown; reasoning?: unk
 
 function timeoutSignal(parent: AbortSignal | undefined, timeoutMs: number): AbortSignal {
   const controller = new AbortController();
+  if (parent?.aborted) {
+    // The caller already cancelled before the request was built (a Stop
+    // press landing between the task's model-call setup and the fetch):
+    // abort immediately instead of issuing a request nobody wants. An
+    // addEventListener on an already-aborted signal never fires, so this
+    // check cannot be folded into the listener below.
+    controller.abort();
+    return controller.signal;
+  }
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   // The abort deadline must not by itself keep a short-lived CLI process
   // alive after the provider has already answered.
