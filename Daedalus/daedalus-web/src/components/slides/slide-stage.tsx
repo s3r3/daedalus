@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type ChangeEvent } from 'react'
 import { ChevronDown, ChevronLeft, ChevronRight, FileDown, Pencil, Presentation, RefreshCw } from 'lucide-react'
 import type { BlockPosition, Slide } from '@daedalus/core'
 import { getLayout } from '@daedalus/core/slides/layouts'
 import { Button } from '../ui/button'
 import { Badge } from '../ui/badge'
-import { api, type BuiltinTemplateInfo, type DeckExportResult, type PptTemplateInfo, type PptTemplatePageInfo } from '../../api/client'
+import { api, type BuiltinTemplateInfo, type DeckExportResult, type DeckPreviewStatus, type PptTemplateInfo, type PptTemplatePageInfo } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useDeck } from './useDeck'
 import { SlideRenderer } from './slide-renderer'
@@ -29,11 +29,56 @@ export function SlideStage() {
   const setSlideIndex = useDaedalusStore((state) => state.setSlideIndex)
   const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
   const [editing, setEditing] = useState(false)
+  // Edit (canvas, approximated, fully interactive) vs Pratinjau Asli
+  // (LibreOffice's own raster of the exported .pptx — faithful, not
+  // editable). The preview renders on demand, never per edit.
+  const [view, setView] = useState<'edit' | 'preview'>('edit')
+  const [preview, setPreview] = useState<DeckPreviewStatus | null>(null)
+  const [previewFetchError, setPreviewFetchError] = useState<string | null>(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [exported, setExported] = useState<DeckExportResult | null>(null)
   const [exportError, setExportError] = useState<string | null>(null)
 
   const go = (index: number): void => setSlideIndex(Math.min(Math.max(0, index), Math.max(0, slideCount - 1)))
+
+  const refreshPreview = useCallback(async (): Promise<void> => {
+    if (!root) return
+    try {
+      setPreview(await api.deckPreview(root))
+      setPreviewFetchError(null)
+    } catch (fetchError: unknown) {
+      setPreviewFetchError(fetchError instanceof Error ? fetchError.message : String(fetchError))
+    }
+  }, [root])
+
+  // Entering Pratinjau Asli (or a deck change while it is open)
+  // re-reads the render status; the render itself only starts from the
+  // button, so plain editing never triggers LibreOffice.
+  const deckSignature = deck ? `${deck.id}:${deck.slides.length}:${deck.title}` : ''
+  useEffect(() => {
+    if (view === 'preview' && root && deck) void refreshPreview()
+  }, [view, root, deckSignature, refreshPreview, deck])
+
+  // While LibreOffice renders, poll the status until it settles.
+  useEffect(() => {
+    if (view !== 'preview' || preview?.status !== 'rendering') return
+    const timer = setInterval(() => void refreshPreview(), 1200)
+    return () => clearInterval(timer)
+  }, [view, preview?.status, refreshPreview])
+
+  const renderPreview = async (): Promise<void> => {
+    if (!root) return
+    setPreviewBusy(true)
+    try {
+      setPreview(await api.deckPreviewRender(root))
+      setPreviewFetchError(null)
+    } catch (renderError: unknown) {
+      setPreviewFetchError(renderError instanceof Error ? renderError.message : String(renderError))
+    } finally {
+      setPreviewBusy(false)
+    }
+  }
 
   // Imported PPT templates of this workspace: a templateRef slide's page
   // design (background + slots) comes from here, resolved per slide.
@@ -211,17 +256,43 @@ export function SlideStage() {
             <RefreshCw className={loading ? 'animate-spin' : undefined} />
             Refresh
           </Button>
-          <Button
-            variant={editing ? 'default' : 'outline'}
-            size="sm"
-            onClick={() => setEditing((value) => !value)}
-            disabled={!deck || !slide}
-            aria-pressed={editing}
-            data-testid="slide-edit-toggle"
-          >
-            <Pencil />
-            Edit
-          </Button>
+          <div className="flex items-center rounded-md border border-line p-0.5" role="group" aria-label="mode tampilan slide">
+            <Button
+              variant={view === 'edit' ? 'default' : 'ghost'}
+              size="sm"
+              className="border-transparent"
+              onClick={() => setView('edit')}
+              disabled={!deck}
+              aria-pressed={view === 'edit'}
+              data-testid="slide-view-edit"
+            >
+              Edit
+            </Button>
+            <Button
+              variant={view === 'preview' ? 'default' : 'ghost'}
+              size="sm"
+              className="border-transparent"
+              onClick={() => setView('preview')}
+              disabled={!deck}
+              aria-pressed={view === 'preview'}
+              data-testid="slide-view-preview"
+            >
+              Pratinjau Asli
+            </Button>
+          </div>
+          {view === 'edit' ? (
+            <Button
+              variant={editing ? 'default' : 'outline'}
+              size="sm"
+              onClick={() => setEditing((value) => !value)}
+              disabled={!deck || !slide}
+              aria-pressed={editing}
+              data-testid="slide-edit-toggle"
+            >
+              <Pencil />
+              Ubah
+            </Button>
+          ) : null}
           <div className="relative flex items-center">
             <Button size="sm" onClick={() => void exportDeck()} disabled={!deck || exporting} data-testid="slide-export">
               <FileDown />
@@ -343,6 +414,96 @@ export function SlideStage() {
         </div>
       ) : slide ? (
         <>
+          {view === 'preview' ? (
+            <div data-testid="slide-true-preview" className="flex min-h-0 flex-1 flex-col gap-2">
+              {previewFetchError ? <p className="text-[11px] text-error">Pratinjau Asli gagal dimuat: {previewFetchError}</p> : null}
+              {!preview ? (
+                <div className="flex flex-1 items-center justify-center text-xs text-muted">Memeriksa pratinjau…</div>
+              ) : preview.status === 'unavailable' ? (
+                <div
+                  data-testid="slide-preview-unavailable"
+                  className="flex flex-1 flex-col items-center justify-center gap-1.5 px-3 py-6 text-center text-muted"
+                >
+                  <p className="text-xs text-foreground">Pratinjau Asli butuh LibreOffice terpasang di mesin ini.</p>
+                  <p className="max-w-[56ch] text-[11px] opacity-80">
+                    Halaman persis-asli dirender oleh LibreOffice (soffice) dan pdftoppm. Tanpa keduanya fitur ini berhenti di sini —
+                    canvas Edit dan ekspor .pptx tetap bekerja seperti biasa.
+                  </p>
+                </div>
+              ) : preview.status === 'rendering' ? (
+                <div data-testid="slide-preview-rendering" className="flex flex-1 flex-col items-center justify-center gap-2 text-muted">
+                  <RefreshCw className="animate-spin" aria-hidden />
+                  <p className="text-xs">Merender halaman dengan LibreOffice…</p>
+                </div>
+              ) : preview.status === 'ready' && preview.pageUrls && preview.pageUrls.length > 0 ? (
+                <>
+                  <div className="flex min-h-0 flex-1 items-center justify-center" data-testid="slide-preview-stage">
+                    <img
+                      data-testid="slide-preview-image"
+                      src={preview.pageUrls[Math.min(safeIndex, preview.pageUrls.length - 1)]}
+                      alt={`Pratinjau asli halaman ${Math.min(safeIndex, preview.pageUrls.length - 1) + 1}`}
+                      className="max-h-full max-w-full rounded-md border border-line object-contain"
+                    />
+                  </div>
+                  <div className="flex shrink-0 gap-2 overflow-x-auto pb-1" data-testid="slide-preview-filmstrip" aria-label="filmstrip pratinjau asli">
+                    {preview.pageUrls.map((pageUrl, index) => {
+                      const active = index === Math.min(safeIndex, preview.pageUrls!.length - 1)
+                      return (
+                        <button
+                          key={pageUrl}
+                          type="button"
+                          data-testid={`slide-preview-thumb-${index}`}
+                          aria-label={`halaman pratinjau ${index + 1}`}
+                          aria-current={active ? 'true' : undefined}
+                          onClick={() => go(index)}
+                          className={`w-32 shrink-0 overflow-hidden rounded-md border text-left ${active ? 'border-primary' : 'border-line hover:border-primary'}`}
+                          style={active ? { boxShadow: '0 0 0 1px var(--daedalus-primary)' } : undefined}
+                        >
+                          <img src={pageUrl} alt="" className="block aspect-video w-full object-cover" />
+                          <span className="block truncate px-1.5 py-1 text-[10px] text-muted">{index + 1} · render asli</span>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </>
+              ) : (
+                <div
+                  data-testid="slide-preview-status"
+                  className="flex flex-1 flex-col items-center justify-center gap-1.5 px-3 py-6 text-center text-muted"
+                >
+                  <p className="max-w-[56ch] text-xs text-foreground">
+                    {preview.status === 'stale'
+                      ? 'Deck berubah sejak pratinjau terakhir dirender — perbarui untuk melihat keadaan terbaru persis-asli.'
+                      : preview.status === 'error'
+                        ? `Render pratinjau gagal${preview.error ? `: ${preview.error}` : '.'}`
+                        : 'Belum ada pratinjau untuk keadaan deck ini.'}
+                  </p>
+                </div>
+              )}
+              <div className="flex shrink-0 flex-wrap items-center gap-2">
+                <p className="min-w-0 flex-1 text-[10px] leading-snug text-muted" data-testid="slide-preview-caption">
+                  Pratinjau Asli: halaman dirender LibreOffice dari berkas .pptx hasil ekspor deck saat ini — persis yang terlihat di
+                  PowerPoint/LibreOffice, bukan gambar canvas. Mengedit tetap di mode Edit.
+                </p>
+                {preview?.status !== 'unavailable' ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => void renderPreview()}
+                    disabled={previewBusy || !preview || preview.status === 'rendering'}
+                    data-testid="slide-preview-render"
+                  >
+                    {previewBusy || preview?.status === 'rendering'
+                      ? 'Merender…'
+                      : preview?.status === 'ready'
+                        ? 'Perbarui pratinjau'
+                        : 'Buat pratinjau'}
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ) : (
+            <>
           <div
             data-testid="slide-preview"
             className={`flex items-center justify-center [container-type:size] ${editing ? 'min-h-48 shrink-0' : 'min-h-0 flex-1'}`}
@@ -389,6 +550,8 @@ export function SlideStage() {
           </div>
 
           {editing && root ? <SlideEditor root={root} deck={deck} slide={slide} index={safeIndex} onChanged={onDeckChanged} /> : null}
+            </>
+          )}
         </>
       ) : (
         <div className="flex flex-1 items-center justify-center text-xs text-muted">Deck tidak punya slide.</div>
