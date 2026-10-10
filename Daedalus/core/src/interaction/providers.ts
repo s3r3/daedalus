@@ -48,7 +48,21 @@ export function sanitizeProviderInput(input: Partial<ProviderConfig> & { id?: st
     modelTiers: normalizeModelTiers(input.modelTiers),
     promptFamily: normalizePromptFamilySetting(input.promptFamily),
     editFormat: normalizeEditFormat(input.editFormat),
+    contextWindows: normalizeContextWindows(input.contextWindows),
   };
+}
+
+/** Per-model context windows: positive-int tokens keyed by model id; garbage entries dropped. */
+function normalizeContextWindows(value: unknown): Record<string, number> | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const out: Record<string, number> = {};
+  for (const [model, tokens] of Object.entries(value as Record<string, unknown>)) {
+    const key = model.trim();
+    const n = typeof tokens === 'number' ? tokens : Number(tokens);
+    if (key && Number.isInteger(n) && n > 0) out[key] = n;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 export function seedProviderFromSettings(settings: Settings): ProviderConfig {

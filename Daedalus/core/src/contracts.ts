@@ -193,6 +193,8 @@ export type ProviderConfig = {
   promptFamily?: PromptFamilySetting;
   /** Edit dialect for this provider's models; unset = `native`. */
   editFormat?: EditFormat;
+  /** Per-model context window in tokens (unset models = provider default / global limit). */
+  contextWindows?: Record<string, number>;
 };
 
 export type ProviderConfigPublic = Omit<ProviderConfig, 'apiKey'> & { hasApiKey: boolean };
