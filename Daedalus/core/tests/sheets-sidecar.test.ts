@@ -119,6 +119,28 @@ describe('resolveSheetSidecar build-on-first-use', () => {
     expect(builds).toBe(1);
   });
 
+  test('a deleted cache binary after a memoized build is rebuilt, not trusted', async () => {
+    const home = tempDir('daedalus-sidecar-home-');
+    const source = fakeSourceDir();
+    let builds = 0;
+    const build = async (input: { outPath: string }): Promise<{ ok: true }> => {
+      builds += 1;
+      writeStubSidecar(input.outPath);
+      return { ok: true };
+    };
+    const seams = { env: { PATH: '/nonexistent' }, homeDir: home, sourceDir: source, goPath: '/fake/go', build };
+    const first = await resolveSheetSidecar(seams);
+    expect(first.available).toBe(true);
+    expect(builds).toBe(1);
+    // The cache entry disappears after the build (user cleanup, another
+    // process): the stale in-process memo must not win.
+    if (first.available) rmSync(first.path);
+    const again = await resolveSheetSidecar(seams);
+    expect(again.available).toBe(true);
+    if (again.available) expect(again.builtFromSource).toBe(true);
+    expect(builds).toBe(2);
+  });
+
   test('Go absent: honest reason with the remedy, export-grade wording', async () => {
     const home = tempDir('daedalus-sidecar-home-');
     const source = fakeSourceDir();

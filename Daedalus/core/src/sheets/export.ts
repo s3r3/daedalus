@@ -10,13 +10,13 @@ import {
   formatCellRef,
   parseCellRef,
   slugifyTitle,
-  workbookPaths,
   type ChartSpec,
   type PivotSpec,
   type SheetExportRecord,
   type SlicerSpec,
   type WorkbookSpec,
 } from './workbook.ts';
+import { workbookPaths } from './store.ts';
 
 /**
  * Export stage. exceljs writes values, live formulas, number formats,
@@ -444,7 +444,12 @@ export type SheetSidecarResolution =
   | { available: false; reason: string };
 
 const SIDECAR_BUILD_TIMEOUT_MS = 300_000;
-/** In-flight/finished build promises, keyed by output path: one build per process per destination. */
+/**
+ * In-flight/finished build promises, keyed by output path: one build
+ * per process per destination. A memo is trusted only while its
+ * artifact still exists — a deleted cache binary is rebuilt, not
+ * reported as ready.
+ */
 const sidecarBuilds = new Map<string, Promise<{ ok: true } | { ok: false; error: string }>>();
 
 async function defaultBuildSidecar(input: { sourceDir: string; outPath: string; goPath: string; env: NodeJS.ProcessEnv }, timeoutMs: number): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -491,14 +496,20 @@ export async function resolveSheetSidecar(seams: SidecarResolveSeams = {}): Prom
   } catch (error) {
     return { available: false, reason: `cache sidecar tidak bisa dibuat: ${error instanceof Error ? error.message : String(error)}` };
   }
-  let build = sidecarBuilds.get(outPath);
-  if (!build) {
+  const startBuild = (): Promise<{ ok: true } | { ok: false; error: string }> => {
     const builder = seams.build ?? ((input: { sourceDir: string; outPath: string; goPath: string; env: NodeJS.ProcessEnv }) =>
       defaultBuildSidecar(input, seams.buildTimeoutMs ?? SIDECAR_BUILD_TIMEOUT_MS));
-    build = Promise.resolve().then(() => builder({ sourceDir, outPath, goPath, env }));
+    const build = Promise.resolve().then(() => builder({ sourceDir, outPath, goPath, env }));
     sidecarBuilds.set(outPath, build);
+    return build;
+  };
+  let built = await (sidecarBuilds.get(outPath) ?? startBuild());
+  if (built.ok && !existsSync(outPath)) {
+    // The memo outlived its artifact (cache deleted after a build):
+    // rebuild once instead of reporting a binary that is not there.
+    sidecarBuilds.delete(outPath);
+    built = await startBuild();
   }
-  const built = await build;
   if (!built.ok) return { available: false, reason: `go build sidecar gagal: ${built.error}` };
   const probe = await versionOf(outPath);
   if (!probe.ok) return { available: false, reason: 'sidecar hasil build tidak merespons --version' };

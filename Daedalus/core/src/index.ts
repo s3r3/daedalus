@@ -942,7 +942,6 @@ export { DokumenWebTools, parseDuckDuckGo, type SearchHit, type WebFetch } from 
 export { DokumenEngine, type DokumenRunEvent, type DokumenEngineOptions, type DokumenRunOptions, type DokumenAskUser } from "./dokumen/engine.ts";
 
 export {
-  workbookPaths,
   workbookRelativePaths,
   slugifyTitle as sheetSlugifyTitle,
   colToIndex,
@@ -984,6 +983,7 @@ export {
   newSheetId,
   newWorkbook,
   newSheet,
+  workbookPaths,
   ensureWorkbookDir,
   readWorkbook,
   writeWorkbook,
