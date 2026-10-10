@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
   formatCellRef,
   parseCellRef,
@@ -8,7 +9,8 @@ import {
   sheetHeaders,
   tileIssues,
   tileRefs,
-  workbookPaths,
+  WORKBOOK_DIRNAME,
+  WORKBOOK_FILENAME,
   MAX_CELLS_PER_SHEET,
   MAX_SHEETS,
   type SheetSpec,
@@ -42,6 +44,17 @@ export function newWorkbook(title: string, meta: { createdBy: string; model?: st
 
 export function newSheet(name: string): SheetSpec {
   return { id: newSheetId(), name, cells: {} };
+}
+
+/**
+ * Absolute paths of the workbook store under a workspace root.
+ * Lives here (not in ./workbook.ts) because this module owns the
+ * spreadsheet filesystem surface; workbook.ts stays node:-free so
+ * the web bundle can import its pure helpers.
+ */
+export function workbookPaths(root: string): { dir: string; file: string } {
+  const dir = join(root, WORKBOOK_DIRNAME);
+  return { dir, file: join(dir, WORKBOOK_FILENAME) };
 }
 
 export async function ensureWorkbookDir(root: string): Promise<{ dir: string; file: string }> {
