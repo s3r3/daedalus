@@ -1,13 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowDownAZ, Download, Plus } from 'lucide-react'
-import {
-  displayValue,
-  evaluateWorkbook,
-  formatCellRef,
-  indexToCol,
-  parseCellRef,
-  type WorkbookSpec,
-} from '@daedalus/core'
+import type { WorkbookSpec } from '@daedalus/core'
+import { displayValue, evaluateWorkbook } from '@daedalus/core/sheets/evaluator'
+import { formatCellRef, indexToCol, parseCellRef } from '@daedalus/core/sheets/workbook'
 import { Button } from '../ui/button'
 import { api } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
