@@ -263,6 +263,114 @@ describe('Susun critic rejects (flagged section keeps its draft + verdict)', () 
   });
 });
 
+/**
+ * A fake that imitates a COMPETENT real model (not the minimal scripted
+ * one): cites the sources it was given, writes uncited general-knowledge
+ * prose when given none, and critiques by the gate's rules.
+ */
+function susunanProvider(behavior: { contradiction?: boolean } = {}): LLMProvider {
+  const respond = (messages: Message[]): { content: string } => {
+    const system = messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+    const user = messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+    if (system.includes('outline a formal')) {
+      return { content: '{"sections":[{"title":"Pendahuluan","thesisPoints":["Latar belakang"]},{"title":"Penutup","thesisPoints":["Kesimpulan"]}]}' };
+    }
+    if (system.includes('write ONE section')) {
+      const ids = [...user.matchAll(/\[(SRC-\d+)\]/g)].map((m) => m[1]!);
+      const id = ids[ids.length - 1];
+      if (!id) {
+        return { content: JSON.stringify({ prose: 'Bahasan umum ini disusun dari pengetahuan umum: vertebrata adalah hewan bertulang belakang yang terbagi ke dalam beberapa kelas besar dengan ciri khas masing-masing yang dikenal luas.', citations: [] }) };
+      }
+      if (behavior.contradiction) {
+        return { content: JSON.stringify({ prose: `Berdasarkan sumber yang dibaca [${id}], dinyatakan bahwa semua vertebrata berdarah dingin, tidak menyusui, dan bertelur tanpa kecuali. KLAIM-BERTENTANGAN sengaja ditulis untuk menguji gerbang kritikus.`, citations: [id] }) };
+      }
+      return { content: JSON.stringify({ prose: `Berdasarkan sumber yang dibaca [${id}], kerangka vertebrata tersusun atas tulang belakang yang melindungi sumsum tulang belakang. Ciri inilah yang membedakan vertebrata dari hewan tak bertulang belakang.`, citations: [id] }) };
+    }
+    if (system.includes('critic gate')) {
+      if (user.includes('KLAIM-BERTENTANGAN')) return { content: JSON.stringify({ ok: false, issues: ['klaim dalam prosa bertentangan dengan sumber yang disitasi'] }) };
+      return { content: '{"ok":true,"issues":[]}' };
+    }
+    return { content: '{}' };
+  };
+  return {
+    name: 'fake-dokumen-kompeten',
+    async chat(messages: Message[]) {
+      return { message: { role: 'assistant' as const, content: respond(messages).content }, usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } };
+    },
+    async *stream() {
+      yield { type: 'done' as const };
+    },
+  } as unknown as LLMProvider;
+}
+
+const emptySearchWeb = new DokumenWebTools({
+  fetchImpl: async () => ({ status: 200, text: async () => '<html><body>tidak ada hasil</body></html>' }),
+  env: {},
+});
+
+const failingWeb = new DokumenWebTools({
+  fetchImpl: async () => {
+    throw new Error('jaringan tidak terjangkau (simulasi)');
+  },
+  env: {},
+});
+
+async function runSusunToEnd(root: string, provider: LLMProvider, webTools: DokumenWebTools): Promise<string> {
+  const engine = new DokumenEngine(provider, { webTools });
+  const pending = engine.run(root, 'susun makalah tentang morfologi hewan vertebrata', { subMode: 'susun' });
+  await until(async () => {
+    const doc = await readActiveDocument(root);
+    return Boolean(doc && doc.sections.length === 2 && doc.sections.every((s) => s.status === 'staged'));
+  });
+  expect(engine.releaseStaged()).toBe(true);
+  return pending;
+}
+
+describe('Susun critic semantics (honestly passable; research never silent)', () => {
+  test('(i) sources read + properly cited draft → accepted, report counts the research', async () => {
+    const root = tmpRoot();
+    const summary = await runSusunToEnd(root, susunanProvider(), offlineWeb);
+    const doc = (await readActiveDocument(root))!;
+    expect(doc.sections.every((s) => s.status === 'drafted')).toBe(true);
+    expect(doc.sections[0]!.citations.length).toBeGreaterThan(0);
+    expect(doc.sections[0]!.prose).toMatch(/\[SRC-\d+\]/);
+    expect(summary).toContain('2 dari 2 bab tertulis, 0 ditandai kritikus');
+    expect(summary).toContain('Riset web: 1 sumber eksternal dibaca');
+  });
+
+  test('(ii) draft contradicts its cited source → critic still rejects; prose retained (flagged path)', async () => {
+    const root = tmpRoot();
+    const summary = await runSusunToEnd(root, susunanProvider({ contradiction: true }), offlineWeb);
+    const doc = (await readActiveDocument(root))!;
+    expect(doc.sections.every((s) => s.status === 'critic-flagged')).toBe(true);
+    expect(doc.sections[0]!.prose).toContain('KLAIM-BERTENTANGAN');
+    expect(doc.sections[0]!.criticIssues!.join(' ')).toMatch(/bertentangan/);
+    expect(summary).toContain('0 dari 2 bab tertulis, 2 ditandai kritikus');
+  });
+
+  test('(iii) zero web hits + no workspace sources → uncited draft accepted as citation-free, report says so', async () => {
+    const root = tmpRoot();
+    const summary = await runSusunToEnd(root, susunanProvider(), emptySearchWeb);
+    const doc = (await readActiveDocument(root))!;
+    expect(doc.sections.every((s) => s.status === 'drafted')).toBe(true);
+    expect(doc.sections[0]!.citations).toEqual([]);
+    expect(summary).toContain('Riset web: 0 sumber eksternal dibaca');
+    expect(summary).toContain('pengetahuan umum model');
+    const audit = await readAudit(root, doc.id);
+    expect(audit.some((a) => a.action === 'research')).toBe(true);
+  });
+
+  test('(iv) webSearch throws → run completes, failure surfaced in audit + report', async () => {
+    const root = tmpRoot();
+    const summary = await runSusunToEnd(root, susunanProvider(), failingWeb);
+    const doc = (await readActiveDocument(root))!;
+    expect(doc.sections.every((s) => s.status === 'drafted')).toBe(true);
+    expect(summary).toContain('Riset web gagal');
+    const audit = await readAudit(root, doc.id);
+    expect(audit.some((a) => a.action === 'web-search-failed')).toBe(true);
+  });
+});
+
 describe('DOCX re-layout (deterministic style ops)', () => {
   test('staged ops apply to a NEW docx; the original stays byte-identical', async () => {
     const root = tmpRoot();

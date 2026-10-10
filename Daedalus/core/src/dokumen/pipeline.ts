@@ -288,10 +288,12 @@ export async function draftSectionStage(
     provider,
     [
       'You write ONE section of a formal Indonesian document. Answer with ONLY JSON: {"prose":"<the section text>","citations":["SRC-1",...]}.',
-      'Every factual claim must rest on the provided sources; mark the supporting source inline like [SRC-1] right after the claim, and list every used id in "citations". Invent no facts, numbers, or names beyond the sources. Formal academic Indonesian, 2–5 paragraphs.',
+      input.materials.length > 0
+        ? 'Ground claims in the provided sources where they support them: mark the supporting source inline like [SRC-1] right after the claim and list every used id in "citations". Never invent a [SRC-n] marker or cite an id that was not provided. Claims the sources do not cover may be written as general knowledge WITHOUT markers. Formal academic Indonesian, 2–5 paragraphs.'
+        : 'No sources were provided for this section. Write sound general-knowledge prose from your own knowledge. Do NOT invent [SRC-n] markers, source names, or specific figures you cannot support; return "citations": []. Formal academic Indonesian, 2–5 paragraphs.',
       ...(input.repairIssues && input.repairIssues.length > 0 ? [`Your previous draft was rejected by the critic for:\n${input.repairIssues.map((i) => `- ${i}`).join('\n')}\nFix exactly those problems.`] : []),
     ].join('\n'),
-    [`Document goal: ${input.goal}`, `Section: ${input.title}`, `Key points:\n${input.thesisPoints.map((p) => `- ${p}`).join('\n')}`, `Sources:\n${materialText || '(no sources provided — write only general framing, no factual claims)'}`, 'Return {"prose": "...", "citations": [...]} now.'].join('\n\n'),
+    [`Document goal: ${input.goal}`, `Section: ${input.title}`, `Key points:\n${input.thesisPoints.map((p) => `- ${p}`).join('\n')}`, `Sources:\n${materialText || '(no sources provided — write from general knowledge; fabricate no citations)'}`, 'Return {"prose": "...", "citations": [...]} now.'].join('\n\n'),
     (value) => {
       if (!isObj(value) || typeof value.prose !== 'string' || value.prose.trim().length < 40) {
         return { ok: false, issues: ['output must be {"prose": "<substantial section text>", "citations": [...]}'] };
@@ -308,22 +310,32 @@ export async function criticStage(
   input: { title: string; prose: string; citations: string[]; materials: CitationMaterial[] },
   signal?: AbortSignal,
 ): Promise<{ ok: boolean; issues: string[] }> {
-  // Deterministic pre-check first: every used citation must name a
-  // real material, and a prose with factual density but no citation
-  // markers fails without spending a model call.
+  // Deterministic pre-check first: fabricated citations fail without
+  // spending a model call — every cited id (in the list AND every
+  // inline marker) must name a provided source. The blanket "sources
+  // exist but no markers → reject" rule is GONE on purpose: it made
+  // acceptance structurally impossible whenever research returned
+  // irrelevant/zero materials, so honest general-knowledge prose could
+  // never pass. Whether a claim is grounded is the LLM critic's call.
   const known = new Set(input.materials.map((m) => m.id));
   const issues: string[] = [];
   for (const id of input.citations) {
     if (!known.has(id)) issues.push(`citation ${id} does not name a provided source`);
   }
-  const markers = (input.prose.match(/\[SRC-\d+\]/g) ?? []).length;
-  if (input.materials.length > 0 && markers === 0) issues.push('prose carries no inline [SRC-n] citation markers although sources were provided');
+  for (const marker of input.prose.match(/\[SRC-\d+\]/g) ?? []) {
+    const id = marker.slice(1, -1);
+    if (!known.has(id)) issues.push(`inline marker ${marker} does not name a provided source`);
+  }
   if (issues.length > 0) return { ok: false, issues };
 
   return structuredCall<{ ok: boolean; issues: string[] }>(
     provider,
-    'You are the critic gate of a document engine. Answer with ONLY JSON: {"ok":true|false,"issues":["..."]}. Reject (ok:false) when: a factual claim or number has no supporting source inline, a claim contradicts the sources, or the section drifts off its title. Accept only grounded prose.',
-    [`Section: ${input.title}`, `Prose:\n${input.prose}`, `Sources:\n${input.materials.map((m) => `[${m.id}] ${m.title}\n${m.text.slice(0, 2500)}`).join('\n\n')}`, 'Return {"ok": ..., "issues": [...]} now.'].join('\n\n'),
+    [
+      'You are the critic gate of a document engine. Answer with ONLY JSON: {"ok":true|false,"issues":["..."]}.',
+      'Reject (ok:false) when: a claim CONTRADICTS a provided source; a claim cites a source that does not support it; the prose fabricates [SRC-n] markers for sources not provided; or the section drifts off its title.',
+      'General-knowledge prose WITHOUT citation markers is acceptable — it will be labeled citation-free, which is honest. Do NOT reject merely because prose is uncited or because the provided sources are irrelevant to it.',
+    ].join('\n'),
+    [`Section: ${input.title}`, `Prose:\n${input.prose}`, `Sources:\n${input.materials.map((m) => `[${m.id}] ${m.title}\n${m.text.slice(0, 2500)}`).join('\n\n') || '(none provided)'}`, 'Return {"ok": ..., "issues": [...]} now.'].join('\n\n'),
     (value) => {
       if (!isObj(value) || typeof value.ok !== 'boolean') return { ok: false, issues: ['output must be {"ok":boolean,"issues":[...]}'] };
       return { ok: true, value: { ok: value.ok, issues: Array.isArray(value.issues) ? value.issues.filter((i): i is string => typeof i === 'string') : [] } };
