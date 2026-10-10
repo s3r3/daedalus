@@ -96,6 +96,11 @@ export function SheetReportPanel() {
                           {record.format.toUpperCase()} · {Math.max(1, Math.round(record.bytes / 1024))} KB · via {record.via}
                         </span>
                       </p>
+                      {record.dashboard ? (
+                        <p className="mt-0.5 text-muted" data-testid="sheet-report-dashboard">
+                          Dashboard “{record.dashboard.sheet}” terkomposisi dalam ekspor: {record.dashboard.tiles} kartu KPI · {record.dashboard.charts} chart · {record.dashboard.slicers} slicer
+                        </p>
+                      ) : null}
                       {record.note ? <p className="mt-0.5 text-muted">{record.note}</p> : null}
                     </li>
                   )

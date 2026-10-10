@@ -204,7 +204,9 @@ describe('structured edit ops', () => {
       'create_workbook', 'get_workbook_summary', 'read_range', 'set_cells',
       'set_formula', 'insert_rows', 'insert_columns', 'delete_range',
       'sort_range', 'set_format', 'add_sheet', 'rename_sheet', 'delete_sheet',
-      'define_named_range', 'validate_workbook', 'export_workbook',
+      'define_named_range', 'set_tile', 'delete_tile', 'set_chart',
+      'delete_chart', 'set_slicer', 'delete_slicer',
+      'validate_workbook', 'export_workbook',
     ]);
     for (const codingTool of ['write_file', 'run_command', 'edit_file', 'spawn_subagent']) {
       expect(SHEET_OP_NAMES as readonly string[]).not.toContain(codingTool);

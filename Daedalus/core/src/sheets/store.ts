@@ -6,6 +6,8 @@ import {
   parseRange,
   sheetBounds,
   sheetHeaders,
+  tileIssues,
+  tileRefs,
   workbookPaths,
   MAX_CELLS_PER_SHEET,
   MAX_SHEETS,
@@ -176,6 +178,36 @@ export function validateWorkbook(workbook: WorkbookSpec): WorkbookIssue[] {
     for (const pivot of sheet.pivots ?? []) {
       if (typeof pivot.id !== 'string' || typeof pivot.source !== 'string' || typeof pivot.target !== 'string') {
         err('invalid-pivot-spec', `pivot spec on ${sheet.name} needs {id, source, target}`, sheet.name);
+      }
+    }
+    for (const tile of sheet.tiles ?? []) {
+      for (const issue of tileIssues(tile)) {
+        err('invalid-tile-spec', issue, sheet.name);
+      }
+      // The materialized value cell must carry the tile's live formula:
+      // a tile whose spec and cells disagree is a forked truth.
+      const refs = tileRefs(tile);
+      if (refs) {
+        const cell = sheet.cells[refs.valueRef];
+        if (cell && cell.f !== tile.formula) {
+          err('tile-formula-mismatch', `tile "${tile.id}" spec formula differs from materialized cell ${refs.valueRef} — recompose the dashboard to resync`, sheet.name, refs.valueRef);
+        }
+      }
+    }
+    const pivotIds = new Set((sheet.pivots ?? []).map((p) => p.id));
+    for (const other of workbook.sheets) for (const p of other.pivots ?? []) pivotIds.add(p.id);
+    for (const slicer of sheet.slicers ?? []) {
+      if (typeof slicer.id !== 'string' || typeof slicer.field !== 'string' || !slicer.field || typeof slicer.source !== 'string' || !slicer.source.includes('!')) {
+        err('invalid-slicer-spec', `slicer spec on ${sheet.name} needs {id, field, source: "Sheet!A1:F9"}`, sheet.name);
+      }
+      if (typeof slicer.anchor !== 'string' || !parseCellRef(slicer.anchor)) {
+        err('invalid-slicer-spec', `slicer "${slicer.id}" anchor "${String(slicer.anchor)}" is not a cell reference`, sheet.name);
+      }
+      if (slicer.pivot !== undefined && !pivotIds.has(slicer.pivot)) {
+        err('invalid-slicer-spec', `slicer "${slicer.id}" binds pivot "${slicer.pivot}" which does not exist`, sheet.name);
+      }
+      if (slicer.kind !== undefined && slicer.kind !== 'field' && slicer.kind !== 'timeline') {
+        err('invalid-slicer-spec', `slicer "${slicer.id}" kind must be "field" or "timeline"`, sheet.name);
       }
     }
   }

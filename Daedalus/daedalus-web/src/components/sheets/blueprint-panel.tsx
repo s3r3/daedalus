@@ -111,6 +111,32 @@ export function BlueprintPanel() {
               </li>
             ))}
           </ul>
+          {blueprint.dashboard ? (
+            <div className="rounded border border-primary/40 bg-primary/5 px-2 py-1.5" data-testid="sheet-blueprint-dashboard">
+              <p className="text-[11px] font-semibold text-foreground">
+                Dashboard — {blueprint.dashboard.sheet ?? 'Dashboard'}
+                <span className="ml-1 font-normal text-muted">sheet KPI native (kartu + chart + slicer, tanpa makro)</span>
+              </p>
+              <ul className="mt-1 flex flex-col gap-0.5" data-testid="sheet-blueprint-dashboard-tiles">
+                {blueprint.dashboard.tiles.map((tile) => (
+                  <li key={tile.id} className="flex items-baseline gap-1.5 text-[10px] text-muted">
+                    <span className="text-foreground">{tile.label}</span>
+                    <code className="truncate text-[9px] text-emerald-300/80">{tile.formula}</code>
+                  </li>
+                ))}
+              </ul>
+              {(blueprint.dashboard.charts?.length || blueprint.dashboard.pivots?.length || blueprint.dashboard.slicers?.length) ? (
+                <p className="mt-1 text-[10px] text-muted" data-testid="sheet-blueprint-dashboard-natives">
+                  Native saat ekspor:{' '}
+                  {[
+                    blueprint.dashboard.charts?.length ? `${blueprint.dashboard.charts.length} chart (${blueprint.dashboard.charts.map((c) => c.title ?? c.type).join(', ')})` : '',
+                    blueprint.dashboard.pivots?.length ? `${blueprint.dashboard.pivots.length} pivot → ${[...new Set(blueprint.dashboard.pivots.map((p) => p.target))].join(', ')}` : '',
+                    blueprint.dashboard.slicers?.length ? `${blueprint.dashboard.slicers.length} slicer (${blueprint.dashboard.slicers.map((s) => s.field).join(', ')})` : '',
+                  ].filter(Boolean).join(' · ')}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           {blueprint.assumptions.length > 0 ? (
             <div data-testid="sheet-blueprint-assumptions">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Asumsi</p>

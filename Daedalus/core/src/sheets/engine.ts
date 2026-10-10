@@ -22,6 +22,7 @@ import { importCsvToWorkbook, importXlsxToWorkbook } from './import.ts';
 import { buildExcelJsWorkbook, exportWorkbookCsv, exportWorkbookToXlsx } from './export.ts';
 import { verifyWorkbook } from './verify.ts';
 import { applySheetOps, SHEET_OP_NAMES } from './ops.ts';
+import { composeDashboard } from './dashboard.ts';
 import { fillSheetRowsStage, generateBlueprintStage, SheetPipelineError, structuredCall, type BlueprintStageInput } from './pipeline.ts';
 
 /**
@@ -68,7 +69,7 @@ type RouteResult = {
 
 const GENERATION_STEPS = [
   { id: 'intake', intent: 'Intake: baca sumber data (prompt / CSV / XLSX)' },
-  { id: 'blueprint', intent: 'Susun blueprint (sheet, kolom, formula kunci, Asumsi) — di-stage untuk ditinjau' },
+  { id: 'blueprint', intent: 'Susun blueprint (sheet, kolom, formula kunci, Asumsi, Dashboard bila diminta) — di-stage untuk ditinjau' },
   { id: 'build', intent: 'Bangun workbook dari blueprint (tombol Buat)' },
   { id: 'verify', intent: 'Verify: evaluator formula + recalc LibreOffice bila ada' },
   { id: 'export', intent: 'Ekspor XLSX (fullCalcOnLoad) + CSV' },
@@ -427,6 +428,13 @@ export class SpreadsheetEngine {
       asumsi.frozen = { row: 1, col: 0 };
       notes.push(`Asumsi: ${blueprint.assumptions.length} nilai di sheet Asumsi`);
     }
+    if (blueprint.dashboard) {
+      // Native Excel dashboard composition: KPI tiles materialize as
+      // live-formula cells; charts/pivots/slicers stay specs for the
+      // export-stage sidecar. Dashboard formulas are ordinary cells,
+      // so the mandatory Verify gate evaluates them like any other.
+      notes.push(...composeDashboard(wb, blueprint.dashboard));
+    }
     wb.stage = 'ready';
     return notes;
   }
@@ -761,6 +769,7 @@ const EDIT_SYSTEM = [
   `Op vocabulary (closed): ${SHEET_OP_NAMES.join(', ')}.`,
   'Each op is an object: {"op":"set_cells","sheet":"Data","range":"B2:B9","values":[[...]]} — a string starting with "=" is a formula, other scalars are literal values, null clears a cell.',
   'Other ops: {"op":"set_formula","sheet":..,"range":"C2:C9","formula":"=B2*Asumsi!$B$2"} (relative refs shift across the range), {"op":"add_sheet","name":..}, {"op":"rename_sheet","sheet":..,"name":..}, {"op":"delete_sheet","sheet":..}, {"op":"insert_rows","sheet":..,"at":3,"count":1}, {"op":"insert_columns","sheet":..,"at":2,"count":1}, {"op":"delete_range","sheet":..,"range":"A5:C5","shift":"up"}, {"op":"sort_range","sheet":..,"range":"A2:D20","by":1,"dir":"asc"}, {"op":"set_format","sheet":..,"range":"A1:D1","bold":true,"fill":"#6B50FF","numFmt":"#,##0"}, {"op":"define_named_range","name":..,"ref":"Data!A1"}, {"op":"validate_workbook"}, {"op":"export_workbook","format":"xlsx|csv"}.',
+  'Dashboard ops (on the dashboard sheet): {"op":"set_tile","sheet":"Dashboard","label":"Total Revenue","formula":"=SUM(Data!F2:F100)","fmt":"#,##0","anchor":"B2","cols":3,"rows":3} upserts a KPI card (formula MUST be a live formula over the data sheets, never a number), {"op":"delete_tile","sheet":..,"tile":"tile-total-revenue"}, {"op":"set_chart","sheet":..,"type":"column|bar|line|pie","range":"Ringkasan!A1:B9","anchor":"B12","title":..}, {"op":"delete_chart","sheet":..,"chart":"chart-1"}, {"op":"set_slicer","sheet":..,"field":"Region","source":"Data!A1:F100","anchor":"B24","pivot":"pivot-region"(optional)}, {"op":"delete_slicer","sheet":..,"slicer":"slicer-1"}. Charts/slicers are native in the exported .xlsx only (Go sidecar); never claim they exist in the file until an export record says so.',
   'Rules: derived numbers are ALWAYS live formulas (never type a computed result as a literal); assumptions are referenced as Asumsi!$B$n, never hardcoded into formulas; when a target column exists as formulas already, extend the same pattern; keep edits minimal and exactly scoped to the goal.',
 ].join('\n');
 

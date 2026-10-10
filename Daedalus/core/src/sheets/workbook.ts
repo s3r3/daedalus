@@ -22,6 +22,8 @@ export type SheetCell = {
   fmt?: string;
   /** Lightweight cell style the exporter honors. */
   bold?: boolean;
+  /** Font size in points (exporter honors it; KPI values use it). */
+  size?: number;
   /** Fill color as #rrggbb. */
   fill?: string;
   /** Font color as #rrggbb. */
@@ -39,12 +41,62 @@ export type ChartSpec = {
   /** Sheet the chart is drawn on (defaults to the range's sheet). */
   sheet?: string;
   title?: string;
+  /** Native size in PIXELS (the sidecar passes them to Excelize's
+   *  Chart.Dimension; one default chart ≈ 480x290). */
+  width?: number;
+  height?: number;
+};
+
+/**
+ * One KPI card on a dashboard sheet. The card is materialized into
+ * ordinary cells (label strip + live-formula value) so the evaluator,
+ * the canvas and the exporter all work off the same truth; this spec
+ * is the editable descriptor the ops and the panel edit.
+ */
+export type DashboardTileSpec = {
+  id: string;
+  label: string;
+  /** Live formula for the KPI value (leading '='). Never a frozen number. */
+  formula: string;
+  /** Number format for the value cell, e.g. '#,##0' or '"Rp" #,##0'. */
+  fmt?: string;
+  /** Top-left cell of the card, e.g. 'B2'. */
+  anchor: string;
+  /** Card footprint in cells (cols includes the full merge span). */
+  cols?: number;
+  rows?: number;
+  /** Accent fill (#rrggbb) for the label strip. */
+  accent?: string;
+};
+
+/**
+ * A slicer floating on a sheet (usually the dashboard). Bound either to
+ * a pivot spec (`pivot` = PivotSpec.id) or, without one, to a table the
+ * sidecar creates over `source`. `kind: 'timeline'` asks for a date
+ * timeline slicer; Excelize 2.9 can only read timelines, so the
+ * sidecar substitutes a regular date-field slicer and says so.
+ */
+export type SlicerSpec = {
+  id: string;
+  /** Field (header name in `source`) the slicer filters. */
+  field: string;
+  /** Source range incl. headers, e.g. 'Data!A1:F100'. */
+  source: string;
+  /** Sheet the slicer floats on (defaults to the owning sheet). */
+  sheet?: string;
+  /** Anchor cell on that sheet. */
+  anchor: string;
+  /** PivotSpec.id to bind to instead of a source table. */
+  pivot?: string;
+  kind?: 'field' | 'timeline';
 };
 
 export type PivotValueSpec = { field: string; agg: 'sum' | 'count' | 'average' | 'min' | 'max' };
 
 export type PivotSpec = {
   id: string;
+  /** Native pivot table name (a slicer binds by this name). */
+  name?: string;
   /** Source range incl. headers, e.g. 'Raw!A1:F500'. */
   source: string;
   /** Sheet the pivot table lands on. */
@@ -76,10 +128,18 @@ export type SheetSpec = {
   id: string;
   name: string;
   tabColor?: string;
+  /** 'dashboard' = composed KPI sheet (tiles/charts/slicers); default data. */
+  kind?: 'dashboard';
+  /** Hidden sheet (pivot helper sheets live here; exporter honors it). */
+  hidden?: boolean;
   /** Frozen panes: rows/cols frozen from the top-left (0 = none). */
   frozen?: { row: number; col: number };
   /** Column widths keyed by column letter. */
   colWidths?: Record<string, number>;
+  /** Row heights keyed by 1-based row number. */
+  rowHeights?: Record<string, number>;
+  /** Print area (A1 range) the exporter sets, e.g. 'A1:N40'. */
+  printArea?: string;
   /** Sparse cell map keyed by A1 ref ('B2'). */
   cells: Record<string, SheetCell>;
   merges?: string[];
@@ -87,6 +147,10 @@ export type SheetSpec = {
   dataValidations?: DataValidationSpec[];
   charts?: ChartSpec[];
   pivots?: PivotSpec[];
+  /** KPI cards (dashboard sheets; materialized into cells + merges). */
+  tiles?: DashboardTileSpec[];
+  /** Slicers floating on this sheet (materialized by the sidecar). */
+  slicers?: SlicerSpec[];
 };
 
 export type ColumnType = 'text' | 'number' | 'currency' | 'percent' | 'date' | 'boolean';
@@ -117,12 +181,30 @@ export type BlueprintSheet = {
 
 export type BlueprintAssumption = { name: string; value: CellScalar; note?: string };
 
+/**
+ * The optional Dashboard section of a blueprint (native Excel
+ * dashboard, video-proven pattern: pivots → KPI cards → charts →
+ * slicers, no macro — pivots carry refreshOnLoad). Tiles are live
+ * formulas over the data sheets; charts/pivots/slicers are specs the
+ * export stage materializes natively through the Go sidecar.
+ */
+export type BlueprintDashboard = {
+  /** Dashboard sheet name (default 'Dashboard'). */
+  sheet?: string;
+  tiles: DashboardTileSpec[];
+  charts?: ChartSpec[];
+  /** Pivots backing the dashboard (usually onto a hidden helper sheet). */
+  pivots?: PivotSpec[];
+  slicers?: SlicerSpec[];
+};
+
 export type SheetBlueprint = {
   goal: string;
   /** Data sources the build consumed (workspace-relative paths). */
   sources: string[];
   assumptions: BlueprintAssumption[];
   sheets: BlueprintSheet[];
+  dashboard?: BlueprintDashboard;
   notes?: string;
 };
 
@@ -164,6 +246,8 @@ export type SheetExportRecord = {
   via: 'exceljs' | 'exceljs+sidecar';
   /** Honest note when natives were skipped or the sidecar was absent. */
   note?: string;
+  /** Composed native-dashboard counts, when a dashboard sheet exists. */
+  dashboard?: { sheet: string; tiles: number; charts: number; slicers: number };
 };
 
 export type WorkbookStage = 'blueprint' | 'ready';
@@ -218,7 +302,7 @@ export function slugifyTitle(title: string): string {
 }
 
 export { colToIndex, indexToCol, parseCellRef, formatCellRef, parseRange, sheetHeaders, type CellRef, type RangeRef } from './refs.ts';
-import { parseCellRef } from './refs.ts';
+import { formatCellRef, parseCellRef } from './refs.ts';
 
 /** Used-range bounds of a sheet's sparse cell map (null when empty). */
 export function sheetBounds(sheet: SheetSpec): { minCol: number; minRow: number; maxCol: number; maxRow: number } | null {
@@ -238,3 +322,42 @@ export function sheetBounds(sheet: SheetSpec): { minCol: number; minRow: number;
 }
 
 /** Header row values (row 1) as trimmed strings, keyed by column index. */
+
+export const DEFAULT_TILE_COLS = 3;
+export const DEFAULT_TILE_ROWS = 3;
+
+/** Cells a dashboard tile owns: label strip on the anchor row, value below. */
+export function tileRefs(tile: DashboardTileSpec): { labelRef: string; valueRef: string; mergeLabel: string; mergeValue: string } | null {
+  const anchor = parseCellRef(tile.anchor);
+  if (!anchor) return null;
+  const cols = Math.max(1, tile.cols ?? DEFAULT_TILE_COLS);
+  const rows = Math.max(2, tile.rows ?? DEFAULT_TILE_ROWS);
+  const start = formatCellRef(anchor.col, anchor.row);
+  const labelEnd = formatCellRef(anchor.col + cols - 1, anchor.row);
+  const valueStart = formatCellRef(anchor.col, anchor.row + 1);
+  const valueEnd = formatCellRef(anchor.col + cols - 1, anchor.row + rows - 1);
+  return {
+    labelRef: start,
+    valueRef: valueStart,
+    mergeLabel: cols > 1 ? `${start}:${labelEnd}` : start,
+    mergeValue: rows > 2 || cols > 1 ? `${valueStart}:${valueEnd}` : valueStart,
+  };
+}
+
+/** Structural issues for one dashboard tile spec (empty = valid). */
+export function tileIssues(tile: DashboardTileSpec, opts: { anchorRequired?: boolean } = {}): string[] {
+  const issues: string[] = [];
+  if (!tile.id || typeof tile.id !== 'string') issues.push('tile needs an id');
+  if (!tile.label || !tile.label.trim()) issues.push(`tile "${tile.id}" needs a label`);
+  if (typeof tile.formula !== 'string' || !tile.formula.startsWith('=')) {
+    issues.push(`tile "${tile.id}" formula must be a live formula starting with = (got ${JSON.stringify(tile.formula)})`);
+  }
+  // Blueprint tiles may omit the anchor (the build lays them out
+  // sequentially); materialized workbook.json specs always carry one.
+  if ((opts.anchorRequired !== false || tile.anchor) && !parseCellRef(tile.anchor)) issues.push(`tile "${tile.id}" anchor "${tile.anchor}" is not a cell reference`);
+  if (tile.cols !== undefined && (!Number.isInteger(tile.cols) || tile.cols < 1 || tile.cols > 26)) issues.push(`tile "${tile.id}" cols must be 1..26`);
+  if (tile.rows !== undefined && (!Number.isInteger(tile.rows) || tile.rows < 2 || tile.rows > 50)) issues.push(`tile "${tile.id}" rows must be 2..50`);
+  if (tile.fmt !== undefined && typeof tile.fmt !== 'string') issues.push(`tile "${tile.id}" fmt must be a string`);
+  if (tile.accent !== undefined && (typeof tile.accent !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(tile.accent))) issues.push(`tile "${tile.id}" accent must be #rrggbb`);
+  return issues;
+}

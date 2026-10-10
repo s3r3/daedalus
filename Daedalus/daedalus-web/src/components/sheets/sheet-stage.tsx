@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ArrowDownAZ, Download, Plus } from 'lucide-react'
-import type { WorkbookSpec } from '@daedalus/core'
-import { displayValue, evaluateWorkbook } from '@daedalus/core/sheets/evaluator'
+import type { SheetSpec, WorkbookSpec } from '@daedalus/core'
+import { displayValue, evaluateWorkbook, type WorkbookEvaluation } from '@daedalus/core/sheets/evaluator'
 import { formatCellRef, indexToCol, parseCellRef } from '@daedalus/core/sheets/refs'
+import { tileRefs } from '@daedalus/core/sheets/workbook'
 import { Button } from '../ui/button'
 import { api } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
@@ -30,6 +31,7 @@ export function SheetStage() {
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [dashView, setDashView] = useState<'canvas' | 'grid'>('canvas')
 
   const sheet = workbook?.sheets[Math.min(activeSheet, Math.max(0, (workbook?.sheets.length ?? 1) - 1))]
   const evaluation = useMemo(() => (workbook ? evaluateWorkbook(workbook) : null), [workbook])
@@ -270,6 +272,33 @@ export function SheetStage() {
       {note ? <p className="border-b border-line bg-emerald-500/10 px-3 py-1 text-[10px] text-emerald-200" data-testid="sheet-stage-note">{note}</p> : null}
       {actionError ? <p className="border-b border-line bg-red-500/10 px-3 py-1 text-[10px] text-red-200" data-testid="sheet-stage-error">Ditolak: {actionError}</p> : null}
 
+      {sheet?.kind === 'dashboard' ? (
+        <div className="flex items-center gap-1 border-b border-line px-3 py-1" data-testid="sheet-dash-toggle">
+          <span className="mr-1 text-[10px] uppercase tracking-wider text-muted">Dashboard</span>
+          <button
+            type="button"
+            data-testid="sheet-dash-view-canvas"
+            aria-pressed={dashView === 'canvas'}
+            onClick={() => setDashView('canvas')}
+            className={cn('rounded border px-2 py-0.5 text-[10px]', dashView === 'canvas' ? 'border-primary text-foreground' : 'border-line text-muted')}
+          >
+            Kanvas
+          </button>
+          <button
+            type="button"
+            data-testid="sheet-dash-view-grid"
+            aria-pressed={dashView === 'grid'}
+            onClick={() => setDashView('grid')}
+            className={cn('rounded border px-2 py-0.5 text-[10px]', dashView === 'grid' ? 'border-primary text-foreground' : 'border-line text-muted')}
+          >
+            Grid sel
+          </button>
+        </div>
+      ) : null}
+
+      {sheet?.kind === 'dashboard' && dashView === 'canvas' && evaluation ? (
+        <DashboardCanvas workbook={workbook} sheet={sheet} evaluation={evaluation} />
+      ) : (
       <div className="min-h-0 flex-1 overflow-auto" data-testid="sheet-grid-scroll">
         <table className="border-collapse text-[11px]" data-testid="sheet-grid">
           <thead>
@@ -323,6 +352,85 @@ export function SheetStage() {
           <p className="px-3 py-2 text-[10px] text-muted">Grid menampilkan sebagian ({MAX_GRID_ROWS}×{MAX_GRID_COLS}) — file lengkapnya ada di workbook/workbook.json dan ekspor.</p>
         ) : null}
       </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The dashboard sheet as a readable canvas: KPI tiles with values
+ * computed live by the core evaluator, chart and slicer placements as
+ * honest placeholders. A browser canvas cannot draw Excel's native
+ * charts — the rendered chart lives in the exported .xlsx (injected
+ * by the Go sidecar); here the placeholder names exactly that, the
+ * same honesty rule as Slide's editable canvas vs Pratinjau Asli.
+ */
+function DashboardCanvas({ workbook, sheet, evaluation }: { workbook: WorkbookSpec; sheet: SheetSpec; evaluation: WorkbookEvaluation }) {
+  const tiles = [...(sheet.tiles ?? [])].sort((a, b) => {
+    const ra = parseCellRef(a.anchor)
+    const rb = parseCellRef(b.anchor)
+    if (!ra || !rb) return 0
+    return ra.row - rb.row || ra.col - rb.col
+  })
+  const charts = workbook.sheets.flatMap((owner) => (owner.charts ?? []).filter((c) => (c.sheet ?? owner.name) === sheet.name))
+  const slicers = sheet.slicers ?? []
+  const pivots = sheet.pivots ?? []
+  return (
+    <div className="min-h-0 flex-1 overflow-auto p-3" data-testid="sheet-dash-canvas">
+      {tiles.length > 0 ? (
+        <div className="flex flex-wrap gap-2" data-testid="sheet-dash-tiles">
+          {tiles.map((tile) => {
+            const refs = tileRefs(tile)
+            const value = refs ? displayValue(workbook, evaluation, sheet, refs.valueRef) : '—'
+            return (
+              <div key={tile.id} className="w-52 overflow-hidden rounded border border-line bg-surface" data-testid={`sheet-tile-${tile.id}`}>
+                <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-white" style={{ backgroundColor: tile.accent ?? 'var(--color-primary)' }}>
+                  {tile.label}
+                </p>
+                <p className="px-2 pt-1.5 text-base font-bold text-foreground" data-testid={`sheet-tile-value-${tile.id}`}>{value}</p>
+                <p className="truncate px-2 pb-1.5 font-mono text-[9px] text-emerald-300/80">{tile.formula}</p>
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <p className="text-[11px] text-muted">Belum ada kartu KPI di dashboard ini — minta lewat chat, mis. “tambah KPI total pendapatan”.</p>
+      )}
+
+      {charts.length > 0 ? (
+        <div className="mt-3" data-testid="sheet-dash-charts">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Chart native ({charts.length})</p>
+          <div className="mt-1 flex flex-wrap gap-2">
+            {charts.map((chart) => (
+              <div key={chart.id} className="flex h-28 flex-col justify-between rounded border border-dashed border-line bg-surface-base p-2" style={{ width: Math.min(chart.width ?? 460, 560) }} data-testid={`sheet-chart-${chart.id}`}>
+                <p className="text-[11px] font-medium text-foreground">{chart.title ?? `Chart ${chart.type}`}</p>
+                <p className="font-mono text-[9px] text-muted">{chart.type} · {chart.range} @ {chart.anchor}</p>
+                <p className="text-[9px] text-muted">Dirender sebagai chart native di file .xlsx hasil ekspor — kanvas ini placeholder, bukan grafik.</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {slicers.length > 0 ? (
+        <div className="mt-3" data-testid="sheet-dash-slicers">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Slicer ({slicers.length})</p>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {slicers.map((slicer) => (
+              <span key={slicer.id} className="rounded border border-line bg-surface px-2 py-1 text-[10px] text-foreground" data-testid={`sheet-slicer-${slicer.id}`}>
+                {slicer.field}
+                <span className="ml-1 text-muted">{slicer.kind === 'timeline' ? 'timeline → slicer tanggal di ekspor' : 'aktif di file ekspor (Excel)'}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {pivots.length > 0 ? (
+        <p className="mt-3 text-[10px] text-muted" data-testid="sheet-dash-pivots">
+          Pivot native pendukung: {pivots.map((p) => `${p.rows.join(' × ')} → sheet ${p.target}`).join(' · ')} (refresh saat file dibuka; tanpa makro).
+        </p>
+      ) : null}
     </div>
   )
 }
