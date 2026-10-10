@@ -110,7 +110,7 @@ function runCommand(command: string, args: string[], timeoutMs: number): Promise
 export const libreOfficeConverter: PreviewConverter = async ({ pptxPath, workDir, profileDir }) => {
   await runCommand(
     "soffice",
-    ["--headless", "--norestore", `--env:UserInstallation=${pathToFileURL(profileDir).href}`, "--convert-to", "pdf", "--outdir", workDir, pptxPath],
+    ["-env:UserInstallation=" + pathToFileURL(profileDir).href, "--headless", "--norestore", "--convert-to", "pdf", "--outdir", workDir, pptxPath],
     SOFFICE_TIMEOUT_MS,
   );
   const pdfPath = join(workDir, `${basename(pptxPath).replace(/\.pptx$/i, "")}.pdf`);
