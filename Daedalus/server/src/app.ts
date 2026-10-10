@@ -545,6 +545,16 @@ function applySettingsUpdate(ctx: AppContext, parsed: Record<string, unknown>): 
   // follow the global setting; merged per domain, never wholesale-replaced.
   const domainsRaw = parsed.domains ?? parsed.domain_settings;
   if (domainsRaw !== undefined) applyDomainSettingsUpdate(ctx, domainsRaw);
+  // Global default max iterations (settings layer 1): a positive int sets
+  // it, explicit null clears back to the built-in 25, anything else 400s.
+  // Precedence per run: per-task > domain override > this global > 25.
+  const maxIterationsRaw = parsed.maxIterations !== undefined ? parsed.maxIterations : parsed.max_iterations;
+  if (maxIterationsRaw !== undefined) {
+    if (maxIterationsRaw === null) delete ctx.settings.maxIterations;
+    else if (typeof maxIterationsRaw !== "number" || !Number.isInteger(maxIterationsRaw) || maxIterationsRaw < 1 || maxIterationsRaw > 100) {
+      throw new Error("invalid_max_iterations");
+    } else ctx.settings.maxIterations = maxIterationsRaw;
+  }
   if (typeof parsed.model === "string") ctx.session.model = parsed.model;
   if (typeof parsed.providerId === "string") ctx.session.providerId = parsed.providerId;
   if (typeof parsed.provider_id === "string") ctx.session.providerId = parsed.provider_id;
@@ -585,9 +595,11 @@ const DOMAIN_SETTINGS_KEYS: readonly TaskDomain[] = ["coding", "slide", "spreads
 
 /**
  * `domains` / `domain_settings`: per-domain `{ model?, temperature?,
- * maxIterations? }` overrides merged into `ctx.settings.domains`. An
- * empty-string model unsets the override (follow-global). Unknown domain
- * keys, non-object values, and out-of-range numbers are named 400s.
+ * maxIterations? }` overrides merged into `ctx.settings.domains`.
+ * An empty-string model OR explicit null unsets the override
+ * (follow-global); null likewise clears temperature/maxIterations.
+ * Unknown domain keys, non-object values, and out-of-range numbers are
+ * named 400s.
  */
 function applyDomainSettingsUpdate(ctx: AppContext, value: unknown): void {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("invalid_domain_settings");
@@ -602,24 +614,30 @@ function applyDomainSettingsUpdate(ctx: AppContext, value: unknown): void {
     const record = domainValue as Record<string, unknown>;
     const next: DomainModelSettings = { ...(store[domain] ?? {}) };
     if (record.model !== undefined) {
-      if (typeof record.model !== "string") throw new Error("invalid_domain_settings");
-      const model = record.model.trim();
+      if (record.model !== null && typeof record.model !== "string") throw new Error("invalid_domain_settings");
+      const model = record.model === null ? "" : (record.model as string).trim();
       if (model) next.model = model;
       else delete next.model;
     }
     if (record.temperature !== undefined) {
       const temperature = record.temperature;
-      if (typeof temperature !== "number" || !Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
-        throw new Error("invalid_domain_temperature");
+      if (temperature === null) delete next.temperature;
+      else {
+        if (typeof temperature !== "number" || !Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
+          throw new Error("invalid_domain_temperature");
+        }
+        next.temperature = temperature;
       }
-      next.temperature = temperature;
     }
-    const maxIterations = record.maxIterations ?? record.max_iterations;
-    if (maxIterations !== undefined) {
-      if (typeof maxIterations !== "number" || !Number.isInteger(maxIterations) || maxIterations < 1 || maxIterations > 100) {
-        throw new Error("invalid_domain_max_iterations");
+    const maxIterationsRaw = record.maxIterations !== undefined ? record.maxIterations : record.max_iterations;
+    if (maxIterationsRaw !== undefined) {
+      if (maxIterationsRaw === null) delete next.maxIterations;
+      else {
+        if (typeof maxIterationsRaw !== "number" || !Number.isInteger(maxIterationsRaw) || maxIterationsRaw < 1 || maxIterationsRaw > 100) {
+          throw new Error("invalid_domain_max_iterations");
+        }
+        next.maxIterations = maxIterationsRaw;
       }
-      next.maxIterations = maxIterations;
     }
     store[domain] = next;
   }
@@ -1642,7 +1660,16 @@ export function createApp(ctx: AppContext) {
           const doneCriteria = stringList(parsed.done_criteria ?? parsed.doneCriteria);
           const mode = parseMode(parsed.mode) ?? ctx.session.mode;
           const autoApprove = typeof parsed.auto_approve === "boolean" ? parsed.auto_approve : typeof parsed.autoApprove === "boolean" ? parsed.autoApprove : ctx.session.autoApprove;
-          const maxIterations = typeof parsed.max_iterations === "number" ? parsed.max_iterations : typeof parsed.maxIterations === "number" ? parsed.maxIterations : 25;
+          // Per-task max iterations: explicit values only. When the payload
+          // omits it, the runner resolves per-task > domain override >
+          // global settings.maxIterations > 25 (core runtime) — so a
+          // hardcoded 25 here must NOT shadow the domain/global settings.
+          const maxIterationsRaw = parsed.max_iterations !== undefined ? parsed.max_iterations : parsed.maxIterations;
+          if (maxIterationsRaw !== undefined && maxIterationsRaw !== null && (typeof maxIterationsRaw !== "number" || !Number.isInteger(maxIterationsRaw) || maxIterationsRaw < 1)) {
+            sendJson(res, 400, { error: "invalid_max_iterations", request_id: requestId });
+            return;
+          }
+          const maxIterations = typeof maxIterationsRaw === "number" ? maxIterationsRaw : undefined;
           const providerId = typeof parsed.provider_id === "string" ? parsed.provider_id : typeof parsed.providerId === "string" ? parsed.providerId : ctx.session.providerId;
           const model = typeof parsed.model === "string" ? parsed.model : ctx.session.model;
           const thinking = typeof parsed.thinking === "boolean" ? parsed.thinking : ctx.session.thinking;
@@ -1813,7 +1840,7 @@ export function createApp(ctx: AppContext) {
             workspaceRoot: repoPath,
             approvalPolicy: autoApprove ? "auto" : "ask",
             approvalMemory: ctx.approvalMemory,
-            maxIterations,
+            ...(maxIterations !== undefined ? { maxIterations } : {}),
             bus: ctx.bus,
             store: taskStore,
             settings: ctx.settings,

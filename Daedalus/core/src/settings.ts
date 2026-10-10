@@ -56,6 +56,13 @@ export type Settings = {
    * Default on; off restores pre-gate behavior exactly.
    */
   questionGate: boolean;
+  /**
+   * Global default max loop iterations (DAEDALUS_MAX_ITERATIONS). Unset =
+   * 25. Precedence per run: per-task > domain override > this global >
+   * 25. Domain tabs show "ikut global" for empty overrides, which is
+   * exactly what the runtime resolves.
+   */
+  maxIterations?: number;
   daedalusHome: string;
 };
 
@@ -119,6 +126,7 @@ export function loadSettings(env: Env = process.env): Settings {
     },
     outputCompression: parseBoolean(env.DAEDALUS_OUTPUT_COMPRESSION, true, "DAEDALUS_OUTPUT_COMPRESSION"),
     questionGate: parseBoolean(env.DAEDALUS_QUESTION_GATE, true, "DAEDALUS_QUESTION_GATE"),
+    maxIterations: parseOptionalPositiveInt(env.DAEDALUS_MAX_ITERATIONS, "DAEDALUS_MAX_ITERATIONS"),
     daedalusHome: env.DAEDALUS_HOME ?? ".daedalus",
   };
 }

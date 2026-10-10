@@ -1157,7 +1157,7 @@ export class TaskRunner {
       }),
       validator: this.validator,
       tools: toolSchemas,
-      stopPolicy: { max_iterations: options.maxIterations ?? this.#options.maxIterations ?? this.#domainMaxIterations(options.domain) ?? 25, max_errors: options.maxErrors ?? 5 },
+      stopPolicy: { max_iterations: options.maxIterations ?? this.#options.maxIterations ?? this.#domainMaxIterations(options.domain) ?? this.#settings.maxIterations ?? 25, max_errors: options.maxErrors ?? 5 },
       chatOptions: this.#chatOptions(options, thinkingLevel),
       modeController: this.modeController,
       thinking: spec.thinking ?? options.thinking ?? this.#options.thinking ?? settingsThinking(this.#settings),

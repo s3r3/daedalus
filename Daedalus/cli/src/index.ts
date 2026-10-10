@@ -603,7 +603,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
     .option("--cwd <path>", "target workspace directory", process.cwd())
     .option("--json", "emit JSON events and final report", false)
     .option("--yolo", "auto-approve all mutating tool actions", false)
-    .option("--max-iterations <number>", "max agent loop iterations", "25")
+    .option("--max-iterations <number>", "max agent loop iterations (default: domain override, DAEDALUS_MAX_ITERATIONS, or 25)")
     .option("--model <name>", "override the model from settings (LLM_MODEL)")
     .option("--models <list>", "comma-separated model pool for failover (LLM_MODELS)")
     .option("--model-strategy <strategy>", "model pool strategy: failover (round-robin coerces to failover)")
@@ -631,7 +631,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
       // mutating call that would need approval is denied outright (unless
       // --yolo was passed deliberately). Piped stdin closes are irrelevant.
       const approvalPolicy = options.yolo ? "auto" : ci ? "deny" : "ask";
-      const maxIterations = parseInt(options.maxIterations ?? "25", 10);
+      const maxIterations = parsePositiveInt(options.maxIterations, "--max-iterations");
       const tty = process.stdout.isTTY && !json;
 
       const modelTimeoutMs = parsePositiveInt(options.timeout, "--timeout");
@@ -666,7 +666,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
       const runner = new TaskRunner({
         workspaceRoot,
         approvalPolicy,
-        maxIterations,
+        ...(maxIterations !== undefined ? { maxIterations } : {}),
         settings,
         mode,
         autoApprove: options.yolo === true,
