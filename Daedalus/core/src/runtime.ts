@@ -3,14 +3,14 @@ import { EventBus, emitEvent } from './events.ts';
 import { TaskStore } from './persistence.ts';
 import { AgentLoop } from './agent/agent-loop.ts';
 import type { ToolOutputLimits } from './agent/tool-output.ts';
-import { DefaultContextManager, type SlideTaskParams } from './agent/context.ts';
+import { DefaultContextManager, presentationCreationGoal, type SlideTaskParams } from './agent/context.ts';
 import { interpretTask } from './agent/interpreter.ts';
 import { loadProjectRules } from './agent/rules.ts';
 import { guardEditedFile } from './agent/edit-guard.ts';
 import { loadHooksConfig, runPostToolHooks, runPreToolHooks, type HooksConfig } from './agent/hooks.ts';
 import { loadAgents, workspaceAgentsDir, type AgentDefinition } from './agents/index.ts';
 import { createTaskWorktree, worktreeChangedFiles } from './worktree.ts';
-import { createDefaultRegistry, editSearchReplaceTool } from './tools/index.ts';
+import { createDefaultRegistry, editSearchReplaceTool, SLIDE_TOOLS } from './tools/index.ts';
 import { pathInWorkspace } from './tools/filesystem/index.ts';
 import type { ToolDefinition } from './tools/registry.ts';
 import { existsSync } from 'node:fs';
@@ -862,10 +862,24 @@ export class TaskRunner {
       throw new Error(invocationProblems.join('; '));
     }
     // Coding runs get the default (coding-only) registry plus extension
-    // tools: the slide deck tools are not registered here — slide tasks
-    // returned earlier, into the SlideEngine, which runs exactly the
-    // SLIDE_TOOLS surface.
+    // tools. Slide-domain tasks returned earlier, into the SlideEngine,
+    // which runs exactly the SLIDE_TOOLS surface. But a presentation
+    // goal typed in the Coding domain is steered at the deck tools
+    // (CODING_SLIDE_GOAL_CONTRACT) and the loop's slide-export gate
+    // refuses a done-claim until export_deck succeeds — so the deck
+    // tools ride along exactly when the same predicate that arms the
+    // contract and the gate fires. An ordinary coding run keeps the
+    // lean coding-only surface (and its per-call schema bill).
     const registry = createDefaultRegistry();
+    if (presentationCreationGoal(spec.goal)) {
+      for (const tool of SLIDE_TOOLS) {
+        try {
+          registry.register(tool);
+        } catch {
+          // Already registered: keep the existing one.
+        }
+      }
+    }
     for (const tool of extensions.tools) {
       try {
         registry.register(tool);
