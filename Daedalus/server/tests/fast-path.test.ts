@@ -138,6 +138,19 @@ describe('classifyWebIntent', () => {
     expect(classifyWebIntent('kenapa test ini gagal?')).toBe('question')
     expect(isPureQuestion('jelaskan kenapa fungsi ini error')).toBe(false)
   })
+
+  test('workspace-content questions route to the direct-answer path, never a task', () => {
+    expect(classifyWebIntent('lihat isi folder src')).toBe('question')
+    expect(classifyWebIntent('ada file apa aja di folder src')).toBe('question')
+    expect(classifyWebIntent('isi file README apa')).toBe('question')
+    expect(classifyWebIntent('di mana file config.ts')).toBe('question')
+  })
+
+  test('mutating and ambiguous lines stay on the full task path', () => {
+    expect(classifyWebIntent('buatkan file src/health.ts')).toBe('task')
+    expect(classifyWebIntent('hapus file src/index.ts')).toBe('task')
+    expect(classifyWebIntent('lihat isi folder src dan hapus yang tidak perlu')).toBe('task')
+  })
 })
 
 describe('POST /tasks fast paths', () => {
@@ -176,6 +189,44 @@ describe('POST /tasks fast paths', () => {
     expect(sentText).toContain('fixture-repo')
     const finished = events.find((event) => event.type === 'MODEL_REQUEST_FINISHED')
     expect(JSON.stringify(finished?.payload)).toContain('repo fixture')
+  })
+
+  test('a workspace-content question is answered deterministically with zero provider calls', async () => {
+    // No fake provider is started on purpose: the grounded Q&A path must
+    // answer from the filesystem without any model call.
+    const { base } = await listen()
+    const created = await postTask(base, { goal: 'lihat isi folder src' })
+    expect(created.status).toBe(201)
+    expect(created.body.intent).toBe('question')
+
+    const events = await waitForEvents(base, created.body.id, 'TASK_COMPLETED')
+    const types = events.map((event) => event.type)
+    // No full task was spawned: no plan, no tool loop, no validation.
+    expect(types).not.toContain('PLAN_CREATED')
+    expect(types).not.toContain('TOOL_CALL_STARTED')
+    expect(types).not.toContain('VALIDATION_STARTED')
+    // No model call happened at all.
+    expect(requests).toHaveLength(0)
+    const finished = events.find((event) => event.type === 'MODEL_REQUEST_FINISHED')
+    const payload = JSON.stringify(finished?.payload)
+    expect(payload).toContain('Isi folder src/:')
+    expect(payload).toContain('- index.ts')
+    const completed = events.find((event) => event.type === 'TASK_COMPLETED')
+    expect(JSON.stringify(completed?.payload)).toContain('"outcome":"success"')
+  })
+
+  test('a file-content question is answered deterministically with zero provider calls', async () => {
+    const { base } = await listen()
+    const created = await postTask(base, { goal: 'isi file README apa' })
+    expect(created.status).toBe(201)
+    expect(created.body.intent).toBe('question')
+
+    const events = await waitForEvents(base, created.body.id, 'TASK_COMPLETED')
+    expect(requests).toHaveLength(0)
+    const finished = events.find((event) => event.type === 'MODEL_REQUEST_FINISHED')
+    const payload = JSON.stringify(finished?.payload)
+    expect(payload).toContain('Isi file README.md:')
+    expect(payload).toContain('A tiny fixture repository for fast-path tests.')
   })
 
   test('a task POST still takes the runner path (plan is created)', async () => {

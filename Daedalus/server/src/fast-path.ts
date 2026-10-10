@@ -1,6 +1,7 @@
 import {
   answerConversational,
   answerQuestion,
+  answerWorkspaceQuestion,
   classifyChatIntent,
   conversationalFallbackReply,
   createProviderForConfig,
@@ -125,7 +126,14 @@ export function executeFastPath(run: FastPathRun): void {
       } else if (intent === "conversational") {
         reply = await answerConversational(provider, goal, run.history ?? []);
       } else {
-        reply = await answerQuestion(provider, goal, { workspaceDir: repoPath, history: run.history ?? [] });
+        // Grounded workspace Q&A first: a single list/read/locate request
+        // is answered deterministically from the filesystem — zero model
+        // calls. Anything needing synthesis falls through to the single
+        // tool-less model call below; either way there is no task, no
+        // plan, no validation.
+        reply =
+          (await answerWorkspaceQuestion(goal, repoPath)) ??
+          (await answerQuestion(provider, goal, { workspaceDir: repoPath, history: run.history ?? [] }));
       }
     } catch (error) {
       emitEvent(target, taskId, undefined, "MODEL_REQUEST_FAILED", { error: String(error), intent });
