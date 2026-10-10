@@ -14,7 +14,7 @@ import type { ToolDefinition, ToolExecutionContext } from '../tools/registry.ts'
  * until the answer arrives through `POST /tasks/:id/questions/:questionId`,
  * the wait times out, or the task is cancelled.
  */
-export const ASK_USER_TOOL_NAME = 'ask_user';
+export { ASK_USER_TOOL_NAME } from '../contracts.ts';
 
 /** One selectable answer the model offers on a question card. */
 export type UserQuestionOption = { label: string; description?: string };

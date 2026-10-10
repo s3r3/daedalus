@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { RefreshCw, Search } from 'lucide-react'
-import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core'
+import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core/skills/origin'
 import { api } from '../../api/client'
 import type { ExtensionStatus } from '../../api/types'
 import { useDaedalusStore } from '../../state/taskStore'

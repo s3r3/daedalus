@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { ArrowDown, CircleQuestionMark, MessageSquarePlus, ShieldAlert } from 'lucide-react'
-import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core'
+import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core/skills/origin'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { EmptyState, Panel } from '../common/panel'

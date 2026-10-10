@@ -1,10 +1,5 @@
-import {
-  formatCellRef,
-  parseCellRef,
-  sheetHeaders,
-  type SheetSpec,
-  type WorkbookSpec,
-} from './workbook.ts';
+import { formatCellRef, parseCellRef, sheetHeaders } from './refs.ts';
+import type { SheetSpec, WorkbookSpec } from './workbook.ts';
 
 /**
  * In-core formula evaluator — the first arm of the Verify gate. The

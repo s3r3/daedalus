@@ -29,7 +29,8 @@ import type { TaskDomain, ToolResult } from '../contracts.ts';
  * these tools simply detects fewer skills.
  */
 
-export type SkillOrigin = 'workspace' | 'global' | 'claude' | 'codex' | 'opencode' | 'kilo';
+export { formatSkillOrigin, type SkillOrigin } from './origin.ts';
+import type { SkillOrigin } from './origin.ts';
 
 /**
  * Payload of the SKILL_LOADED event: a skill body entered a task's
@@ -86,18 +87,6 @@ export type SkillDirOptions = {
   env?: Record<string, string | undefined>;
   homeDir?: string;
 };
-
-/** Human label for an origin, e.g. `global · claude` for a Claude Code skill. */
-export function formatSkillOrigin(origin: SkillOrigin): string {
-  switch (origin) {
-    case 'workspace':
-      return 'workspace';
-    case 'global':
-      return 'global';
-    default:
-      return `global · ${origin}`;
-  }
-}
 
 export class SkillRegistry {
   readonly #skills = new Map<string, Skill>();
