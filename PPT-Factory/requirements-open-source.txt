@@ -1,2 +1,0 @@
--r my_skills/architect_html_layouts/requirements.txt
--r my_skills/assemble_pptx_file/requirements.txt

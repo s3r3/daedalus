@@ -30,5 +30,8 @@
     "build": "npm run build --workspaces",
     "lint": "npm run lint --workspaces",
     "test": "npm run test --workspaces"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }

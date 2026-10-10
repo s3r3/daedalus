@@ -1,0 +1,206 @@
+{
+  "version": 1,
+  "id": "deck-127685eb",
+  "title": "buatkan slide tentang kalkulus matematika",
+  "theme": {
+    "dark": true,
+    "accent": "#6b50ff",
+    "background": "#201f26",
+    "surface": "#2d2c36",
+    "text": "#ecebf0",
+    "muted": "#bfbcc8",
+    "headingFont": "Arial",
+    "bodyFont": "Arial",
+    "templateId": "general",
+    "designId": "standar"
+  },
+  "slides": [
+    {
+      "id": "slide-68723902",
+      "layout": "template-page",
+      "content": {
+        "title": "Kalkulus Matematika",
+        "slots": {
+          "s0": "Kalkulus Matematika",
+          "s1": "Perubahan & Akumulasi",
+          "s2": "Cabang Matematika",
+          "s3": "Mempelajari laju perubahan dan akumulasi besaran kontinu",
+          "s4": "Diferensial mengukur perubahan sesaat, integral mengukur akumulasi total dari fungsi matematika",
+          "s5": "Abad 17"
+        }
+      },
+      "status": "filled",
+      "keyMessage": "Cabang matematika yang mempelajari perubahan dan akumulasi",
+      "templateRef": {
+        "templateId": "roadmaps-infographic-presentation-template",
+        "page": 0
+      }
+    },
+    {
+      "id": "slide-a9a4023e",
+      "layout": "template-page",
+      "content": {
+        "title": "Daftar Isi",
+        "slots": {
+          "s0": "Daftar Isi",
+          "s1": "Konsep Dasar",
+          "s2": "Bab 1",
+          "s3": "Turunan",
+          "s4": "Bab 2",
+          "s5": "Integral",
+          "s6": "Bab 3",
+          "s7": "Aplikasi & Teorema",
+          "s8": "Bab 4"
+        }
+      },
+      "status": "filled",
+      "keyMessage": "Konsep dasar, turunan, integral, aplikasi, teorema fundamental",
+      "templateRef": {
+        "templateId": "roadmaps-infographic-presentation-template",
+        "page": 1
+      }
+    },
+    {
+      "id": "slide-00bbee99",
+      "layout": "template-page",
+      "content": {
+        "title": "Apa itu Kalkulus?",
+        "slots": {
+          "s0": "Apa itu Kalkulus?",
+          "s1": "Cabang Matematika",
+          "s2": "Studi tentang laju perubahan dan akumulasi dalam sistem dinamis",
+          "s3": "Menghubungkan turunan untuk perubahan dan integral untuk total",
+          "s4": "Kalkulus mempelajari dua konsep: turunan mengukur laju perubahan, integral mengukur akumulasi kuantitas",
+          "s5": "Abad 17"
+        }
+      },
+      "status": "filled",
+      "keyMessage": "Studi tentang laju perubahan (turunan) dan akumulasi (integral)",
+      "templateRef": {
+        "templateId": "roadmaps-infographic-presentation-template",
+        "page": 5
+      }
+    },
+    {
+      "id": "slide-82f2e816",
+      "layout": "template-page",
+      "content": {
+        "title": "Limit dan Kontinuitas",
+        "slots": {
+          "s0": "Limit dan Kontinuitas",
+          "s1": "Fondasi Kalkulus",
+          "s2": "Konsep Dasar",
+          "s3": "Memahami perilaku fungsi saat mendekati nilai tertentu",
+          "s4": "Limit menjelaskan nilai yang didekati fungsi tanpa harus mencapainya, kontinuitas memastikan fungsi tidak terputus",
+          "s5": "f(x)→L",
+          "s6": "Fungsi kontinu jika limit kiri sama dengan limit kanan di x=a",
+          "s7": "Teorema limit memungkinkan analisis fungsi kompleks melalui pendekatan nilai yang semakin dekat ke titik tertentu",
+          "s8": "lim x→a"
+        }
+      },
+      "status": "filled",
+      "keyMessage": "Fondasi kalkulus: perilaku fungsi saat mendekati nilai tertentu",
+      "templateRef": {
+        "templateId": "roadmaps-infographic-presentation-template",
+        "page": 10
+      }
+    },
+    {
+      "id": "slide-ecf3d1e8",
+      "layout": "template-page",
+      "content": {
+        "title": "Turunan (Derivative)",
+        "slots": {
+          "s0": "f'(x)",
+          "s1": "Definisi Turunan",
+          "s2": "Limit perbandingan perubahan fungsi per unit",
+          "s3": "dy/dx",
+          "s4": "Notasi Leibniz",
+          "s5": "Menunjukkan perubahan y terhadap perubahan x",
+          "s6": "d/dx",
+          "s7": "Operator Turunan",
+          "s8": "Simbol operasi diferensiasi terhadap variabel",
+          "s9": "Turunan",
+          "s10": "Mengukur Laju Perubahan Sesaat Fungsi Terhadap Variabelnya",
+          "s11": "Konsep fundamental kalkulus untuk analisis perubahan dinamis dalam matematika dan aplikasi fisika"
+        }
+      },
+      "status": "filled",
+      "keyMessage": "Mengukur laju perubahan sesaat suatu fungsi terhadap variabelnya",
+      "templateRef": {
+        "templateId": "roadmaps-infographic-presentation-template",
+        "page": 12
+      }
+    },
+    {
+      "id": "slide-58233672",
+      "layout": "template-page",
+      "content": {
+        "title": "Integral",
+        "slots": {
+          "s0": "Integral",
+          "s1": "Konsep Dasar Integral",
+          "s2": "Akumulasi dan Kebalikan Turunan",
+          "s3": "Integral mengukur akumulasi nilai fungsi sepanjang interval tertentu. Sebagai kebalikan dari turunan, integral digunakan untuk menghitung luas di bawah kurva dan volume benda putar.",
+          "s4": "Memahami Hubungan Integral dan Turunan",
+          "s5": "Teorema Fundamental",
+          "s6": "Aplikasi Praktis"
+        }
+      },
+      "status": "filled",
+      "keyMessage": "Akumulasi nilai fungsi, kebalikan dari turunan, menghitung luas dan volume",
+      "templateRef": {
+        "templateId": "roadmaps-infographic-presentation-template",
+        "page": 15
+      }
+    },
+    {
+      "id": "slide-b08d8fd6",
+      "layout": "template-page",
+      "content": {
+        "title": "Teorema Fundamental Kalkulus",
+        "slots": {
+          "s0": "Bagian Pertama",
+          "s1": "F'(x)=f(x)",
+          "s2": "Bagian Kedua",
+          "s3": "∫f(x)dx",
+          "s4": "Hubungan",
+          "s5": "F(b)-F(a)",
+          "s6": "Kesimpulan",
+          "s7": "Anti-drvt",
+          "s8": "Turunan dari anti-turunan F(x) menghasilkan kembali fungsi asli f(x)",
+          "s9": "Integral tentu dari a ke b adalah selisih nilai anti-turunan di kedua batas",
+          "s10": "Integral dan turunan adalah operasi kebalikan satu sama lain",
+          "s11": "Integral tentu dapat dihitung dengan mencari anti-turunan terlebih dahulu"
+        }
+      },
+      "status": "filled",
+      "keyMessage": "Menghubungkan turunan dan integral: integral tentu adalah anti-turunan",
+      "templateRef": {
+        "templateId": "roadmaps-infographic-presentation-template",
+        "page": 16
+      }
+    },
+    {
+      "id": "slide-441cb824",
+      "layout": "template-page",
+      "content": {
+        "title": "Aplikasi Kalkulus",
+        "slots": {
+          "s0": "Aplikasi Kalkulus",
+          "s1": "Bidang Penerapan Kalkulus",
+          "s2": "Kalkulus dalam Praktik",
+          "s3": "Menyelesaikan masalah nyata melalui turunan dan integral",
+          "s4": "Optimasi fungsi, pemodelan gerak fisika, analisis marginal ekonomi, pertumbuhan populasi biologi, desain teknik",
+          "s5": "2026"
+        }
+      },
+      "status": "filled",
+      "keyMessage": "Optimasi, fisika, ekonomi, biologi, teknik, dan ilmu alam",
+      "templateRef": {
+        "templateId": "roadmaps-infographic-presentation-template",
+        "page": 19
+      }
+    }
+  ]
+}
