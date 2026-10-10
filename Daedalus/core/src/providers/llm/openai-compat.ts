@@ -63,7 +63,7 @@ export class OpenAICompatProvider implements LLMProvider {
   }
 
   async chat(messages: Message[], tools?: ToolDefinition[], options: ChatOptions = {}): Promise<ChatResponse> {
-    const response = await this.#request(messages, tools, options, false);
+    const response = await this.#requestWithReasoningEffortFallback(messages, tools, options, false);
     if (!response.ok) {
       const json = (await response.json().catch(() => ({}))) as OpenAIResponse;
       throw providerHttpError(response.status, json, response.headers.get("retry-after"));
@@ -75,7 +75,7 @@ export class OpenAICompatProvider implements LLMProvider {
   }
 
   async *stream(messages: Message[], tools?: ToolDefinition[], options: ChatOptions = {}): AsyncIterable<StreamChunk> {
-    const response = await this.#request(messages, tools, options, true);
+    const response = await this.#requestWithReasoningEffortFallback(messages, tools, options, true);
     if (!response.ok) {
       const json = (await response.json().catch(() => ({}))) as OpenAIResponse;
       throw providerHttpError(response.status, json, response.headers.get("retry-after"));
@@ -162,7 +162,7 @@ export class OpenAICompatProvider implements LLMProvider {
         // allOf/anyOf combinators are flattened (Bedrock rejects the whole
         // request over one); the declared schemas and the runtime
         // validator keep the original semantics. See schema-normalize.ts.
-        body: JSON.stringify({ model: this.#model, messages, ...(tools?.length ? { tools: normalizeToolSchemas(tools) } : {}), ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}), stream, stream_options: stream ? { include_usage: true } : undefined, temperature: options.temperature, max_tokens: options.max_tokens, top_p: options.top_p, stop: options.stop }),
+        body: JSON.stringify({ model: this.#model, messages, ...(tools?.length ? { tools: normalizeToolSchemas(tools) } : {}), ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}), stream, stream_options: stream ? { include_usage: true } : undefined, temperature: options.temperature, max_tokens: options.max_tokens, top_p: options.top_p, stop: options.stop, reasoning_effort: options.reasoningEffort }),
         signal,
       });
     } catch (error) {
@@ -170,6 +170,36 @@ export class OpenAICompatProvider implements LLMProvider {
       throw new LLMError("LLM request failed", { cause: error, code: "network" });
     }
   }
+
+  /**
+   * Defensive fallback for endpoints that reject `reasoning_effort`:
+   * on a 400 whose error body names the parameter (or calls it an
+   * unknown/unrecognized parameter), retry ONCE without it. Any other
+   * failure — or a second failure — returns the response untouched so
+   * the normal error path reports it.
+   */
+  async #requestWithReasoningEffortFallback(
+    messages: Message[],
+    tools: ToolDefinition[] | undefined,
+    options: ChatOptions,
+    stream: boolean,
+  ): Promise<Response> {
+    const response = await this.#request(messages, tools, options, stream);
+    if (response.ok || response.status !== 400 || options.reasoningEffort === undefined) return response;
+    const probe = (await response.json().catch(() => ({}))) as OpenAIResponse;
+    if (!reasoningEffortRejected(probe)) {
+      // Not a reasoning_effort complaint: the body is consumed, so
+      // rebuild the rejection from the parsed error instead of losing it.
+      throw providerHttpError(response.status, probe, response.headers.get("retry-after"));
+    }
+    return this.#request(messages, tools, { ...options, reasoningEffort: undefined }, stream);
+  }
+}
+
+/** True when an error body blames the reasoning_effort parameter. */
+function reasoningEffortRejected(body: OpenAIResponse): boolean {
+  const marker = `${body.error?.code ?? ""} ${body.error?.type ?? ""} ${body.error?.message ?? ""}`.toLowerCase();
+  return marker.includes("reasoning_effort") || marker.includes("unknown parameter") || marker.includes("unrecognized");
 }
 
 /**

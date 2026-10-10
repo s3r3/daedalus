@@ -1,9 +1,10 @@
 import { readFile } from 'node:fs/promises';
-import type { Plan, PlanStep, TaskSpec, TaskState, ValidationResult } from '../contracts.ts';
+import type { Plan, PlanStep, TaskSpec, TaskState, TokenBudget, ValidationResult } from '../contracts.ts';
+import { TokenBudgetExhaustedError, isTokenBudgetExhausted } from '../contracts.ts';
 import { emitEvent, type EventBus } from '../events.ts';
 import type { TaskStore } from '../persistence.ts';
 import type { QuestionBroker } from '../interaction/questions.ts';
-import type { LLMProvider, Message } from '../providers/llm/types.ts';
+import type { ChatOptions, LLMProvider, Message } from '../providers/llm/types.ts';
 import type { SlideTaskParams } from '../agent/context.ts';
 import { deckPaths, type DeckSpec, type Slide } from './deck.ts';
 import { diffLines, changedLineCounts, renderPatch } from '../tools/filesystem/diff.ts';
@@ -47,6 +48,18 @@ export type SlideEngineDeps = {
   store: TaskStore;
   questions: QuestionBroker;
   workspaceRoot: string;
+  /**
+   * Domain-effective model options (temperature / reasoning effort /
+   * prompt caching) merged into every engine model call — per-call
+   * values win, these fill the gaps.
+   */
+  chatOptions?: ChatOptions;
+  /**
+   * Hard token budget for the run: checked before every model call
+   * and fed the provider-reported usage after; exhaustion ends the
+   * run through the normal partial-completion path.
+   */
+  tokenBudget?: TokenBudget;
 };
 
 export type SlideEngineOutcome = 'success' | 'partial' | 'failed';
@@ -180,15 +193,28 @@ export class SlideEngine {
    * stage JSON is not chat text; the human summary rides THOUGHT and
    * the final state instead.
    */
+  /**
+   * Engine model-call options: the run's domain-effective chat options
+   * merged under any per-call values (per-call wins).
+   */
+  #modelChatOptions(options: ChatOptions | undefined): ChatOptions | undefined {
+    const configured = this.#deps.chatOptions;
+    if (!configured) return options;
+    return { ...configured, ...options };
+  }
+
   #observingProvider(inner: LLMProvider): LLMProvider {
     const self = this;
     return {
       name: inner.name,
       async chat(messages: Message[], tools, options) {
+        const budget = self.#deps.tokenBudget;
+        if (budget?.exhausted) throw new TokenBudgetExhaustedError(budget);
         self.#requests += 1;
         self.#emit('MODEL_REQUEST_STARTED', { provider: inner.name, messages: messages.length, tools: 0 });
         try {
-          const response = await inner.chat(messages, tools, options);
+          const response = await inner.chat(messages, tools, self.#modelChatOptions(options));
+          budget?.add(response.usage);
           self.#emit('MODEL_REQUEST_FINISHED', {
             message: { content: '' },
             ...(response.usage ? { usage: response.usage } : {}),
@@ -305,6 +331,15 @@ export class SlideEngine {
         save({ status: 'failed', last_error: 'aborted', last_observation: 'Berhenti sebelum selesai: tugas dihentikan.' });
         this.#emit('TASK_COMPLETED', { state, outcome: 'failed', reason: 'aborted' });
         return { state, outcome: 'failed', summary: 'Berhenti sebelum selesai: tugas dihentikan.' };
+      }
+      // Token budget exhausted: the normal partial-completion path —
+      // deck.json already holds every finished unit of work, so the run
+      // ends partial with honest evidence instead of failing.
+      if (isTokenBudgetExhausted(error)) {
+        const summary = `${error.message} Deck parsial tersimpan di deck/deck.json — kirim prompt lanjutan untuk melanjutkan pengisian.`;
+        save({ status: 'failed', last_error: 'budget_exhausted', last_observation: summary });
+        this.#emit('TASK_COMPLETED', { state, outcome: 'partial', reason: 'budget_exhausted' });
+        return { state, outcome: 'partial', summary };
       }
       const message = errorText(error);
       save({ status: 'failed', last_error: message, last_observation: `Gagal: ${message}` });

@@ -78,6 +78,20 @@ export type ChatOptions = {
    * it is ignored and the wire format is unchanged.
    */
   cachePrefix?: boolean;
+  /**
+   * Provider reasoning effort (off = omit the field entirely). The
+   * runtime derives it from the resolved thinking level; endpoints
+   * that reject it get one retry without it (see openai-compat.ts).
+   */
+  reasoningEffort?: 'low' | 'medium' | 'high';
+  /**
+   * Global prompt-caching UI toggle (Settings → DAEDALUS_PROMPT_CACHING),
+   * plumbed from runtime settings. The wire-level marker is emitted from
+   * `cachePrefix` only when the engine's mechanism is positively detected;
+   * this flag is the user-facing switch, honoured by the provider layer
+   * as the mechanism detection allows.
+   */
+  promptCaching?: boolean;
 };
 
 export type StreamChunk =

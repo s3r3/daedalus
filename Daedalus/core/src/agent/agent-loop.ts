@@ -7,7 +7,8 @@ import type { ContentBlock, LLMProvider, Message, ModelPhase } from '../provider
 import { classifyLLMError, LLMAuthError, LLMContentPolicyError, type LLMErrorKind } from '../providers/llm/errors.ts';
 import { StreamMessageAssembler } from '../providers/llm/stream-assembly.ts';
 import { asModelController, modelPoolFailureReason } from '../providers/llm/model-pool.ts';
-import type { AgentMode, Event, ModelTier, Plan, PlanStep, TaskSpec, TaskState, ToolCall, ToolResult } from '../contracts.ts';
+import type { AgentMode, Event, ModelTier, Plan, PlanStep, TaskSpec, TaskState, ThinkingLevel, TokenBudget, ToolCall, ToolResult, ToolRules } from '../contracts.ts';
+import { resolveThinkingLevel } from '../settings.ts';
 import type { Action, CompleteAction, ContextManager, Observation, ObservationHandler, Planner, ReplanAction, StopAction, StopCondition, StopPolicy, StopReason, TaskInterpreter, ToolAction, ToolExecutor } from './types.ts';
 import type { Validator } from '../validation/index.ts';
 import { completionGate, normalizeError, validationFailed, validationFailureSignature } from '../validation/index.ts';
@@ -101,6 +102,14 @@ export type AgentLoopOptions = {
   /** Surface provider/interpreter thought text as THOUGHT events. Default: on. */
   thinking?: boolean;
   /**
+   * Reasoning-effort tier (settings layer 2). Resolved once via
+   * resolveThinkingLevel: an explicit level wins, else the deprecated
+   * `thinking` boolean (false → 'off'), else 'medium'. Drives both
+   * THOUGHT-event surfacing ('off' disables it) and the
+   * `reasoningEffort` ChatOptions on every model call.
+   */
+  thinkingLevel?: ThinkingLevel;
+  /**
    * Stream model text as MODEL_TEXT_DELTA events while the turn is in
    * flight (the Web renders it live; the finished message still lands
    * as MODEL_REQUEST_FINISHED + THOUGHT). The turn itself is assembled
@@ -159,6 +168,21 @@ export type AgentLoopOptions = {
    */
   inputTokenBudget?: number;
   /**
+   * Hard token budget for the run, metered on provider-reported
+   * total_tokens (see contracts.createTokenBudget). After every model
+   * response the loop adds the response usage; when the budget is
+   * exhausted the task stops cleanly with outcome 'budget_exhausted' —
+   * never a crash.
+   */
+  tokenBudget?: TokenBudget;
+  /**
+   * Per-run tool permission overrides (settings layer): deny → hard
+   * denial at the loop gate; ask → the approval question is forced even
+   * where the mode/auto-approve would auto-allow; allow → the question
+   * is skipped. `*` matches any tool.
+   */
+  toolRules?: ToolRules;
+  /**
    * Pre-build question gate: a creation-shaped, underspecified brief
    * (agent/scaffold.ts questionGateAppliesToGoal) in Auto/Manual mode
    * may not mutate anything until one ask_user round has completed —
@@ -213,6 +237,9 @@ export class AgentLoop {
   readonly #chatOptions?: import('../providers/llm/types.ts').ChatOptions;
   readonly #modeController: ModeController;
   readonly #thinking: boolean;
+  readonly #thinkingLevel: ThinkingLevel;
+  readonly #tokenBudget?: TokenBudget;
+  readonly #toolRules?: ToolRules;
   readonly #streamText: boolean;
   readonly #contextLimitTokens: number;
   readonly #condense: boolean;
@@ -343,7 +370,7 @@ export class AgentLoop {
    * while a question is actually pending, and only these two reasons:
    * the gate cannot outlive the question (see #pendingQuestions).
    */
-  readonly #DEFERRED_HARD_STOP_REASONS = new Set(['input_token_budget', 'no_progress']);
+  readonly #DEFERRED_HARD_STOP_REASONS = new Set(['input_token_budget', 'budget_exhausted', 'no_progress']);
   /** Tasks with a hard-pause question awaiting the user right now; resolves when it settles. */
   readonly #pendingQuestions = new Map<string, Promise<void>>();
   #cancelled = new Set<string>();
@@ -376,7 +403,10 @@ export class AgentLoop {
     this.#tools = options.tools;
     this.#chatOptions = options.chatOptions;
     this.#modeController = options.modeController ?? new ModeController(options.mode ?? 'auto', options.autoApprove ?? false);
-    this.#thinking = options.thinking !== false;
+    this.#thinkingLevel = resolveThinkingLevel({ thinkingLevel: options.thinkingLevel, thinking: options.thinking }, 'medium');
+    this.#thinking = this.#thinkingLevel !== 'off';
+    this.#tokenBudget = options.tokenBudget;
+    this.#toolRules = options.toolRules;
     this.#streamText = options.streamText === true;
     this.#contextLimitTokens = options.contextLimitTokens && options.contextLimitTokens > 0 ? options.contextLimitTokens : 128_000;
     this.#condense = options.condense !== false;
@@ -514,8 +544,17 @@ export class AgentLoop {
         // normal completion path below judge it (validation + gates
         // still apply); if it needs more model calls, the next response
         // re-crosses and ends the task here honestly.
-        if (hardStop.reason === 'input_token_budget' && (state.status === 'done' || this.#done(state))) {
+        if ((hardStop.reason === 'input_token_budget' || hardStop.reason === 'budget_exhausted') && (state.status === 'done' || this.#done(state))) {
           this.#hardStops.delete(state.id);
+        } else if (hardStop.reason === 'budget_exhausted') {
+          // Provider-reported token budget: a clean stop, never a crash.
+          // The completion outcome carries 'budget_exhausted' verbatim so
+          // the runtime reports it (with its evidence) instead of a
+          // generic failure.
+          state = { ...state, status: 'failed', last_error: 'budget_exhausted', last_observation: hardStop.detail };
+          await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'budget_exhausted', reason: 'budget_exhausted', detail: hardStop.detail });
+          this.#store.saveState(state.id, state);
+          return state;
         } else {
           state = { ...state, status: 'failed', last_error: hardStop.reason, last_observation: hardStop.detail };
           await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: hardStop.reason, detail: hardStop.detail });
@@ -800,6 +839,27 @@ export class AgentLoop {
       await this.#emitThought(state.id, turnId, response.message);
       this.#modelFailures.delete(state.id);
       this.#consecutiveTimeouts.delete(state.id);
+      // Hard token budget (provider-reported totals): after every model
+      // response, add its usage. When the budget is exhausted the task
+      // stops at the top of the next pass as 'budget_exhausted' — a
+      // clean stop, never a crash.
+      if (this.#tokenBudget && !this.#hardStops.has(state.id)) {
+        this.#tokenBudget.add(response.usage);
+        if (this.#tokenBudget.exhausted) {
+          await this.#emit(state.id, turnId, 'LOOP_WARNING', {
+            tool: '',
+            repeats: 0,
+            suppressed: false,
+            kind: 'token_budget',
+            tokens_used: this.#tokenBudget.used,
+            budget: this.#tokenBudget.limit,
+          });
+          this.#hardStops.set(state.id, {
+            reason: 'budget_exhausted',
+            detail: `Budget token habis: ${this.#tokenBudget.used}/${this.#tokenBudget.limit} token.`,
+          });
+        }
+      }
       // Per-task input-token budget: metered on the harness's OWN context
       // estimate (what Daedalus actually put on the wire), never on the
       // provider's billed prompt_tokens. Billed usage can include tokens
@@ -1142,7 +1202,9 @@ export class AgentLoop {
       // model earns its cost (config-gated, once per task).
       await this.#maybeEscalateEarly(state, 'loop_warning');
     }
-    if (isToolCallDenied(turnMode, call.tool, toolCallTargetPath(call.args))) {
+    // The hard denial covers the mode gate AND the per-run tool rules:
+    // a tool in rules.deny is denied here, before any approval layer.
+    if (isToolCallDenied(turnMode, call.tool, toolCallTargetPath(call.args), this.#modeController.autoApprove, this.#toolRules)) {
       return {
         result: {
           call_id: call.id,
@@ -1929,12 +1991,20 @@ export class AgentLoop {
 
   /**
    * Provider-call options for one task turn: the configured chat options
-   * plus the task's cancellation signal. The task signal is the Stop
-   * seam — it wins over any host-supplied signal, because a host signal
-   * cannot distinguish this task's requests from any other's.
+   * plus the task's cancellation signal (the Stop seam — it wins over any
+   * host-supplied signal), the stable-prefix cache marker, and the
+   * resolved reasoning effort. 'off' omits reasoning_effort entirely.
    */
   #chatRequestOptions(taskId: string, phase: ModelPhase | undefined): import('../providers/llm/types.ts').ChatOptions {
-    return { ...this.#chatOptions, phase, signal: this.#taskSignal(taskId), cachePrefix: true };
+    const effort = this.#chatOptions?.reasoningEffort ?? (this.#thinkingLevel === 'off' ? undefined : this.#thinkingLevel);
+    return {
+      ...this.#chatOptions,
+      phase,
+      signal: this.#taskSignal(taskId),
+      cachePrefix: true,
+      // 'off' omits the key entirely (never sent as null/undefined).
+      ...(effort !== undefined ? { reasoningEffort: effort } : {}),
+    };
   }
 
   /** The task's cancellation signal, if the task has started. */

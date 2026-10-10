@@ -1,4 +1,4 @@
-import { AGENT_MODES, type AgentMode, type ToolModePolicy } from '../contracts.ts';
+import { AGENT_MODES, type AgentMode, type ToolModePolicy, type ToolRules } from '../contracts.ts';
 import type { ModelToolSchema } from '../tools/registry.ts';
 import { ASK_USER_TOOL_NAME } from '../contracts.ts';
 import { SPAWN_SUBAGENT_TOOL_NAME } from './subagents.ts';
@@ -98,9 +98,32 @@ export function isToolVisible(mode: AgentMode, toolName: string): boolean {
   return true;
 }
 
-export function toolModePolicy(mode: AgentMode, toolName: string, autoApprove = false): ToolModePolicy {
+/**
+ * Per-run tool-rule decision for one tool name (settings layer):
+ * deny > ask > allow — the first matching list wins, `*` matches any
+ * tool. Undefined when no list names the tool.
+ */
+export function toolRulesDecision(rules: ToolRules, toolName: string): 'deny' | 'ask' | 'allow' | undefined {
+  const matches = (list: string[]): boolean => list.some((rule) => rule === '*' || rule === toolName);
+  if (matches(rules.deny)) return 'deny';
+  if (matches(rules.ask)) return 'ask';
+  if (matches(rules.allow)) return 'allow';
+  return undefined;
+}
+
+export function toolModePolicy(mode: AgentMode, toolName: string, autoApprove = false, toolRules?: ToolRules): ToolModePolicy {
   const visible = isToolVisible(mode, toolName);
   if (!visible) return { visible: false, approval: 'deny' };
+  // Per-run tool rules override the mode/auto-approve approval: deny →
+  // deny, ask → force the approval question, allow → skip it. A mode
+  // that hides the tool keeps it denied — rules grant approval, never
+  // visibility.
+  if (toolRules) {
+    const decision = toolRulesDecision(toolRules, toolName);
+    if (decision === 'deny') return { visible: true, approval: 'deny' };
+    if (decision === 'ask') return { visible: true, approval: 'ask' };
+    if (decision === 'allow') return { visible: true, approval: 'auto' };
+  }
   const kind = classifyToolName(toolName);
   if (kind === 'read') return { visible: true, approval: 'auto' };
   if (mode === 'manual') return { visible: true, approval: 'ask' };
@@ -120,18 +143,25 @@ export function toolModePolicy(mode: AgentMode, toolName: string, autoApprove = 
  * `.daedalus/plans/**` run freely, every other mutating path is denied.
  * `targetPath` is the call's workspace-relative `path` argument, when any.
  */
-export function toolCallPolicy(mode: AgentMode, toolName: string, targetPath?: string, autoApprove = false): ToolModePolicy {
+export function toolCallPolicy(mode: AgentMode, toolName: string, targetPath?: string, autoApprove = false, toolRules?: ToolRules): ToolModePolicy {
   if (mode === 'plan' && PLAN_WRITE_TOOLS.has(toolName)) {
-    return isPlanDocumentPath(targetPath)
-      ? { visible: true, approval: 'auto' }
-      : { visible: true, approval: 'deny' };
+    // The carve-out boundary stands regardless of rules: outside
+    // .daedalus/plans/** is always denied. On the sanctioned path the
+    // per-run rules still decide the approval.
+    if (!isPlanDocumentPath(targetPath)) return { visible: true, approval: 'deny' };
+    if (toolRules) {
+      const decision = toolRulesDecision(toolRules, toolName);
+      if (decision === 'deny') return { visible: true, approval: 'deny' };
+      if (decision === 'ask') return { visible: true, approval: 'ask' };
+    }
+    return { visible: true, approval: 'auto' };
   }
-  return toolModePolicy(mode, toolName, autoApprove);
+  return toolModePolicy(mode, toolName, autoApprove, toolRules);
 }
 
 /** True when the mode gate refuses this exact call (the loop's hard denial). */
-export function isToolCallDenied(mode: AgentMode, toolName: string, targetPath?: string, autoApprove = false): boolean {
-  return toolCallPolicy(mode, toolName, targetPath, autoApprove).approval === 'deny';
+export function isToolCallDenied(mode: AgentMode, toolName: string, targetPath?: string, autoApprove = false, toolRules?: ToolRules): boolean {
+  return toolCallPolicy(mode, toolName, targetPath, autoApprove, toolRules).approval === 'deny';
 }
 
 /**
