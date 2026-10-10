@@ -159,13 +159,18 @@ describe('Template dari PPT v3 — storage', () => {
     expect(template.sourceAddresses).toHaveLength(3);
     expect(template.sourceAddresses![0]!.slidePart).toBe('ppt/slides/slide1.xml');
     const coverText = template.sourceAddresses![0]!.slots.filter((s) => s.kind === 'text').map((s) => s.key);
-    expect(coverText).toEqual(['s0', 's1']);
+    // The grouped "TeksDiGrup" shape is a slot too since group-aware
+    // parsing (identity transform here): it sits after the sub at s2.
+    expect(coverText).toEqual(['s0', 's1', 's2']);
     expect(template.sourceAddresses![0]!.slots.find((s) => s.key === 's0')?.shapeKey).toBe('id-2');
+    // The group holds children 4 (group) → 1 (its text shape).
+    expect(template.sourceAddresses![0]!.slots.find((s) => s.key === 's2')?.shapePath).toEqual([4, 1]);
     const contentImage = template.sourceAddresses![2]!.slots.find((s) => s.kind === 'image');
     expect(contentImage?.mediaPart).toBe('ppt/media/image1.png');
 
     // Decor preview capture: solid preset shapes and the converted
-    // custGeom blob, in paint order; grouped children honestly stay out.
+    // custGeom blob, in paint order. The group's plus is not a preview
+    // geometry and its text shape is a slot, so neither joins decor.
     const coverShapes = template.pages![0]!.shapes ?? [];
     expect(coverShapes.map((s) => (s.type === 'shape' ? s.geom : s.type))).toEqual(['ellipse', 'path', 'roundRect']);
     expect(coverShapes[0]).toMatchObject({ type: 'shape', fill: '#0e7a5f' });
@@ -399,7 +404,12 @@ describe('Template dari PPT v3 — pipeline integration', () => {
     const out = await unzip(readFileSync(exportedPath));
     const cover = await partText(out, 'ppt/slides/slide1.xml');
     expect(cover).toContain(DECOR_ELLIPSE);
-    expect(cover).toContain(DECOR_GROUP);
+    // The group stays put; its TEXT shape is a real slot now, so the AI
+    // word lands inside it (s2) while the plus sibling keeps its bytes.
+    expect(cover).toContain('name="Plus1"');
+    expect(cover).toContain('prst="plus"');
+    expect(cover).not.toContain('TeksDiGrup');
+    expect(ts(cover)).toContain('Kata AI untuk s2');
     expect(ts(cover)).toContain('Kata AI untuk s0');
     const reused = await partText(out, 'ppt/slides/slide4.xml');
     expect(ts(reused)).toContain('Kata AI untuk s0');

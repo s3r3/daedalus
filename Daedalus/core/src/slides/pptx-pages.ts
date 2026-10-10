@@ -12,12 +12,17 @@
 // the Web canvas can preview the design; the EXPORT preserves the full
 // original design by cloning the source slide XML (export-template.ts)
 // rather than by reconstructing anything parsed here. Known limits,
-// honestly documented: group shapes (p:grpSp) stay atomic (their
-// children are not scraped as separate slots or decor), and graphic
-// frames (charts/tables/SmartArt) are not poured — under clone export
-// they survive as the template's originals, untouched.
+// honestly documented: group shapes (p:grpSp) are walked recursively
+// — children live in group-local child space (chOff/chExt) mapped
+// through the group's off/ext box — so text/picture slots and decor
+// inside groups are found with slide-space rects, and each slot
+// address carries a shape path (child indices from the tree root) the
+// clone export resolves unambiguously. Group rotation is not applied
+// to rects (axis-aligned mapping only), and graphic frames
+// (charts/tables/SmartArt) are not scraped — under clone export they
+// survive as the template's originals, untouched.
 import JSZip from 'jszip';
-import { createShapeKeyer, picEmbedId, shapeElementId, splitTopLevelElements } from './xml-shape-utils.ts';
+import { leafShapeKey, picEmbedId, walkShapeTree } from './xml-shape-utils.ts';
 
 export type PptxTemplatePageKind = 'cover' | 'toc' | 'section' | 'content' | 'closing';
 
@@ -47,7 +52,8 @@ export interface PptxImageSlot {
 export type PptxTemplateSlot = PptxTextSlot | PptxImageSlot;
 
 /**
- * A decorative (non-slot) top-level shape of a template page, captured so
+ * A decorative (non-slot) shape of a template page — top-level or
+ * inside a group, at its transformed slide-space rect — captured so
  * the Web canvas can PREVIEW the design honestly. Two faithful render
  * kinds: simple preset geometry with a solid fill, and an image (a pic,
  * or a blip-filled shape — the picture already extracted as an asset).
@@ -146,6 +152,21 @@ function xfrmRect(xml: string, slideCx: number, slideCy: number): PptxSlotRect |
   return { x: clamp01(x), y: clamp01(y), w: Math.max(0.01, clamp01(w)), h: Math.max(0.01, clamp01(h)) };
 }
 
+/**
+ * Slide-EMU box → slide fractions, with the same clamping xfrmRect has
+ * always applied (origin pulled on-slide, size floored at 1% so a sliver
+ * of a shape stays addressable). The walker (xml-shape-utils) produces
+ * the EMU box with group transforms already applied.
+ */
+function emuRectToFractions(rectEmu: { x: number; y: number; cx: number; cy: number }, slideCx: number, slideCy: number): PptxSlotRect {
+  return {
+    x: clamp01(rectEmu.x / slideCx),
+    y: clamp01(rectEmu.y / slideCy),
+    w: Math.max(0.01, clamp01(rectEmu.cx / slideCx)),
+    h: Math.max(0.01, clamp01(rectEmu.cy / slideCy)),
+  };
+}
+
 /** Placeholder identity (`type` + `idx`) of a shape, for layout fallback. */
 function placeholderKey(xml: string): string | undefined {
   const ph = /<p:ph\b([^>]*)\/>/.exec(xml)?.[1] ?? /<p:ph\b([^>]*)>/.exec(xml)?.[1];
@@ -175,14 +196,9 @@ const PREVIEW_GEOMS: Record<string, 'rect' | 'roundRect' | 'ellipse'> = {
  */
 function decorShapeOf(
   elementXml: string,
-  elementTag: string,
-  slideCx: number,
-  slideCy: number,
+  rect: PptxSlotRect,
   imageFileByEmbed: Map<string, string>,
 ): PptxDecorShape | undefined {
-  if (elementTag === 'grpSp' || elementTag === 'graphicFrame') return undefined;
-  const rect = xfrmRect(elementXml, slideCx, slideCy);
-  if (!rect) return undefined;
   const blipEmbed = picEmbedId(elementXml);
   const imageFile = blipEmbed ? imageFileByEmbed.get(blipEmbed) : undefined;
   if (imageFile) return { type: 'image', rect, imageFile };
@@ -314,7 +330,11 @@ function shapeText(spXml: string): ParsedShapeText | undefined {
   };
 }
 
-/** Remove <p:grpSp> subtrees (nested too) — their children use group-local coords. */
+/**
+ * Remove <p:grpSp> subtrees (nested too) — used only for layout
+ * placeholder rects, where placeholders are read top-level as before.
+ * Slide pages themselves are walked group-aware (walkShapeTree).
+ */
 function stripGroupShapes(xml: string): string {
   let out = xml;
   for (let guard = 0; guard < 8; guard += 1) {
@@ -446,20 +466,21 @@ export async function extractPptxPages(bytes: Uint8Array): Promise<PptxPagesExtr
     }
 
     const spTreeInner = /<p:spTree>([\s\S]*?)<\/p:spTree>/.exec(xml)?.[1] ?? xml;
-    const spTree = stripGroupShapes(spTreeInner);
+    // Group-aware flattening: every leaf shape (top-level and nested in
+    // grpSp children, arbitrary depth) in document order, with its
+    // slide-space rect already mapped through the group transforms.
+    const leaves = walkShapeTree(spTreeInner);
     const slots: PptxTemplateSlot[] = [];
     const textSlots: PptxTextSlot[] = [];
-    const slotShapeIds = new Set<number>();
+    const slotLeafPaths = new Set<string>();
     const imageAssetsByEmbed = new Map<string, string>();
     let slotSeq = 0;
     let picSeq = 0;
-    for (const shape of spTree.matchAll(/<p:(sp|pic)>([\s\S]*?)<\/p:\1>/g)) {
-      const kind = shape[1]!;
-      const body = shape[2]!;
-      const rect = xfrmRect(body, slideCx, slideCy)
-        ?? (kind === 'sp' ? layoutPhRects.get(placeholderKey(body) ?? '') : undefined);
-      if (!rect) continue;
-      if (kind === 'pic') {
+    for (const leaf of leaves) {
+      const body = leaf.xml;
+      if (leaf.tag === 'pic') {
+        if (!leaf.rectEmu) continue;
+        const rect = emuRectToFractions(leaf.rectEmu, slideCx, slideCy);
         const embed = /<a:blip[^>]*r:embed="([^"]+)"/.exec(body)?.[1];
         const rel = embed ? rels.get(embed) : undefined;
         const key = `s${slotSeq}`;
@@ -477,14 +498,18 @@ export async function extractPptxPages(bytes: Uint8Array): Promise<PptxPagesExtr
           }
         }
         slots.push(imageFile ? { key, kind: 'image', rect, imageFile } : { key, kind: 'image', rect });
+        slotLeafPaths.add(leaf.shapePath.join('.'));
         continue;
       }
+      if (leaf.tag !== 'sp') continue;
+      const rect = (leaf.rectEmu ? emuRectToFractions(leaf.rectEmu, slideCx, slideCy) : undefined)
+        ?? (leaf.shapePath.length === 1 ? layoutPhRects.get(placeholderKey(body) ?? '') : undefined);
+      if (!rect) continue;
       const text = shapeText(body);
       if (!text) continue;
       const key = `s${slotSeq}`;
       slotSeq += 1;
-      const shapeId = shapeElementId(body);
-      if (shapeId !== undefined) slotShapeIds.add(shapeId);
+      slotLeafPaths.add(leaf.shapePath.join('.'));
       const slot: PptxTextSlot = {
         key,
         kind: 'text',
@@ -501,17 +526,16 @@ export async function extractPptxPages(bytes: Uint8Array): Promise<PptxPagesExtr
       slots.push(slot);
       textSlots.push(slot);
     }
-    // Decor capture for canvas preview: every top-level shape that is not
-    // a consumed slot and not a pic (pics are image slots). Groups and
-    // graphic frames stay atomic — the clone export preserves them as
-    // originals; the preview simply doesn't draw them.
+    // Decor capture for canvas preview: every sp shape that is not a
+    // consumed slot (group children included, at their transformed
+    // slide-space rects; pics are image slots, not decor).
     const shapes: PptxDecorShape[] = [];
-    for (const element of splitTopLevelElements(spTreeInner)) {
-      if (element.tag !== 'sp') continue;
-      const elementId = shapeElementId(element.xml);
-      if (elementId !== undefined && slotShapeIds.has(elementId)) continue;
-      if (shapeText(element.xml)) continue;
-      const decor = decorShapeOf(element.xml, element.tag, slideCx, slideCy, imageAssetsByEmbed);
+    for (const leaf of leaves) {
+      if (leaf.tag !== 'sp') continue;
+      if (slotLeafPaths.has(leaf.shapePath.join('.'))) continue;
+      if (!leaf.rectEmu) continue;
+      if (shapeText(leaf.xml)) continue;
+      const decor = decorShapeOf(leaf.xml, emuRectToFractions(leaf.rectEmu, slideCx, slideCy), imageAssetsByEmbed);
       if (decor) shapes.push(decor);
     }
     rawPages.push({ ...(background ? { background } : {}), slots, textSlots, shapes });
@@ -625,6 +649,15 @@ export interface PptxTemplateSlotAddress {
   kind: 'text' | 'image';
   /** shapeKeyOf() address of the shape within the source slide part. */
   shapeKey: string;
+  /**
+   * Child indices from the shape-tree root to the slot's shape
+   * (`[4, 1]` = second child of the fifth top-level element, a group).
+   * Present on slots inside <p:grpSp> groups and on every slot stored
+   * since group-aware parsing; the clone export resolves it
+   * unambiguously. Absent on pre-group records — the export then falls
+   * back to the shapeKey over top-level shapes, as before.
+   */
+  shapePath?: number[];
   /** Text slots: how many <a:p> paragraphs the original shape carries. */
   paragraphs?: number;
   /** Image slots: package part holding the picture bytes. */
@@ -654,35 +687,42 @@ export function matchPageAddresses(slideXml: string, slideRelsXml: string, slide
   const textSlots = templatePageTextSlots(page);
   const imageSlots = templatePageImageSlots(page);
   const slots: PptxTemplateSlotAddress[] = [];
-  const keyer = createShapeKeyer();
+  // Both sides (page extraction above and this pairing) flatten the
+  // shape tree with the same walker in the same order, and both apply
+  // the same candidate rules — a text shape counts when it carries text
+  // (or a placeholder) AND a locatable box (its own transform, or the
+  // top-level layout-placeholder fallback extraction may have used) —
+  // so slot N of the page is always leaf N of the candidates here.
+  const keySeen = new Map<string, number>();
   let textIdx = 0;
   let imageIdx = 0;
-  const elements = splitTopLevelElements(spTreeInner);
-  elements.forEach((element, ordinal) => {
-    const shapeKey = keyer(element.xml, ordinal);
-    if (element.tag === 'sp') {
-      const txBody = /<p:txBody>([\s\S]*?)<\/p:txBody>/.exec(element.xml)?.[1];
-      if (!txBody || !/<a:p(?=[\s>])/.test(txBody)) return;
-      if (!/<a:t>/.test(txBody) && !/<p:ph\b/.test(element.xml)) return;
+  for (const leaf of walkShapeTree(spTreeInner)) {
+    const shapeKey = leafShapeKey(leaf.xml, leaf.shapePath, keySeen);
+    if (leaf.tag === 'sp') {
+      const txBody = /<p:txBody>([\s\S]*?)<\/p:txBody>/.exec(leaf.xml)?.[1];
+      if (!txBody || !/<a:p(?=[\s>])/.test(txBody)) continue;
+      if (!/<a:t>/.test(txBody) && !/<p:ph\b/.test(leaf.xml)) continue;
+      if (leaf.rectEmu === undefined && leaf.shapePath.length > 1) continue;
       const slot = textSlots[textIdx];
       textIdx += 1;
-      if (!slot) return;
+      if (!slot) continue;
       const paragraphs = (txBody.match(/<a:p(?=[\s>])/g) ?? []).length;
-      slots.push({ key: slot.key, kind: 'text', shapeKey, paragraphs: Math.max(1, paragraphs) });
-      return;
+      slots.push({ key: slot.key, kind: 'text', shapeKey, shapePath: leaf.shapePath, paragraphs: Math.max(1, paragraphs) });
+      continue;
     }
-    if (element.tag === 'pic') {
+    if (leaf.tag === 'pic') {
+      if (leaf.rectEmu === undefined) continue;
       const slot = imageSlots[imageIdx];
       imageIdx += 1;
-      if (!slot) return;
-      const address: PptxTemplateSlotAddress = { key: slot.key, kind: 'image', shapeKey };
-      const embed = picEmbedId(element.xml);
+      if (!slot) continue;
+      const address: PptxTemplateSlotAddress = { key: slot.key, kind: 'image', shapeKey, shapePath: leaf.shapePath };
+      const embed = picEmbedId(leaf.xml);
       const rel = embed ? rels.get(embed) : undefined;
       if (rel) address.mediaPart = resolvePartPath(slidePart, rel.target);
       if (embed) address.embedId = embed;
       slots.push(address);
     }
-  });
+  }
   return { slidePart, slots };
 }
 

@@ -21,7 +21,7 @@ import { basename, extname, join } from 'node:path';
 import { deckPaths, slugifyTitle, type DeckSpec } from './deck.ts';
 import { matchPageAddresses, type PptxTemplatePageAddress } from './pptx-pages.ts';
 import { readPptxTemplateSource, type PptxTemplate } from './pptx-template.ts';
-import { createShapeKeyer, splitTopLevelElements } from './xml-shape-utils.ts';
+import { createShapeKeyer, leafShapeKey, splitTopLevelElements, walkShapeTree } from './xml-shape-utils.ts';
 
 export class TemplateCloneError extends Error {
   constructor(message: string) {
@@ -126,11 +126,66 @@ function rewriteTextBody(shapeXml: string, text: string): string {
   return shapeXml.slice(0, innerStart) + rebuilt + shapeXml.slice(txClose);
 }
 
+function dottedPath(path: number[]): string {
+  return path.join('.');
+}
+
 /**
- * Rewrites the text of the addressed shapes inside one slide part. Every
- * other byte of the slide — decorations, fills, geometry, charts — is
- * carried over untouched. A slot whose shape cannot be located keeps its
- * original sample text (honest: never a silently dropped box).
+ * String surgery on one shape-tree level: text targets inside groups
+ * recurse into the group's children (only when a target actually lives
+ * under it, so untouched groups stay byte-identical); a target `sp`
+ * gets its text body rewritten; every other byte passes through.
+ */
+function rewriteTreeLevel(inner: string, prefix: number[], targets: Map<string, string>): string {
+  const elements = splitTopLevelElements(inner);
+  if (elements.length === 0) return inner;
+  let out = '';
+  let cursor = 0;
+  elements.forEach((element, index) => {
+    const path = [...prefix, index];
+    let xml = element.xml;
+    if (element.tag === 'grpSp') {
+      const under = `${dottedPath(path)}.`;
+      let needed = false;
+      for (const key of targets.keys()) {
+        if (key.startsWith(under)) {
+          needed = true;
+          break;
+        }
+      }
+      if (needed) {
+        const openEnd = element.xml.indexOf('>');
+        const closeStart = element.xml.lastIndexOf('</p:grpSp>');
+        if (openEnd >= 0 && closeStart > openEnd) {
+          xml = element.xml.slice(0, openEnd + 1)
+            + rewriteTreeLevel(element.xml.slice(openEnd + 1, closeStart), path, targets)
+            + element.xml.slice(closeStart);
+        }
+      }
+    } else if (element.tag === 'sp') {
+      const value = targets.get(dottedPath(path));
+      if (value !== undefined) xml = rewriteTextBody(element.xml, value);
+    }
+    out += inner.slice(cursor, element.start);
+    out += xml;
+    cursor = element.end;
+  });
+  out += inner.slice(cursor);
+  return out;
+}
+
+/**
+ * Rewrites the text of the addressed shapes inside one slide part,
+ * including shapes nested inside groups. Every other byte of the slide
+ * — decorations, fills, geometry, charts — is carried over untouched.
+ * A slot whose shape cannot be located keeps its original sample text
+ * (honest: never a silently dropped box).
+ *
+ * Address resolution: a stored shapePath (child indices from the tree
+ * root) wins when it resolves; otherwise the shapeKey is matched the
+ * way pre-group exports did — keyed over the top-level elements — and
+ * finally over the flattened leaf walk, so addresses stored by any
+ * import vintage land on their shape.
  */
 export function rewriteTemplateSlideText(
   slideXml: string,
@@ -142,21 +197,39 @@ export function rewriteTemplateSlideText(
   if (treeOpen < 0 || treeClose < treeOpen) return slideXml;
   const innerStart = treeOpen + '<p:spTree>'.length;
   const inner = slideXml.slice(innerStart, treeClose);
-  const elements = splitTopLevelElements(inner);
-  const addressByKey = new Map(pageAddress.slots.filter((slot) => slot.kind === 'text').map((slot) => [slot.shapeKey, slot]));
-  if (addressByKey.size === 0) return slideXml;
-  const keyer = createShapeKeyer();
-  let out = '';
-  let cursor = 0;
-  elements.forEach((element, ordinal) => {
-    const address = element.tag === 'sp' ? addressByKey.get(keyer(element.xml, ordinal)) : undefined;
-    const value = address ? values.get(address.key) : undefined;
-    out += inner.slice(cursor, element.start);
-    out += value !== undefined ? rewriteTextBody(element.xml, value) : element.xml;
-    cursor = element.end;
-  });
-  out += inner.slice(cursor);
-  return slideXml.slice(0, innerStart) + out + slideXml.slice(treeClose);
+  const textAddresses = pageAddress.slots.filter((slot) => slot.kind === 'text' && values.has(slot.key));
+  if (textAddresses.length === 0) return slideXml;
+
+  const leaves = walkShapeTree(inner);
+  const leafByPath = new Map(leaves.map((leaf) => [dottedPath(leaf.shapePath), leaf]));
+  // Keys as stored by pre-group imports: a keyer over the top-level
+  // elements only, counting every element in document order.
+  const topKeyToPath = new Map<string, string>();
+  {
+    const keyer = createShapeKeyer();
+    splitTopLevelElements(inner).forEach((element, index) => {
+      topKeyToPath.set(keyer(element.xml, index), dottedPath([index]));
+    });
+  }
+  // Keys over the flattened walk (what group-aware imports store).
+  const leafKeyToPath = new Map<string, string>();
+  {
+    const seen = new Map<string, number>();
+    for (const leaf of leaves) leafKeyToPath.set(leafShapeKey(leaf.xml, leaf.shapePath, seen), dottedPath(leaf.shapePath));
+  }
+
+  const targets = new Map<string, string>();
+  for (const address of textAddresses) {
+    let path: string | undefined;
+    if (address.shapePath && leafByPath.has(dottedPath(address.shapePath))) {
+      path = dottedPath(address.shapePath);
+    } else if (address.shapeKey) {
+      path = topKeyToPath.get(address.shapeKey) ?? leafKeyToPath.get(address.shapeKey);
+    }
+    if (path !== undefined) targets.set(path, values.get(address.key)!);
+  }
+  if (targets.size === 0) return slideXml;
+  return slideXml.slice(0, innerStart) + rewriteTreeLevel(inner, [], targets) + slideXml.slice(treeClose);
 }
 
 /* ------------------------------------------------------------ clone export */

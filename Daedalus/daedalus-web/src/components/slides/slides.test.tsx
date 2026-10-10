@@ -1362,6 +1362,45 @@ describe('template slides (imported PPT designs)', () => {
     expect(fallback.textContent).toContain('Desain template tidak terbaca')
   })
 
+  test('group-origin slots and decor render at their transformed slide rects', () => {
+    // A grouped TOC card as the parser now reports it: card body decor
+    // plus title/body texts whose rects came out of the group's
+    // child-space transform (small, right-of-center — where the winding
+    // roadmap cards sit), not the page top-left they collapsed to when
+    // group children were invisible.
+    const groupedPage = {
+      kind: 'toc' as const,
+      background: { color: '#f8f7ff' },
+      shapes: [
+        { type: 'shape' as const, rect: { x: 0.11, y: 0.275, w: 0.25, h: 0.1 }, fill: '#4f46e5', geom: 'roundRect' as const },
+      ],
+      slots: [
+        { key: 's0', kind: 'text' as const, rect: { x: 0.06, y: 0.05, w: 0.5, h: 0.12 }, sampleText: 'Daftar Isi', fontSizePt: 32, bold: true, lineCount: 1, maxChars: 40 },
+        { key: 's1', kind: 'text' as const, rect: { x: 0.12, y: 0.2875, w: 0.225, h: 0.0375 }, sampleText: 'Project Progress A', fontSizePt: 20, bold: true, color: '#ffffff', lineCount: 1, maxChars: 21 },
+        { key: 's2', kind: 'image' as const, rect: { x: 0.3625, y: 0.275, w: 0.05, h: 0.075 }, imageFile: 'peta.page-1.pic-0.png' },
+      ],
+    }
+    const groupedSlide: Slide = {
+      id: 'g1',
+      layout: 'template-page',
+      templateRef: { templateId: 'peta', page: 1 },
+      content: { title: 'Daftar Isi', slots: { s0: 'Daftar Isi', s1: 'Kemajuan Bab Satu', s2: '' } },
+      status: 'filled',
+    }
+    render(<SlideRenderer slide={groupedSlide} theme={templateDeck.theme} templateSlide={{ page: groupedPage, assetSrc }} />)
+    const cardTitle = screen.getByTestId('template-slot-s1')
+    expect(cardTitle.textContent).toBe('Kemajuan Bab Satu')
+    expect(parseFloat(cardTitle.style.left)).toBeCloseTo(12)
+    expect(parseFloat(cardTitle.style.top)).toBeCloseTo(28.75)
+    expect(parseFloat(cardTitle.style.width)).toBeCloseTo(22.5)
+    const decor = screen.getByTestId('template-decor-shape')
+    expect(parseFloat(decor.style.left)).toBeCloseTo(11)
+    expect(parseFloat(decor.style.top)).toBeCloseTo(27.5)
+    expect(decor.style.backgroundColor).toBe('rgb(79, 70, 229)')
+    const pic = screen.getByTestId('template-slot-s2')
+    expect(pic.querySelector('img')?.getAttribute('src')).toBe('/tpl-assets/peta.page-1.pic-0.png')
+  })
+
   test('stage flow: image upload on a template slide records the asset under its slot key', async () => {
     const user = userEvent.setup()
     fileMock.mockResolvedValue(deckFile(templateDeck))

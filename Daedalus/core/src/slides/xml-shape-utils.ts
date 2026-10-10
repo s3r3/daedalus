@@ -83,6 +83,142 @@ export function picEmbedId(picXml: string): string | undefined {
   return /<a:blip\b[^>]*\br:embed="([^"]+)"/.exec(picXml)?.[1];
 }
 
+/* ------------------------------------------- group-aware tree walking */
+
+/**
+ * One leaf shape of a shape tree, flattened in document order (group
+ * children appear where their group sits). `shapePath` is the chain of
+ * child indices from the shape-tree root — `[4, 1]` is child 1 of the
+ * group at top-level index 4 — and is the stable address the clone
+ * export uses to find the same shape again inside a group, where a bare
+ * cNvPr id is not guaranteed unique per slide. `rectEmu` is the shape's
+ * box in SLIDE EMU coordinates: for group children the group's
+ * chOff/chExt child space is mapped through its off/ext box (arbitrary
+ * nesting composes), including flipH/flipV mirroring. Group rotation
+ * (`rot` on the group's xfrm) is NOT applied — the rect stays the
+ * axis-aligned unrotated mapping, an honest preview-grade approximation
+ * (the clone export never consumes rects, only paths).
+ */
+export interface ShapeTreeLeaf {
+  /** Tag name after the `p:` prefix, e.g. "sp", "pic", "graphicFrame", "grpSp" is never a leaf. */
+  tag: string;
+  /** The full element XML, open tag through close tag. */
+  xml: string;
+  /** Child indices from the shape-tree root. */
+  shapePath: number[];
+  /** Slide-EMU box when the shape carries an <a:xfrm> off/ext. */
+  rectEmu?: { x: number; y: number; cx: number; cy: number };
+}
+
+/** Affine map from a group's child space into its parent's space: slide = a·p + b per axis. */
+interface SpaceTransform { ax: number; bx: number; ay: number; by: number }
+const IDENTITY_TRANSFORM: SpaceTransform = { ax: 1, bx: 0, ay: 1, by: 0 };
+
+interface XfrmParts { x: number; y: number; cx: number; cy: number }
+
+/** off/ext of the first <a:xfrm> inside `xml` (the shape's own transform). */
+function xfrmOffExt(xml: string): XfrmParts | undefined {
+  const block = /<a:xfrm[^>]*>([\s\S]*?)<\/a:xfrm>/.exec(xml)?.[1];
+  if (!block) return undefined;
+  const off = /<a:off x="(-?\d+)" y="(-?\d+)"/.exec(block);
+  const ext = /<a:ext cx="(-?\d+)" cy="(-?\d+)"/.exec(block);
+  if (!off || !ext) return undefined;
+  return { x: Number(off[1]), y: Number(off[2]), cx: Number(ext[1]), cy: Number(ext[2]) };
+}
+
+function applyTransform(t: SpaceTransform, rect: XfrmParts): { x: number; y: number; cx: number; cy: number } {
+  const x1 = t.ax * rect.x + t.bx;
+  const x2 = t.ax * (rect.x + rect.cx) + t.bx;
+  const y1 = t.ay * rect.y + t.by;
+  const y2 = t.ay * (rect.y + rect.cy) + t.by;
+  return { x: Math.min(x1, x2), y: Math.min(y1, y2), cx: Math.abs(x2 - x1), cy: Math.abs(y2 - y1) };
+}
+
+/** Parent transform ∘ one group's child-space mapping. */
+function composeGroupTransform(parent: SpaceTransform, grpXml: string): SpaceTransform {
+  const grpSpPr = /<p:grpSpPr>([\s\S]*?)<\/p:grpSpPr>/.exec(grpXml)?.[1];
+  if (!grpSpPr) return parent;
+  const xfrmTag = /<a:xfrm\b([^>]*)>/.exec(grpSpPr)?.[0];
+  const body = /<a:xfrm\b[^>]*>([\s\S]*?)<\/a:xfrm>/.exec(grpSpPr)?.[1];
+  if (!xfrmTag || !body) return parent;
+  const off = /<a:off x="(-?\d+)" y="(-?\d+)"/.exec(body);
+  const ext = /<a:ext cx="(-?\d+)" cy="(-?\d+)"/.exec(body);
+  if (!off || !ext) return parent;
+  const offX = Number(off[1]);
+  const offY = Number(off[2]);
+  const extCx = Number(ext[1]);
+  const extCy = Number(ext[2]);
+  const chOff = /<a:chOff x="(-?\d+)" y="(-?\d+)"/.exec(body);
+  const chExt = /<a:chExt cx="(-?\d+)" cy="(-?\d+)"/.exec(body);
+  const chOffX = chOff ? Number(chOff[1]) : offX;
+  const chOffY = chOff ? Number(chOff[2]) : offY;
+  const chExtCx = chExt && Number(chExt[1]) !== 0 ? Number(chExt[1]) : extCx;
+  const chExtCy = chExt && Number(chExt[2]) !== 0 ? Number(chExt[2]) : extCy;
+  const sx = chExtCx !== 0 ? extCx / chExtCx : 1;
+  const sy = chExtCy !== 0 ? extCy / chExtCy : 1;
+  const flipH = /\bflipH="1"/.test(xfrmTag);
+  const flipV = /\bflipV="1"/.test(xfrmTag);
+  // Unflipped: q = off + (p − chOff)·s. Flipped: q = off + (chOff + chExt − p)·s.
+  const lax = flipH ? -sx : sx;
+  const lbx = flipH ? offX + extCx + chOffX * sx : offX - chOffX * sx;
+  const lay = flipV ? -sy : sy;
+  const lby = flipV ? offY + extCy + chOffY * sy : offY - chOffY * sy;
+  return { ax: parent.ax * lax, bx: parent.ax * lbx + parent.bx, ay: parent.ay * lay, by: parent.ay * lby + parent.by };
+}
+
+const MAX_GROUP_DEPTH = 32;
+
+function walkLevel(fragment: string, prefix: number[], transform: SpaceTransform, out: ShapeTreeLeaf[]): void {
+  splitTopLevelElements(fragment).forEach((element, index) => {
+    const shapePath = [...prefix, index];
+    if (element.tag === 'grpSp') {
+      if (prefix.length >= MAX_GROUP_DEPTH) return;
+      const openEnd = element.xml.indexOf('>');
+      const closeStart = element.xml.lastIndexOf('</p:grpSp>');
+      if (openEnd < 0 || closeStart <= openEnd) return;
+      walkLevel(element.xml.slice(openEnd + 1, closeStart), shapePath, composeGroupTransform(transform, element.xml), out);
+      return;
+    }
+    const rect = xfrmOffExt(element.xml);
+    out.push({
+      tag: element.tag,
+      xml: element.xml,
+      shapePath,
+      ...(rect ? { rectEmu: applyTransform(transform, rect) } : {}),
+    });
+  });
+}
+
+/**
+ * Flattens a shape-tree fragment into its leaf shapes in document
+ * order, descending into <p:grpSp> groups (arbitrary nesting) with the
+ * group coordinate transforms applied. The shape tree's own
+ * nvGrpSpPr/grpSpPr header children carry no shape tags and never
+ * appear as leaves. Graphic frames and connectors are leaves (callers
+ * decide what they mean); groups themselves are containers, not leaves.
+ */
+export function walkShapeTree(shapeTreeFragment: string): ShapeTreeLeaf[] {
+  const out: ShapeTreeLeaf[] = [];
+  walkLevel(shapeTreeFragment, [], IDENTITY_TRANSFORM, out);
+  return out;
+}
+
+/**
+ * Secondary key of one walked leaf: the cNvPr id (`id-12`, `#n` suffix
+ * on repeats across the whole walk, counted through the shared `seen`
+ * map) or, without an id, the dotted shape path (`ord-4.1`). Both the
+ * template store (at import) and the clone export compute keys through
+ * this one function over the same walk, so the two sides cannot drift.
+ * For group-free slides the result is identical to createShapeKeyer's.
+ */
+export function leafShapeKey(xml: string, shapePath: number[], seen: Map<string, number>): string {
+  const id = shapeElementId(xml);
+  const base = id !== undefined ? `id-${id}` : `ord-${shapePath.join('.')}`;
+  const occurrence = (seen.get(base) ?? 0) + 1;
+  seen.set(base, occurrence);
+  return occurrence === 1 ? base : `${base}#${occurrence}`;
+}
+
 /**
  * Stable address of one top-level shape inside its slide: the cNvPr id
  * when the producer wrote one (`id-12`), else the element's document
