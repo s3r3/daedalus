@@ -425,17 +425,28 @@ function SectionCard({ document, index, sectionId, root, refresh }: { document: 
           </Button>
         </div>
       ) : section.prose ? (
-        section.prose.split(/\n\s*\n/).map((para, i) => (
-          <p key={i} className="mb-2 text-[12px] leading-relaxed whitespace-pre-wrap">
-            {para.split(/(\[SRC-\d+\])/g).map((part, j) =>
-              /^\[SRC-\d+\]$/.test(part) ? (
-                <span key={j} className="rounded bg-sky-500/15 px-0.5 font-mono text-[10px] text-sky-600 dark:text-sky-400">{part}</span>
-              ) : (
-                <span key={j}>{part}</span>
-              ),
-            )}
-          </p>
-        ))
+        <>
+          {section.status === 'critic-flagged' ? (
+            <p className="mb-2 rounded border border-rose-500/40 bg-rose-500/10 px-2 py-1.5 text-[11px] text-rose-600 dark:text-rose-400" data-testid={`dokumen-section-${section.id}-critic-note`}>
+              DITANDAI KRITIKUS — periksa: {section.criticIssues && section.criticIssues.length > 0 ? section.criticIssues.join('; ') : 'kritikus menolak draf ini tiga kali; baca ulang sebelum ekspor.'}
+            </p>
+          ) : null}
+          {section.prose.split(/\n\s*\n/).map((para, i) => (
+            <p key={i} className="mb-2 text-[12px] leading-relaxed whitespace-pre-wrap">
+              {para.split(/(\[SRC-\d+\])/g).map((part, j) =>
+                /^\[SRC-\d+\]$/.test(part) ? (
+                  <span key={j} className="rounded bg-sky-500/15 px-0.5 font-mono text-[10px] text-sky-600 dark:text-sky-400">{part}</span>
+                ) : (
+                  <span key={j}>{part}</span>
+                ),
+              )}
+            </p>
+          ))}
+        </>
+      ) : section.status === 'critic-flagged' ? (
+        <p className="text-[11px] text-rose-600 dark:text-rose-400" data-testid={`dokumen-section-${section.id}-critic-empty`}>
+          Draf ditandai kritikus tetapi teksnya tidak tersimpan — tekan Susun lagi untuk menulis ulang.
+        </p>
       ) : (
         <p className="text-[11px] text-muted">Belum ditulis — bab ini menunggu tombol Susun di panel Outline.</p>
       )}

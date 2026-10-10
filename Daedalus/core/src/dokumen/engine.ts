@@ -26,7 +26,7 @@ import {
 } from './pipeline.ts';
 import { decisionCounts } from './validate.ts';
 import { inspectDocxStyles, parseStyleInstruction, proposeStyleOps, applyStyleOps } from './style-ops.ts';
-import { DokumenWebTools } from './web.ts';
+import { DokumenWebTools, type SearchHit } from './web.ts';
 
 export type { DokumenSubMode } from './document.ts';
 
@@ -307,9 +307,16 @@ export class DokumenEngine {
     doc = (await readActiveDocument(root)) ?? doc;
 
     // Write each section: web-gathered, cited, critic-gated (cap 3).
+    // Research is accounted per run: how many EXTERNAL pages were
+    // actually read, and whether search ever failed — never silently
+    // swallowed into an apparent success (the live-run lesson: 0/9
+    // sections written while the task reported plain success).
     let citationSeq = Object.keys(doc.citations).length;
     const flagged: string[] = [];
+    let written = 0;
     let wordTotal = 0;
+    const externalReadUrls = new Set<string>();
+    let researchError: string | null = null;
     for (const section of doc.sections) {
       if (this.signal.aborted) throw new Error('dokumen task stopped');
       this.#stage(doc, `Menulis bab "${section.title}"`);
@@ -325,11 +332,26 @@ export class DokumenEngine {
       }
 
       // The engine's own web tools (never the shell): search, then fetch.
-      const hits = await this.#web.webSearch(`${section.title} ${doc.title}`.slice(0, 120), 3, this.signal).catch(() => []);
+      let hits: SearchHit[] = [];
+      try {
+        hits = await this.#web.webSearch(`${section.title} ${doc.title}`.slice(0, 120), 3, this.signal);
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        researchError ??= detail;
+        await appendAudit(root, doc.id, { action: 'web-search-failed', detail: `"${section.title}": ${detail}` });
+      }
       await appendAudit(root, doc.id, { action: 'web-search', detail: `"${section.title}" → ${hits.length} hasil` });
       for (const hit of hits.slice(0, 2)) {
-        const page = await this.#web.fetchUrl(hit.url, this.signal).catch(() => null);
+        let page: Awaited<ReturnType<DokumenWebTools['fetchUrl']>> | null = null;
+        try {
+          page = await this.#web.fetchUrl(hit.url, this.signal);
+        } catch (error) {
+          const detail = error instanceof Error ? error.message : String(error);
+          researchError ??= detail;
+          await appendAudit(root, doc.id, { action: 'web-fetch-failed', detail: `${hit.url}: ${detail}` });
+        }
         if (!page) continue;
+        externalReadUrls.add(page.url);
         citationSeq += 1;
         const id = `SRC-${citationSeq}`;
         doc.citations[id] = { id, title: page.title || hit.title, url: page.url };
@@ -339,6 +361,7 @@ export class DokumenEngine {
       await writeDocument(root, doc);
 
       let accepted: { prose: string; citations: string[] } | null = null;
+      let lastDraft: { prose: string; citations: string[] } | null = null;
       let lastIssues: string[] = [];
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         const draft = await draftSectionStage(this.#provider, {
@@ -348,6 +371,7 @@ export class DokumenEngine {
           materials,
           ...(attempt > 1 ? { repairIssues: lastIssues } : {}),
         }, this.signal);
+        lastDraft = draft;
         const verdict = await criticStage(this.#provider, { title: section.title, prose: draft.prose, citations: draft.citations, materials }, this.signal);
         if (verdict.ok) {
           accepted = draft;
@@ -356,19 +380,34 @@ export class DokumenEngine {
         lastIssues = verdict.issues;
         await appendAudit(root, doc.id, { action: 'critic-reject', detail: `bab "${section.title}" upaya ${attempt}: ${verdict.issues.join('; ')}` });
       }
-      section.prose = accepted?.prose ?? section.prose;
-      section.citations = accepted ? accepted.citations.filter((id) => doc.citations[id] !== undefined) : [];
+      // A fully-rejected section keeps its LAST draft + the critic's final
+      // issues: the flag must show WHAT was written and WHY it was flagged,
+      // never an empty "not written yet" state over real prose.
+      section.prose = accepted?.prose ?? lastDraft?.prose ?? section.prose;
+      const finalDraft = accepted ?? lastDraft;
+      section.citations = finalDraft ? finalDraft.citations.filter((id) => doc.citations[id] !== undefined) : [];
       section.status = accepted ? 'drafted' : 'critic-flagged';
-      if (!accepted) flagged.push(section.title);
+      section.criticIssues = accepted ? undefined : [...lastIssues];
+      if (accepted) written += 1;
+      else flagged.push(section.title);
       wordTotal += section.prose.split(/\s+/).filter(Boolean).length;
       await writeDocument(root, doc);
       this.#emitFileChanged(doc);
     }
 
+    const externalRead = externalReadUrls.size;
+    const citationFree = externalRead === 0 && written > 0 && doc.sections.filter((s) => s.status === 'drafted').every((s) => s.citations.length === 0);
+    await appendAudit(root, doc.id, {
+      action: 'research',
+      detail: `riset web: ${externalRead} sumber eksternal dibaca${researchError ? `; kegagalan: ${researchError}` : ''}${citationFree ? '; semua bab yang lolos ditulis tanpa sitasi (pengetahuan umum model)' : ''}`,
+    });
     return this.#report(
       doc,
       [
-        `Penyusunan selesai: ${doc.sections.length} bab, ±${wordTotal} kata, ${Object.keys(doc.citations).length} sitasi tercatat.`,
+        `Penyusunan selesai: ${written} dari ${doc.sections.length} bab tertulis, ${flagged.length} ditandai kritikus, ±${wordTotal} kata.`,
+        `Riset web: ${externalRead} sumber eksternal dibaca, ${Object.keys(doc.citations).length} sitasi tercatat pada dokumen.`,
+        ...(researchError ? [`Riset web gagal dalam run ini: ${researchError} — bab ditulis semampunya tanpa sumber itu; periksa koneksi/API key bila ingin penulisan berbasis sumber.`] : []),
+        ...(citationFree ? ['Tidak ada sumber eksternal yang terbaca dalam run ini — bab yang lolos ditulis dari pengetahuan umum model dan ditandai tanpa sitasi (citation-free), bukan karangan sitasi.'] : []),
         flagged.length > 0 ? `Bab yang DITANDAI kritikus (butuh pemeriksaan): ${flagged.join(', ')}.` : 'Semua bab lolos gerbang kritikus.',
         'Ekspor DOCX tersedia dari Panel Laporan.',
       ].join(' '),
