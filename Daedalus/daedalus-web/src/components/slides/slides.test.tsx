@@ -1401,6 +1401,57 @@ describe('template slides (imported PPT designs)', () => {
     expect(pic.querySelector('img')?.getAttribute('src')).toBe('/tpl-assets/peta.page-1.pic-0.png')
   })
 
+  test('gradient decor renders, frame decor marks its footprint, year slot wraps instead of clipping', () => {
+    // A Nexora-style page after the theme-resolved parse: a gradient
+    // card, a radial freeform, a chart footprint, and a narrow year
+    // slot whose text previously clipped mid-token ("1185").
+    const premiumPage = {
+      kind: 'content' as const,
+      background: { color: '#f5f5f5' },
+      shapes: [
+        {
+          type: 'shape' as const,
+          rect: { x: 0.09, y: 0.42, w: 0.17, h: 0.42 },
+          fill: '#f5f5f5',
+          geom: 'roundRect' as const,
+          gradient: { kind: 'linear' as const, angleDeg: 90, stops: [{ pos: 0, color: '#f5f5f5' }, { pos: 1, color: '#ececec' }] },
+        },
+        {
+          type: 'path' as const,
+          rect: { x: 0.3, y: 0.42, w: 0.17, h: 0.42 },
+          fill: '#ffffff',
+          d: 'M 0 0 L 1000 0 L 500 1000 Z',
+          box: { w: 1000, h: 1000 },
+          gradient: { kind: 'radial' as const, angleDeg: 0, stops: [{ pos: 0, color: '#ffffff' }, { pos: 1, color: '#d9d9d9' }] },
+        },
+        { type: 'frame' as const, rect: { x: 0.55, y: 0.42, w: 0.28, h: 0.3 } },
+      ],
+      slots: [
+        { key: 's0', kind: 'text' as const, rect: { x: 0.1, y: 0.44, w: 0.04, h: 0.06 }, sampleText: '1185', fontSizePt: 20, bold: true, lineCount: 1, maxChars: 4 },
+      ],
+    }
+    const premiumSlide: Slide = {
+      id: 'n1',
+      layout: 'template-page',
+      templateRef: { templateId: 'nexora', page: 5 },
+      content: { title: 'Periode Samurai', slots: { s0: '1185' } },
+      status: 'filled',
+    }
+    render(<SlideRenderer slide={premiumSlide} theme={templateDeck.theme} templateSlide={{ page: premiumPage, assetSrc }} />)
+    const card = screen.getByTestId('template-decor-shape')
+    expect(card.style.background).toContain('linear-gradient')
+    expect(card.style.background).toContain('#f5f5f5')
+    expect(card.style.background).toContain('#ececec')
+    const blob = screen.getByTestId('template-decor-path')
+    expect(blob.querySelector('radialGradient')).not.toBeNull()
+    expect(blob.querySelector('path')?.getAttribute('fill')).toMatch(/^url\(#/)
+    expect(screen.getByTestId('template-decor-frame')).toBeTruthy()
+    const year = screen.getByTestId('template-slot-s0')
+    expect(year.textContent).toBe('1185')
+    expect(year.style.overflowWrap).toBe('anywhere')
+    expect(year.className).not.toContain('overflow-hidden')
+  })
+
   test('stage flow: image upload on a template slide records the asset under its slot key', async () => {
     const user = userEvent.setup()
     fileMock.mockResolvedValue(deckFile(templateDeck))

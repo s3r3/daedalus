@@ -134,10 +134,18 @@ export type PptTemplateSlotInfo =
  * paths are not carried — the exported .pptx still contains them, because
  * it clones the template's original slide instead of redrawing it.
  */
+/** Gradient paint of a decor shape, resolved from the template's gradFill. */
+export type PptTemplateGradientInfo = {
+  kind: 'linear' | 'radial'
+  angleDeg: number
+  stops: { pos: number; color: string; alpha?: number }[]
+}
+
 export type PptTemplateDecorShapeInfo =
-  | { type: 'shape'; rect: { x: number; y: number; w: number; h: number }; fill: string; geom: 'rect' | 'roundRect' | 'ellipse' }
+  | { type: 'shape'; rect: { x: number; y: number; w: number; h: number }; fill: string; geom: 'rect' | 'roundRect' | 'ellipse'; gradient?: PptTemplateGradientInfo }
   | { type: 'image'; rect: { x: number; y: number; w: number; h: number }; imageFile: string }
-  | { type: 'path'; rect: { x: number; y: number; w: number; h: number }; fill: string; d: string; box: { w: number; h: number } }
+  | { type: 'path'; rect: { x: number; y: number; w: number; h: number }; fill: string; d: string; box: { w: number; h: number }; gradient?: PptTemplateGradientInfo }
+  | { type: 'frame'; rect: { x: number; y: number; w: number; h: number } }
 
 /** One parsed slide design of an imported PPT template. */
 export type PptTemplatePageInfo = {

@@ -18,9 +18,16 @@
 // inside groups are found with slide-space rects, and each slot
 // address carries a shape path (child indices from the tree root) the
 // clone export resolves unambiguously. Group rotation is not applied
-// to rects (axis-aligned mapping only), and graphic frames
-// (charts/tables/SmartArt) are not scraped — under clone export they
-// survive as the template's originals, untouched.
+// to rects (axis-aligned mapping only). Graphic frames
+// (charts/tables/SmartArt) are not scraped for slots — under clone
+// export they survive as the template's originals, untouched — but
+// they yield a `frame` decor entry so the preview marks their place
+// instead of leaving a hole. Fills resolve beyond plain srgb:
+// gradFill stops, schemeClr names with lumMod/lumOff/tint/shade/
+// satMod transforms (ECMA-376), and style fillRef/bgRef entries of
+// the theme's fill style lists all feed the preview paint — premium
+// templates that paint from schemeClr gradients (e.g. Nexora)
+// carried zero preview decor before that resolution existed.
 import JSZip from 'jszip';
 import { leafShapeKey, picEmbedId, walkShapeTree } from './xml-shape-utils.ts';
 
@@ -54,15 +61,35 @@ export type PptxTemplateSlot = PptxTextSlot | PptxImageSlot;
 /**
  * A decorative (non-slot) shape of a template page — top-level or
  * inside a group, at its transformed slide-space rect — captured so
- * the Web canvas can PREVIEW the design honestly. Two faithful render
- * kinds: simple preset geometry with a solid fill, and an image (a pic,
- * or a blip-filled shape — the picture already extracted as an asset).
- * Freeform custGeom fills are drawn as their picture in its rect (an
- * approximation); the exported .pptx is always exact because it clones
- * the original slide XML instead of reconstructing anything.
+ * the Web canvas can PREVIEW the design honestly. Faithful render
+ * kinds: simple preset geometry with a solid or gradient fill, and an
+ * image (a pic, or a blip-filled shape — the picture already extracted
+ * as an asset). Freeform custGeom fills are drawn as an SVG path in
+ * their rect (an approximation); graphic frames reduce to a footprint
+ * marker. The exported .pptx is always exact because it clones the
+ * original slide XML instead of reconstructing anything.
  */
+/** One gradient stop of a resolved gradFill paint (pos 0..1). */
+export interface PptxGradientStop {
+  pos: number;
+  color: string;
+  /** Opacity 0..1 when the stop carries an <a:alpha> (absent = opaque). */
+  alpha?: number;
+}
+
+/**
+ * A resolved <a:gradFill> for canvas preview: linear gradients carry
+ * the OOXML angle (degrees, clockwise from the +x axis, y down);
+ * path gradients (circle/rect focus) reduce to a centered radial.
+ */
+export interface PptxGradient {
+  kind: 'linear' | 'radial';
+  angleDeg: number;
+  stops: PptxGradientStop[];
+}
+
 export type PptxDecorShape =
-  | { type: 'shape'; rect: PptxSlotRect; fill: string; geom: 'rect' | 'roundRect' | 'ellipse' }
+  | { type: 'shape'; rect: PptxSlotRect; fill: string; geom: 'rect' | 'roundRect' | 'ellipse'; gradient?: PptxGradient }
   | { type: 'image'; rect: PptxSlotRect; imageFile: string }
   | {
       type: 'path';
@@ -72,6 +99,14 @@ export type PptxDecorShape =
       d: string;
       /** The custGeom path coordinate space the `d` data lives in. */
       box: { w: number; h: number };
+      gradient?: PptxGradient;
+    }
+  | {
+      /** A graphicFrame (native chart/table/SmartArt): never redrawn —
+       * the preview marks its footprint; the clone export keeps the
+       * template's original frame byte-for-byte. */
+      type: 'frame';
+      rect: PptxSlotRect;
     };
 
 export interface PptxTemplatePage {
@@ -134,6 +169,259 @@ function srgbOf(xmlFragment: string | undefined): string | undefined {
   return sys ? `#${sys.toLowerCase()}` : undefined;
 }
 
+/* ------------------------------------------------------------ colors
+ * OOXML color resolution for preview paints. Premium templates paint
+ * almost nothing with raw srgb: fills are schemeClr references
+ * (accent1, bg1, tx2, …) carrying luminance/saturation transforms, or
+ * style fillRef pointers into the theme's fill style list, where the
+ * placeholder color phClr stands for the color the referencing shape
+ * itself names. Everything resolves against the file's own
+ * <a:clrScheme>, parsed once per import.
+ */
+
+/** clrScheme name → '#rrggbb', from one theme part's <a:clrScheme>. */
+export type PptxColorScheme = Record<string, string>;
+
+/** Scheme aliases every producer relies on (bg/tx pair onto lt/dk). */
+const SCHEME_ALIASES: Record<string, string> = { bg1: 'lt1', tx1: 'dk1', bg2: 'lt2', tx2: 'dk2' };
+
+export function parseClrScheme(themeXml: string): PptxColorScheme {
+  const block = /<a:clrScheme\b[^>]*>([\s\S]*?)<\/a:clrScheme>/.exec(themeXml)?.[1];
+  const scheme: PptxColorScheme = {};
+  if (!block) return scheme;
+  for (const name of ['dk1', 'lt1', 'dk2', 'lt2', 'accent1', 'accent2', 'accent3', 'accent4', 'accent5', 'accent6', 'hlink', 'folHlink']) {
+    const entry = new RegExp(`<a:${name}>([\\s\\S]*?)</a:${name}>`).exec(block)?.[1];
+    const hex = entry ? srgbOf(entry) : undefined;
+    if (hex) scheme[name] = hex;
+  }
+  return scheme;
+}
+
+function hexToHsl(hex: string): { h: number; s: number; l: number } {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return { h: 0, s: 0, l };
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h = 0;
+  if (max === r) h = ((g - b) / d + (g < b ? 6 : 0)) / 6;
+  else if (max === g) h = ((b - r) / d + 2) / 6;
+  else h = ((r - g) / d + 4) / 6;
+  return { h, s, l };
+}
+
+function hslToHex(h: number, s: number, l: number): string {
+  const clampByte = (v: number) => Math.max(0, Math.min(255, Math.round(v * 255)));
+  if (s === 0) {
+    const gray = clampByte(l).toString(16).padStart(2, '0');
+    return `#${gray}${gray}${gray}`;
+  }
+  const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+  const p = 2 * l - q;
+  const channel = (t: number) => {
+    let tt = t;
+    if (tt < 0) tt += 1;
+    if (tt > 1) tt -= 1;
+    if (tt < 1 / 6) return p + (q - p) * 6 * tt;
+    if (tt < 1 / 2) return q;
+    if (tt < 2 / 3) return p + (q - p) * (2 / 3 - tt) * 6;
+    return p;
+  };
+  const byte = (v: number) => clampByte(v).toString(16).padStart(2, '0');
+  return `#${byte(channel(h + 1 / 3))}${byte(channel(h))}${byte(channel(h - 1 / 3))}`;
+}
+
+/**
+ * Apply one ECMA-376 color transform to a hex color, in HSL terms
+ * (val is in 1000ths of a percent, so 100000 = 100%):
+ *  - lumMod:  L ×= v        lumOff: L += v
+ *  - tint:    L → L + (1−L)·v (toward white)
+ *  - shade:   L → L · (1−v)   (toward black)
+ *  - satMod:  S ×= v
+ * Transforms compose in document order, as producers emit them.
+ */
+function applyColorTransform(hex: string, name: string, val: number): string {
+  const f = val / 100000;
+  const hsl = hexToHsl(hex);
+  if (name === 'lumMod') hsl.l = clamp01(hsl.l * f);
+  else if (name === 'lumOff') hsl.l = clamp01(hsl.l + f);
+  else if (name === 'tint') hsl.l = clamp01(hsl.l + (1 - hsl.l) * f);
+  else if (name === 'shade') hsl.l = clamp01(hsl.l * (1 - f));
+  else if (name === 'satMod') hsl.s = clamp01(hsl.s * f);
+  else return hex;
+  return hslToHex(hsl.h, hsl.s, hsl.l);
+}
+
+/** One resolved color: '#rrggbb' plus opacity when an <a:alpha> rides along. */
+export interface ResolvedColor { color: string; alpha?: number }
+
+/**
+ * Resolve the first color element (<a:srgbClr>, <a:sysClr>,
+ * <a:schemeClr>, <a:phClr>) inside an XML fragment against the scheme.
+ * `phClrHex` is what phClr stands for at this reference site (the
+ * color a style ref names); without one it falls back to accent1.
+ * srgb-only fragments resolve exactly as srgbOf did, so flat templates
+ * are untouched.
+ */
+export function resolveColorIn(fragment: string | undefined, scheme: PptxColorScheme, phClrHex?: string): ResolvedColor | undefined {
+  if (!fragment) return undefined;
+  const match = /<a:(srgbClr|sysClr|schemeClr|phClr)\b([^>]*)(?:\/>|>([\s\S]*?)<\/a:\1>)/.exec(fragment);
+  if (!match) return undefined;
+  const [, tag, attrs, inner] = match as unknown as [string, string, string, string | undefined];
+  let hex: string | undefined;
+  if (tag === 'srgbClr') {
+    const val = /\bval="([0-9a-fA-F]{6})"/.exec(attrs)?.[1];
+    hex = val ? `#${val.toLowerCase()}` : undefined;
+  } else if (tag === 'sysClr') {
+    const val = /\blastClr="([0-9a-fA-F]{6})"/.exec(attrs)?.[1];
+    hex = val ? `#${val.toLowerCase()}` : undefined;
+  } else if (tag === 'schemeClr') {
+    const name = /\bval="([a-zA-Z0-9]+)"/.exec(attrs)?.[1];
+    // Theme style lists spell the placeholder color as schemeClr "phClr".
+    if (name === 'phClr') hex = phClrHex ?? scheme.accent1;
+    else {
+      const key = name ? (SCHEME_ALIASES[name] ?? name) : undefined;
+      hex = key ? scheme[key] : undefined;
+    }
+  } else {
+    hex = phClrHex ?? scheme.accent1;
+  }
+  if (!hex) return undefined;
+  let alpha: number | undefined;
+  for (const mod of (inner ?? '').matchAll(/<a:(lumMod|lumOff|tint|shade|satMod|alpha)\s+val="(\d+)"/g)) {
+    if (mod[1] === 'alpha') alpha = clamp01(Number(mod[2]) / 100000);
+    else hex = applyColorTransform(hex, mod[1]!, Number(mod[2]));
+  }
+  return { color: hex, ...(alpha !== undefined ? { alpha } : {}) };
+}
+
+/** A preview paint: a representative color, or a full gradient. */
+export interface ResolvedFill {
+  /** First-stop / solid color — the representative every consumer can use. */
+  color: string;
+  /** Opacity of the solid (or first stop) when an <a:alpha> rides along. */
+  alpha?: number;
+  gradient?: PptxGradient;
+}
+
+/**
+ * Resolve one fill element's XML (<a:solidFill>… or <a:gradFill>…) to
+ * a preview paint. Gradient stop positions normalize to 0..1; a
+ * gradient with no readable stops, or one whose colors all fail to
+ * resolve, returns undefined — never a fabricated paint.
+ */
+export function resolveFillElement(fillXml: string, scheme: PptxColorScheme, phClrHex?: string): ResolvedFill | undefined {
+  if (fillXml.includes('<a:solidFill')) {
+    const resolved = resolveColorIn(fillXml, scheme, phClrHex);
+    return resolved ? { color: resolved.color, ...(resolved.alpha !== undefined ? { alpha: resolved.alpha } : {}) } : undefined;
+  }
+  if (!fillXml.includes('<a:gradFill')) return undefined;
+  const stops: PptxGradientStop[] = [];
+  for (const gs of fillXml.matchAll(/<a:gs\s+pos="(\d+)"[^>]*>([\s\S]*?)<\/a:gs>/g)) {
+    const resolved = resolveColorIn(gs[2], scheme, phClrHex);
+    if (!resolved) continue;
+    stops.push({ pos: clamp01(Number(gs[1]) / 100000), color: resolved.color, ...(resolved.alpha !== undefined ? { alpha: resolved.alpha } : {}) });
+  }
+  if (stops.length === 0) return undefined;
+  const lin = /<a:lin\s+ang="(-?\d+)"/.exec(fillXml)?.[1];
+  const gradient: PptxGradient = /<a:path\b/.test(fillXml)
+    ? { kind: 'radial', angleDeg: 0, stops }
+    : { kind: 'linear', angleDeg: lin !== undefined ? Number(lin) / 60000 : 0, stops };
+  const first = stops[0]!;
+  return { color: first.color, ...(first.alpha !== undefined ? { alpha: first.alpha } : {}), gradient };
+}
+
+/** Raw fill-element children of a theme's fill/bg fill style lists. */
+export interface ThemeFillStyles { fills: string[]; bgFills: string[] }
+
+export function parseFillStyles(themeXml: string): ThemeFillStyles {
+  const listOf = (tag: string): string[] => {
+    const block = new RegExp(`<a:${tag}>([\\s\\S]*?)</a:${tag}>`).exec(themeXml)?.[1];
+    if (!block) return [];
+    return [...block.matchAll(/<a:(solidFill|gradFill|blipFill|noFill|grpFill)\b[^>]*?(?:\/>|>[\s\S]*?<\/a:\1>)/g)].map((m) => m[0]);
+  };
+  return { fills: listOf('fillStyleLst'), bgFills: listOf('bgFillStyleLst') };
+}
+
+/** Everything fill resolution needs from the package theme. */
+export interface PptxThemeContext {
+  scheme: PptxColorScheme;
+  fillStyles: ThemeFillStyles;
+}
+
+/**
+ * Resolve a style reference: fillRef/bgRef idx N (1-based) picks the
+ * Nth entry of the theme's corresponding fill style list; the ref's
+ * own color child is what phClr means inside that entry. idx 0 is
+ * DrawingML's "no fill". A ref whose entry cannot resolve falls back
+ * to its own named color, so the shape still paints something honest.
+ */
+function resolveStyleRef(elementXml: string, refTag: 'fillRef' | 'bgRef', list: string[], scheme: PptxColorScheme): ResolvedFill | undefined {
+  const ref = new RegExp(`<a:${refTag}\\b[^>]*\\bidx="(\\d+)"[^>]*>([\\s\\S]*?)</a:${refTag}>`).exec(elementXml)
+    ?? new RegExp(`<a:${refTag}\\b[^>]*\\bidx="(\\d+)"[^>]*/>`).exec(elementXml);
+  if (!ref) return undefined;
+  const idx = Number(ref[1]);
+  if (idx === 0) return undefined;
+  const refColor = resolveColorIn(ref[2] ?? '', scheme);
+  const entry = list[idx - 1];
+  if (entry && !entry.includes('<a:noFill') && !entry.includes('<a:blipFill')) {
+    const resolved = resolveFillElement(entry, scheme, refColor?.color);
+    if (resolved) return resolved;
+  }
+  return refColor ? { color: refColor.color, ...(refColor.alpha !== undefined ? { alpha: refColor.alpha } : {}) } : undefined;
+}
+
+/**
+ * The preview fill of one shape element, in DrawingML precedence: an
+ * explicit spPr fill (noFill → nothing), then a blip fill (reported
+ * separately by the caller as an image), then the shape's style
+ * fillRef/bgRef. Returns undefined for unpainted shapes.
+ */
+export function resolveShapeFill(elementXml: string, theme: PptxThemeContext): ResolvedFill | undefined {
+  const spPr = /<p:spPr>([\s\S]*?)<\/p:spPr>/.exec(elementXml)?.[1];
+  if (spPr) {
+    // The outline element starts the region where fills no longer live;
+    // match it with a boundary so <a:lnTo> path commands don't count.
+    const lnAt = spPr.search(/<a:ln[\s>]/);
+    const fillRegion = lnAt >= 0 ? spPr.slice(0, lnAt) : spPr;
+    if (/<a:noFill\s*\/>/.test(fillRegion)) return undefined;
+    const fillMatch = /<a:(solidFill|gradFill)\b[^>]*>([\s\S]*?)<\/a:\1>/.exec(fillRegion) ?? /<a:(solidFill|gradFill)\s*\/>/.exec(fillRegion);
+    if (fillMatch) return resolveFillElement(fillMatch[0], theme.scheme);
+    if (/<a:blipFill/.test(fillRegion)) return undefined; // image paint: caller's asset path
+    const grp = /<a:grpFill>([\s\S]*?)<\/a:grpFill>/.exec(fillRegion);
+    if (grp) return resolveFillElement(grp[0], theme.scheme);
+  }
+  // Style reference: the shape names a color, the theme names the paint.
+  const byFill = resolveStyleRef(elementXml, 'fillRef', theme.fillStyles.fills, theme.scheme);
+  if (byFill) return byFill;
+  return resolveStyleRef(elementXml, 'bgRef', theme.fillStyles.bgFills, theme.scheme);
+}
+
+/** The theme part + parsed color context of the whole package. */
+async function themeContextOf(zip: JSZip): Promise<PptxThemeContext> {
+  const paths = Object.keys(zip.files);
+  let themePath: string | undefined;
+  const masterPath = paths.filter((p) => /^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(p)).sort()[0];
+  if (masterPath) {
+    const dir = masterPath.slice(0, masterPath.lastIndexOf('/'));
+    const relsFile = zip.file(`${dir}/_rels/${masterPath.slice(masterPath.lastIndexOf('/') + 1)}.rels`);
+    if (relsFile) {
+      const rels = parseRels(await relsFile.async('string'));
+      const themeRel = [...rels.values()].find((rel) => /\/theme$/.test(rel.type));
+      if (themeRel) themePath = resolvePartPath(masterPath, themeRel.target);
+    }
+  }
+  if (!themePath || !zip.file(themePath)) {
+    themePath = paths.filter((p) => /^ppt\/theme\/theme\d+\.xml$/.test(p)).sort()[0];
+  }
+  const themeXml = themePath && zip.file(themePath) ? await zip.file(themePath)!.async('string') : '';
+  return { scheme: parseClrScheme(themeXml), fillStyles: parseFillStyles(themeXml) };
+}
+
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
@@ -176,9 +464,13 @@ function placeholderKey(xml: string): string | undefined {
   return `${type}:${idx}`;
 }
 
-function solidFillColorOf(xml: string): string | undefined {
-  const fill = /<a:solidFill>([\s\S]*?)<\/a:solidFill>/.exec(xml)?.[1];
-  return fill ? srgbOf(fill) : undefined;
+/** '#rrggbb' or 'rgba(r,g,b,a)' for the canvas (CSS + SVG fill both take it). */
+function cssColor(color: string, alpha?: number): string {
+  if (alpha === undefined || alpha >= 1) return color;
+  const r = parseInt(color.slice(1, 3), 16);
+  const g = parseInt(color.slice(3, 5), 16);
+  const b = parseInt(color.slice(5, 7), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 /** Simple preset geometries the canvas can draw faithfully as divs. */
@@ -191,28 +483,33 @@ const PREVIEW_GEOMS: Record<string, 'rect' | 'roundRect' | 'ellipse'> = {
 /**
  * Decorative (non-slot) shapes of one page for canvas preview: pic
  * elements and image-filled shapes reuse their already-extracted asset,
- * solid preset shapes reduce to a colored div. Text-bearing shapes are
- * slots, not decor — the caller filters those out by shape id.
+ * preset shapes reduce to a colored/gradient div, freeforms to an SVG
+ * path. Fills resolve through the theme (solid/scheme/gradient/style
+ * ref). Text-bearing shapes are slots, not decor — the caller filters
+ * those out by shape path.
  */
 function decorShapeOf(
   elementXml: string,
   rect: PptxSlotRect,
   imageFileByEmbed: Map<string, string>,
+  theme: PptxThemeContext,
 ): PptxDecorShape | undefined {
   const blipEmbed = picEmbedId(elementXml);
   const imageFile = blipEmbed ? imageFileByEmbed.get(blipEmbed) : undefined;
   if (imageFile) return { type: 'image', rect, imageFile };
-  const fill = solidFillColorOf(elementXml);
+  const fill = resolveShapeFill(elementXml, theme);
+  if (!fill) return undefined;
+  const gradient = fill.gradient ? { gradient: fill.gradient } : {};
   const geom = /<a:prstGeom[^>]*\bprst="([^"]+)"/.exec(elementXml)?.[1];
   if (geom && PREVIEW_GEOMS[geom]) {
-    if (fill) return { type: 'shape', rect, fill, geom: PREVIEW_GEOMS[geom]! };
+    return { type: 'shape', rect, fill: cssColor(fill.color, fill.alpha), geom: PREVIEW_GEOMS[geom]!, ...gradient };
   }
   // Freeform fills (the big blobs of downloaded templates) convert to an
   // SVG path when they use only the straight/curve command subset; an
   // arcTo or anything exotic skips the shape rather than faking it.
-  if (fill && elementXml.includes('<a:custGeom')) {
+  if (elementXml.includes('<a:custGeom')) {
     const path = custGeomPathOf(elementXml);
-    if (path) return { type: 'path', rect, fill, d: path.d, box: path.box };
+    if (path) return { type: 'path', rect, fill: cssColor(fill.color, fill.alpha), d: path.d, box: path.box, ...gradient };
   }
   return undefined;
 }
@@ -280,7 +577,7 @@ interface ParsedShapeText {
 }
 
 /** Dominant-run text/style of one <p:sp> body, or undefined when textless. */
-function shapeText(spXml: string): ParsedShapeText | undefined {
+function shapeText(spXml: string, scheme: PptxColorScheme = {}): ParsedShapeText | undefined {
   const txBody = /<p:txBody>([\s\S]*?)<\/p:txBody>/.exec(spXml)?.[1];
   if (!txBody) return undefined;
   const paragraphs = [...txBody.matchAll(/<a:p>([\s\S]*?)<\/a:p>/g)].map((m) => m[1]!);
@@ -304,7 +601,7 @@ function shapeText(spXml: string): ParsedShapeText | undefined {
         length: text.length,
         size: Number.isFinite(size) && size > 0 ? size / 100 : 18,
         bold: /\bb="1"/.test(rPr),
-        color: srgbOf(body),
+        color: resolveColorIn(body, scheme)?.color,
         font: /<a:latin typeface="([^"]+)"/.exec(body)?.[1],
       };
       if (!best || candidate.length > best.length || (candidate.length === best.length && candidate.size > best.size)) best = candidate;
@@ -415,6 +712,7 @@ export async function extractPptxPages(bytes: Uint8Array): Promise<PptxPagesExtr
   }
 
   const assets: Array<{ file: string; bytes: Uint8Array }> = [];
+  const theme = await themeContextOf(zip);
   const rawPages: Array<{ background?: { color?: string; imageFile?: string }; slots: PptxTemplateSlot[]; textSlots: PptxTextSlot[]; shapes: PptxDecorShape[] }> = [];
 
   for (let pageIndex = 0; pageIndex < slideParts.length; pageIndex += 1) {
@@ -505,7 +803,7 @@ export async function extractPptxPages(bytes: Uint8Array): Promise<PptxPagesExtr
       const rect = (leaf.rectEmu ? emuRectToFractions(leaf.rectEmu, slideCx, slideCy) : undefined)
         ?? (leaf.shapePath.length === 1 ? layoutPhRects.get(placeholderKey(body) ?? '') : undefined);
       if (!rect) continue;
-      const text = shapeText(body);
+      const text = shapeText(body, theme.scheme);
       if (!text) continue;
       const key = `s${slotSeq}`;
       slotSeq += 1;
@@ -528,14 +826,37 @@ export async function extractPptxPages(bytes: Uint8Array): Promise<PptxPagesExtr
     }
     // Decor capture for canvas preview: every sp shape that is not a
     // consumed slot (group children included, at their transformed
-    // slide-space rects; pics are image slots, not decor).
+    // slide-space rects; pics are image slots, not decor). A blip-filled
+    // shape whose image no pic slot extracted gets its own decor asset
+    // here — grouped icon pictures ride on that path. Graphic frames
+    // leave a footprint marker; the export keeps the real frame.
     const shapes: PptxDecorShape[] = [];
+    let decorSeq = 0;
     for (const leaf of leaves) {
+      if (!leaf.rectEmu) continue;
+      const rect = emuRectToFractions(leaf.rectEmu, slideCx, slideCy);
+      if (leaf.tag === 'graphicFrame') {
+        shapes.push({ type: 'frame', rect });
+        continue;
+      }
       if (leaf.tag !== 'sp') continue;
       if (slotLeafPaths.has(leaf.shapePath.join('.'))) continue;
-      if (!leaf.rectEmu) continue;
-      if (shapeText(leaf.xml)) continue;
-      const decor = decorShapeOf(leaf.xml, emuRectToFractions(leaf.rectEmu, slideCx, slideCy), imageAssetsByEmbed);
+      if (shapeText(leaf.xml, theme.scheme)) continue;
+      const blipEmbed = /<a:blip[^>]*r:embed="([^"]+)"/.exec(leaf.xml)?.[1];
+      if (blipEmbed && !imageAssetsByEmbed.has(blipEmbed)) {
+        const rel = rels.get(blipEmbed);
+        if (rel && IMAGE_EXT_RE.test(rel.target)) {
+          const media = zip.file(resolvePartPath(part, rel.target));
+          if (media) {
+            const extension = rel.target.slice(rel.target.lastIndexOf('.')).toLowerCase();
+            const imageFile = `page-${pageIndex}.decor-${decorSeq}${extension}`;
+            decorSeq += 1;
+            assets.push({ file: imageFile, bytes: await media.async('uint8array') });
+            imageAssetsByEmbed.set(blipEmbed, imageFile);
+          }
+        }
+      }
+      const decor = decorShapeOf(leaf.xml, rect, imageAssetsByEmbed, theme);
       if (decor) shapes.push(decor);
     }
     rawPages.push({ ...(background ? { background } : {}), slots, textSlots, shapes });

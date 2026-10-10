@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import * as lucideIcons from 'lucide-react'
 import { Image as ImageIcon, Quote as QuoteIcon, Sparkles } from 'lucide-react'
@@ -2268,6 +2268,34 @@ function TemplateImageSlot({ slotKey, rectStyle, chosen, chosenSrc, originalSrc,
  * image slots follow TemplateImageSlot's honest fallback chain. Slot
  * positions are the template's design — fixed, never draggable.
  */
+type TemplateGradient = import('../../api/client').PptTemplateGradientInfo
+
+/** A decor stop color with its opacity, translucent stops mixed toward transparent. */
+function decorCssPaint(color: string, alpha?: number): string {
+  if (alpha === undefined || alpha >= 1) return color
+  return `color-mix(in srgb, ${color} ${Math.round(alpha * 100)}%, transparent)`
+}
+
+/** CSS gradient for a decor div (OOXML angles are clockwise from east; CSS from north). */
+function decorCssGradient(gradient: TemplateGradient): string {
+  const stops = gradient.stops.map((stop) => `${decorCssPaint(stop.color, stop.alpha)} ${Math.round(stop.pos * 100)}%`).join(', ')
+  return gradient.kind === 'radial'
+    ? `radial-gradient(circle, ${stops})`
+    : `linear-gradient(${gradient.angleDeg + 90}deg, ${stops})`
+}
+
+/** SVG <defs> paint for a freeform path carrying a gradient. */
+function DecorGradientDef({ id, gradient }: { id: string; gradient: TemplateGradient }) {
+  const stops = gradient.stops.map((stop, index) => (
+    <stop key={index} offset={`${Math.round(stop.pos * 100)}%`} stopColor={stop.color} stopOpacity={stop.alpha ?? 1} />
+  ))
+  if (gradient.kind === 'radial') return (<radialGradient id={id}>{stops}</radialGradient>)
+  const rad = (gradient.angleDeg * Math.PI) / 180
+  const dx = Math.cos(rad) / 2
+  const dy = Math.sin(rad) / 2
+  return (<linearGradient id={id} x1={0.5 - dx} y1={0.5 - dy} x2={0.5 + dx} y2={0.5 + dy}>{stops}</linearGradient>)
+}
+
 function TemplateSlots({ slide, page, assetSrc, editable, onImagePick, imageSrc, ctx }: {
   slide: Slide
   page: import('../../api/client').PptTemplatePageInfo
@@ -2278,12 +2306,16 @@ function TemplateSlots({ slide, page, assetSrc, editable, onImagePick, imageSrc,
   ctx: Ctx
 }) {
   const slots = obj(slide.content.slots)
+  const uid = useId().replace(/[^a-zA-Z0-9]/g, '')
   return (
     <div className="absolute inset-0" style={{ zIndex: 2 }} data-testid="template-slide" data-page-kind={page.kind}>
       {/* Decorative shapes of the template page, in paint order behind
-          the slots (v3 preview honesty). The canvas approximates the
-          design; the exported .pptx is exact — it clones the template's
-          original slide instead of redrawing it. */}
+          the slots (v3 preview honesty). Fills arrive theme-resolved
+          (solid / scheme / gradient / style ref), so the canvas paints
+          the cards the template defines; the exported .pptx is still
+          exact — it clones the template's original slide instead of
+          redrawing it. Graphic frames are footprints only: the export
+          keeps the real chart/table. */}
       {(page.shapes ?? []).map((shape, index) => {
         const rectStyle: CSSProperties = {
           left: `${shape.rect.x * 100}%`,
@@ -2303,7 +2335,27 @@ function TemplateSlots({ slide, page, assetSrc, editable, onImagePick, imageSrc,
             />
           )
         }
+        if (shape.type === 'frame') {
+          return (
+            <div
+              key={`decor-${index}`}
+              data-testid="template-decor-frame"
+              className="absolute flex items-center justify-center"
+              style={{
+                ...rectStyle,
+                border: `1.5px dashed ${ctx.line}`,
+                borderRadius: 6,
+                color: ctx.muted,
+                fontSize: '0.55cqw',
+                pointerEvents: 'none',
+              }}
+            >
+              Bagan / tabel template — utuh di hasil ekspor
+            </div>
+          )
+        }
         if (shape.type === 'path') {
+          const gradientId = shape.gradient ? `decor-grad-${uid}-${index}` : undefined
           return (
             <svg
               key={`decor-${index}`}
@@ -2314,7 +2366,8 @@ function TemplateSlots({ slide, page, assetSrc, editable, onImagePick, imageSrc,
               style={{ ...rectStyle, pointerEvents: 'none' }}
               aria-hidden
             >
-              <path d={shape.d} fill={shape.fill} />
+              {shape.gradient && gradientId ? (<defs><DecorGradientDef id={gradientId} gradient={shape.gradient} /></defs>) : null}
+              <path d={shape.d} fill={gradientId ? `url(#${gradientId})` : shape.fill} />
             </svg>
           )
         }
@@ -2325,7 +2378,7 @@ function TemplateSlots({ slide, page, assetSrc, editable, onImagePick, imageSrc,
             className="absolute"
             style={{
               ...rectStyle,
-              backgroundColor: shape.fill,
+              ...(shape.gradient ? { background: decorCssGradient(shape.gradient) } : { backgroundColor: shape.fill }),
               borderRadius: shape.geom === 'ellipse' ? '50%' : shape.geom === 'roundRect' ? '12%' : undefined,
               pointerEvents: 'none',
             }}
@@ -2345,9 +2398,17 @@ function TemplateSlots({ slide, page, assetSrc, editable, onImagePick, imageSrc,
             <div
               key={slot.key}
               data-testid={`template-slot-${slot.key}`}
-              className="absolute overflow-hidden whitespace-pre-wrap"
+              className="absolute whitespace-pre-wrap"
               style={{
                 ...rectStyle,
+                // Wrap inside the rect, breaking long tokens (a year like
+                // 1185 in a narrow box) instead of clipping glyphs mid-token;
+                // paragraph breaks survive via pre-wrap; text taller than
+                // the box overflows downward visibly like the stacked
+                // design, never sideways off the rect edge.
+                overflow: 'visible',
+                overflowWrap: 'anywhere',
+                wordBreak: 'break-word',
                 fontSize: `${slot.fontSizePt / 9.6}cqw`,
                 fontWeight: slot.bold ? 700 : 400,
                 ...(slot.color ? { color: slot.color } : {}),
