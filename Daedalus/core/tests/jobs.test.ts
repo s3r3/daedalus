@@ -200,6 +200,38 @@ describe('background job lifecycle (manager + tools)', () => {
     expect(status.output).toContain('earlier output dropped');
   });
 
+  test('task-end drain lets a concurrently exiting job settle as exited, not killed', async () => {
+    const root = temp('daedalus-jobs-drain-exit-');
+    const finished: string[] = [];
+    const manager = new BackgroundJobManager({ onFinish: (job) => finished.push(`${job.id}:${job.state}`) });
+    const started = manager.start({ taskId: 't1', command: 'sleep', args: ['0.05'], cwd: root });
+    expect(started.ok).toBe(true);
+    expect(manager.status('t1', 'job-1')?.job.state).toBe('running');
+
+    const killed = await manager.settleAndKillAll('t1', 500);
+
+    expect(killed).toBe(0);
+    expect(finished).toEqual(['job-1:exited']);
+    expect(manager.status('t1', 'job-1')?.job.state).toBe('exited');
+    expect(manager.status('t1', 'job-1')?.job.exitCode).toBe(0);
+  });
+
+  test('task-end drain still kills a job running after the bounded grace period', async () => {
+    const root = temp('daedalus-jobs-drain-kill-');
+    const finished: string[] = [];
+    const manager = new BackgroundJobManager({ onFinish: (job) => finished.push(`${job.id}:${job.state}`) });
+    cleanups.push(() => manager.killAll('t1'));
+    const started = manager.start({ taskId: 't1', command: 'sleep', args: ['30'], cwd: root });
+    expect(started.ok).toBe(true);
+
+    const killed = await manager.settleAndKillAll('t1', 10);
+
+    expect(killed).toBe(1);
+    expect(manager.status('t1', 'job-1')?.job.state).toBe('killed');
+    await waitFor(() => finished.length === 1);
+    expect(finished).toEqual(['job-1:killed']);
+  });
+
   test('the allowlist still gates background starts', async () => {
     const root = temp('daedalus-jobs-allowlist-');
     const manager = new BackgroundJobManager();
