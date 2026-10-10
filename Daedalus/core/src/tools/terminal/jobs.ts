@@ -44,6 +44,8 @@ export const JOB_OUTPUT_BUFFER_CHARS = 32_768;
 export const JOB_STATUS_MAX_TAIL_CHARS = 4_000;
 /** Status tail the tool returns when the caller asks for nothing. */
 export const JOB_STATUS_DEFAULT_TAIL_CHARS = 1_000;
+/** Bounded grace task teardown gives queued exit notices to land before killing. */
+export const JOB_TEARDOWN_DRAIN_MS = 250;
 
 export type BackgroundJobHooks = {
   /** One output chunk from a running job (runtime → COMMAND_OUTPUT mirror). */
@@ -57,6 +59,9 @@ type JobRecord = {
   child: ChildProcess;
   output: string;
   settled: boolean;
+  settledPromise: Promise<void>;
+  resolveSettled: () => void;
+  processExit?: { code: number | null; signal: NodeJS.Signals | null };
 };
 
 export type StartJobResult =
@@ -101,7 +106,9 @@ export class BackgroundJobManager {
       outputBytes: 0,
       startedAt: new Date().toISOString(),
     };
-    const record: JobRecord = { job, child, output: '', settled: false };
+    let resolveSettled!: () => void;
+    const settledPromise = new Promise<void>((resolve) => { resolveSettled = resolve; });
+    const record: JobRecord = { job, child, output: '', settled: false, settledPromise, resolveSettled };
     this.#jobs.set(id, record);
     const consume = (chunk: Buffer): void => {
       const text = chunk.toString();
@@ -112,6 +119,7 @@ export class BackgroundJobManager {
     };
     child.stdout?.on('data', consume);
     child.stderr?.on('data', consume);
+    child.on('exit', (code, signal) => { record.processExit = { code, signal }; });
     child.on('error', () => this.#settle(record, job.state === 'killed' ? 'killed' : 'failed', null, null));
     child.on('close', (code, signal) => {
       if (job.state === 'killed') {
@@ -171,6 +179,37 @@ export class BackgroundJobManager {
     return killed;
   }
 
+  /**
+   * End-of-task teardown with deterministic final states. A process can
+   * terminate at the OS level while Node has not yet delivered its `close`
+   * callback; killing in that window would relabel a natural exit as
+   * `killed`. Give those queued notifications a bounded chance to settle,
+   * honour a process exit whose stdio has ended if the `close` callback is
+   * still pending, then kill only what remains running.
+   */
+  async settleAndKillAll(taskId: string, drainMs = JOB_TEARDOWN_DRAIN_MS): Promise<number> {
+    const pending = [...this.#jobs.values()].filter((record) => record.job.taskId === taskId && record.job.state === 'running');
+    if (pending.length === 0) return 0;
+
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<void>((resolve) => { timer = setTimeout(resolve, Math.max(0, drainMs)); });
+    try {
+      await Promise.race([Promise.all(pending.map((record) => record.settledPromise)), timeout]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+
+    for (const record of pending) {
+      if (record.job.state !== 'running' || !record.processExit) continue;
+      const stdioEnded = (!record.child.stdout || record.child.stdout.readableEnded)
+        && (!record.child.stderr || record.child.stderr.readableEnded);
+      if (!stdioEnded) continue;
+      const { code, signal } = record.processExit;
+      this.#settle(record, code === 0 ? 'exited' : 'failed', code, signal);
+    }
+    return this.killAll(taskId);
+  }
+
   runningCount(taskId: string): number {
     let count = 0;
     for (const record of this.#jobs.values()) {
@@ -186,7 +225,11 @@ export class BackgroundJobManager {
     record.job.exitCode = exitCode;
     record.job.signal = signal;
     record.job.finishedAt = new Date().toISOString();
-    this.#hooks.onFinish?.({ ...record.job });
+    try {
+      this.#hooks.onFinish?.({ ...record.job });
+    } finally {
+      record.resolveSettled();
+    }
   }
 }
 

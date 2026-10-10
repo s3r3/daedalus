@@ -1108,8 +1108,10 @@ export class TaskRunner {
       // tool; the loop-pause handler above), which is what clears the
       // card in the Web.
       this.questions.cancelTasks([spec.id]);
-      // The task is over: its background jobs die with it.
-      jobManager.killAll(spec.id);
+      // The task is over: first let exit notices that are already queued
+      // settle, so a job that finished on its own is not relabelled as
+      // killed; then its still-running background jobs die with it.
+      await jobManager.settleAndKillAll(spec.id);
       this.#jobManagers.delete(spec.id);
       this.#activeLsp = undefined;
       await extensions.close();
