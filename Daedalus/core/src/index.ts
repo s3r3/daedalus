@@ -940,5 +940,117 @@ export {
 export { DokumenWebTools, parseDuckDuckGo, type SearchHit, type WebFetch } from "./dokumen/web.ts";
 
 export { DokumenEngine, type DokumenRunEvent, type DokumenEngineOptions, type DokumenRunOptions, type DokumenAskUser } from "./dokumen/engine.ts";
+  workbookPaths,
+  workbookRelativePaths,
+  slugifyTitle as sheetSlugifyTitle,
+  colToIndex,
+  indexToCol,
+  parseCellRef,
+  formatCellRef,
+  parseRange,
+  sheetBounds,
+  sheetHeaders,
+  WORKBOOK_DIRNAME,
+  WORKBOOK_FILENAME,
+  type CellScalar,
+  type SheetCell,
+  type SheetSpec,
+  type ChartSpec,
+  type PivotSpec,
+  type PivotValueSpec,
+  type ConditionalFormatSpec,
+  type DataValidationSpec,
+  type ColumnType,
+  type BlueprintColumn,
+  type BlueprintSheet,
+  type BlueprintAssumption,
+  type SheetBlueprint,
+  type VerifyCellIssue,
+  type VerifyReport,
+  type SheetExportRecord,
+  type WorkbookStage,
+  type WorkbookSpec,
+  type WorkbookIssue,
+} from "./sheets/workbook.ts";
+export {
+  newWorkbookId,
+  newSheetId,
+  newWorkbook,
+  newSheet,
+  ensureWorkbookDir,
+  readWorkbook,
+  writeWorkbook,
+  validateWorkbook,
+  summarizeWorkbook,
+  readRangeValues,
+  type SheetSummary,
+  type WorkbookSummary,
+} from "./sheets/store.ts";
+export {
+  parseFormula,
+  evaluateFormula,
+  evaluateWorkbook,
+  createEvalContext,
+  displayValue,
+  formatWithNumFmt,
+  type EvalResult,
+  type EvalError,
+  type WorkbookEvaluation,
+} from "./sheets/evaluator.ts";
+export {
+  SHEET_OP_NAMES,
+  applySheetOps,
+  shiftFormulaRefs,
+  type SheetOpName,
+  type SheetOpResult,
+  type ApplySheetOpsResult,
+} from "./sheets/ops.ts";
+export {
+  parseCsvText,
+  inferScalar,
+  rowsToSheet,
+  importCsvToWorkbook,
+  importXlsxToWorkbook,
+  inferColumnType,
+} from "./sheets/import.ts";
+export {
+  buildExcelJsWorkbook,
+  exportWorkbookToXlsx,
+  appendFormulaSummaryFallback,
+  exportSheetToCsvText,
+  exportWorkbookCsv,
+  probeSheetSidecar,
+  runSheetSidecar,
+  sidecarCandidates,
+  type SidecarSpec,
+  type SidecarRunResult,
+  type SidecarProbe,
+} from "./sheets/export.ts";
+export {
+  verifyWorkbook,
+  verifyWorkbookCore,
+  libreOfficeRecalc,
+  detectSoffice,
+  ERROR_LITERALS,
+  type VerifyOptions,
+  type LibreOfficeRecalcResult,
+} from "./sheets/verify.ts";
+export {
+  generateBlueprintStage,
+  fillSheetRowsStage,
+  validateBlueprint,
+  validateFillRows,
+  structuredCall as sheetStructuredCall,
+  SheetPipelineError,
+  type BlueprintStageInput,
+  type FillStageInput,
+  type FillStageResult as SheetFillStageResult,
+} from "./sheets/pipeline.ts";
+export {
+  SpreadsheetEngine,
+  type SpreadsheetEngineDeps,
+  type SpreadsheetEngineOutcome,
+  type SpreadsheetEngineRunResult,
+} from "./sheets/engine.ts";
 
 export { VERSION } from "./version.ts";

@@ -22,6 +22,8 @@ import { ApprovalBroker, ExecutionHarness, commandLineOf, resolveApprovalTimeout
 import { CommandValidator, type ValidationCommand, type Validator } from './validation/index.ts';
 import { SlideEngine, type SlideEngineOutcome } from './slides/engine.ts';
 import { DokumenEngine } from './dokumen/engine.ts';
+import { SpreadsheetEngine, type SpreadsheetEngineOutcome } from './sheets/engine.ts';
+import { readWorkbook } from './sheets/store.ts';
 import { fillDeckSlidesStage, regenerateSlideStage, type ExportInfo, type FillStageResult } from './slides/pipeline.ts';
 import { readDeck } from './slides/store.ts';
 import type { DeckSpec, Slide } from './slides/deck.ts';
@@ -424,6 +426,8 @@ export class TaskRunner {
   /** Dokumen-domain tasks run on the DokumenEngine, never on AgentLoop: task id → its engine (cancel seam). */
   readonly #activeDokumenEngines = new Map<string, DokumenEngine>();
   readonly #activeEngines = new Map<string, SlideEngine>();
+  /** Spreadsheet-domain tasks run on the SpreadsheetEngine, never on AgentLoop: task id → its engine (cancel seam). */
+  readonly #activeSheetEngines = new Map<string, SpreadsheetEngine>();
   /** Child task id → orchestrator parent task id, for approval surfacing. */
   readonly #taskParents = new Map<string, string>();
   /** Parent task id → its live subagent tooling, so cancel() can stop background children. */
@@ -689,6 +693,8 @@ export class TaskRunner {
     // pending checkpoint question settled by the cancelTasks call above).
     for (const engine of this.#activeEngines.values()) engine.stop();
     for (const engine of this.#activeDokumenEngines.values()) engine.stop();
+    // Spreadsheet-engine tasks stop the same way.
+    for (const engine of this.#activeSheetEngines.values()) engine.stop();
   }
 
   async run(options: RunOptions): Promise<RunResult> {
@@ -726,7 +732,7 @@ export class TaskRunner {
     const spec: TaskSpec = await interpretTask(options.goal, {
       id: options.taskId,
       repo_path: this.#workspaceRoot,
-      mode: options.domain === 'slide' || options.domain === 'dokumen' ? 'auto' : (effectiveMode ?? this.modeController.mode),
+      mode: options.domain === 'slide' || options.domain === 'dokumen' || options.domain === 'spreadsheet' ? 'auto' : (effectiveMode ?? this.modeController.mode),
       domain: options.domain,
       provider_id: options.providerId ?? this.#options.providerId,
       model: effectiveOptions.model ?? this.#options.model ?? modelConfig.models[0],
@@ -839,6 +845,11 @@ export class TaskRunner {
     // machinery below is never constructed for a dokumen task.
     if (options.domain === 'dokumen') {
       return this.#runDokumenEngine(spec, effectiveOptions, collected, startedAt);
+    // Spreadsheet domain: the SpreadsheetEngine owns the task end to
+    // end (its own executor, blueprint checkpoint, verify gate, and
+    // completion verdict). No coding machinery is constructed either.
+    if (options.domain === 'spreadsheet') {
+      return this.#runSpreadsheetEngine(spec, effectiveOptions, collected, startedAt);
     }
 
     const isolation = options.isolation ?? this.#options.isolation;
@@ -1615,6 +1626,74 @@ export class TaskRunner {
   }
 
   /**
+   * Spreadsheet-domain execution: the SpreadsheetEngine (sheets/
+   * engine.ts) runs the task — intake, staged blueprint, build, the
+   * mandatory verify gate, export, structured edit ops, audit — while
+   * this layer only supplies the run's provider, collects events for
+   * the report, and records the same FinalReport shape coding runs
+   * produce. No AgentLoop, registry, or mode policy is constructed.
+   */
+  async #runSpreadsheetEngine(spec: TaskSpec, options: RunOptions, collected: Event[], startedAt: number): Promise<RunResult> {
+    let provider: LLMProvider;
+    try {
+      provider = this.#options.provider ?? this.#providerFor(options, spec.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const state: TaskState = {
+        ...spec,
+        plan: { id: `${spec.id}-plan`, task_id: spec.id, steps: [], version: 0, status: 'draft' },
+        steps: [],
+        status: 'failed',
+        mode: 'auto',
+        last_error: message,
+      };
+      this.store.saveState(spec.id, state);
+      emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'TASK_STARTED', { spec });
+      emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: 'provider_unavailable' });
+      const report: FinalReport = { task_id: spec.id, outcome: 'failed', diff: '', evidence: [`Gagal: ${message}`], metrics: { duration_ms: Date.now() - startedAt } };
+      this.store.saveReport(spec.id, report);
+      return { state, events: collected, outcome: 'failed', report };
+    }
+    const engine = new SpreadsheetEngine({
+      provider,
+      bus: this.bus,
+      store: this.store,
+      questions: this.questions,
+      workspaceRoot: this.#workspaceRoot,
+    });
+    this.#activeSheetEngines.set(spec.id, engine);
+    try {
+      const result = await engine.run(spec);
+      const usageTotals = accumulateUsage(collected);
+      const report: FinalReport = {
+        task_id: spec.id,
+        outcome: result.outcome,
+        diff: '',
+        evidence: [result.summary],
+        metrics: {
+          turns: result.state.turns ?? 0,
+          model_requests: usageTotals.requests,
+          ...(usageTotals.reported > 0
+            ? {
+                tokens_input: usageTotals.input_tokens,
+                tokens_output: usageTotals.output_tokens,
+                tokens_total: usageTotals.total_tokens,
+                token_requests_reported: usageTotals.reported,
+              }
+            : {}),
+          ...(result.exported ? { sheets_exported: result.exported.sheets } : {}),
+          duration_ms: Date.now() - startedAt,
+        },
+      };
+      this.store.saveReport(spec.id, report);
+      return { state: result.state, events: collected, validation: result.validation, outcome: result.outcome, report };
+    } finally {
+      this.#activeSheetEngines.delete(spec.id);
+      this.questions.cancelTasks([spec.id]);
+    }
+  }
+
+  /**
    * Editor seam (the Web slide editor's per-slide variant): regenerate
    * ONE slide of a workspace deck with this runner's provider selection.
    * Not a task — no events, no task state; the deck on disk changes only
@@ -1678,6 +1757,61 @@ export class TaskRunner {
       if (engine.workspaceRoot === root && engine.abandonStagedDeck()) settled = true;
     }
     return settled;
+  }
+
+  /**
+   * Spreadsheet staging seam (the Panel Blueprint "Buat" button):
+   * release a staged blueprint run waiting in this workspace. Null
+   * when no staged run waits on this runner for that workspace.
+   */
+  async releaseStagedWorkbook(root: string): Promise<{ taskId: string; outcome: SpreadsheetEngineOutcome; summary: string; exported?: { path: string; bytes: number; sheets: number } } | null> {
+    for (const engine of this.#activeSheetEngines.values()) {
+      if (engine.workspaceRoot !== root) continue;
+      const completion = engine.generateStagedWorkbook();
+      if (!completion) continue;
+      const result = await completion;
+      return { taskId: engine.taskId, outcome: result.outcome, summary: result.summary, ...(result.exported ? { exported: result.exported } : {}) };
+    }
+    return null;
+  }
+
+  /** True while any spreadsheet engine is executing for this workspace. */
+  hasSpreadsheetEngineFor(root: string): boolean {
+    for (const engine of this.#activeSheetEngines.values()) {
+      if (engine.workspaceRoot === root) return true;
+    }
+    return false;
+  }
+
+  /** A newer spreadsheet prompt supersedes a staged blueprint. */
+  abandonStagedWorkbook(root: string): boolean {
+    let settled = false;
+    for (const engine of this.#activeSheetEngines.values()) {
+      if (engine.workspaceRoot === root && engine.abandonStagedWorkbook()) settled = true;
+    }
+    return settled;
+  }
+
+  /**
+   * Buat pressed while no run is alive: build the persisted staged
+   * blueprint directly with this runner's provider selection. Null
+   * when nothing is staged in the workspace.
+   */
+  async buildStagedWorkbook(root: string, options: { model?: string; providerId?: string } = {}): Promise<{ outcome: SpreadsheetEngineOutcome; summary: string } | null> {
+    const workbook = await readWorkbook(root).catch(() => null);
+    if (!workbook || !workbook.blueprint || workbook.stage !== 'blueprint') return null;
+    const provider = this.#options.provider ?? this.#providerFor(
+      { ...(options.model ? { model: options.model } : {}), ...(options.providerId ? { providerId: options.providerId } : {}) } as RunOptions,
+      'sheet-staged-build',
+    );
+    const engine = new SpreadsheetEngine({
+      provider,
+      bus: this.bus,
+      store: this.store,
+      questions: this.questions,
+      workspaceRoot: root,
+    });
+    return engine.buildStagedWorkbookDirect({ ...(options.model ? { model: options.model } : {}) });
   }
 
   /**

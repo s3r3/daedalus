@@ -34,7 +34,7 @@ export type TailorEscalatedPayload = {
 
 export type AgentMode = 'ask' | 'manual' | 'auto' | 'plan' | 'orchestrator';
 /** Product domain a task runs in; domains re-skin the harness around the artifact being produced. */
-export type TaskDomain = 'coding' | 'slide' | 'dokumen';
+export type TaskDomain = 'coding' | 'slide' | 'dokumen' | 'spreadsheet';
 export type ModelStrategy = 'failover' | 'round-robin';
 /**
  * Capability tier of one model in a pool (tailor suite): the harness routes
