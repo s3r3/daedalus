@@ -272,6 +272,8 @@ export type DokumenExportResult = {
 /** Base for direct fetches (PDF bytes for the canvas) — same origin in production. */
 export function dokumenSourceFileUrl(root: string, sourceId: string): string {
   return `${BASE}/dokumen/source-file?root=${encodeURIComponent(root)}&sourceId=${encodeURIComponent(sourceId)}`
+}
+
 /** Verdict of POST /sheets/workbook/reset (Spreadsheet new chat's reset). */
 export type WorkbookResetResult = {
   root: string

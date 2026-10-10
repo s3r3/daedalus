@@ -940,6 +940,8 @@ export {
 export { DokumenWebTools, parseDuckDuckGo, type SearchHit, type WebFetch } from "./dokumen/web.ts";
 
 export { DokumenEngine, type DokumenRunEvent, type DokumenEngineOptions, type DokumenRunOptions, type DokumenAskUser } from "./dokumen/engine.ts";
+
+export {
   workbookPaths,
   workbookRelativePaths,
   slugifyTitle as sheetSlugifyTitle,
