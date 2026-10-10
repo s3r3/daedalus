@@ -6,6 +6,7 @@ import {
   DokumenEngine,
   DokumenWebTools,
   TaskRunner,
+  buildDocumentDocxBytes,
   decisionCounts,
   exportData,
   exportDocumentDocx,
@@ -368,6 +369,21 @@ describe('Susun critic semantics (honestly passable; research never silent)', ()
     expect(summary).toContain('Riset web gagal');
     const audit = await readAudit(root, doc.id);
     expect(audit.some((a) => a.action === 'web-search-failed')).toBe(true);
+  });
+});
+
+describe('Pratinjau compose bytes (no export side effects)', () => {
+  test('buildDocumentDocxBytes renders a real DOCX without writing files or recording an export', async () => {
+    const root = tmpRoot();
+    const doc = await createActiveDocument(root, 'compose', 'Makalah Uji');
+    doc.sections = [{ id: 's1', title: 'Pendahuluan', thesisPoints: [], citations: [], prose: 'Paragraf pembuka yang cukup panjang untuk menjadi isi dokumen.', status: 'drafted' }];
+    const exportsBefore = doc.exports.length;
+    const bytes = await buildDocumentDocxBytes(doc);
+    // A DOCX is a zip: PK\x03\x04 magic, multi-KB with styles inside.
+    expect(bytes.subarray(0, 2).toString('latin1')).toBe('PK');
+    expect(bytes.length).toBeGreaterThan(1000);
+    expect(doc.exports.length).toBe(exportsBefore);
+    expect(existsSync(join(root, '.daedalus', 'documents', doc.id, 'exports'))).toBe(false);
   });
 });
 

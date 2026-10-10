@@ -79,12 +79,13 @@ function sectionParagraphs(doc: DocumentState): { body: Paragraph[]; footnotes: 
   return { body, footnotes };
 }
 
-export async function exportDocumentDocx(root: string, doc: DocumentState): Promise<DocumentExportResult> {
-  const paths = documentPaths(root, doc.id);
-  await mkdir(paths.exportsDir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const name = `dokumen-${stamp}.docx`;
-  const abs = join(paths.exportsDir, name);
+/**
+ * Compose the native DOCX bytes for this document state — the exact
+ * file export writes, without writing it anywhere or recording an
+ * export. The Pratinjau engine renders these bytes so the user sees
+ * the would-be document without polluting the export history.
+ */
+export async function buildDocumentDocxBytes(doc: DocumentState): Promise<Buffer> {
   const { body, footnotes } = sectionParagraphs(doc);
   const file = new Document({
     creator: 'Daedalus DokumenEngine',
@@ -92,7 +93,16 @@ export async function exportDocumentDocx(root: string, doc: DocumentState): Prom
     footnotes,
     sections: [{ children: body }],
   });
-  const buffer = await Packer.toBuffer(file);
+  return Packer.toBuffer(file);
+}
+
+export async function exportDocumentDocx(root: string, doc: DocumentState): Promise<DocumentExportResult> {
+  const paths = documentPaths(root, doc.id);
+  await mkdir(paths.exportsDir, { recursive: true });
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const name = `dokumen-${stamp}.docx`;
+  const abs = join(paths.exportsDir, name);
+  const buffer = await buildDocumentDocxBytes(doc);
   await writeFile(abs, buffer);
   const flagged = doc.sections.filter((s) => s.status === 'critic-flagged').length;
   const result: DocumentExportResult = {
