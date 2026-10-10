@@ -41,6 +41,22 @@ import {
 
 export const MAX_STAGE_ATTEMPTS = 3;
 
+/**
+ * Per-attempt timeout for slide stage model calls (spec 2026-10-09):
+ * a hung attempt fails fast at ~75s and is retried like any provider
+ * failure, instead of burning the provider's 180s default in silence.
+ * The coding timeout (180s) is untouched — this constant is the slide
+ * stage's own, easy to retune.
+ */
+export const FILL_STAGE_TIMEOUT_MS = 75_000;
+
+/**
+ * Bounded parallelism for per-slide fill: at most this many slides are
+ * filled concurrently. Model calls run in parallel; deck mutation +
+ * deck.json writes stay strictly serialized (see fillDeckSlidesStage).
+ */
+export const MAX_FILL_CONCURRENCY = 3;
+
 export class SlidePipelineError extends Error {
   readonly issues: string[];
   constructor(message: string, issues: string[] = []) {
@@ -151,6 +167,12 @@ type Verdict<T> = { ok: true; value: T } | { ok: false; issues: string[] };
  * (and the offending output) appended verbatim — the stage, not the
  * model, owns correctness. Throws SlidePipelineError after the last
  * attempt; never invents a fallback value.
+ *
+ * `options.timeoutMs` bounds EACH attempt: on expiry the in-flight
+ * request is aborted and the attempt fails like a provider error (so
+ * it is retried); only the caller's own abort signal escapes the retry
+ * loop. `options.onAttempt` fires with the 1-based attempt number
+ * before every attempt, so callers can narrate retries.
  */
 export async function structuredCall<T>(
   provider: LLMProvider,
@@ -158,23 +180,49 @@ export async function structuredCall<T>(
   user: string,
   validate: (value: unknown) => Verdict<T>,
   signal?: AbortSignal,
+  options: { timeoutMs?: number; onAttempt?: (attempt: number) => void } = {},
 ): Promise<T> {
   const messages: Message[] = [
     { role: 'system', content: system },
     { role: 'user', content: user },
   ];
+  const timeoutMs = typeof options.timeoutMs === 'number' && options.timeoutMs > 0 ? options.timeoutMs : undefined;
   let issues: string[] = ['model produced no parseable JSON'];
   for (let attempt = 1; attempt <= MAX_STAGE_ATTEMPTS; attempt += 1) {
+    options.onAttempt?.(attempt);
     let response;
+    // The attempt runs on a linked controller: the caller's abort
+    // still cancels immediately, and a per-attempt timeout cancels the
+    // hung HTTP request itself (not just our wait for it).
+    const attemptController = new AbortController();
+    const onOuterAbort = (): void => attemptController.abort();
+    if (signal) signal.addEventListener('abort', onOuterAbort, { once: true });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    if (timeoutMs !== undefined) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        attemptController.abort();
+      }, timeoutMs);
+      // A pending timer must never hold the process open by itself.
+      if (typeof timer === 'object' && typeof (timer as unknown as { unref?: unknown }).unref === 'function') {
+        (timer as unknown as { unref(): void }).unref();
+      }
+    }
     try {
-      response = await provider.chat(messages, undefined, signal ? { signal } : undefined);
+      response = await provider.chat(messages, undefined, {
+        signal: attemptController.signal,
+        ...(timeoutMs !== undefined ? { timeout_ms: timeoutMs } : {}),
+      });
     } catch (error) {
+      if (timer !== undefined) clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onOuterAbort);
       // A provider-level failure (empty response, transient 5xx) is
       // retried inside the stage like invalid output — the stage owns
       // resilience; the caller sees only the final verdict. An aborted
       // request is never retried.
       if (signal?.aborted) throw error;
-      const message = error instanceof Error ? error.message : String(error);
+      const message = timedOut ? `attempt timed out after ${timeoutMs} ms` : error instanceof Error ? error.message : String(error);
       issues = [`the model request failed: ${message}`];
       if (attempt < MAX_STAGE_ATTEMPTS) {
         messages.push({
@@ -185,6 +233,8 @@ export async function structuredCall<T>(
       }
       throw new SlidePipelineError(`model output stayed invalid after ${MAX_STAGE_ATTEMPTS} attempts: ${issues.join('; ')}`, issues);
     }
+    if (timer !== undefined) clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onOuterAbort);
     const raw = messageText(response.message.content);
     const verdict = validate(extractJsonValue(raw));
     if (verdict.ok) return verdict.value;
@@ -538,6 +588,7 @@ export async function generateDeckOutlineStage(
       templateOutlineUser(brief, pptTemplate, templatePages),
       (value) => validateTemplateOutline(value, brief.slideCount),
       options.signal,
+      { timeoutMs: FILL_STAGE_TIMEOUT_MS },
     );
     const pageIndexes = assignTemplatePages(items, templatePages);
     const deck = existing ?? newDeck(brief.topic);
@@ -562,7 +613,7 @@ export async function generateDeckOutlineStage(
     };
   }
 
-  const outline = await structuredCall(provider, OUTLINE_SYSTEM, outlineUser(brief, builtin), (value) => validateOutline(value, brief.slideCount), options.signal);
+  const outline = await structuredCall(provider, OUTLINE_SYSTEM, outlineUser(brief, builtin), (value) => validateOutline(value, brief.slideCount), options.signal, { timeoutMs: FILL_STAGE_TIMEOUT_MS });
   const deck = existing ?? newDeck(brief.topic);
   if (builtin) {
     deck.theme = builtinDeckTheme(builtin);
@@ -655,10 +706,35 @@ function isUntouchedSkeleton(slide: Slide): boolean {
   return JSON.stringify(slide.content) === JSON.stringify(skeletonContent(layout, slideTitle(slide)));
 }
 
+/**
+ * Per-slide fill progress (spec 2026-10-09: "tidak ada menit yang
+ * tidak terlihat"): the pipeline emits these while filling; the
+ * SlideEngine relays them as THOUGHT events so the chat/filmstrip
+ * visibly moves even when one slide burns retries. `index`/`total`
+ * are the slide's position in this fill pass (0-based).
+ */
+export type FillProgressEvent =
+  | { type: 'slide-started'; slideId: string; index: number; total: number; title: string }
+  | { type: 'slide-retry'; slideId: string; index: number; total: number; attempt: number; maxAttempts: number }
+  | { type: 'slide-done'; slideId: string; index: number; total: number; title: string }
+  | { type: 'slide-failed'; slideId: string; index: number; total: number; title: string; issues: string[] };
+
+export type FillDeckSlidesOptions = {
+  language?: string;
+  templateId?: string;
+  designId?: string;
+  signal?: AbortSignal;
+  stagedGenerate?: boolean;
+  /** Per-slide progress narration (slide-started/retry/done/failed). */
+  onProgress?: (event: FillProgressEvent) => void;
+  /** Per-attempt model-call timeout; defaults to FILL_STAGE_TIMEOUT_MS. */
+  timeoutMs?: number;
+};
+
 export async function fillDeckSlidesStage(
   provider: LLMProvider,
   root: string,
-  options: { language?: string; templateId?: string; designId?: string; signal?: AbortSignal; stagedGenerate?: boolean } = {},
+  options: FillDeckSlidesOptions = {},
 ): Promise<FillStageResult> {
   const deck = await readDeck(root);
   if (!deck) {
@@ -749,50 +825,122 @@ export async function fillDeckSlidesStage(
   const targets = deck.slides.filter(
     (slide) => (slide.status === 'skeleton' && untouchedById.get(slide.id) === true) || errorIds.has(slide.id),
   );
-  for (const slide of targets) {
+  const timeoutMs = options.timeoutMs ?? FILL_STAGE_TIMEOUT_MS;
+
+  // One slide's fill as pure model work: it computes the new content
+  // (or the failure issues) WITHOUT touching the deck, so workers can
+  // run it in parallel. The returned `apply` mutates the slide and
+  // runs only inside the serialized writer below.
+  type SlideFillOutcome = { ok: true; apply: () => void } | { ok: false; issues: string[] };
+  const fillOne = async (slide: Slide, index: number, total: number): Promise<SlideFillOutcome> => {
+    const title = slideTitle(slide);
+    const onAttempt = (attempt: number): void => {
+      if (attempt > 1) {
+        options.onProgress?.({ type: 'slide-retry', slideId: slide.id, index, total, attempt, maxAttempts: MAX_STAGE_ATTEMPTS });
+      }
+    };
     if (slide.templateRef) {
       const page = await resolvePage(slide);
       if (!page) {
-        attemptIssues.set(slide.id, [`template page ${slide.templateRef.page} of "${slide.templateRef.templateId}" not found — re-import the template from the "Template impor" panel or remove this slide`]);
-        continue;
+        return { ok: false, issues: [`template page ${slide.templateRef.page} of "${slide.templateRef.templateId}" not found — re-import the template from the "Template impor" panel or remove this slide`] };
       }
       try {
-        const filled = await structuredCall(provider, TEMPLATE_FILL_SYSTEM, templateFillUser(deck, slide, page, options.language), validateTemplateFill(page), options.signal);
-        const currentSlots = isObj(slide.content.slots) ? (slide.content.slots as Record<string, unknown>) : {};
-        const slots: Record<string, unknown> = { ...currentSlots };
-        // Image slots are never filled by the model: keep the user's
-        // picked asset, or '' (the template's own picture).
-        for (const slot of page.slots) if (slot.kind === 'image' && !(slot.key in slots)) slots[slot.key] = '';
-        Object.assign(slots, filled);
-        slide.content = { ...(typeof slide.content.title === 'string' ? { title: slide.content.title } : {}), slots };
-        slide.status = 'filled';
-        filledNow.push(slide.id);
-        await writeDeck(root, deck);
+        const filled = await structuredCall(provider, TEMPLATE_FILL_SYSTEM, templateFillUser(deck, slide, page, options.language), validateTemplateFill(page), options.signal, { timeoutMs, onAttempt });
+        return {
+          ok: true,
+          apply: () => {
+            const currentSlots = isObj(slide.content.slots) ? (slide.content.slots as Record<string, unknown>) : {};
+            const slots: Record<string, unknown> = { ...currentSlots };
+            // Image slots are never filled by the model: keep the user's
+            // picked asset, or '' (the template's own picture).
+            for (const slot of page.slots) if (slot.kind === 'image' && !(slot.key in slots)) slots[slot.key] = '';
+            Object.assign(slots, filled);
+            slide.content = { ...(typeof slide.content.title === 'string' ? { title: slide.content.title } : {}), slots };
+            slide.status = 'filled';
+          },
+        };
       } catch (error) {
-        attemptIssues.set(slide.id, error instanceof SlidePipelineError ? error.issues : [error instanceof Error ? error.message : String(error)]);
+        return { ok: false, issues: error instanceof SlidePipelineError ? error.issues : [error instanceof Error ? error.message : String(error)] };
       }
-      continue;
     }
     const layout = getLayout(slide.layout);
     if (!layout) {
-      attemptIssues.set(slide.id, [`unknown layout "${slide.layout}" — change the slide layout before filling`]);
-      continue;
+      return { ok: false, issues: [`unknown layout "${slide.layout}" — change the slide layout before filling`] };
     }
     try {
-      const content = await structuredCall(provider, fillSystem(layout), fillUser(deck, slide, options.language), validateFill(layout), options.signal);
-      // Picture slots are never filled by the model: a generated image
-      // name would be a fabrication (and fail asset validation); '' is
-      // the click-to-upload placeholder the canvas renders.
-      slide.content = emptyImageFields(layout.id, content);
-      slide.status = 'filled';
-      filledNow.push(slide.id);
-      // Persist after every slide: a crash or a later failure leaves a
-      // resumable deck, never an all-or-nothing generation.
-      await writeDeck(root, deck);
+      const content = await structuredCall(provider, fillSystem(layout), fillUser(deck, slide, options.language), validateFill(layout), options.signal, { timeoutMs, onAttempt });
+      return {
+        ok: true,
+        apply: () => {
+          // Picture slots are never filled by the model: a generated image
+          // name would be a fabrication (and fail asset validation); '' is
+          // the click-to-upload placeholder the canvas renders.
+          slide.content = emptyImageFields(layout.id, content);
+          slide.status = 'filled';
+        },
+      };
     } catch (error) {
-      attemptIssues.set(slide.id, error instanceof SlidePipelineError ? error.issues : [error instanceof Error ? error.message : String(error)]);
+      return { ok: false, issues: error instanceof SlidePipelineError ? error.issues : [error instanceof Error ? error.message : String(error)] };
     }
-  }
+  };
+
+  // Deck writes are SERIALIZED through a promise-chain mutex: model
+  // calls run in parallel, but only one worker at a time may apply its
+  // fill to the in-memory deck and persist deck.json. The mutation runs
+  // synchronously inside the critical section, so a write always
+  // captures a complete, consistent deck — parallel fills can never
+  // interleave corruptly. Per-slide persistence (crash-resumable deck)
+  // is preserved exactly as the sequential version had it.
+  let writeChain = Promise.resolve();
+  const persistFill = (outcome: SlideFillOutcome, slide: Slide): Promise<void> => {
+    const run = writeChain.then(async () => {
+      if (outcome.ok) {
+        outcome.apply();
+        filledNow.push(slide.id);
+      } else {
+        attemptIssues.set(slide.id, outcome.issues);
+      }
+      await writeDeck(root, deck);
+    });
+    writeChain = run.catch(() => undefined);
+    return run;
+  };
+
+  // Bounded parallel fill (spec 2026-10-09): at most
+  // MAX_FILL_CONCURRENCY slides fill concurrently — a 10-slide deck is
+  // ~4 waves, not 10 queues. Workers pull the next target by index;
+  // progress events carry index/total so the UI narrates each slide.
+  const total = targets.length;
+  let cursor = 0;
+  const workerCount = Math.min(MAX_FILL_CONCURRENCY, total);
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      for (;;) {
+        if (options.signal?.aborted) throw new Error('slide fill aborted');
+        const index = cursor;
+        cursor += 1;
+        if (index >= total) return;
+        const slide = targets[index]!;
+        const title = slideTitle(slide);
+        options.onProgress?.({ type: 'slide-started', slideId: slide.id, index, total, title });
+        let outcome: SlideFillOutcome;
+        try {
+          outcome = await fillOne(slide, index, total);
+        } catch (error) {
+          // Only an abort escapes fillOne (structuredCall rethrows it
+          // instead of converting it to issues): a stop is never
+          // reported as a slide failure.
+          throw error;
+        }
+        await persistFill(outcome, slide);
+        if (outcome.ok) {
+          options.onProgress?.({ type: 'slide-done', slideId: slide.id, index, total, title });
+        } else {
+          options.onProgress?.({ type: 'slide-failed', slideId: slide.id, index, total, title, issues: outcome.issues });
+        }
+      }
+    }),
+  );
 
   const deckIssues = validateDeck(deck, { root });
   const failureMap = new Map<string, string[]>();
@@ -862,7 +1010,7 @@ export async function regenerateSlideStage(
       throw new SlidePipelineError(`template page ${slide.templateRef.page} of "${slide.templateRef.templateId}" not found — re-import the template from the "Template impor" panel before regenerating`);
     }
     const user = `${templateFillUser(deck, slide, page, options.language)}\nThis is a REGENERATION: produce a fresh, different take on the wording — do not repeat the current slot texts.`;
-    const filled = await structuredCall(provider, TEMPLATE_FILL_SYSTEM, user, validateTemplateFill(page), options.signal);
+    const filled = await structuredCall(provider, TEMPLATE_FILL_SYSTEM, user, validateTemplateFill(page), options.signal, { timeoutMs: FILL_STAGE_TIMEOUT_MS });
     const currentSlots = isObj(slide.content.slots) ? (slide.content.slots as Record<string, unknown>) : {};
     const slots: Record<string, unknown> = { ...currentSlots };
     for (const slot of page.slots) if (slot.kind === 'image' && !(slot.key in slots)) slots[slot.key] = '';
@@ -877,7 +1025,7 @@ export async function regenerateSlideStage(
     throw new SlidePipelineError(`slide "${slideId}" uses unknown layout "${slide.layout}" — change its layout before regenerating`);
   }
   const user = `${fillUser(deck, slide, options.language)}\nThis is a REGENERATION: produce a fresh, different take on this slide (different angle, wording, and structure) — do not repeat the current content.`;
-  const content = await structuredCall(provider, fillSystem(layout), user, validateFill(layout), options.signal);
+  const content = await structuredCall(provider, fillSystem(layout), user, validateFill(layout), options.signal, { timeoutMs: FILL_STAGE_TIMEOUT_MS });
   slide.content = emptyImageFields(layout.id, content);
   slide.status = 'filled';
   await writeDeck(root, deck);

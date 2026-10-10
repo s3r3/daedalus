@@ -206,6 +206,44 @@ describe('dokumen panels', () => {
     expect(screen.getByTestId('dokumen-decision-counts')).toBeTruthy()
     expect(screen.getByTestId('dokumen-held-list')).toBeTruthy()
   })
+
+  test('interrupted outline (written + staged sections) shows Lanjutkan instead of Susun; clicking it creates a susun resume task', async () => {
+    useDaedalusStore.setState({ dokumenOptions: { subMode: 'susun', sources: [], docxPath: null } })
+    dokumenDocument.mockResolvedValue({ root: '/ws', document: seededComposeDocument })
+    render(<DokumenPanel />)
+    // seededComposeDocument: one critic-flagged (written) + one staged.
+    expect(await screen.findByTestId('dokumen-outline-resumable')).toBeTruthy()
+    expect(screen.getByTestId('dokumen-outline-continue')).toBeTruthy()
+    expect(screen.queryByTestId('dokumen-compose-release')).toBeNull()
+    fireEvent.click(screen.getByTestId('dokumen-outline-continue'))
+    await waitFor(() => expect(createTask).toHaveBeenCalled())
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        domain: 'dokumen',
+        dokumen: expect.objectContaining({ sub_mode: 'susun' }),
+        goal: expect.stringMatching(/Lanjutkan/),
+      }),
+    )
+  })
+
+  test('fully staged outline still shows Susun and no Lanjutkan', async () => {
+    useDaedalusStore.setState({ dokumenOptions: { subMode: 'susun', sources: [], docxPath: null } })
+    dokumenDocument.mockResolvedValue({
+      root: '/ws',
+      document: {
+        ...seededComposeDocument,
+        sections: [
+          { id: 'sec-a', title: 'Pendahuluan', thesisPoints: ['Latar'], citations: [], prose: '', status: 'staged' },
+          { id: 'sec-b', title: 'Penutup', thesisPoints: ['Simpulan'], citations: [], prose: '', status: 'staged' },
+        ],
+      },
+    })
+    render(<DokumenPanel />)
+    expect(await screen.findByTestId('dokumen-outline-staged')).toBeTruthy()
+    expect(screen.getByTestId('dokumen-compose-release')).toBeTruthy()
+    expect(screen.queryByTestId('dokumen-outline-continue')).toBeNull()
+    expect(screen.queryByTestId('dokumen-outline-resumable')).toBeNull()
+  })
 })
 
 const seededComposePreviewDocument = {

@@ -736,10 +736,15 @@ export {
   assignTemplatePages,
   templateSkeletonContent,
   SlidePipelineError,
+  MAX_STAGE_ATTEMPTS,
+  FILL_STAGE_TIMEOUT_MS,
+  MAX_FILL_CONCURRENCY,
   type DeckBrief,
   type OutlineItem,
   type TemplateOutlineItem,
   type FillStageResult,
+  type FillProgressEvent,
+  type FillDeckSlidesOptions,
   type ExportInfo,
 } from "./slides/pipeline.ts";
 

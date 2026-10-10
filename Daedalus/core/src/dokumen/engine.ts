@@ -274,10 +274,8 @@ export class DokumenEngine {
 
   async #runCompose(root: string, doc: DocumentState, prompt: string): Promise<string> {
     this.#stage(doc, 'Menyusun kerangka');
-    const outlineReady = doc.sections.length > 0 && doc.sections.every((s) => s.status === 'staged');
-    if (!outlineReady) {
+    if (doc.sections.length === 0) {
       doc = (await readActiveDocument(root)) ?? doc;
-      doc.sections = doc.sections.filter((s) => s.status === 'drafted' || s.status === 'critic-flagged');
       const summaries: string[] = [];
       for (const source of doc.sources.filter((s) => s.status === 'parsed')) {
         const parsed = await this.#parsedOf(root, doc, source);
@@ -298,13 +296,34 @@ export class DokumenEngine {
       this.#emitFileChanged(doc);
     }
 
-    this.#stage(doc, 'Menunggu persetujuan kerangka');
-    try {
-      await this.#stageGate(doc, 'outline');
-    } catch {
-      return this.#report(doc, 'Kerangka dibatalkan sebelum disetujui. Belum ada bab yang ditulis.');
+    // RESUME (no-resume flaw fix, 2026-10-11): a run stopped mid-write
+    // leaves drafted/critic-flagged sections next to staged ones. That
+    // outline was already approved by the earlier run, so it is NEVER
+    // re-proposed here (re-proposing would discard written prose) and
+    // never waits at the gate again — the run continues straight into
+    // writing the remaining staged sections. Written sections
+    // (drafted or critic-flagged, both carry prose) are skipped below
+    // and keep their prose byte-identical: re-running is idempotent,
+    // it never duplicates or clobbers.
+    const resuming = doc.sections.some((s) => s.status === 'drafted' || s.status === 'critic-flagged');
+    const keptBefore = doc.sections.filter((s) => s.status !== 'staged').length;
+    if (!resuming) {
+      this.#stage(doc, 'Menunggu persetujuan kerangka');
+      try {
+        await this.#stageGate(doc, 'outline');
+      } catch {
+        return this.#report(doc, 'Kerangka dibatalkan sebelum disetujui. Belum ada bab yang ditulis.');
+      }
+      doc = (await readActiveDocument(root)) ?? doc;
+    } else {
+      doc = (await readActiveDocument(root)) ?? doc;
+      const remaining = doc.sections.filter((s) => s.status === 'staged').length;
+      await appendAudit(root, doc.id, {
+        action: 'resume',
+        detail: `melanjutkan penulisan: ${remaining} bab tersisa dari ${doc.sections.length}; ${keptBefore} bab yang sudah tertulis dipertahankan tanpa ditulis ulang`,
+      });
+      this.#emitFileChanged(doc);
     }
-    doc = (await readActiveDocument(root)) ?? doc;
 
     // Write each section: web-gathered, cited, critic-gated (cap 3).
     // Research is accounted per run: how many EXTERNAL pages were
@@ -319,6 +338,11 @@ export class DokumenEngine {
     let researchError: string | null = null;
     for (const section of doc.sections) {
       if (this.signal.aborted) throw new Error('dokumen task stopped');
+      // Resume idempotency: a section that already carries prose
+      // ('drafted', or 'critic-flagged' which keeps its last draft) is
+      // never re-drafted — Lanjutkan writes only the remaining staged
+      // sections, so re-running never duplicates or clobbers.
+      if (section.status !== 'staged') continue;
       this.#stage(doc, `Menulis bab "${section.title}"`);
       const materials: CitationMaterial[] = [];
 
@@ -401,14 +425,20 @@ export class DokumenEngine {
       action: 'research',
       detail: `riset web: ${externalRead} sumber eksternal dibaca${researchError ? `; kegagalan: ${researchError}` : ''}${citationFree ? '; semua bab yang lolos ditulis tanpa sitasi (pengetahuan umum model)' : ''}`,
     });
+    // On resume the honest count names the kept sections too: the user
+    // stopped mid-run, so "N dari M" must not pretend this run wrote
+    // everything.
+    const allFlaggedTitles = doc.sections.filter((s) => s.status === 'critic-flagged').map((s) => s.title);
     return this.#report(
       doc,
       [
-        `Penyusunan selesai: ${written} dari ${doc.sections.length} bab tertulis, ${flagged.length} ditandai kritikus, ±${wordTotal} kata.`,
+        resuming
+          ? `Penulisan dilanjutkan: ${written} bab tersisa tertulis dalam run ini, ${keptBefore} bab yang sudah tertulis dipertahankan tanpa perubahan, ±${wordTotal} kata ditulis run ini.`
+          : `Penyusunan selesai: ${written} dari ${doc.sections.length} bab tertulis, ${flagged.length} ditandai kritikus, ±${wordTotal} kata.`,
         `Riset web: ${externalRead} sumber eksternal dibaca, ${Object.keys(doc.citations).length} sitasi tercatat pada dokumen.`,
         ...(researchError ? [`Riset web gagal dalam run ini: ${researchError} — bab ditulis semampunya tanpa sumber itu; periksa koneksi/API key bila ingin penulisan berbasis sumber.`] : []),
         ...(citationFree ? ['Tidak ada sumber eksternal yang terbaca dalam run ini — bab yang lolos ditulis dari pengetahuan umum model dan ditandai tanpa sitasi (citation-free), bukan karangan sitasi.'] : []),
-        flagged.length > 0 ? `Bab yang DITANDAI kritikus (butuh pemeriksaan): ${flagged.join(', ')}.` : 'Semua bab lolos gerbang kritikus.',
+        allFlaggedTitles.length > 0 ? `Bab yang DITANDAI kritikus (butuh pemeriksaan): ${allFlaggedTitles.join(', ')}.` : 'Semua bab lolos gerbang kritikus.',
         'Ekspor DOCX tersedia dari Panel Laporan.',
       ].join(' '),
     );

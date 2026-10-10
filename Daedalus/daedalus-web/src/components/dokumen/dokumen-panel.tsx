@@ -172,12 +172,49 @@ function OutlinePanel({ document, loading, error, root, refresh }: { document: D
   const { releasing, note, release } = useRelease(root, refresh)
   const [drafts, setDrafts] = useState<Array<{ id: string; title: string; points: string }>>([])
   const [saving, setSaving] = useState(false)
+  const [continuing, setContinuing] = useState(false)
+  const [continueNote, setContinueNote] = useState<string | null>(null)
 
   useEffect(() => {
     setDrafts((document?.sections ?? []).map((s) => ({ id: s.id, title: s.title, points: s.thesisPoints.join('\n') })))
   }, [document?.sections])
 
   const staged = Boolean(document && document.sections.length > 0 && document.sections.every((s) => s.status === 'staged'))
+  const unwrittenCount = document?.sections.filter((s) => s.status === 'staged').length ?? 0
+  // Resume (Lanjutkan): a run stopped mid-write leaves staged sections
+  // next to written ones. The Susun button only shows for a
+  // fully-staged outline, so in this interrupted state the panel offers
+  // Lanjutkan instead — a fresh susun task whose engine skips the
+  // already-written sections and writes only the remaining ones.
+  const resumable = unwrittenCount > 0 && !staged
+
+  const continueWriting = async (): Promise<void> => {
+    if (!root || continuing) return
+    setContinuing(true)
+    setContinueNote(null)
+    try {
+      const store = useDaedalusStore.getState()
+      const goal = 'Lanjutkan penulisan bab yang belum tertulis (bab yang sudah tertulis tidak ditulis ulang).'
+      const created = await api.createTask({
+        goal,
+        repo_path: root,
+        domain: 'dokumen',
+        auto_approve: store.composer.autoApprove,
+        mode: store.composer.mode,
+        thinking: store.composer.thinking,
+        ...(store.composer.model ? { model: store.composer.model } : {}),
+        dokumen: { sub_mode: 'susun' },
+        ...(store.conversation && store.conversation.root === root ? { conversation_id: store.conversation.id } : {}),
+      })
+      store.setTask(created.id, goal)
+      setContinueNote('Tugas lanjutan dibuat — bab yang belum tertulis sedang ditulis; bab yang sudah tertulis tidak disentuh.')
+      refresh()
+    } catch (err) {
+      setContinueNote(err instanceof Error ? err.message : String(err))
+    } finally {
+      setContinuing(false)
+    }
+  }
 
   const save = async (): Promise<void> => {
     if (!root || saving) return
@@ -202,6 +239,10 @@ function OutlinePanel({ document, loading, error, root, refresh }: { document: D
           {staged ? (
             <p className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px]" data-testid="dokumen-outline-staged">
               Kerangka menunggu persetujuan — sunting judul/poin, lalu tekan <strong>Susun</strong>.
+            </p>
+          ) : resumable ? (
+            <p className="rounded border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-[11px]" data-testid="dokumen-outline-resumable">
+              Penulisan terhenti — {unwrittenCount} bab masih kerangka. Tekan <strong>Lanjutkan</strong> untuk menulis sisanya; bab yang sudah tertulis tidak ditulis ulang.
             </p>
           ) : null}
           <ol className="flex flex-col gap-2" data-testid="dokumen-outline-list">
@@ -243,8 +284,20 @@ function OutlinePanel({ document, loading, error, root, refresh }: { document: D
               <Button size="sm" onClick={() => void release()} disabled={releasing} data-testid="dokumen-compose-release" className="flex-1">
                 <Play className="size-3.5" aria-hidden /> {releasing ? 'Melepas…' : 'Susun'}
               </Button>
+            ) : resumable ? (
+              <Button
+                size="sm"
+                onClick={() => void continueWriting()}
+                disabled={continuing}
+                data-testid="dokumen-outline-continue"
+                className="flex-1"
+                title="Menulis hanya bab yang masih berstatus kerangka; bab yang sudah tertulis tidak disentuh"
+              >
+                <Play className="size-3.5" aria-hidden /> {continuing ? 'Memulai…' : 'Lanjutkan'}
+              </Button>
             ) : null}
           </div>
+          {continueNote ? <p className="text-[10px] text-muted">{continueNote}</p> : null}
           {note ? <p className="text-[10px] text-muted">{note}</p> : null}
         </div>
       )}

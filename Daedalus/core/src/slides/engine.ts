@@ -17,6 +17,7 @@ import {
   generateDeckOutlineStage,
   structuredCall,
   SlidePipelineError,
+  MAX_STAGE_ATTEMPTS,
   type DeckBrief,
   type OutlineItem,
 } from './pipeline.ts';
@@ -391,6 +392,21 @@ export class SlideEngine {
       // panel (hand-edited skeletons are adopted, not overwritten).
       ...(stagedFill ? { stagedGenerate: true } : {}),
       signal,
+      // Per-slide progress (spec 2026-10-09): no silent minutes — the
+      // filmstrip moves on FILE_CHANGED, and the chat narrates every
+      // slide start, retry, completion, and failure as THOUGHT.
+      onProgress: (event) => {
+        const where = `slide ${event.index + 1}/${event.total}`;
+        if (event.type === 'slide-started') {
+          this.#emit('THOUGHT', { text: `Mengisi ${where}: "${event.title}"…` });
+        } else if (event.type === 'slide-retry') {
+          this.#emit('THOUGHT', { text: `${where}: percobaan ${event.attempt}/${event.maxAttempts} — mencoba lagi…` });
+        } else if (event.type === 'slide-done') {
+          this.#emit('THOUGHT', { text: `${where} selesai: "${event.title}".` });
+        } else {
+          this.#emit('THOUGHT', { text: `${where} gagal setelah ${MAX_STAGE_ATTEMPTS} percobaan: ${event.issues.join('; ')}` });
+        }
+      },
     });
     await this.#emitDeckChanged(root, deckTextBeforeFill);
     ctx.setStep('fill', fill.failures.length === 0 ? 'done' : 'active');

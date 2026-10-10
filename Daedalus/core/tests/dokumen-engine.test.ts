@@ -443,3 +443,128 @@ describe('TaskRunner dokumen dispatch (separation guard)', () => {
     expect(result.report.evidence.join(' ')).toContain('Ekstraksi selesai');
   });
 });
+
+/**
+ * Susun resume (the Lanjutkan path): a run stopped mid-write leaves
+ * drafted sections next to staged ones. A fresh run must NOT re-propose
+ * the outline (that would discard written prose) and must NOT wait at
+ * the outline gate again — it writes only the remaining staged
+ * sections, leaving written prose byte-identical and never duplicating
+ * sections.
+ */
+function resumeProvider(): { provider: LLMProvider; counts: { outline: number; draft: number } } {
+  const counts = { outline: 0, draft: 0 };
+  const respond = (messages: Message[]): { content: string } => {
+    const system = messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+    const user = messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+    if (system.includes('outline a formal')) {
+      counts.outline += 1;
+      return { content: '{"sections":[{"title":"Bab Satu","thesisPoints":["Poin satu"]},{"title":"Bab Dua","thesisPoints":["Poin dua"]},{"title":"Bab Tiga","thesisPoints":["Poin tiga"]}]}' };
+    }
+    if (system.includes('write ONE section')) {
+      counts.draft += 1;
+      const title = /Section: ([^\n]+)/.exec(user)?.[1]?.trim() ?? `bab-${counts.draft}`;
+      return { content: JSON.stringify({ prose: `Prosa final untuk ${title}: pembahasan sistematis, tuntas, dan terstruktur atas tesis bab ini dalam beberapa paragraf akademik.`, citations: [] }) };
+    }
+    if (system.includes('critic gate')) return { content: '{"ok":true,"issues":[]}' };
+    return { content: '{}' };
+  };
+  const provider = {
+    name: 'fake-resume',
+    async chat(messages: Message[], _tools?: unknown, options?: { signal?: AbortSignal }) {
+      // Honor aborts like a real provider: a stop mid-write must surface
+      // as a thrown abort, not as a silently completed section.
+      if (options?.signal?.aborted) throw new Error('aborted by test');
+      return { message: { role: 'assistant' as const, content: respond(messages).content }, usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } };
+    },
+    async *stream() {
+      yield { type: 'done' as const };
+    },
+  } as unknown as LLMProvider;
+  return { provider, counts };
+}
+
+describe('Susun resume (Lanjutkan: stop mid-run, continue writes only the rest)', () => {
+  test('stop mid-run strands staged sections; a fresh run resumes only them — written prose byte-identical, no duplicates', async () => {
+    const root = tmpRoot();
+    const first = resumeProvider();
+    const engine1 = new DokumenEngine(first.provider, {
+      webTools: offlineWeb,
+      setStage: (label) => {
+        // Stop exactly when the third section's write begins: two
+        // drafted, one still staged — the stranded shape from the field.
+        if (label === 'Menulis bab "Bab Tiga"') engine1.stop();
+      },
+    });
+    const pending = engine1.run(root, 'susun makalah tiga bab', { subMode: 'susun' });
+    await until(async () => {
+      const doc = await readActiveDocument(root);
+      return Boolean(doc && doc.sections.length === 3 && doc.sections.every((s) => s.status === 'staged'));
+    });
+    expect(engine1.releaseStaged()).toBe(true);
+    await expect(pending).rejects.toThrow();
+    const interrupted = (await readActiveDocument(root))!;
+    expect(interrupted.sections.map((s) => s.status)).toEqual(['drafted', 'drafted', 'staged']);
+    expect(interrupted.sections[2]!.prose).toBe('');
+    const proseBefore = interrupted.sections.slice(0, 2).map((s) => s.prose);
+    const idsBefore = interrupted.sections.map((s) => s.id);
+    expect(proseBefore.every((p) => p.length > 0)).toBe(true);
+
+    // Lanjutkan: a fresh engine + run, NO gate release (resume skips it).
+    const second = resumeProvider();
+    const engine2 = new DokumenEngine(second.provider, { webTools: offlineWeb });
+    const summary = await engine2.run(root, 'lanjutkan penulisan bab yang belum tertulis', { subMode: 'susun' });
+    const resumed = (await readActiveDocument(root))!;
+    expect(resumed.sections.map((s) => s.status)).toEqual(['drafted', 'drafted', 'drafted']);
+    // Idempotent: written prose untouched, sections never duplicated.
+    expect(resumed.sections.map((s) => s.id)).toEqual(idsBefore);
+    expect(resumed.sections).toHaveLength(3);
+    expect(resumed.sections[0]!.prose).toBe(proseBefore[0]);
+    expect(resumed.sections[1]!.prose).toBe(proseBefore[1]);
+    expect(resumed.sections[2]!.prose).toContain('Bab Tiga');
+    // Only the stranded section was drafted in run 2; the outline was
+    // never re-proposed (re-proposing would have wiped written prose).
+    expect(second.counts.draft).toBe(1);
+    expect(second.counts.outline).toBe(0);
+    expect(first.counts.outline).toBe(1);
+    expect(summary).toContain('dilanjutkan');
+    const audit = await readAudit(root, resumed.id);
+    expect(audit.some((a) => a.action === 'resume')).toBe(true);
+  });
+
+  test('resume skips critic-flagged sections too (their kept draft is written prose)', async () => {
+    const root = tmpRoot();
+    const engine1 = new DokumenEngine(scriptedProvider({ criticMode: 'always-reject' }), { webTools: offlineWeb });
+    const pending = engine1.run(root, 'susun makalah tentang agentic framework', { subMode: 'susun' });
+    await until(async () => {
+      const doc = await readActiveDocument(root);
+      return Boolean(doc && doc.sections.length === 2 && doc.sections.every((s) => s.status === 'staged'));
+    });
+    expect(engine1.releaseStaged()).toBe(true);
+    await pending;
+    const flagged = (await readActiveDocument(root))!;
+    expect(flagged.sections.every((s) => s.status === 'critic-flagged')).toBe(true);
+    const proseBefore = flagged.sections.map((s) => s.prose);
+
+    // Nothing is staged, so a resume run must be a no-op for prose —
+    // flagged sections are not re-drafted into duplicates.
+    let drafts = 0;
+    const counting: LLMProvider = {
+      name: 'fake-count',
+      async chat(messages: Message[]) {
+        const system = messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+        if (system.includes('write ONE section')) drafts += 1;
+        return { message: { role: 'assistant' as const, content: '{}' }, usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } };
+      },
+      async *stream() {
+        yield { type: 'done' as const };
+      },
+    } as unknown as LLMProvider;
+    const engine2 = new DokumenEngine(counting, { webTools: offlineWeb });
+    await engine2.run(root, 'lanjutkan', { subMode: 'susun' });
+    const after = (await readActiveDocument(root))!;
+    expect(drafts).toBe(0);
+    expect(after.sections.map((s) => s.prose)).toEqual(proseBefore);
+    expect(after.sections).toHaveLength(2);
+  });
+});
