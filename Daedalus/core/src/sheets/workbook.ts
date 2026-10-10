@@ -1,5 +1,3 @@
-import { join } from 'node:path';
-
 /**
  * Agentic Spreadsheet source of truth: `workbook/workbook.json` (analog
  * of deck/deck.json in the Slide domain). One cell stores a literal
@@ -279,10 +277,10 @@ export const WORKBOOK_FILENAME = 'workbook.json';
 export const MAX_SHEETS = 20;
 export const MAX_CELLS_PER_SHEET = 200_000;
 
-export function workbookPaths(root: string): { dir: string; file: string } {
-  const dir = join(root, WORKBOOK_DIRNAME);
-  return { dir, file: join(dir, WORKBOOK_FILENAME) };
-}
+// NOTE: workbookPaths() lives in ./store.ts with the rest of the
+// filesystem surface — this module must stay free of node: imports:
+// the web bundle imports it directly (tileRefs) and Rollup cannot
+// externalize node:path into the browser build.
 
 /** Relative (workspace) paths, for messages/tools. */
 export function workbookRelativePaths(): { dir: string; file: string } {
