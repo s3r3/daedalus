@@ -1,5 +1,6 @@
 import { ModelPoolProvider, OpenAICompatProvider, TextProtocolProvider, registerProvider, type LLMProvider, type Message, type ProtocolSwitchInfo, type ToolProtocol } from "./llm/index.ts";
 import { loadSettings, type Settings } from "../settings.ts";
+import type { PromptCacheMechanism } from "./llm/prompt-cache.ts";
 
 export type PromptSection = { id: string; content: string };
 
@@ -28,6 +29,7 @@ export function createProviderFromSettings(settings: Settings = loadSettings()):
           apiKey: settings.llm.apiKey,
           model,
           defaultTimeoutMs: settings.llm.timeoutMs ?? undefined,
+          promptCache: settings.llm.promptCache,
         }), { protocol }),
       })
     : new TextProtocolProvider(new OpenAICompatProvider({
@@ -35,6 +37,7 @@ export function createProviderFromSettings(settings: Settings = loadSettings()):
         apiKey: settings.llm.apiKey,
         model: settings.llm.model || models[0] || "",
         defaultTimeoutMs: settings.llm.timeoutMs ?? undefined,
+        promptCache: settings.llm.promptCache,
       }), { protocol });
   registerProvider(provider);
   return provider;
@@ -44,13 +47,14 @@ export function createProviderFromSettings(settings: Settings = loadSettings()):
 export function createProviderForConfig(
   config: { baseUrl?: string; apiKey?: string; toolProtocol?: ToolProtocol } | undefined,
   model: string,
-  options: { defaultTimeoutMs?: number; toolProtocol?: ToolProtocol; onProtocolSwitch?: (info: ProtocolSwitchInfo) => void | Promise<void> } = {},
+  options: { defaultTimeoutMs?: number; toolProtocol?: ToolProtocol; promptCache?: PromptCacheMechanism; onProtocolSwitch?: (info: ProtocolSwitchInfo) => void | Promise<void> } = {},
 ): LLMProvider {
   return new TextProtocolProvider(new OpenAICompatProvider({
     baseUrl: config?.baseUrl ?? "",
     apiKey: config?.apiKey ?? "",
     model,
     defaultTimeoutMs: options.defaultTimeoutMs,
+    promptCache: options.promptCache,
   }), {
     protocol: options.toolProtocol ?? config?.toolProtocol ?? "auto",
     onProtocolSwitch: options.onProtocolSwitch,

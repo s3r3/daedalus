@@ -1,4 +1,5 @@
 import { LLMAuthError, LLMContentPolicyError, LLMError, LLMFormatError, LLMRateLimitError, LLMTimeoutError } from "./errors.ts";
+import { detectPromptCacheMechanism, stablePrefixCacheKey, type PromptCacheMechanism } from "./prompt-cache.ts";
 import { normalizeToolSchemas } from "./schema-normalize.ts";
 import type { ChatOptions, ChatResponse, LLMProvider, Message, StreamChunk, ToolDefinition, ToolCall, Usage } from "./types.ts";
 
@@ -10,6 +11,13 @@ export type OpenAICompatOptions = {
   model: string;
   fetch?: typeof fetch;
   defaultTimeoutMs?: number;
+  /**
+   * Prompt-cache mechanism this endpoint's dialect positively supports.
+   * Default "none": no cache parameter is ever emitted. Set to
+   * "prompt_cache_key" only for OpenAI(-compatible) upstreams/relays known
+   * to honour it (9Router forwards it to upstreams declaring support).
+   */
+  promptCache?: PromptCacheMechanism;
 };
 
 type OpenAIResponse = {
@@ -30,6 +38,7 @@ export class OpenAICompatProvider implements LLMProvider {
   readonly #model: string;
   readonly #fetch: typeof fetch;
   readonly #defaultTimeoutMs: number;
+  readonly #promptCache: PromptCacheMechanism;
 
   constructor(options: OpenAICompatOptions) {
     this.#baseUrl = options.baseUrl.replace(/\/$/, "");
@@ -37,6 +46,7 @@ export class OpenAICompatProvider implements LLMProvider {
     this.#model = options.model;
     this.#fetch = options.fetch ?? fetch;
     this.#defaultTimeoutMs = options.defaultTimeoutMs ?? DEFAULT_LLM_TIMEOUT_MS;
+    this.#promptCache = options.promptCache ?? "none";
   }
 
   get model(): string {
@@ -45,6 +55,11 @@ export class OpenAICompatProvider implements LLMProvider {
 
   get defaultTimeoutMs(): number {
     return this.#defaultTimeoutMs;
+  }
+
+  /** Declared prompt-cache capability, read by detectPromptCacheMechanism(). */
+  get promptCacheMechanism(): PromptCacheMechanism {
+    return this.#promptCache;
   }
 
   async chat(messages: Message[], tools?: ToolDefinition[], options: ChatOptions = {}): Promise<ChatResponse> {
@@ -133,6 +148,12 @@ export class OpenAICompatProvider implements LLMProvider {
   async #request(messages: Message[], tools: ToolDefinition[] | undefined, options: ChatOptions, stream: boolean): Promise<Response> {
     const timeoutMs = options.timeout_ms ?? this.#defaultTimeoutMs;
     const signal = timeoutSignal(options.signal, timeoutMs);
+    // Prompt caching: the stable prefix (system prompt + tool schemas) is
+    // marked cacheable ONLY when the caller asked for it (options.cachePrefix)
+    // AND this adapter positively supports a mechanism (this.#promptCache,
+    // default "none"). Both keys must turn: an unsupported dialect never
+    // sees a cache parameter.
+    const promptCacheKey = cacheKeyForRequest(this, messages, tools, options);
     try {
       return await this.#fetch(`${this.#baseUrl}/chat/completions`, {
         method: "POST",
@@ -141,7 +162,7 @@ export class OpenAICompatProvider implements LLMProvider {
         // allOf/anyOf combinators are flattened (Bedrock rejects the whole
         // request over one); the declared schemas and the runtime
         // validator keep the original semantics. See schema-normalize.ts.
-        body: JSON.stringify({ model: this.#model, messages, ...(tools?.length ? { tools: normalizeToolSchemas(tools) } : {}), stream, stream_options: stream ? { include_usage: true } : undefined, temperature: options.temperature, max_tokens: options.max_tokens, top_p: options.top_p, stop: options.stop }),
+        body: JSON.stringify({ model: this.#model, messages, ...(tools?.length ? { tools: normalizeToolSchemas(tools) } : {}), ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}), stream, stream_options: stream ? { include_usage: true } : undefined, temperature: options.temperature, max_tokens: options.max_tokens, top_p: options.top_p, stop: options.stop }),
         signal,
       });
     } catch (error) {
@@ -149,6 +170,22 @@ export class OpenAICompatProvider implements LLMProvider {
       throw new LLMError("LLM request failed", { cause: error, code: "network" });
     }
   }
+}
+
+/**
+ * The prompt-cache key for this request, or undefined when the gate is
+ * closed: caller didn't mark the prefix (`cachePrefix`), or the provider's
+ * detected mechanism can't express it on this dialect.
+ */
+function cacheKeyForRequest(
+  provider: OpenAICompatProvider,
+  messages: Message[],
+  tools: ToolDefinition[] | undefined,
+  options: ChatOptions,
+): string | undefined {
+  if (options.cachePrefix !== true) return undefined;
+  if (detectPromptCacheMechanism(provider) !== "prompt_cache_key") return undefined;
+  return stablePrefixCacheKey(provider.model, messages, tools);
 }
 
 /** The non-streaming JSON body → ChatResponse, shared by chat() and stream()'s JSON branch. */

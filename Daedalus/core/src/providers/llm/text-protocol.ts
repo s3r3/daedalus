@@ -1,4 +1,5 @@
 import type { ToolProtocol } from "../../contracts.ts";
+import { detectPromptCacheMechanism, type PromptCacheMechanism } from "./prompt-cache.ts";
 import { LLMFormatError } from "./errors.ts";
 import type { ChatOptions, ChatResponse, LLMProvider, Message, StreamChunk, ToolCall, ToolDefinition } from "./types.ts";
 
@@ -92,6 +93,15 @@ export class TextProtocolProvider implements LLMProvider {
   /** Keep the inner provider's identity: events and registries key off it. */
   get name(): string {
     return this.#inner.name;
+  }
+
+  /**
+   * Prompt-cache capability of the inner provider: the text protocol only
+   * rewrites tool calling, it never changes which cache mechanism the wire
+   * dialect supports, so detection passes straight through.
+   */
+  get promptCacheMechanism(): PromptCacheMechanism {
+    return detectPromptCacheMechanism(this.#inner);
   }
 
   get model(): string | undefined {

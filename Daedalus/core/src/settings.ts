@@ -2,13 +2,14 @@ import { resolve } from "node:path";
 import type { EditFormat, ModelTier, PromptFamilySetting } from "./contracts.ts";
 import { normalizeModelList, normalizeModelTiers, parseModelStrategy, parseModelTiers, type ModelStrategy } from "./providers/llm/model-pool.ts";
 import { parsePromptFamilySetting } from "./agent/prompt-dialects.ts";
+import { parsePromptCacheMechanism, type PromptCacheMechanism } from "./providers/llm/prompt-cache.ts";
 import { parseToolProtocol, type ToolProtocol } from "./providers/llm/text-protocol.ts";
 import { TOOL_OUTPUT_MAX_CHARS, TOOL_OUTPUT_MAX_LINES, type ToolOutputLimits } from "./agent/tool-output.ts";
 
 export type { ToolProtocol };
 
 export type Settings = {
-  llm: { baseUrl: string; apiKey: string; model: string; models: string[]; modelStrategy: ModelStrategy; timeoutMs: number | null; helperModel: string; toolProtocol: ToolProtocol; modelTiers: Record<string, ModelTier>; promptFamily: PromptFamilySetting; editFormat: EditFormat };
+  llm: { baseUrl: string; apiKey: string; model: string; models: string[]; modelStrategy: ModelStrategy; timeoutMs: number | null; helperModel: string; toolProtocol: ToolProtocol; modelTiers: Record<string, ModelTier>; promptFamily: PromptFamilySetting; editFormat: EditFormat; promptCache: PromptCacheMechanism };
   server: { host: string; port: number };
   session: { thinking: boolean };
   /**
@@ -76,6 +77,7 @@ export function loadSettings(env: Env = process.env): Settings {
       modelTiers: parseModelTiers(env.LLM_MODEL_TIERS),
       promptFamily: parsePromptFamilySetting(env.LLM_PROMPT_FAMILY),
       editFormat: parseEditFormat(env.LLM_EDIT_FORMAT),
+      promptCache: parsePromptCacheMechanism(env.LLM_PROMPT_CACHE),
     },
     tailor: {
       modelRouting: parseBoolean(env.DAEDALUS_MODEL_ROUTING, true, "DAEDALUS_MODEL_ROUTING"),

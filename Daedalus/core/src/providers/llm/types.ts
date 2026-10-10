@@ -70,6 +70,14 @@ export type ChatOptions = {
   timeout_ms?: number;
   /** Tailor-suite phase hint for tier routing; ignored by non-pool providers. */
   phase?: ModelPhase;
+  /**
+   * Caller asserts the request's stable prefix (system prompt + tool
+   * schemas) is identical across calls and asks the provider to cache it.
+   * Provider-agnostic: each adapter translates this ONLY when its dialect
+   * positively supports a cache mechanism (see prompt-cache.ts); otherwise
+   * it is ignored and the wire format is unchanged.
+   */
+  cachePrefix?: boolean;
 };
 
 export type StreamChunk =
