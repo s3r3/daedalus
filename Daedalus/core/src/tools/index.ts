@@ -88,7 +88,11 @@ import { ToolRegistry, type ToolDefinition } from './registry.ts';
  * The nine slide (deck) tools are deliberately NOT here: slide tasks run
  * on the SlideEngine with exactly SLIDE_TOOLS (see tools/slides.ts, which
  * likewise carries no coding tools), and the extra ~3.7k tokens of slide
- * schemas per model call is dead weight on every coding turn.
+ * schemas per model call is dead weight on every coding turn. The one
+ * exception is composition-time, not here: a coding run whose goal asks
+ * for a presentation adds SLIDE_TOOLS on top (runtime.ts), because the
+ * contract steering it at the deck tools and the loop's slide-export
+ * gate both arm on that same goal.
  */
 export const DEFAULT_TOOLS: ToolDefinition[] = [readFileTool, writeFileTool, editFileTool, createDirTool, listDirTool, grepTool, globTool, runCommandTool, commandStatusTool, commandKillTool, gitDiffTool, gitStatusTool, fetchUrlTool, webSearchTool, viewImageTool, screenshotTool, searchImagesTool, downloadFileTool];
 
