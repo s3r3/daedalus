@@ -11,7 +11,10 @@
     "./interaction/modes": "./src/interaction/modes.ts",
     "./interaction/slash-commands": "./src/interaction/slash-commands.ts",
     "./slides/layouts": "./src/slides/layouts.ts",
-    "./slides/builtin-templates": "./src/slides/builtin-templates.ts"
+    "./slides/builtin-templates": "./src/slides/builtin-templates.ts",
+    "./skills/origin": "./src/skills/origin.ts",
+    "./sheets/evaluator": "./src/sheets/evaluator.ts",
+    "./sheets/refs": "./src/sheets/refs.ts"
   },
   "engines": {
     "node": ">=22"

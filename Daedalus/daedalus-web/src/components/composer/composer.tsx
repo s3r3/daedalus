@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { ImagePlus, Paperclip, Play, Square, UploadCloud, X } from 'lucide-react'
 import type { AgentMode, Attachment } from '@daedalus/core'
-import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core'
+import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core/skills/origin'
 import { AGENT_MODE_ORDER, nextAgentMode } from '@daedalus/core/interaction/modes'
 import { SlashCommandRegistry, slashCommandSuggestions, type SlashCommandContext, type SlashCommandResult } from '@daedalus/core/interaction/slash-commands'
 import { Button } from '../ui/button'
@@ -801,6 +801,10 @@ export function Composer() {
           <SlideComposerControls />
         ) : domain === 'dokumen' ? (
           <DokumenComposerControls />
+        ) : domain === 'spreadsheet' ? (
+          <span className="text-[10px] text-muted" data-testid="sheet-composer-note">
+            Spreadsheet: blueprint di-stage dulu di Panel Blueprint — tekan Buat untuk membangun. Mode Ask/Manual/Auto/Plan hanya milik Coding.
+          </span>
         ) : (
           <>
             <span
@@ -852,6 +856,8 @@ export function Composer() {
                 : dokumenOptions.docxPath
                   ? 'Instruksi tata ulang… misalnya: margin 4-3-3-3, font Times New Roman 12pt, spasi 1.5, heading bernomor'
                   : 'Topik dokumen… misalnya: susun makalah tentang agentic framework untuk tugas kuliah'
+            : domain === 'spreadsheet'
+              ? 'Jelaskan spreadsheet-nya… sebut nama file .csv/.xlsx di workspace bila datanya dari file, atau minta "audit workbook ini"'
               : 'Describe the coding task… type @ to reference a file or folder, /help for slash commands'
         }
         value={composer.goal}

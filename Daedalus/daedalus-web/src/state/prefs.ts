@@ -65,16 +65,17 @@ export function saveComposerPrefs(prefs: ComposerPrefs, storage: Storage | undef
 }
 
 /**
- * Active product domain (Agentic Coding vs Agentic Slide). The domain only
- * re-skins the workspace — center canvas and outline — while the workspace,
- * chat, and core stay shared, so the choice is a view preference that
- * belongs next to the other browser prefs, not on the server.
+ * Active product domain (Agentic Coding vs Agentic Slide vs Agentic
+ * Spreadsheet). The domain only re-skins the workspace — center canvas
+ * and panels — while the workspace, chat, and core stay shared, so the
+ * choice is a view preference that belongs next to the other browser
+ * prefs, not on the server.
  */
-export type WebDomain = 'coding' | 'slide' | 'dokumen'
+export type WebDomain = 'coding' | 'slide' | 'dokumen' | 'spreadsheet'
 
 export const DOMAIN_PREFS_KEY = 'daedalus.web.domain.v1'
 
-const DOMAINS: ReadonlySet<string> = new Set(['coding', 'slide', 'dokumen'])
+const DOMAINS: ReadonlySet<string> = new Set(['coding', 'slide', 'dokumen', 'spreadsheet'])
 
 export function loadDomain(storage: Storage | undefined = defaultStorage()): WebDomain {
   if (!storage) return 'coding'
@@ -97,13 +98,15 @@ export function saveDomain(domain: WebDomain, storage: Storage | undefined = def
 
 /**
  * The route is the source of truth for the active domain: '/slide' (and
- * anything under it) opens Agentic Slide, every other path opens Agentic
- * Coding. The pathname wins over the persisted pref so a shared/bookmarked
- * URL lands in the domain it names; the pref only mirrors the choice.
+ * anything under it) opens Agentic Slide, '/spreadsheet' opens Agentic
+ * Spreadsheet, every other path opens Agentic Coding. The pathname wins
+ * over the persisted pref so a shared/bookmarked URL lands in the domain
+ * it names; the pref only mirrors the choice.
  */
 export function domainFromPathname(pathname: string): WebDomain {
   if (pathname.startsWith('/slide')) return 'slide'
   if (pathname.startsWith('/dokumen')) return 'dokumen'
+  if (pathname.startsWith('/spreadsheet')) return 'spreadsheet'
   return 'coding'
 }
 
@@ -111,6 +114,7 @@ export function domainFromPathname(pathname: string): WebDomain {
 export function pathForDomain(domain: WebDomain): string {
   if (domain === 'slide') return '/slide'
   if (domain === 'dokumen') return '/dokumen'
+  if (domain === 'spreadsheet') return '/spreadsheet'
   return '/'
 }
 

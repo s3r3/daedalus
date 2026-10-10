@@ -1,5 +1,5 @@
 import type { Attachment, ChildTask, Event, FinalReport, Plan, PlanStep, ToolCall, ToolResult, UserQuestionInfo, ValidationResult } from '@daedalus/core'
-import { formatSkillOrigin } from '@daedalus/core'
+import { formatSkillOrigin } from '@daedalus/core/skills/origin'
 import { payloadOf, type ApprovalRequested, type CommandFinished, type CommandStarted, type FileChange, type RecoveryStarted } from '../api/types'
 
 /**

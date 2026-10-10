@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { ArrowDown, CircleQuestionMark, MessageSquarePlus, ShieldAlert } from 'lucide-react'
-import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core'
+import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core/skills/origin'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { EmptyState, Panel } from '../common/panel'
@@ -137,6 +137,17 @@ export function ChatPanel() {
       }
       // The deck left deck/ (archived or never existed): repaint stage,
       // outline, and deck workspace from the empty state.
+      bumpWorkspaceRevision()
+    }
+    if (domain === 'spreadsheet' && root) {
+      try {
+        await api.workbookReset(root)
+      } catch (error) {
+        setComposer({ error: `Workbook belum bisa direset: ${error instanceof Error ? error.message : String(error)}` })
+        return
+      }
+      // The workbook left workbook/ (archived, never deleted): repaint
+      // the grid, blueprint, and workspace panels from the empty state.
       bumpWorkspaceRevision()
     }
     useDaedalusStore.setState({ taskId: null, events: [], report: null, taskAttachments: [] })

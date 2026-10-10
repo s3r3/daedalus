@@ -1,6 +1,6 @@
 import { AGENT_MODES, type AgentMode, type ToolModePolicy } from '../contracts.ts';
 import type { ModelToolSchema } from '../tools/registry.ts';
-import { ASK_USER_TOOL_NAME } from './questions.ts';
+import { ASK_USER_TOOL_NAME } from '../contracts.ts';
 import { SPAWN_SUBAGENT_TOOL_NAME } from './subagents.ts';
 
 /**
