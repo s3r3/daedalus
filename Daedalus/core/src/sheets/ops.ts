@@ -4,10 +4,15 @@ import {
   parseCellRef,
   parseRange,
   colToIndex,
+  tileIssues,
   type CellScalar,
+  type ChartSpec,
+  type DashboardTileSpec,
   type SheetSpec,
+  type SlicerSpec,
   type WorkbookSpec,
 } from './workbook.ts';
+import { clearTile, materializeTile, tileSlug } from './dashboard.ts';
 import { validateWorkbook } from './store.ts';
 import { newSheet, newSheetId } from './store.ts';
 
@@ -39,6 +44,12 @@ export const SHEET_OP_NAMES = [
   'rename_sheet',
   'delete_sheet',
   'define_named_range',
+  'set_tile',
+  'delete_tile',
+  'set_chart',
+  'delete_chart',
+  'set_slicer',
+  'delete_slicer',
   'validate_workbook',
   'export_workbook',
 ] as const;
@@ -313,6 +324,12 @@ export function applySheetOps(workbook: WorkbookSpec, value: unknown): ApplyShee
         opsApplied += 1;
         break;
       }
+      case 'set_tile': case 'delete_tile': case 'set_chart': case 'delete_chart': case 'set_slicer': case 'delete_slicer': {
+        const sheet = sheetOf(op); if (!sheet) break;
+        const dashboardOps = applyDashboardOps(sheet, op, issues);
+        if (dashboardOps) opsApplied += 1;
+        break;
+      }
       case 'define_named_range': {
         if (!str(op.name) || !/^[A-Za-z_][A-Za-z0-9_.]*$/.test(op.name)) { issues.push('define_named_range needs a valid Excel name'); break; }
         if (!str(op.ref) || !(op.ref as string).includes('!')) { issues.push('define_named_range ref must look like Sheet!A1'); break; }
@@ -341,3 +358,95 @@ export function applySheetOps(workbook: WorkbookSpec, value: unknown): ApplyShee
 }
 
 export { newSheetId };
+
+/* ------------------------------------------------- dashboard pieces
+ * Follow-up edits to a composed dashboard go through the same batch
+ * validator as every other op: specs are upserted by id (or by label
+ * slug for tiles) and tiles rematerialize into cells atomically with
+ * the rest of the batch — an invalid tile rejects everything. */
+
+function findByIdOrLabel<T extends { id: string; label?: string }>(items: T[] | undefined, key: string): T | undefined {
+  return (items ?? []).find((item) => item.id === key || (item.label !== undefined && (item.id === key || tileSlug(item.label, new Set()) === key || item.label === key)));
+}
+
+function applyDashboardOps(sheet: SheetSpec, op: Record<string, unknown>, issues: string[]): boolean {
+  switch (op.op) {
+    case 'set_tile': {
+      const label = str(op.label) ? op.label : '';
+      if (!label) { issues.push('set_tile needs a label'); return false; }
+      const existing = findByIdOrLabel(sheet.tiles, str(op.tile) ? op.tile : tileSlug(label, new Set((sheet.tiles ?? []).map((t) => t.id))));
+      const tile: DashboardTileSpec = {
+        id: existing?.id ?? (str(op.tile) && (sheet.tiles ?? []).some((t) => t.id === op.tile) ? op.tile : tileSlug(label, new Set((sheet.tiles ?? []).map((t) => t.id)))),
+        label,
+        formula: str(op.formula) ? op.formula : (existing?.formula ?? ''),
+        ...(str(op.fmt) ? { fmt: op.fmt } : existing?.fmt ? { fmt: existing.fmt } : {}),
+        anchor: str(op.anchor) ? op.anchor : (existing?.anchor ?? 'B2'),
+        ...(typeof op.cols === 'number' ? { cols: op.cols } : existing?.cols !== undefined ? { cols: existing.cols } : {}),
+        ...(typeof op.rows === 'number' ? { rows: op.rows } : existing?.rows !== undefined ? { rows: existing.rows } : {}),
+        ...(str(op.accent) ? { accent: op.accent } : existing?.accent ? { accent: existing.accent } : {}),
+      };
+      const tileProblems = tileIssues(tile);
+      if (tileProblems.length > 0) { issues.push(...tileProblems); return false; }
+      if (existing) clearTile(sheet, existing);
+      sheet.kind = 'dashboard';
+      sheet.tiles = [...(sheet.tiles ?? []).filter((t) => t !== existing), tile];
+      const materializeIssue = materializeTile(sheet, tile);
+      if (materializeIssue) { issues.push(materializeIssue); return false; }
+      return true;
+    }
+    case 'delete_tile': {
+      const key = str(op.tile) ? op.tile : str(op.label) ? op.label : '';
+      const existing = findByIdOrLabel(sheet.tiles, key);
+      if (!existing) { issues.push(`delete_tile: no tile "${key}" on ${sheet.name}`); return false; }
+      clearTile(sheet, existing);
+      sheet.tiles = (sheet.tiles ?? []).filter((t) => t !== existing);
+      return true;
+    }
+    case 'set_chart': {
+      if (!str(op.range) || !(op.range as string).includes('!')) { issues.push('set_chart needs a range like "Data!A1:B13"'); return false; }
+      const id = str(op.id) ? op.id : `chart-${(sheet.charts ?? []).length + 1}`;
+      const chart: ChartSpec = {
+        id,
+        type: str(op.type) ? op.type : 'column',
+        range: op.range,
+        anchor: str(op.anchor) ? op.anchor : 'A1',
+        sheet: sheet.name,
+        ...(str(op.title) ? { title: op.title } : {}),
+        ...(typeof op.width === 'number' ? { width: op.width } : {}),
+        ...(typeof op.height === 'number' ? { height: op.height } : {}),
+      };
+      sheet.charts = [...(sheet.charts ?? []).filter((c) => c.id !== id), chart];
+      return true;
+    }
+    case 'delete_chart': {
+      const id = str(op.chart) ? op.chart : str(op.id) ? op.id : '';
+      if (!(sheet.charts ?? []).some((c) => c.id === id)) { issues.push(`delete_chart: no chart "${id}" on ${sheet.name}`); return false; }
+      sheet.charts = (sheet.charts ?? []).filter((c) => c.id !== id);
+      return true;
+    }
+    case 'set_slicer': {
+      if (!str(op.field) || !str(op.source)) { issues.push('set_slicer needs field + source ("Sheet!A1:F9")'); return false; }
+      const id = str(op.id) ? op.id : `slicer-${(sheet.slicers ?? []).length + 1}`;
+      const slicer: SlicerSpec = {
+        id,
+        field: op.field,
+        source: op.source,
+        sheet: sheet.name,
+        anchor: str(op.anchor) ? op.anchor : 'A1',
+        ...(str(op.pivot) ? { pivot: op.pivot } : {}),
+        ...(op.kind === 'timeline' ? { kind: 'timeline' as const } : {}),
+      };
+      sheet.slicers = [...(sheet.slicers ?? []).filter((s) => s.id !== id), slicer];
+      return true;
+    }
+    case 'delete_slicer': {
+      const id = str(op.slicer) ? op.slicer : str(op.id) ? op.id : '';
+      if (!(sheet.slicers ?? []).some((s) => s.id === id)) { issues.push(`delete_slicer: no slicer "${id}" on ${sheet.name}`); return false; }
+      sheet.slicers = (sheet.slicers ?? []).filter((s) => s.id !== id);
+      return true;
+    }
+    default:
+      issues.push(`unknown dashboard op "${String(op.op)}"`);
+      return false;
+  }
+}

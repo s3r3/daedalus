@@ -1,5 +1,5 @@
 import type { ContentBlock, LLMProvider, Message } from '../providers/llm/types.ts';
-import { MAX_SHEETS, type BlueprintColumn, type SheetBlueprint } from './workbook.ts';
+import { MAX_SHEETS, tileIssues, type BlueprintColumn, type SheetBlueprint } from './workbook.ts';
 
 /** Text of a provider message (string or text blocks) — local copy, no cross-domain import. */
 function messageText(content: string | ContentBlock[]): string {
@@ -140,24 +140,8 @@ export function validateBlueprint(value: unknown, goal: string): Verdict<SheetBl
       }
       columns.push({ name: colName, type, source, ...(formula ? { formula } : {}) });
     }
-    const charts = Array.isArray(rawSheet.charts) ? (rawSheet.charts as unknown[]).filter(isObj).map((c, i) => ({
-      id: typeof c.id === 'string' ? c.id : `chart-${si}-${i}`,
-      type: typeof c.type === 'string' ? c.type : 'column',
-      range: typeof c.range === 'string' ? c.range : '',
-      anchor: typeof c.anchor === 'string' ? c.anchor : 'A1',
-      ...(typeof c.title === 'string' ? { title: c.title } : {}),
-    })).filter((c) => c.range.length > 0) : undefined;
-    const pivots = Array.isArray(rawSheet.pivots) ? (rawSheet.pivots as unknown[]).filter(isObj).map((p, i) => ({
-      id: typeof p.id === 'string' ? p.id : `pivot-${si}-${i}`,
-      source: typeof p.source === 'string' ? p.source : '',
-      target: typeof p.target === 'string' ? p.target : name,
-      rows: Array.isArray(p.rows) ? p.rows.filter((r): r is string => typeof r === 'string') : [],
-      ...(Array.isArray(p.cols) ? { cols: p.cols.filter((r): r is string => typeof r === 'string') } : {}),
-      values: Array.isArray(p.values) ? p.values.filter(isObj).map((v) => ({
-        field: typeof v.field === 'string' ? v.field : '',
-        agg: (['sum', 'count', 'average', 'min', 'max'] as const).includes(v.agg as 'sum') ? (v.agg as 'sum' | 'count' | 'average' | 'min' | 'max') : 'sum' as const,
-      })).filter((v) => v.field.length > 0) : [],
-    })).filter((p) => p.source.length > 0 && p.rows.length > 0) : undefined;
+    const charts = parseChartSpecs(rawSheet.charts, si);
+    const pivots = parsePivotSpecs(rawSheet.pivots, si, name);
     sheets.push({
       name,
       ...(typeof rawSheet.purpose === 'string' ? { purpose: rawSheet.purpose } : {}),
@@ -166,6 +150,47 @@ export function validateBlueprint(value: unknown, goal: string): Verdict<SheetBl
       ...(charts && charts.length > 0 ? { charts } : {}),
       ...(pivots && pivots.length > 0 ? { pivots } : {}),
     });
+  }
+  let dashboard: SheetBlueprint['dashboard'];
+  if (value.dashboard !== undefined) {
+    if (!isObj(value.dashboard)) {
+      issues.push('dashboard must be an object {"sheet": ..., "tiles": [...], "charts": [...], "pivots": [...], "slicers": [...]}');
+    } else {
+      const rawDash = value.dashboard;
+      const tiles = Array.isArray(rawDash.tiles) ? (rawDash.tiles as unknown[]).filter(isObj).map((t, i) => ({
+        id: typeof t.id === 'string' ? t.id : `tile-${i}`,
+        label: typeof t.label === 'string' ? t.label : '',
+        formula: typeof t.formula === 'string' ? t.formula : '',
+        ...(typeof t.fmt === 'string' ? { fmt: t.fmt } : {}),
+        anchor: typeof t.anchor === 'string' ? t.anchor : '',
+        ...(typeof t.cols === 'number' ? { cols: t.cols } : {}),
+        ...(typeof t.rows === 'number' ? { rows: t.rows } : {}),
+        ...(typeof t.accent === 'string' ? { accent: t.accent } : {}),
+      })) : [];
+      if (!Array.isArray(rawDash.tiles) || tiles.length === 0) issues.push('dashboard.tiles must be a non-empty array of KPI cards');
+      for (const tile of tiles) {
+        for (const issue of tileIssues(tile, { anchorRequired: false })) issues.push(`dashboard ${issue}`);
+      }
+      const dashCharts = parseChartSpecs(rawDash.charts, 90);
+      const dashSheetName = typeof rawDash.sheet === 'string' && rawDash.sheet.trim() ? rawDash.sheet.trim() : 'Dashboard';
+      const dashPivots = parsePivotSpecs(rawDash.pivots, 90, '_PivotData');
+      const slicers = Array.isArray(rawDash.slicers) ? (rawDash.slicers as unknown[]).filter(isObj).map((s, i) => ({
+        id: typeof s.id === 'string' ? s.id : `slicer-${i}`,
+        field: typeof s.field === 'string' ? s.field : '',
+        source: typeof s.source === 'string' ? s.source : '',
+        ...(typeof s.sheet === 'string' ? { sheet: s.sheet } : {}),
+        anchor: typeof s.anchor === 'string' ? s.anchor : 'A1',
+        ...(typeof s.pivot === 'string' ? { pivot: s.pivot } : {}),
+        ...(s.kind === 'timeline' ? { kind: 'timeline' as const } : {}),
+      })).filter((s) => s.field.length > 0 && s.source.length > 0) : undefined;
+      dashboard = {
+        sheet: dashSheetName,
+        tiles,
+        ...(dashCharts && dashCharts.length > 0 ? { charts: dashCharts.map((c) => ({ ...c, sheet: c.sheet ?? dashSheetName })) } : {}),
+        ...(dashPivots && dashPivots.length > 0 ? { pivots: dashPivots } : {}),
+        ...(slicers && slicers.length > 0 ? { slicers } : {}),
+      };
+    }
   }
   const assumptions: SheetBlueprint['assumptions'] = [];
   if (value.assumptions !== undefined && !Array.isArray(value.assumptions)) issues.push('assumptions must be an array');
@@ -184,19 +209,51 @@ export function validateBlueprint(value: unknown, goal: string): Verdict<SheetBl
       sources: [],
       assumptions,
       sheets,
+      ...(dashboard ? { dashboard } : {}),
       ...(typeof value.notes === 'string' ? { notes: value.notes } : {}),
     },
   };
 }
 
+function parseChartSpecs(raw: unknown, si: number) {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.filter(isObj).map((c, i) => ({
+    id: typeof c.id === 'string' ? c.id : `chart-${si}-${i}`,
+    type: typeof c.type === 'string' ? c.type : 'column',
+    range: typeof c.range === 'string' ? c.range : '',
+    anchor: typeof c.anchor === 'string' ? c.anchor : 'A1',
+    ...(typeof c.sheet === 'string' ? { sheet: c.sheet } : {}),
+    ...(typeof c.title === 'string' ? { title: c.title } : {}),
+    ...(typeof c.width === 'number' ? { width: c.width } : {}),
+    ...(typeof c.height === 'number' ? { height: c.height } : {}),
+  })).filter((c) => c.range.length > 0);
+}
+
+function parsePivotSpecs(raw: unknown, si: number, defaultTarget: string) {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.filter(isObj).map((p, i) => ({
+    id: typeof p.id === 'string' ? p.id : `pivot-${si}-${i}`,
+    ...(typeof p.name === 'string' ? { name: p.name } : {}),
+    source: typeof p.source === 'string' ? p.source : '',
+    target: typeof p.target === 'string' ? p.target : defaultTarget,
+    rows: Array.isArray(p.rows) ? p.rows.filter((r): r is string => typeof r === 'string') : [],
+    ...(Array.isArray(p.cols) ? { cols: p.cols.filter((r): r is string => typeof r === 'string') } : {}),
+    values: Array.isArray(p.values) ? p.values.filter(isObj).map((v) => ({
+      field: typeof v.field === 'string' ? v.field : '',
+      agg: (['sum', 'count', 'average', 'min', 'max'] as const).includes(v.agg as 'sum') ? (v.agg as 'sum' | 'count' | 'average' | 'min' | 'max') : 'sum' as const,
+    })).filter((v) => v.field.length > 0) : [],
+  })).filter((p) => p.source.length > 0 && p.rows.length > 0);
+}
+
 const BLUEPRINT_SYSTEM = [
   'You are the blueprint stage of an agentic spreadsheet builder. You output exactly one JSON object and nothing else.',
-  'Shape: {"title": string, "sheets": [{"name": string, "purpose": string, "columns": [{"name": string, "type": "text|number|currency|percent|date|boolean", "source": "input|formula|assumption", "formula": "=...{r}..."}], "summary": string, "charts": [{"type": "column|bar|line|pie", "range": "Sheet!A1:B9", "anchor": "D2", "title": string}], "pivots": [{"source": "Data!A1:F100", "target": "Ringkasan", "rows": ["Kategori"], "values": [{"field": "Total", "agg": "sum"}]}]}], "assumptions": [{"name": string, "value": number|string|boolean, "note": string}], "notes": string}',
+  'Shape: {"title": string, "sheets": [{"name": string, "purpose": string, "columns": [{"name": string, "type": "text|number|currency|percent|date|boolean", "source": "input|formula|assumption", "formula": "=...{r}..."}], "summary": string, "charts": [{"type": "column|bar|line|pie", "range": "Sheet!A1:B9", "anchor": "D2", "width": 640, "height": 300, "title": string}], "pivots": [{"source": "Data!A1:F100", "target": "Ringkasan", "rows": ["Kategori"], "values": [{"field": "Total", "agg": "sum"}]}]}], "assumptions": [{"name": string, "value": number|string|boolean, "note": string}], "dashboard": {"sheet": "Dashboard", "tiles": [{"label": string, "formula": "=SUM(Data!F2:F100)", "fmt": "#,##0", "cols": 3, "rows": 3}], "charts": [...], "pivots": [...], "slicers": [{"field": "Region", "source": "Data!A1:F100", "anchor": "B20"}]}, "notes": string}',
   'Rules:',
   '- Design the workbook the user asked for: a data sheet (raw/input rows), an "Asumsi" sheet for every rate/price/threshold the math depends on, and a summary/dashboard sheet whose cells are live formulas.',
   '- Every derived number is a formula. Formula templates use {r} as the row placeholder (e.g. "=B{r}*Asumsi!$B$2"); cross-sheet references to assumptions use absolute $ refs.',
   '- Column names are headers; keep them short and in the user language of the goal (default Indonesian).',
   '- "charts" and "pivots" are optional native specs for the export stage; only include them when the goal asks for a chart or a pivot summary.',
+  '- "dashboard" is optional and only when the goal asks for a dashboard: KPI tiles are live formulas over the data sheets (e.g. =SUM(...), =SUMIF(...), ratios of two aggregates — never a number you computed yourself); charts read summary-sheet ranges or pivot outputs; pivots that back the dashboard target a hidden helper sheet ("_PivotData"); slicers float on the dashboard sheet and bind a pivot by its id ("pivot") or a data field.',
   '- Never invent data values in the blueprint; only structure, formulas, and assumptions.',
 ].join('\n');
 

@@ -11,6 +11,7 @@ import {
   type ChartSpec,
   type PivotSpec,
   type SheetExportRecord,
+  type SlicerSpec,
   type WorkbookSpec,
 } from './workbook.ts';
 
@@ -49,8 +50,19 @@ export async function buildExcelJsWorkbook(workbook: WorkbookSpec): Promise<Exce
       const color = argb(sheet.tabColor);
       if (color) ws.properties.tabColor = { argb: color };
     }
+    if (sheet.hidden) ws.state = 'hidden';
     for (const [letter, width] of Object.entries(sheet.colWidths ?? {})) {
       ws.getColumn(letter).width = width;
+    }
+    for (const [row, height] of Object.entries(sheet.rowHeights ?? {})) {
+      const n = Number(row);
+      if (Number.isInteger(n) && n >= 1) ws.getRow(n).height = height;
+    }
+    if (sheet.printArea) ws.pageSetup = { ...ws.pageSetup, printArea: sheet.printArea };
+    if (sheet.kind === 'dashboard') {
+      // A dashboard is meant to be read (and printed) as one page:
+      // landscape, fitted to a single sheet of paper.
+      ws.pageSetup = { ...ws.pageSetup, orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 1 };
     }
     for (const [refText, cell] of Object.entries(sheet.cells)) {
       const out = ws.getCell(refText);
@@ -63,9 +75,10 @@ export async function buildExcelJsWorkbook(workbook: WorkbookSpec): Promise<Exce
       }
       else if (cell.v !== undefined) out.value = cell.v;
       if (cell.fmt) out.numFmt = cell.fmt;
-      if (cell.bold || cell.fill || cell.color) {
+      if (cell.bold || cell.fill || cell.color || cell.size) {
         out.font = {
           ...(cell.bold ? { bold: true } : {}),
+          ...(cell.size ? { size: cell.size } : {}),
           ...(cell.color && argb(cell.color) ? { color: { argb: argb(cell.color) as string } } : {}),
         };
         const fill = argb(cell.fill);
@@ -102,6 +115,16 @@ export async function buildExcelJsWorkbook(workbook: WorkbookSpec): Promise<Exce
       wb.definedNames.add(ref.replace(/'/g, ''), name);
     } catch { /* invalid name for exceljs: export continues without it */ }
   }
+  // Open the file on the dashboard when one is composed — that is
+  // the sheet the reader is meant to land on (Excel/LibreOffice honor
+  // the workbook view's active tab).
+  const dashIndex = workbook.sheets.findIndex((s) => s.kind === 'dashboard' && !s.hidden);
+  if (dashIndex > 0) {
+    try {
+      const view = { x: 0, y: 0, width: 16000, height: 9000, firstSheet: 0, activeTab: dashIndex, visibility: 'visible' as const };
+      wb.views = [view];
+    } catch { /* view preferences are cosmetic: export continues */ }
+  }
   return wb;
 }
 
@@ -123,9 +146,12 @@ export async function exportWorkbookToXlsx(
     via: 'exceljs',
   };
   const charts = workbook.sheets.flatMap((s) => (s.charts ?? []).map((c) => ({ ...c, sheet: c.sheet ?? s.name })));
-  const pivots = workbook.sheets.flatMap((s) => s.pivots ?? []);
-  if ((charts.length > 0 || pivots.length > 0) && opts.sidecar !== false) {
-    const sidecar = await runSheetSidecar(outPath, workbook, { charts, pivots });
+  const pivots = workbook.sheets.flatMap((s) => s.pivots ?? []).map((p) => ({ ...p, name: p.name ?? p.id }));
+  const slicers = workbook.sheets.flatMap((s) => (s.slicers ?? []).map((sl) => ({ ...sl, sheet: sl.sheet ?? s.name })));
+  const dashboard = dashboardComposition(workbook, charts);
+  if (dashboard) record = { ...record, dashboard };
+  if ((charts.length > 0 || pivots.length > 0 || slicers.length > 0) && opts.sidecar !== false) {
+    const sidecar = await runSheetSidecar(outPath, workbook, { charts, pivots, slicers });
     if (sidecar.applied) {
       record = { ...record, via: 'exceljs+sidecar', bytes: (await stat(outPath)).size, note: sidecar.note };
     } else {
@@ -140,6 +166,25 @@ export async function exportWorkbookToXlsx(
     record = { ...record, note: 'sidecar dinonaktifkan; ekspor tanpa chart/pivot native' };
   }
   return record;
+}
+
+/**
+ * What the composed dashboard contributes to one export: KPI tiles,
+ * charts anchored on the dashboard sheet(s), slicers floating there.
+ * Named in the export record so the report states composition counts,
+ * not just that a file exists.
+ */
+export function dashboardComposition(workbook: WorkbookSpec, charts?: Array<{ sheet?: string }>): SheetExportRecord['dashboard'] | undefined {
+  const dashSheets = workbook.sheets.filter((s) => s.kind === 'dashboard');
+  if (dashSheets.length === 0) return undefined;
+  const names = new Set(dashSheets.map((s) => s.name));
+  const allCharts = charts ?? workbook.sheets.flatMap((s) => (s.charts ?? []).map((c) => ({ ...c, sheet: c.sheet ?? s.name })));
+  return {
+    sheet: dashSheets.map((s) => s.name).join(', '),
+    tiles: dashSheets.reduce((n, s) => n + (s.tiles ?? []).length, 0),
+    charts: allCharts.filter((c) => c.sheet && names.has(c.sheet)).length,
+    slicers: dashSheets.reduce((n, s) => n + (s.slicers ?? []).length, 0),
+  };
 }
 
 /**
@@ -258,6 +303,7 @@ export async function exportWorkbookCsv(
 export type SidecarSpec = {
   charts: ChartSpec[];
   pivots: PivotSpec[];
+  slicers: SlicerSpec[];
 };
 
 export type SidecarRunResult =
@@ -287,6 +333,10 @@ function spawnCapture(cmd: string, args: string[], input: string, timeoutMs: num
     const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
     child.stdout.on('data', (d: Buffer) => { stdout += d.toString('utf8'); });
     child.stderr.on('data', (d: Buffer) => { stderr += d.toString('utf8'); });
+    // A sidecar that exits before the payload flushes (instant
+    // --version, early death) must not take the export down with an
+    // unhandled stdin EPIPE — the exit code carries the verdict.
+    child.stdin.on('error', () => undefined);
     child.on('error', () => { clearTimeout(timer); resolvePromise({ code: null, stdout, stderr }); });
     child.on('close', (code) => { clearTimeout(timer); resolvePromise({ code, stdout, stderr }); });
     child.stdin.end(input);
@@ -304,10 +354,13 @@ export async function probeSheetSidecar(env: NodeJS.ProcessEnv = process.env): P
 }
 
 /**
- * Inject native charts/pivots into an already-exported xlsx. Contract
- * (sheet-sidecar): JSON on stdin {input, output, charts, pivots,
- * slicers:[]}; exit 0 = written; the input file is never modified in
- * place — output replaces it only after a successful run.
+ * Inject native charts/pivots/slicers into an already-exported xlsx.
+ * Contract (sheet-sidecar): JSON on stdin {input, output, charts,
+ * pivots, slicers}; exit 0 = written; the input file is never modified
+ * in place — output replaces it only after a successful run. A slicer
+ * bound to a pivot (`pivot` = PivotSpec.id) resolves here to the
+ * pivot's native name + target sheet, which is how Excelize attaches
+ * a slicer to a pivot table instead of a source table.
  */
 export async function runSheetSidecar(
   xlsxPath: string,
@@ -315,11 +368,22 @@ export async function runSheetSidecar(
   spec: SidecarSpec,
   opts: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
 ): Promise<SidecarRunResult> {
-  if (spec.charts.length === 0 && spec.pivots.length === 0) return { applied: false, reason: 'no-native-specs' };
+  if (spec.charts.length === 0 && spec.pivots.length === 0 && spec.slicers.length === 0) return { applied: false, reason: 'no-native-specs' };
   const probe = await probeSheetSidecar(opts.env);
   if (!probe.available || !probe.path) return { applied: false, reason: 'sidecar-tidak-terdeteksi' };
   const tmpOut = `${xlsxPath}.sidecar-tmp.xlsx`;
-  const payload = JSON.stringify({ input: xlsxPath, output: tmpOut, title: workbook.title, charts: spec.charts, pivots: spec.pivots, slicers: [] });
+  const slicerPayload = spec.slicers.map((sl) => {
+    const pivot = sl.pivot ? spec.pivots.find((p) => p.id === sl.pivot) : undefined;
+    return {
+      field: sl.field,
+      source: sl.source,
+      target: sl.sheet ?? '',
+      cell: sl.anchor,
+      ...(sl.kind ? { kind: sl.kind } : {}),
+      ...(pivot ? { pivot: pivot.name ?? pivot.id, pivotSheet: pivot.target } : {}),
+    };
+  });
+  const payload = JSON.stringify({ input: xlsxPath, output: tmpOut, title: workbook.title, charts: spec.charts, pivots: spec.pivots, slicers: slicerPayload });
   const result = await spawnCapture(probe.path, ['inject'], payload, opts.timeoutMs ?? 120000);
   if (result.code !== 0) {
     return { applied: false, reason: `sidecar gagal (exit ${String(result.code)}): ${(result.stderr || result.stdout).trim().slice(0, 200)}` };
@@ -336,7 +400,7 @@ export async function runSheetSidecar(
   const injectedCharts = actual?.charts ?? spec.charts.length;
   const injectedPivots = actual?.pivots ?? spec.pivots.length;
   const injectedSlicers = actual?.slicers ?? 0;
-  const skipNotes = (actual?.notes ?? []).filter((n) => n.includes('skipped'));
+  const skipNotes = (actual?.notes ?? []).filter((n) => n.includes('skipped') || n.includes('timeline'));
   if (injectedCharts + injectedPivots + injectedSlicers === 0) {
     const { rm } = await import('node:fs/promises');
     await rm(tmpOut, { force: true }).catch(() => undefined);

@@ -14,7 +14,8 @@
     "./slides/builtin-templates": "./src/slides/builtin-templates.ts",
     "./skills/origin": "./src/skills/origin.ts",
     "./sheets/evaluator": "./src/sheets/evaluator.ts",
-    "./sheets/refs": "./src/sheets/refs.ts"
+    "./sheets/refs": "./src/sheets/refs.ts",
+    "./sheets/workbook": "./src/sheets/workbook.ts"
   },
   "engines": {
     "node": ">=22"
