@@ -23,11 +23,17 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
+    "@types/mailparser": "^3.9.0",
     "typescript": "~6.0.2",
     "vitest": "^3.2.4"
   },
   "dependencies": {
+    "docx": "^9.9.0",
+    "exceljs": "^4.4.0",
     "jszip": "^3.10.1",
+    "mailparser": "^3.9.38",
+    "mammoth": "^1.13.0",
+    "pdfjs-dist": "^4.10.38",
     "pptxgenjs": "^4.0.1"
   }
 }

@@ -56,6 +56,7 @@ export {
   CONDENSED_TOOL_OUTPUT,
 
   type SlideTaskParams,
+  type DokumenTaskParams,
   MAX_PINNED_FILES_IN_PROMPT,
   MAX_PINNED_LINES_PER_FILE,
   MAX_PINNED_TOTAL_CHARS,
