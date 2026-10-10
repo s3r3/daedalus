@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
@@ -269,6 +269,59 @@ describe('/slides/ppt-templates v2 (pages)', () => {
     expect(uploaded.body.error).toBe('pptx_too_large')
     expect(uploaded.body.message).toBe('Template PPTX terlalu besar (maks 100 MB)')
   }, 120_000)
+
+  test('upload/list carry hasSource, and re-uploading the same file refreshes the one record in place', async () => {
+    const { base, root } = await listen()
+    const bytes = await pagedPptx()
+
+    const first = await uploadPptx(base, root, 'Berhalaman.pptx', bytes)
+    expect(first.status).toBe(201)
+    const t1 = first.body.template as { id: string; hasSource?: boolean }
+    expect(t1.hasSource).toBe(true)
+
+    const again = await uploadPptx(base, root, 'Berhalaman.pptx', bytes)
+    expect(again.status).toBe(201)
+    expect((again.body.template as { id: string }).id).toBe(t1.id)
+
+    const list = await req(base, 'GET', `/slides/ppt-templates?root=${encodeURIComponent(root)}`)
+    const templates = list.body.templates as Array<{ id: string; hasSource?: boolean }>
+    expect(templates).toHaveLength(1)
+    expect(templates[0]?.id).toBe(t1.id)
+    expect(templates[0]?.hasSource).toBe(true)
+  })
+
+  test('a pre-v3 stored record lists hasSource:false until the same file is re-uploaded', async () => {
+    const { base, root } = await listen()
+    const bytes = await pagedPptx()
+    const uploaded = await uploadPptx(base, root, 'Berhalaman.pptx', bytes)
+    const id = (uploaded.body.template as { id: string }).id
+
+    // Simulate the pre-v3 store exactly as it exists on older installs:
+    // the JSON loses its v3 fields and the kept source .pptx is gone.
+    const dir = join(root, '.daedalus', 'slide-templates')
+    const jsonPath = join(dir, `${id}.json`)
+    const stored = JSON.parse(readFileSync(jsonPath, 'utf8')) as Record<string, unknown>
+    delete stored.sourceFileName
+    delete stored.sourceAddresses
+    writeFileSync(jsonPath, JSON.stringify(stored, null, 2))
+    rmSync(join(dir, `${id}.source.pptx`), { force: true })
+
+    const stale = await req(base, 'GET', `/slides/ppt-templates?root=${encodeURIComponent(root)}`)
+    const staleTemplates = stale.body.templates as Array<{ hasSource?: boolean }>
+    expect(staleTemplates).toHaveLength(1)
+    expect(staleTemplates[0]?.hasSource).toBe(false)
+
+    const reuploaded = await uploadPptx(base, root, 'Berhalaman.pptx', bytes)
+    expect(reuploaded.status).toBe(201)
+    expect((reuploaded.body.template as { id: string; hasSource?: boolean }).id).toBe(id)
+    expect((reuploaded.body.template as { hasSource?: boolean }).hasSource).toBe(true)
+    expect(existsSync(join(dir, `${id}.source.pptx`))).toBe(true)
+
+    const fresh = await req(base, 'GET', `/slides/ppt-templates?root=${encodeURIComponent(root)}`)
+    const freshTemplates = fresh.body.templates as Array<{ hasSource?: boolean }>
+    expect(freshTemplates).toHaveLength(1)
+    expect(freshTemplates[0]?.hasSource).toBe(true)
+  })
 
   test('task submit refuses bundled+imported template together, and unknown imported templates', async () => {
     const { base, root } = await listen()

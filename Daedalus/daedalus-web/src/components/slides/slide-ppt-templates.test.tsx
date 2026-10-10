@@ -155,6 +155,39 @@ describe('SlidePptTemplatesPanel', () => {
     expect(screen.queryByTestId('slide-ppt-template-pages-emerald-gold')).toBeNull()
   })
 
+  test('a paged but sourceless (pre-v3) template shows the versi lama badge; a sourced one does not', async () => {
+    const legacy = {
+      ...importedTemplate,
+      id: 'versi-lama',
+      name: 'Versi Lama',
+      hasSource: false,
+      pages: [
+        { kind: 'cover', slots: [] },
+        { kind: 'content', slots: [] },
+      ],
+    }
+    const current = {
+      ...importedTemplate,
+      id: 'versi-baru',
+      name: 'Versi Baru',
+      hasSource: true,
+      pages: [
+        { kind: 'cover', slots: [] },
+        { kind: 'content', slots: [] },
+      ],
+    }
+    pptTemplatesMock.mockResolvedValue({ root: '/ws', templates: [legacy, current] })
+    render(<SlidePptTemplatesPanel />)
+
+    const legacyItem = await screen.findByTestId('slide-ppt-template-versi-lama')
+    expect(legacyItem.textContent).toContain('versi lama — impor ulang untuk desain penuh')
+    expect(screen.getByTestId('slide-ppt-template-legacy-versi-lama')).toBeTruthy()
+
+    const currentItem = await screen.findByTestId('slide-ppt-template-versi-baru')
+    expect(currentItem.textContent).not.toContain('versi lama')
+    expect(screen.queryByTestId('slide-ppt-template-legacy-versi-baru')).toBeNull()
+  })
+
   test('an applied template shows its active state from the deck theme', async () => {
     fileMock.mockResolvedValue(deckFile({ ...fixtureDeck, theme: { customTemplateId: 'emerald-gold', background: '#0f2d1e' } }))
     render(<SlidePptTemplatesPanel />)

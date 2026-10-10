@@ -48,7 +48,12 @@ function pageSummary(template: PptTemplateInfo): string | null {
  * outline into those page designs and only the words change — font,
  * color, and layout all come from the template. Templates imported
  * before page parsing existed carry no pages and keep the v1 skin
- * behavior (palette/fonts over the 50 Daedalus layouts). The bundled
+ * behavior (palette/fonts over the 50 Daedalus layouts). Templates
+ * imported before the kept-source (v3) export existed have pages but
+ * no source file (`hasSource: false`): exports approximate their
+ * design and the export result says so — the card badges them
+ * "versi lama" rather than letting the gap stay silent, and uploading
+ * the same file again upgrades the record in place. The bundled
  * five stay the default: importing never changes a deck until a
  * template is clicked.
  */
@@ -241,6 +246,11 @@ export function SlidePptTemplatesPanel() {
                   ) : (
                     <span className="block text-[10px] text-muted">Impor ulang untuk memakai desain halamannya</span>
                   )}
+                  {template.pages && template.pages.length > 0 && template.hasSource === false ? (
+                    <span className="block text-[10px] font-medium text-warning" data-testid={`slide-ppt-template-legacy-${template.id}`}>
+                      versi lama — impor ulang untuk desain penuh
+                    </span>
+                  ) : null}
                 </span>
               </button>
               <button
@@ -258,7 +268,7 @@ export function SlidePptTemplatesPanel() {
         })}
       </div>
       <p className="px-1 pt-1.5 text-[10px] text-muted">
-        Pakai template PPT: font, warna, dan layout halaman ikut template — AI hanya mengganti kata-katanya. Slot gambar tidak diisi AI: klik placeholder gambar di canvas (mode Edit) untuk menggantinya. File .pptx hasil Export mempertahankan seluruh elemen desain template (bentuk vektor, grafik, tabel) persis seperti aslinya; tampilan canvas hanya perkiraan. Template bawaan dan Warna &amp; Font di atas tetap pilihan tanpa impor.
+        Pakai template PPT: font, warna, dan layout halaman ikut template — AI hanya mengganti kata-katanya. Slot gambar tidak diisi AI: klik placeholder gambar di canvas (mode Edit) untuk menggantinya. File .pptx hasil Export mempertahankan seluruh elemen desain template (bentuk vektor, grafik, tabel) persis seperti aslinya; tampilan canvas hanya perkiraan. Template bertanda “versi lama” diekspor dengan gambar ulang perkiraan — impor ulang berkas .pptx yang sama agar elemen desainnya utuh. Template bawaan dan Warna &amp; Font di atas tetap pilihan tanpa impor.
       </p>
     </Panel>
   )

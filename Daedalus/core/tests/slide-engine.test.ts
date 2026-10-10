@@ -1,7 +1,8 @@
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { inflateRawSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import JSZip from 'jszip';
 import { afterEach, describe, expect, test } from 'vitest';
 import {
   EventBus,
@@ -9,7 +10,9 @@ import {
   TaskStore,
   loadSettings,
   newDeck,
+  pptxTemplatesDir,
   readDeck,
+  savePptxTemplate,
   writeDeck,
   type Event,
   type LLMProvider,
@@ -194,6 +197,70 @@ describe('SlideEngine generation', () => {
     const allSlides = slideNames.map((name) => parts.get(name) ?? '').join('\n');
     expect(allSlides).toContain('Judul Slide');
     expect(allSlides).toContain('poin satu');
+  });
+
+  test('generation with a pre-v3 (sourceless) imported template completes but its summary warns the export is approximate', async () => {
+    const root = temp('daedalus-engine-sourceless-');
+
+    // A minimal two-page template (cover + content words), imported the
+    // modern way, then stripped back to its pre-v3 stored shape: no
+    // source .pptx beside the JSON, no v3 fields inside it. Generation
+    // still pours words into the parsed pages; only clone fidelity is
+    // unavailable — and that must be said, not silent.
+    const zip = new JSZip();
+    const rel = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+    zip.file('ppt/presentation.xml', `<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="${rel}"><p:sldIdLst><p:sldId id="256" r:id="rId2"/><p:sldId id="257" r:id="rId3"/></p:sldIdLst><p:sldSz cx="12192000" cy="6858000"/></p:presentation>`);
+    zip.file('ppt/_rels/presentation.xml.rels', `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${rel}/slideMaster" Target="slideMasters/slideMaster1.xml"/><Relationship Id="rId2" Type="${rel}/slide" Target="slides/slide1.xml"/><Relationship Id="rId3" Type="${rel}/slide" Target="slides/slide2.xml"/></Relationships>`);
+    zip.file('ppt/theme/theme1.xml', `<a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Mesin"><a:themeElements><a:clrScheme name="M"><a:dk1><a:srgbClr val="101418"/></a:dk1><a:lt1><a:srgbClr val="F7F3E8"/></a:lt1><a:accent1><a:srgbClr val="2E7D5C"/></a:accent1><a:hlink><a:srgbClr val="0563C1"/></a:hlink></a:clrScheme><a:fontScheme name="M"><a:majorFont><a:latin typeface="Georgia"/></a:majorFont><a:minorFont><a:latin typeface="Verdana"/></a:minorFont></a:fontScheme></a:themeElements></a:theme>`);
+    zip.file('ppt/slideMasters/slideMaster1.xml', `<p:sldMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree/></p:cSld></p:sldMaster>`);
+    zip.file('ppt/slideMasters/_rels/slideMaster1.xml.rels', `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="${rel}/theme" Target="../theme/theme1.xml"/></Relationships>`);
+    const shape = (id: number, size: number, x: number, y: number, w: number, h: number, sampleText: string): string =>
+      `<p:sp><p:nvSpPr><p:cNvPr id="${id}" name="T${id}"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="${x}" y="${y}"/><a:ext cx="${w}" cy="${h}"/></a:xfrm></p:spPr><p:txBody><a:bodyPr/><a:p><a:r><a:rPr sz="${size}"><a:solidFill><a:srgbClr val="0B3D2E"/></a:solidFill><a:latin typeface="Georgia"/></a:rPr><a:t>${sampleText}</a:t></a:r></a:p></p:txBody></p:sp>`;
+    const slide = (body: string): string =>
+      `<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="${rel}" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>${body}</p:spTree></p:cSld></p:sld>`;
+    zip.file('ppt/slides/slide1.xml', slide(shape(2, 4400, 1219200, 2286000, 9753600, 1828800, 'Judul Contoh Lama') + shape(3, 1800, 2438400, 4114800, 7315200, 914400, 'Subjudul contoh lama')));
+    zip.file('ppt/slides/slide2.xml', slide(shape(2, 2800, 853440, 457200, 6400800, 914400, 'Judul Isi Lama') + shape(3, 1400, 853440, 1645920, 6400800, 3200400, 'Poin contoh lama')));
+    const templateBytes = await zip.generateAsync({ type: 'nodebuffer' });
+
+    const template = await savePptxTemplate(root, { fileName: 'Mesin Uji.pptx', bytes: templateBytes });
+    expect(template.hasSource).toBe(true);
+    const dir = pptxTemplatesDir(root);
+    const jsonPath = join(dir, `${template.id}.json`);
+    const stored = JSON.parse(readFileSync(jsonPath, 'utf8')) as Record<string, unknown>;
+    delete stored.sourceFileName;
+    delete stored.sourceAddresses;
+    writeFileSync(jsonPath, JSON.stringify(stored, null, 2));
+    rmSync(join(dir, `${template.id}.source.pptx`), { force: true });
+
+    const { provider } = scripted((system, user) => {
+      if (system.includes(OUTLINE_SYSTEM_MARKER)) {
+        return ['cover', 'content', 'content'].map((role, i) => ({ title: `Judul ${i + 1}`, keyMessage: `pesan ${i + 1}`, role }));
+      }
+      if (system.includes(FILL_SYSTEM_MARKER)) {
+        const out: Record<string, string> = {};
+        for (const m of user.matchAll(/^- (s\d+):/gm)) out[m[1]!] = 'Balasan AI';
+        return out;
+      }
+      return {};
+    });
+    const { runner } = makeRunner(root, provider);
+    const result = await runner.run({
+      goal: 'buatkan deck tentang fotosintesis',
+      taskId: 'engine-sourceless',
+      domain: 'slide',
+      slide: { generation: 'smart', slideCount: 3, customTemplateId: template.id },
+    });
+
+    expect(result.state.status).toBe('done');
+    expect(result.outcome).toBe('success');
+    // The generation task report carries the honesty warning: words were
+    // poured, but the export could not clone the template's design.
+    const reportText = result.report.evidence.join('\n');
+    expect(reportText).toContain('diimpor sebelum ekspor fidelitas penuh');
+    expect(reportText).toContain('impor ulang');
+    expect(pptxFiles(root)).toHaveLength(1);
+    const deck = await readDeck(root);
+    expect(deck?.slides.every((s) => s.templateRef?.templateId === template.id)).toBe(true);
   });
 
   test('standard flow stages the outline in the panel; Buat fills the persisted skeleton and completes the task', async () => {

@@ -8,9 +8,12 @@ import {
   exportDeckToPptx,
   fillDeckSlidesStage,
   generateDeckOutlineStage,
+  getPptxTemplate,
+  listPptxTemplates,
   newDeck,
   pptxTemplatesDir,
   readDeck,
+  readPptxTemplateSync,
   savePptxTemplate,
   type DeckSpec,
   type LLMProvider,
@@ -294,6 +297,62 @@ describe('Template dari PPT v3 — clone-and-rewrite export', () => {
     expect(pureResult.note).toContain('diimpor sebelum ekspor fidelitas penuh');
     expect(existsSync(join(root, 'deck', 'murni-template.pptx'))).toBe(true);
     expect(readdirSync(join(root, 'deck')).filter((f) => f.endsWith('.pptx')).length).toBe(2);
+  });
+});
+
+describe('Template dari PPT v3 — pre-v3 records stay honest, re-import upgrades in place', () => {
+  /** Strip a stored record back to its pre-v3 shape: v3 JSON fields gone AND the source file deleted. */
+  function makeSourceless(root: string, id: string): void {
+    const dir = pptxTemplatesDir(root);
+    const jsonPath = join(dir, `${id}.json`);
+    const stored = JSON.parse(readFileSync(jsonPath, 'utf8')) as Record<string, unknown>;
+    delete stored.sourceFileName;
+    delete stored.sourceAddresses;
+    writeFileSync(jsonPath, JSON.stringify(stored, null, 2));
+    rmSync(join(dir, `${id}.source.pptx`), { force: true });
+  }
+
+  test('a sourceless record reports hasSource false on every reader, and its export note says why', async () => {
+    const root = temp('daedalus-ppt-fidelity-sourceless-');
+    const template = await savePptxTemplate(root, { fileName: 'HutanBelajar.pptx', bytes: await hutanPptx() });
+    expect(template.hasSource).toBe(true);
+
+    makeSourceless(root, template.id);
+    expect((await getPptxTemplate(root, template.id))?.hasSource).toBe(false);
+    expect((await listPptxTemplates(root)).map((t) => t.hasSource)).toEqual([false]);
+    expect(readPptxTemplateSync(root, template.id)?.hasSource).toBe(false);
+
+    const deck = newDeck('Sumber Hilang');
+    deck.slides = [templateSlide('a', template.id, 0, { s0: 'Sampul', s1: 'Sub' })];
+    const result = await exportDeckToPptx(deck, root);
+    expect(result.note).toContain('diimpor sebelum ekspor fidelitas penuh');
+  });
+
+  test('re-importing the same file upgrades the record in place: same id, source attached, clone export restored', async () => {
+    const root = temp('daedalus-ppt-fidelity-reimport-');
+    const bytes = await hutanPptx();
+    const template = await savePptxTemplate(root, { fileName: 'HutanBelajar.pptx', bytes });
+    const { id, createdAt } = template;
+    makeSourceless(root, id);
+
+    const upgraded = await savePptxTemplate(root, { fileName: 'HutanBelajar.pptx', bytes });
+    expect(upgraded.id).toBe(id);
+    expect(upgraded.createdAt).toBe(createdAt);
+    expect(upgraded.hasSource).toBe(true);
+    expect(upgraded.sourceFileName).toBe(`${id}.source.pptx`);
+    expect(await listPptxTemplates(root)).toHaveLength(1);
+
+    // The deck referencing the OLD template id now clone-exports:
+    // decorations byte-identical, note gone.
+    const deck = newDeck('Hutan Lagi');
+    deck.slides = [templateSlide('a', id, 0, { s0: 'Sampul Baru', s1: 'Sub baru' })];
+    const result = await exportDeckToPptx(deck, root);
+    expect(result.note).toBeUndefined();
+    const out = await unzip(readFileSync(join(root, 'deck', 'hutan-lagi.pptx')));
+    const cover = await partText(out, 'ppt/slides/slide1.xml');
+    expect(cover).toContain(DECOR_ELLIPSE);
+    expect(cover).toContain(DECOR_GROUP);
+    expect(ts(cover)).toEqual(['Sampul Baru', 'Sub baru', 'TeksDiGrup']);
   });
 });
 
