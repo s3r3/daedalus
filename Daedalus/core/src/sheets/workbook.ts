@@ -218,6 +218,7 @@ export function slugifyTitle(title: string): string {
 }
 
 export { colToIndex, indexToCol, parseCellRef, formatCellRef, parseRange, sheetHeaders, type CellRef, type RangeRef } from './refs.ts';
+import { parseCellRef } from './refs.ts';
 
 /** Used-range bounds of a sheet's sparse cell map (null when empty). */
 export function sheetBounds(sheet: SheetSpec): { minCol: number; minRow: number; maxCol: number; maxRow: number } | null {
