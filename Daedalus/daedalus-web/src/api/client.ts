@@ -1,4 +1,4 @@
-import type { AgentMode, Attachment, Event, FinalReport, PermissionKey } from '@daedalus/core'
+import type { AgentMode, Attachment, DocumentState, Event, FinalReport, PermissionKey } from '@daedalus/core'
 import type {
   Conversation,
   FileChange,
@@ -77,8 +77,8 @@ function query(params: Record<string, string | number | undefined>): string {
 export type CreateTaskInput = {
   goal: string
   repo_path: string
-  /** Domain produk aktif saat submit ('coding'|'slide'); server meneruskannya ke core agar task berjalan dengan toolset domain tersebut. */
-  domain?: 'coding' | 'slide'
+  /** Domain produk aktif saat submit ('coding'|'slide'|'dokumen'); server meneruskannya ke core agar task berjalan dengan engine domain tersebut. */
+  domain?: 'coding' | 'slide' | 'dokumen'
   auto_approve?: boolean
   max_iterations?: number
   constraints?: string[]
@@ -100,6 +100,8 @@ export type CreateTaskInput = {
   skills?: string[]
   /** Slide composer parameters (Agentic Slide v2); only sent in the slide domain, validated by the server. */
   slide?: { generation?: 'smart' | 'standard'; slide_count?: number; language?: string; template_id?: string; design_id?: string; custom_template_id?: string }
+  /** Dokumen composer parameters; only sent in the dokumen domain, validated by the server. */
+  dokumen?: { sub_mode: 'ekstrak' | 'susun'; sources?: string[]; docx_path?: string }
 }
 
 /** One bundled slide template (design direction) from GET /slides/templates. */
@@ -235,8 +237,99 @@ export type DeckGenerateResult = {
   exported: { path: string; bytes: number; slides: number } | null
 }
 
+export type { DocumentState }
+
+/** Verdict of POST /dokumen/reset (Dokumen new chat's full reset). */
+export type DokumenResetResult = {
+  root: string
+  /** Workspace-relative archive path (`.daedalus/dokumen-archive/<ts>-<slug>`) of the document moved aside, null when there was none. */
+  archived: string | null
+  staged_abandoned: boolean
+}
+
+export type DokumenBlocksResult = {
+  root: string
+  sourceId: string
+  pages: number
+  pageSizes: Array<{ width: number; height: number }>
+  blocks: Array<{ page: number; text: string; bbox?: [number, number, number, number] }>
+}
+
+export type DokumenReleaseResult = {
+  root: string
+  released: boolean
+  applied?: string
+  path?: string
+  document?: DocumentState
+}
+
+export type DokumenExportResult = {
+  root: string
+  result: { format: string; path: string; recordCount: number; heldBack: number; bytes?: number }
+  document: DocumentState
+}
+
+/** Base for direct fetches (PDF bytes for the canvas) — same origin in production. */
+export function dokumenSourceFileUrl(root: string, sourceId: string): string {
+  return `${BASE}/dokumen/source-file?root=${encodeURIComponent(root)}&sourceId=${encodeURIComponent(sourceId)}`
+}
+
 export const api = {
   health: () => request<{ status: string; service: string; active_tasks: number }>('/health'),
+
+  /** The workspace's active Dokumen document (null = none yet). */
+  dokumenDocument: (root: string) =>
+    request<{ root: string; document: DocumentState | null }>(`/dokumen/document?root=${encodeURIComponent(root)}`),
+
+  /** Parsed provenance blocks for one source (the canvas source view). */
+  dokumenBlocks: (root: string, sourceId: string) =>
+    request<DokumenBlocksResult>(`/dokumen/blocks?root=${encodeURIComponent(root)}&sourceId=${encodeURIComponent(sourceId)}`),
+
+  /** Attach workspace files as sources (copied in, hash-deduped, parsed natively at once). */
+  dokumenSources: (root: string, paths: string[]) =>
+    request<{ root: string; document: DocumentState }>('/dokumen/sources', { method: 'POST', body: JSON.stringify({ root, paths }) }),
+
+  /** Save Panel Skema edits (fields/target); optionally also store as the saved schema for a document kind. */
+  dokumenSchema: (root: string, schema: unknown, saveTemplate = false) =>
+    request<{ root: string; document: DocumentState }>('/dokumen/schema', { method: 'POST', body: JSON.stringify({ root, schema, save_template: saveTemplate }) }),
+
+  /** The panel release buttons: Ekstrak / Susun / Terapkan. */
+  dokumenRelease: (root: string) =>
+    request<DokumenReleaseResult>('/dokumen/release', { method: 'POST', body: JSON.stringify({ root }) }),
+
+  /** One field correction from the grid (re-validated deterministically server-side). */
+  dokumenField: (root: string, recordId: string, field: string, value: string | number | boolean | null) =>
+    request<{ root: string; document: DocumentState; record: DocumentState['records'][number] }>('/dokumen/field', {
+      method: 'POST',
+      body: JSON.stringify({ root, record_id: recordId, field, value }),
+    }),
+
+  /** Save Panel Outline edits (titles + thesis points) before Susun. */
+  dokumenOutline: (root: string, sections: Array<{ id: string; title: string; thesisPoints: string[] }>) =>
+    request<{ root: string; document: DocumentState }>('/dokumen/outline', { method: 'POST', body: JSON.stringify({ root, sections }) }),
+
+  /** Save a user prose edit on one composed section. */
+  dokumenSection: (root: string, id: string, prose: string) =>
+    request<{ root: string; document: DocumentState }>('/dokumen/section', { method: 'POST', body: JSON.stringify({ root, id, prose }) }),
+
+  /** Verified-only data export (the gate counts held-back records, never mixes them in). */
+  dokumenExportData: (root: string, format: 'json' | 'csv' | 'xlsx') =>
+    request<DokumenExportResult>('/dokumen/export-data', { method: 'POST', body: JSON.stringify({ root, format }) }),
+
+  /** Compose export (DOCX native render; PDF via LibreOffice when present). */
+  dokumenExportDocument: (root: string, format: 'docx' | 'pdf') =>
+    request<DokumenExportResult>('/dokumen/export-document', { method: 'POST', body: JSON.stringify({ root, format }) }),
+
+  /** Deterministic DOCX style inspection + optional staged-op proposal for an instruction. */
+  dokumenStyleInspect: (root: string, path: string, instruction?: string) =>
+    request<{ root: string; state: unknown; ops: Array<{ id: string; target: string; before: string; after: string; applied: boolean }> }>('/dokumen/style-inspect', {
+      method: 'POST',
+      body: JSON.stringify({ root, path, ...(instruction ? { instruction } : {}) }),
+    }),
+
+  /** Dokumen new chat: archive the active document aside (never deleted) and settle any staged gate. */
+  dokumenReset: (root: string) =>
+    request<DokumenResetResult>('/dokumen/reset', { method: 'POST', body: JSON.stringify({ root }) }),
 
   settings: () => request<SettingsResponse>('/settings'),
 

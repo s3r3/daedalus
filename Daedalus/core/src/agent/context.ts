@@ -68,6 +68,15 @@ export const MAX_PINNED_LINES_PER_FILE = 6;
 export const MAX_PINNED_TOTAL_CHARS = 2_400;
 
 /** Slide task parameters chosen in the Slide composer (generation flow, target count, content language, pre-picked template). Consumed by the SlideEngine (slides/engine.ts); the coding prompt builder never renders them. */
+/** Dokumen composer parameters (only meaningful with domain 'dokumen'): sub-mode Ekstrak|Susun, sources to ingest, DOCX to re-layout. */
+export type DokumenTaskParams = {
+  subMode: 'ekstrak' | 'susun';
+  /** Workspace-relative (or absolute) source files to ingest for this run. */
+  sources?: string[];
+  /** DOCX (workspace-relative) to re-layout; the prompt carries the style instruction. */
+  docxPath?: string;
+};
+
 export type SlideTaskParams = {
   generation?: 'smart' | 'standard';
   slideCount?: number;

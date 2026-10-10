@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { mkdir, rename, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,6 +52,29 @@ import {
   savePptxTemplate,
   newSlideId,
   readDeck,
+  readActiveDocument,
+  writeDocument,
+  readParsedBlocks,
+  readAudit,
+  appendAudit,
+  sourceFilePath,
+  ingestSourceFile,
+  parseSourceFile,
+  writeParsedBlocks,
+  saveSchema,
+  archiveActiveDocument,
+  createActiveDocument,
+  exportData,
+  exportDocumentDocx,
+  exportDocumentPdf,
+  inspectDocxStyles,
+  proposeStyleOps,
+  parseStyleInstruction,
+  applyStyleOps,
+  validateRecord,
+  isSupportedSource,
+  type DokumenTaskParams,
+  type DocumentState,
   validateDeck,
   writeDeck,
   type DeckSpec,
@@ -195,7 +218,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(data);
 }
 
-const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workspace", "/slides", "/uploads", "/upload", "/attachments", "/extensions", "/review", "/terminals"];
+const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workspace", "/slides", "/dokumen", "/uploads", "/upload", "/attachments", "/extensions", "/review", "/terminals"];
 
 function webContentType(path: string): string {
   switch (extname(path).toLowerCase()) {
@@ -231,7 +254,13 @@ function webDistPath(ctx: AppContext): string | undefined {
 }
 
 function serveWebAsset(ctx: AppContext, res: ServerResponse, pathname: string, accept = ""): boolean {
-  if (WEB_API_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) return false;
+  // API paths never serve the app shell — except a BARE prefix that is
+  // also a domain page route ('/dokumen' the page vs '/dokumen/...' the
+  // API): a browser navigation there (Accept: text/html) wants the SPA.
+  const isApiPath = WEB_API_PREFIXES.some(
+    (prefix) => pathname.startsWith(`${prefix}/`) || (pathname === prefix && !accept.includes("text/html")),
+  );
+  if (isApiPath) return false;
   const dist = webDistPath(ctx);
   if (!dist) return false;
 
@@ -1325,11 +1354,34 @@ export function createApp(ctx: AppContext) {
             return;
           }
           const isolation = parsed.isolation === "worktree" ? ("worktree" as const) : undefined;
-          if (parsed.domain !== undefined && parsed.domain !== "coding" && parsed.domain !== "slide") {
+          if (parsed.domain !== undefined && parsed.domain !== "coding" && parsed.domain !== "slide" && parsed.domain !== "dokumen") {
             sendJson(res, 400, { error: "invalid_domain", request_id: requestId });
             return;
           }
-          const domain = parsed.domain === "slide" || parsed.domain === "coding" ? parsed.domain : undefined;
+          const domain = parsed.domain === "slide" || parsed.domain === "coding" || parsed.domain === "dokumen" ? parsed.domain : undefined;
+
+          // Dokumen composer parameters: Ekstrak|Susun sub-mode, source
+          // files to ingest, DOCX to re-layout. Only meaningful in the
+          // dokumen domain; validated here so the composer gets a named
+          // 400 instead of a silently wrong run.
+          let dokumen: DokumenTaskParams | undefined;
+          if (domain === "dokumen") {
+            const raw = parsed.dokumen && typeof parsed.dokumen === "object" ? (parsed.dokumen as Record<string, unknown>) : {};
+            const subModeRaw = raw.sub_mode ?? raw.subMode;
+            if (subModeRaw !== undefined && subModeRaw !== "ekstrak" && subModeRaw !== "susun") {
+              sendJson(res, 400, { error: "invalid_dokumen_submode", request_id: requestId });
+              return;
+            }
+            const sourcesRaw = raw.sources;
+            const sources = Array.isArray(sourcesRaw) ? sourcesRaw.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : [];
+            const docxRaw = raw.docx_path ?? raw.docxPath;
+            const docxPath = typeof docxRaw === "string" && docxRaw.trim() ? docxRaw.trim() : undefined;
+            dokumen = {
+              subMode: subModeRaw === "susun" ? "susun" : "ekstrak",
+              ...(sources.length > 0 ? { sources } : {}),
+              ...(docxPath ? { docxPath } : {}),
+            };
+          }
 
           // Slide composer parameters (Agentic Slide v2): generation flow,
           // target slide count, content language, pre-picked template. The
@@ -1464,10 +1516,10 @@ export function createApp(ctx: AppContext) {
           // un-skilled task. A valid invocation always takes the task
           // path (the fast answer paths have no skill context).
           const skillNames = stringList(parsed.skills).map((name) => name.trim()).filter(Boolean);
-          if (domain === "slide" && skillNames.length > 0) {
+          if ((domain === "slide" || domain === "dokumen") && skillNames.length > 0) {
             // Slide mode is a locked surface (deck tools + ask_user); a
             // /skill invocation there gets a named refusal, not a silent drop.
-            sendJson(res, 400, { error: "skills_not_in_slide_domain", request_id: requestId });
+            sendJson(res, 400, { error: domain === "dokumen" ? "skills_not_in_dokumen_domain" : "skills_not_in_slide_domain", request_id: requestId });
             return;
           }
           if (skillNames.length > 0) {
@@ -1497,7 +1549,7 @@ export function createApp(ctx: AppContext) {
           // attachments/worktrees always take the task path. Slide-domain
           // submits also always take the full task path: the fast answer
           // paths have no tool loop, so they could never touch the deck.
-          const intent = attachments.length || isolation || skillNames.length || domain === "slide" ? "task" : classifyWebIntent(goal);
+          const intent = attachments.length || isolation || skillNames.length || domain === "slide" || domain === "dokumen" ? "task" : classifyWebIntent(goal);
           if (intent !== "task") {
             const task = {
               id: taskId,
@@ -1573,6 +1625,13 @@ export function createApp(ctx: AppContext) {
               if (otherId !== taskId) other.abandonStagedDeck(repoPath);
             }
           }
+          if (domain === "dokumen") {
+            // Same doctrine: a new dokumen prompt supersedes a staged
+            // schema/outline/style gate still waiting in this workspace.
+            for (const [otherId, other] of ctx.activeRunners) {
+              if (otherId !== taskId) other.abandonDokumenGate(repoPath);
+            }
+          }
 
           const task = {
             id: taskId,
@@ -1623,6 +1682,7 @@ export function createApp(ctx: AppContext) {
               ...(conversationId ? { conversationId } : {}),
               ...(domain ? { domain } : {}),
               ...(slide ? { slide } : {}),
+              ...(dokumen ? { dokumen } : {}),
             })
             .then((result) => {
               ctx.log.info("task finished", { task_id: taskId, outcome: result.outcome });
@@ -2502,6 +2562,336 @@ export function createApp(ctx: AppContext) {
           }
           await rename(deckDir, join(archiveParent, name));
           sendJson(res, 200, { root, archived: `.daedalus/deck-archive/${name}`, staged_abandoned: stagedAbandoned });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+
+    /* ---------------------------------------------------------- Dokumen
+     * The Dokumen domain's panel API (Slide-deck-route doctrine): the
+     * panels read/write document.json through core, the staged gates
+     * are released by panel buttons (never chat cards), and exports run
+     * through core's verification gate. document.json is the truth;
+     * these routes never render native files themselves. */
+
+    if (method === "GET" && url.pathname === "/dokumen/document") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const document = await readActiveDocument(root);
+          sendJson(res, 200, { root, document });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/dokumen/blocks") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const sourceId = url.searchParams.get("sourceId") ?? "";
+          const document = await readActiveDocument(root);
+          if (!document) {
+            sendJson(res, 404, { error: "document_not_found", request_id: requestId });
+            return;
+          }
+          const parsed = await readParsedBlocks(root, document.id, sourceId);
+          if (!parsed) {
+            sendJson(res, 404, { error: "blocks_not_found", request_id: requestId });
+            return;
+          }
+          sendJson(res, 200, { root, sourceId, pages: parsed.pages, pageSizes: parsed.pageSizes, blocks: parsed.blocks });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/dokumen/source-file") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const sourceId = url.searchParams.get("sourceId") ?? "";
+          const document = await readActiveDocument(root);
+          const source = document?.sources.find((s) => s.id === sourceId);
+          if (!document || !source) {
+            sendJson(res, 404, { error: "source_not_found", request_id: requestId });
+            return;
+          }
+          const bytes = await readFile(sourceFilePath(root, document.id, source.filename));
+          const type = source.filename.toLowerCase().endsWith(".pdf")
+            ? "application/pdf"
+            : source.filename.toLowerCase().endsWith(".docx")
+              ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              : source.filename.toLowerCase().endsWith(".eml")
+                ? "message/rfc822"
+                : "text/plain; charset=utf-8";
+          res.writeHead(200, { "content-type": type, "content-length": bytes.length, ...CORS_HEADERS });
+          res.end(bytes);
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && url.pathname.startsWith("/dokumen/")) {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const needDocument = async (): Promise<DocumentState | null> => {
+            const document = await readActiveDocument(root);
+            if (!document) sendJson(res, 404, { error: "document_not_found", request_id: requestId });
+            return document;
+          };
+
+          if (url.pathname === "/dokumen/sources") {
+            // Panel attach: bytes are copied + hash-deduped and parsed
+            // natively right away (no model) so Panel Sumber shows real
+            // page counts; extraction itself stays a task.
+            let document = await readActiveDocument(root);
+            if (!document) document = await createActiveDocument(root, "extract", "Dokumen");
+            const paths = Array.isArray(parsed.paths) ? parsed.paths.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : [];
+            for (const rel of paths) {
+              if (!isSupportedSource(rel)) {
+                sendJson(res, 400, { error: "unsupported_source", message: `Berkas ${rel} tidak didukung — Dokumen v1 membaca PDF, DOCX, EML, TXT, MD.`, request_id: requestId });
+                return;
+              }
+              const { source } = await ingestSourceFile(root, document, resolve(root, rel), rel);
+              if (source.status !== "parsed") {
+                try {
+                  const parsedSource = await parseSourceFile(sourceFilePath(root, document.id, source.filename));
+                  await writeParsedBlocks(root, document.id, source.id, parsedSource);
+                  source.pages = parsedSource.pages;
+                  source.status = "parsed";
+                } catch (error) {
+                  source.status = "failed";
+                  source.error = error instanceof Error ? error.message : String(error);
+                }
+              }
+            }
+            await writeDocument(root, document);
+            sendJson(res, 200, { root, document });
+            return;
+          }
+
+          if (url.pathname === "/dokumen/schema") {
+            const document = await needDocument();
+            if (!document) return;
+            const raw = parsed.schema && typeof parsed.schema === "object" ? (parsed.schema as Record<string, unknown>) : {};
+            const rawFields = Array.isArray(raw.fields) ? raw.fields : null;
+            const types = ["string", "number", "money", "date", "email", "boolean"];
+            if (!rawFields || rawFields.length === 0) {
+              sendJson(res, 400, { error: "invalid_schema", message: "Skema butuh minimal satu field.", request_id: requestId });
+              return;
+            }
+            const fields: DocumentState["schema"] extends { fields: infer F } | undefined ? F : never = [];
+            const seen = new Set<string>();
+            for (const entry of rawFields) {
+              const f = entry as Record<string, unknown>;
+              const name = typeof f.name === "string" ? f.name.trim() : "";
+              if (!name || seen.has(name)) {
+                sendJson(res, 400, { error: "invalid_schema", message: `Nama field kosong atau ganda: "${name}"`, request_id: requestId });
+                return;
+              }
+              seen.add(name);
+              fields.push({
+                name,
+                type: typeof f.type === "string" && types.includes(f.type) ? (f.type as (typeof fields)[number]["type"]) : "string",
+                ...(f.required === true ? { required: true } : {}),
+                ...(typeof f.description === "string" ? { description: f.description } : {}),
+              });
+            }
+            const target = raw.extraction_target ?? raw.extractionTarget;
+            document.schema = {
+              version: 1,
+              fields,
+              extractionTarget: target === "per_page" || target === "per_row" || target === "per_doc" ? target : (document.schema?.extractionTarget ?? "per_doc"),
+              ...(typeof raw.autoClearMin === "number" ? { autoClearMin: raw.autoClearMin } : {}),
+              ...(typeof raw.escalateBelow === "number" ? { escalateBelow: raw.escalateBelow } : {}),
+              approved: document.schema?.approved ?? false,
+            };
+            await writeDocument(root, document);
+            await appendAudit(root, document.id, { actor: "web", action: "schema_edited", detail: `${fields.length} field disimpan dari Panel Skema` });
+            if (parsed.save_template === true) {
+              const docType = typeof parsed.doc_type === "string" && parsed.doc_type.trim() ? parsed.doc_type.trim() : document.sources[0]?.docType;
+              if (docType) await saveSchema(root, docType, document.schema);
+            }
+            sendJson(res, 200, { root, document });
+            return;
+          }
+
+          if (url.pathname === "/dokumen/release") {
+            // The panel release buttons (Ekstrak / Susun / Terapkan):
+            // settle the waiting engine gate; the task itself continues
+            // and reports through its own task.
+            for (const runner of ctx.activeRunners.values()) {
+              if (runner.releaseDokumenGate(root)) {
+                sendJson(res, 200, { root, released: true });
+                return;
+              }
+            }
+            // No live gate (server restarted / run ended): apply what
+            // can honestly be applied from disk — schema approval is a
+            // state change; drafting/extraction still needs a task.
+            const document = await readActiveDocument(root);
+            if (!document) {
+              sendJson(res, 404, { error: "document_not_found", request_id: requestId });
+              return;
+            }
+            if (document.schema && !document.schema.approved) {
+              document.schema = { ...document.schema, approved: true };
+              await writeDocument(root, document);
+              await appendAudit(root, document.id, { actor: "web", action: "schema_approved_offline", detail: "skema disetujui tanpa run aktif; ekstraksi berjalan pada tugas berikutnya" });
+              sendJson(res, 200, { root, released: false, applied: "schema-approved", document });
+              return;
+            }
+            const pendingOps = document.styleOps.filter((op) => !op.applied);
+            if (pendingOps.length > 0 && document.styleTarget) {
+              const result = await applyStyleOps(root, document, resolve(root, document.styleTarget), document.styleOps);
+              await writeDocument(root, document);
+              await appendAudit(root, document.id, { actor: "web", action: "style_applied_offline", detail: `${result.path} dibuat; asli tidak ditimpa` });
+              sendJson(res, 200, { root, released: false, applied: "style", path: result.path, document });
+              return;
+            }
+            sendJson(res, 409, { error: "no_staged_gate", message: "Tidak ada skema/kerangka/perubahan gaya yang menunggu persetujuan di workspace ini.", request_id: requestId });
+            return;
+          }
+
+          if (url.pathname === "/dokumen/field") {
+            const document = await needDocument();
+            if (!document) return;
+            if (!document.schema) {
+              sendJson(res, 409, { error: "no_schema", request_id: requestId });
+              return;
+            }
+            const record = document.records.find((r) => r.id === parsed.record_id);
+            const fieldName = typeof parsed.field === "string" ? parsed.field : "";
+            if (!record || !record.fields[fieldName]) {
+              sendJson(res, 404, { error: "field_not_found", request_id: requestId });
+              return;
+            }
+            const before = record.fields[fieldName]!;
+            record.fields[fieldName] = {
+              value: (parsed.value ?? null) as string | number | boolean | null,
+              confidence: 1,
+              status: "corrected",
+              originalValue: before.value,
+              note: "dikoreksi pengguna di kanvas",
+              ...(before.provenance ? { provenance: before.provenance } : {}),
+            };
+            validateRecord(record, document.schema);
+            await writeDocument(root, document);
+            await appendAudit(root, document.id, { actor: "web", action: "field_corrected", recordId: record.id, field: fieldName, detail: `${JSON.stringify(before.value)} -> ${JSON.stringify(record.fields[fieldName]!.value)}; keputusan kini ${record.decision}` });
+            sendJson(res, 200, { root, document, record });
+            return;
+          }
+
+          if (url.pathname === "/dokumen/outline") {
+            const document = await needDocument();
+            if (!document) return;
+            const list = Array.isArray(parsed.sections) ? parsed.sections : [];
+            const byId = new Map(document.sections.map((s) => [s.id, s]));
+            document.sections = list.map((entry) => {
+              const raw = entry as Record<string, unknown>;
+              const id = typeof raw.id === "string" ? raw.id : "";
+              const existing = byId.get(id);
+              return {
+                id: existing?.id ?? `sec-${Math.random().toString(36).slice(2, 10)}`,
+                title: typeof raw.title === "string" && raw.title.trim() ? raw.title.trim() : (existing?.title ?? "Tanpa judul"),
+                thesisPoints: Array.isArray(raw.thesisPoints) ? raw.thesisPoints.filter((x): x is string => typeof x === "string") : (existing?.thesisPoints ?? []),
+                citations: existing?.citations ?? [],
+                prose: existing?.prose ?? "",
+                status: existing?.status ?? "staged",
+              };
+            });
+            await writeDocument(root, document);
+            await appendAudit(root, document.id, { actor: "web", action: "outline_edited", detail: `${document.sections.length} bab disimpan dari panel` });
+            sendJson(res, 200, { root, document });
+            return;
+          }
+
+          if (url.pathname === "/dokumen/section") {
+            const document = await needDocument();
+            if (!document) return;
+            const section = document.sections.find((x) => x.id === parsed.id);
+            if (!section) {
+              sendJson(res, 404, { error: "section_not_found", request_id: requestId });
+              return;
+            }
+            if (typeof parsed.prose === "string") section.prose = parsed.prose;
+            await writeDocument(root, document);
+            await appendAudit(root, document.id, { actor: "web", action: "section_edited", detail: `prosa bab "${section.title}" disunting pengguna` });
+            sendJson(res, 200, { root, document, section });
+            return;
+          }
+
+          if (url.pathname === "/dokumen/export-data") {
+            const document = await needDocument();
+            if (!document) return;
+            const format = parsed.format === "csv" || parsed.format === "xlsx" ? parsed.format : "json";
+            const result = await exportData(root, document, format);
+            await writeDocument(root, document);
+            await appendAudit(root, document.id, { actor: "web", action: "export_data", detail: `${format}: ${result.recordCount} record keluar, ${result.heldBack} tertahan` });
+            sendJson(res, 200, { root, result, document });
+            return;
+          }
+
+          if (url.pathname === "/dokumen/export-document") {
+            const document = await needDocument();
+            if (!document) return;
+            const result = parsed.format === "pdf" ? await exportDocumentPdf(root, document) : await exportDocumentDocx(root, document);
+            await writeDocument(root, document);
+            await appendAudit(root, document.id, { actor: "web", action: "export_document", detail: `${result.format}: ${result.path}` });
+            sendJson(res, 200, { root, result, document });
+            return;
+          }
+
+          if (url.pathname === "/dokumen/style-inspect") {
+            const rel = typeof parsed.path === "string" ? parsed.path : "";
+            if (!rel.toLowerCase().endsWith(".docx")) {
+              sendJson(res, 400, { error: "not_docx", message: "Tata ulang hanya untuk berkas .docx.", request_id: requestId });
+              return;
+            }
+            const state = await inspectDocxStyles(resolve(root, rel));
+            const instruction = typeof parsed.instruction === "string" ? parsed.instruction : "";
+            const target = instruction ? parseStyleInstruction(instruction) : null;
+            const ops = target ? proposeStyleOps(state, target) : [];
+            sendJson(res, 200, { root, state, ops });
+            return;
+          }
+
+          if (url.pathname === "/dokumen/reset") {
+            // New chat in Dokumen = full reset (Slide doctrine): settle a
+            // staged gate honestly, refuse while a run is mid-flight,
+            // then archive the active document — never delete it.
+            let stagedAbandoned = false;
+            for (const runner of ctx.activeRunners.values()) {
+              if (!runner.hasDokumenEngineFor(root)) continue;
+              if (runner.abandonDokumenGate(root)) {
+                stagedAbandoned = true;
+                continue;
+              }
+              sendJson(res, 409, { error: "dokumen_run_in_progress", message: "Tugas dokumen sedang berjalan di workspace ini — tunggu selesai sebelum memulai chat baru.", request_id: requestId });
+              return;
+            }
+            const archived = await archiveActiveDocument(root);
+            sendJson(res, 200, { root, archived: archived ? archived.archivedTo.slice(root.length + 1) : null, staged_abandoned: stagedAbandoned });
+            return;
+          }
+
+          sendJson(res, 404, { error: "not_found", request_id: requestId });
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }

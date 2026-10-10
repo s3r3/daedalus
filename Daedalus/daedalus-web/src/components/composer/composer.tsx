@@ -14,6 +14,7 @@ import type { Conversation, ConversationTurn, ExtensionStatus, WorkspaceFileEntr
 import { saveActiveConversationId } from '../../state/prefs'
 import { ModelPicker } from './model-picker'
 import { SlideComposerControls } from './slide-controls'
+import { DokumenComposerControls } from './dokumen-controls'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 
 type UploadKind = 'file' | 'folder' | 'image' | 'zip'
@@ -27,6 +28,7 @@ export function Composer() {
   const composer = useDaedalusStore((state) => state.composer)
   const domain = useDaedalusStore((state) => state.domain)
   const slideOptions = useDaedalusStore((state) => state.slideOptions)
+  const dokumenOptions = useDaedalusStore((state) => state.dokumenOptions)
   const workspaceRoot = useDaedalusStore((state) => state.workspace.root)
   const activeTaskId = useDaedalusStore((state) => state.taskId)
   const models = useDaedalusStore((state) => state.models)
@@ -630,6 +632,15 @@ export function Composer() {
         ...(pool.length > 1 ? { model_strategy: composer.modelStrategy } : {}),
         attachments: attachmentsForTask,
         ...(skillNames.length ? { skills: skillNames } : {}),
+        ...(domain === 'dokumen'
+          ? {
+              dokumen: {
+                sub_mode: dokumenOptions.subMode,
+                ...(dokumenOptions.sources.length > 0 ? { sources: dokumenOptions.sources } : {}),
+                ...(dokumenOptions.docxPath ? { docx_path: dokumenOptions.docxPath } : {}),
+              },
+            }
+          : {}),
         ...(domain === 'slide'
           ? {
               slide: {
@@ -788,6 +799,8 @@ export function Composer() {
       <div className="flex flex-wrap items-center gap-2">
         {domain === 'slide' ? (
           <SlideComposerControls />
+        ) : domain === 'dokumen' ? (
+          <DokumenComposerControls />
         ) : (
           <>
             <span
@@ -833,7 +846,13 @@ export function Composer() {
         placeholder={
           domain === 'slide'
             ? 'Describe the deck to build… type /help for slash commands'
-            : 'Describe the coding task… type @ to reference a file or folder, /help for slash commands'
+            : domain === 'dokumen'
+              ? dokumenOptions.subMode === 'ekstrak'
+                ? 'Tujuan ekstraksi… misalnya: ekstrak semua invoice bulan ini jadi tabel'
+                : dokumenOptions.docxPath
+                  ? 'Instruksi tata ulang… misalnya: margin 4-3-3-3, font Times New Roman 12pt, spasi 1.5, heading bernomor'
+                  : 'Topik dokumen… misalnya: susun makalah tentang agentic framework untuk tugas kuliah'
+              : 'Describe the coding task… type @ to reference a file or folder, /help for slash commands'
         }
         value={composer.goal}
         onChange={(event) => {

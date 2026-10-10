@@ -115,6 +115,19 @@ export function ChatPanel() {
   // conversation-only, exactly as before.
   const startNewChat = async (): Promise<void> => {
     const root = workspaceRoot || conversation?.root
+    if (domain === 'dokumen' && root) {
+      // Dokumen new chat = full reset, same doctrine as Slide: the
+      // server archives the active document aside and settles any staged
+      // schema/outline/style gate, so the next prompt starts from an
+      // empty document instead of editing the previous one.
+      try {
+        await api.dokumenReset(root)
+      } catch (error) {
+        setComposer({ error: `Dokumen belum bisa direset: ${error instanceof Error ? error.message : String(error)}` })
+        return
+      }
+      bumpWorkspaceRevision()
+    }
     if (domain === 'slide' && root) {
       try {
         await api.deckReset(root)

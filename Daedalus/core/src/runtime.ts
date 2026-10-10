@@ -1,9 +1,9 @@
-import type { AgentMode, Attachment, ChildTask, ChildTaskErrorReason, Event, FinalReport, ModelStrategy, ProviderConfig, TaskDomain, TaskSpec, TaskState, ToolCall, ToolResult, ValidationResult } from './contracts.ts';
+import type { AgentMode, Attachment, ChildTask, ChildTaskErrorReason, Event, EventType, FinalReport, ModelStrategy, ProviderConfig, TaskDomain, TaskSpec, TaskState, ToolCall, ToolResult, ValidationResult } from './contracts.ts';
 import { EventBus, emitEvent } from './events.ts';
 import { TaskStore } from './persistence.ts';
 import { AgentLoop } from './agent/agent-loop.ts';
 import type { ToolOutputLimits } from './agent/tool-output.ts';
-import { DefaultContextManager, presentationCreationGoal, type SlideTaskParams } from './agent/context.ts';
+import { DefaultContextManager, presentationCreationGoal, type DokumenTaskParams, type SlideTaskParams } from './agent/context.ts';
 import { interpretTask } from './agent/interpreter.ts';
 import { loadProjectRules } from './agent/rules.ts';
 import { guardEditedFile } from './agent/edit-guard.ts';
@@ -21,6 +21,7 @@ import { changedLineCounts, diffLines, renderPatch } from './tools/filesystem/di
 import { ApprovalBroker, ExecutionHarness, commandLineOf, resolveApprovalTimeoutMs, type ApprovalDecision, type ApprovalPolicy, type HarnessConfig } from './execution/index.ts';
 import { CommandValidator, type ValidationCommand, type Validator } from './validation/index.ts';
 import { SlideEngine, type SlideEngineOutcome } from './slides/engine.ts';
+import { DokumenEngine } from './dokumen/engine.ts';
 import { fillDeckSlidesStage, regenerateSlideStage, type ExportInfo, type FillStageResult } from './slides/pipeline.ts';
 import { readDeck } from './slides/store.ts';
 import type { DeckSpec, Slide } from './slides/deck.ts';
@@ -210,6 +211,8 @@ export type RunOptions = {
   domain?: TaskDomain;
   /** Slide composer parameters (only meaningful with domain 'slide'): generation flow, target count, content language, pre-picked template. */
   slide?: SlideTaskParams;
+  /** Dokumen composer parameters (only meaningful with domain 'dokumen'): Ekstrak|Susun sub-mode, sources, DOCX re-layout target. */
+  dokumen?: DokumenTaskParams;
   thinking?: boolean;
   providerId?: string;
   model?: string;
@@ -418,6 +421,8 @@ export class TaskRunner {
   readonly #options: TaskRunnerOptions;
   readonly #activeLoops = new Map<string, AgentLoop>();
   /** Slide-domain tasks run on the SlideEngine, never on AgentLoop: task id → its engine (cancel seam). */
+  /** Dokumen-domain tasks run on the DokumenEngine, never on AgentLoop: task id → its engine (cancel seam). */
+  readonly #activeDokumenEngines = new Map<string, DokumenEngine>();
   readonly #activeEngines = new Map<string, SlideEngine>();
   /** Child task id → orchestrator parent task id, for approval surfacing. */
   readonly #taskParents = new Map<string, string>();
@@ -683,6 +688,7 @@ export class TaskRunner {
     // Slide-engine tasks stop through their own engine (provider abort +
     // pending checkpoint question settled by the cancelTasks call above).
     for (const engine of this.#activeEngines.values()) engine.stop();
+    for (const engine of this.#activeDokumenEngines.values()) engine.stop();
   }
 
   async run(options: RunOptions): Promise<RunResult> {
@@ -720,7 +726,7 @@ export class TaskRunner {
     const spec: TaskSpec = await interpretTask(options.goal, {
       id: options.taskId,
       repo_path: this.#workspaceRoot,
-      mode: options.domain === 'slide' ? 'auto' : (effectiveMode ?? this.modeController.mode),
+      mode: options.domain === 'slide' || options.domain === 'dokumen' ? 'auto' : (effectiveMode ?? this.modeController.mode),
       domain: options.domain,
       provider_id: options.providerId ?? this.#options.providerId,
       model: effectiveOptions.model ?? this.#options.model ?? modelConfig.models[0],
@@ -826,6 +832,13 @@ export class TaskRunner {
     // constructed for a slide task.
     if (options.domain === 'slide') {
       return this.#runSlideEngine(spec, effectiveOptions, collected, startedAt);
+    }
+
+    // Dokumen domain: the DokumenEngine owns the task end to end (its
+    // own staged gates, validation, and completion verdict). The coding
+    // machinery below is never constructed for a dokumen task.
+    if (options.domain === 'dokumen') {
+      return this.#runDokumenEngine(spec, effectiveOptions, collected, startedAt);
     }
 
     const isolation = options.isolation ?? this.#options.isolation;
@@ -1451,6 +1464,154 @@ export class TaskRunner {
       this.#activeEngines.delete(spec.id);
       this.questions.cancelTasks([spec.id]);
     }
+  }
+
+
+  /**
+   * Dokumen-domain execution: the DokumenEngine (dokumen/engine.ts)
+   * runs the task — ingest/parse, the staged schema/outline/style
+   * gates, deterministic validation, cited drafting — while this layer
+   * only supplies the run's provider, translates engine events into
+   * the shared task event feed, records the same FinalReport shape,
+   * and wires the one inherited helper (ask_user via the question
+   * broker). No AgentLoop, registry, or mode policy is constructed.
+   */
+  async #runDokumenEngine(spec: TaskSpec, options: RunOptions, collected: Event[], startedAt: number): Promise<RunResult> {
+    const emit = (type: EventType, payload: unknown): void => {
+      emitEvent({ bus: this.bus, store: this.store }, spec.id, undefined, type, payload);
+    };
+    const state: TaskState = {
+      ...spec,
+      plan: { id: `${spec.id}-plan`, task_id: spec.id, steps: [], version: 0, status: 'draft' },
+      steps: [],
+      status: 'active',
+      mode: 'auto',
+      turns: 0,
+    };
+    let provider: LLMProvider;
+    try {
+      provider = this.#options.provider ?? this.#providerFor(options, spec.id);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const failed: TaskState = { ...state, status: 'failed', last_error: message };
+      this.store.saveState(spec.id, failed);
+      emit('TASK_STARTED', { spec });
+      emit('TASK_COMPLETED', { state: failed, outcome: 'failed', reason: 'provider_unavailable' });
+      const report: FinalReport = { task_id: spec.id, outcome: 'failed', diff: '', evidence: [`Gagal: ${message}`], metrics: { duration_ms: Date.now() - startedAt } };
+      this.store.saveReport(spec.id, report);
+      return { state: failed, events: collected, outcome: 'failed', report };
+    }
+
+    let fileSeq = 0;
+    const askUser = async (question: string, choices: string[]): Promise<string> => {
+      const info: UserQuestionInfo = {
+        id: `dokumen-q-${spec.id}-${Date.now()}`,
+        taskId: spec.id,
+        question,
+        options: choices.map((label) => ({ label })),
+        allowFreeText: false,
+        createdAt: new Date().toISOString(),
+      };
+      emit('QUESTION_REQUESTED', { question: info });
+      const result = await this.questions.ask(info);
+      emit('QUESTION_ANSWERED', {
+        question_id: info.id,
+        question,
+        outcome: result.outcome,
+        ...(result.answer !== undefined ? { answer: result.answer } : {}),
+      });
+      await this.bus.drain();
+      return result.answer ?? '';
+    };
+
+    const engine = new DokumenEngine(provider, {
+      askUser,
+      onEvent: (event) => {
+        if (event.type === 'model-request-started') {
+          emit('MODEL_REQUEST_STARTED', { model: event.model });
+        } else if (event.type === 'model-request-finished') {
+          emit('MODEL_REQUEST_FINISHED', {
+            model: event.model,
+            ...(typeof event.inputTokens === 'number' || typeof event.outputTokens === 'number'
+              ? { usage: { prompt_tokens: event.inputTokens ?? 0, completion_tokens: event.outputTokens ?? 0, total_tokens: (event.inputTokens ?? 0) + (event.outputTokens ?? 0) } }
+              : {}),
+          });
+        } else if (event.type === 'file-changed') {
+          fileSeq += 1;
+          emit('FILE_CHANGED', { call_id: `dokumen-${fileSeq}`, path: event.path, tool: 'dokumen-engine', operation: 'modified' });
+        }
+      },
+    });
+    this.#activeDokumenEngines.set(spec.id, engine);
+    this.store.saveState(spec.id, state);
+    emit('TASK_STARTED', { spec });
+    try {
+      const summary = await engine.run(this.#workspaceRoot, spec.goal, {
+        subMode: options.dokumen?.subMode ?? 'ekstrak',
+        ...(options.dokumen?.sources ? { sources: options.dokumen.sources } : {}),
+        ...(options.dokumen?.docxPath ? { docxPath: options.dokumen.docxPath } : {}),
+      });
+      const usageTotals = accumulateUsage(collected);
+      const done: TaskState = { ...state, status: 'done' };
+      this.store.saveState(spec.id, done);
+      emit('TASK_COMPLETED', { state: done, outcome: 'success' });
+      const report: FinalReport = {
+        task_id: spec.id,
+        outcome: 'success',
+        diff: '',
+        evidence: [summary],
+        metrics: {
+          model_requests: usageTotals.requests,
+          ...(usageTotals.reported > 0
+            ? { tokens_input: usageTotals.input_tokens, tokens_output: usageTotals.output_tokens, tokens_total: usageTotals.total_tokens, token_requests_reported: usageTotals.reported }
+            : {}),
+          duration_ms: Date.now() - startedAt,
+        },
+      };
+      this.store.saveReport(spec.id, report);
+      return { state: done, events: collected, outcome: 'success', report };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const failed: TaskState = { ...state, status: 'failed', last_error: message };
+      this.store.saveState(spec.id, failed);
+      emit('TASK_COMPLETED', { state: failed, outcome: 'failed', reason: 'dokumen_error' });
+      const report: FinalReport = { task_id: spec.id, outcome: 'failed', diff: '', evidence: [`Gagal: ${message}`], metrics: { duration_ms: Date.now() - startedAt } };
+      this.store.saveReport(spec.id, report);
+      return { state: failed, events: collected, outcome: 'failed', report };
+    } finally {
+      this.#activeDokumenEngines.delete(spec.id);
+      this.questions.cancelTasks([spec.id]);
+    }
+  }
+
+  /**
+   * Dokumen staging seam (the Panel Skema/Outline/Terapkan release
+   * buttons): settle the staged gate of the dokumen run waiting in
+   * this workspace. True when a waiting gate was released.
+   */
+  releaseDokumenGate(root: string): boolean {
+    for (const engine of this.#activeDokumenEngines.values()) {
+      if (engine.workspaceRoot !== root) continue;
+      if (engine.releaseStaged()) return true;
+    }
+    return false;
+  }
+
+  /** Abandon a staged dokumen gate (new chat / superseding task). True when a gate was settled. */
+  abandonDokumenGate(root: string): boolean {
+    let settled = false;
+    for (const engine of this.#activeDokumenEngines.values()) {
+      if (engine.workspaceRoot === root && engine.abandonStaged()) settled = true;
+    }
+    return settled;
+  }
+
+  /** True while any dokumen engine is executing for this workspace (staged or mid-run). */
+  hasDokumenEngineFor(root: string): boolean {
+    for (const engine of this.#activeDokumenEngines.values()) {
+      if (engine.workspaceRoot === root) return true;
+    }
+    return false;
   }
 
   /**

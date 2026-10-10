@@ -22,6 +22,10 @@ import { SlideBuiltinTemplatesPanel } from './components/slides/slide-builtin-te
 import { SlideTemplatesPanel } from './components/slides/slide-templates'
 import { SlidePptTemplatesPanel } from './components/slides/slide-ppt-templates'
 import { SlideWorkspacePanel } from './components/slides/slide-workspace'
+import { DokumenWorkspacePanel } from './components/dokumen/dokumen-workspace'
+import { DokumenPanel } from './components/dokumen/dokumen-panel'
+import { DokumenStage } from './components/dokumen/dokumen-stage'
+import { DokumenReportPanel } from './components/dokumen/dokumen-report'
 import { useEventStream } from './api/useEventStream'
 import { api } from './api/client'
 import { readStoredTheme, applyPaletteVars } from './theme/theme'
@@ -294,7 +298,12 @@ export function App() {
             and scrolls internally — the workspace panel used to sit at its
             natural (content) height and push this scroll region to zero. */}
         <aside className="flex min-h-0 flex-col gap-2 lg:overflow-hidden">
-          {domain === 'slide' ? (
+          {domain === 'dokumen' ? (
+            <DokumenWorkspacePanel
+              className={workspacePanelHeight > 0 ? 'min-h-0 shrink-0' : 'min-h-0 lg:flex-1'}
+              style={workspacePanelHeight > 0 ? { height: `${workspacePanelHeight}px` } : undefined}
+            />
+          ) : domain === 'slide' ? (
             <SlideWorkspacePanel
               className={workspacePanelHeight > 0 ? 'min-h-0 shrink-0' : 'min-h-0 lg:flex-1'}
               style={workspacePanelHeight > 0 ? { height: `${workspacePanelHeight}px` } : undefined}
@@ -305,7 +314,7 @@ export function App() {
               style={workspacePanelHeight > 0 ? { height: `${workspacePanelHeight}px` } : undefined}
             />
           )}
-          {domain === 'slide' ? null : (
+          {domain !== 'coding' ? null : (
             <div
               role="separator"
               aria-orientation="horizontal"
@@ -330,7 +339,8 @@ export function App() {
               {domain === 'slide' ? <SlideBuiltinTemplatesPanel /> : null}
               {domain === 'slide' ? <SlideTemplatesPanel /> : null}
               {domain === 'slide' ? <SlidePptTemplatesPanel /> : null}
-              {domain === 'slide' ? null : <ExtensionsPanel />}
+              {domain === 'dokumen' ? <DokumenPanel /> : null}
+              {domain === 'coding' ? <ExtensionsPanel /> : null}
               <PlanPanel />
               <ActivityTimeline />
               <ValidationPanel />
@@ -344,6 +354,8 @@ export function App() {
         <section className="flex min-h-[420px] min-w-0 flex-col gap-2 rounded-md border border-line bg-surface-base lg:min-h-0">
           {domain === 'slide' ? (
             <SlideStage />
+          ) : domain === 'dokumen' ? (
+            <DokumenStage />
           ) : (
             <>
               <EditorPane
@@ -371,11 +383,12 @@ export function App() {
           <ChatPanel />
           <ScrollArea className="min-h-[320px] lg:min-h-0 lg:flex-1">
             <div className="flex flex-col gap-2 pr-1">
-              <DiffViewer />
-              <GitPanel />
-              <AttachmentsPanel />
-              <ChildTasksPanel />
-              <FinalReportView report={report} />
+              {domain === 'dokumen' ? <DokumenReportPanel /> : null}
+              {domain === 'dokumen' ? null : <DiffViewer />}
+              {domain === 'dokumen' ? null : <GitPanel />}
+              {domain === 'dokumen' ? null : <AttachmentsPanel />}
+              {domain === 'dokumen' ? null : <ChildTasksPanel />}
+              {domain === 'dokumen' ? null : <FinalReportView report={report} />}
               <p className="pb-2 text-center text-[9px] uppercase tracking-wider text-muted">daedalus core {VERSION}</p>
             </div>
           </ScrollArea>

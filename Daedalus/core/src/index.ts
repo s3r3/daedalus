@@ -426,6 +426,7 @@ export {
   REVIEW_READ_ONLY_TOOLS,
   type ContextManagerOptions,
   type SlideTaskParams,
+  type DokumenTaskParams,
   type CreationCompletionEvidence,
   type CreationGoal,
   type CreationRefusal,
@@ -833,5 +834,111 @@ export {
   exportDeckTool,
   SLIDE_TOOLS,
 } from "./tools/index.ts";
+
+export {
+  documentDir,
+  documentPaths,
+  documentsRoot,
+  activePointerPath,
+  savedSchemasDir,
+  dokumenArchiveDir,
+  type DokumenKind,
+  type DokumenSubMode,
+  type FieldType,
+  type FieldDef,
+  type ExtractionTarget,
+  type DokumenSchema,
+  type FieldStatus,
+  type Provenance,
+  type FieldValue,
+  type RecordCheck,
+  type RecordDecision,
+  type ExtractRecord,
+  type SourceStatus,
+  type SourceInfo,
+  type SectionStatus,
+  type DokumenSection,
+  type StyleOp,
+  type ExportRecord,
+  type Citation,
+  type DocumentState,
+  type ParsedBlock,
+  type ParsedSource,
+} from "./dokumen/document.ts";
+
+export {
+  newDocumentId,
+  newSourceId,
+  newRecordId,
+  newSectionId,
+  newStyleOpId,
+  newDocument,
+  writeDocument,
+  readDocument,
+  readActiveDocument,
+  setActiveDocument,
+  createActiveDocument,
+  appendAudit,
+  readAudit,
+  ingestSourceFile,
+  sourceFilePath,
+  writeParsedBlocks,
+  readParsedBlocks,
+  readSavedSchema,
+  saveSchema,
+  listSavedSchemas,
+  archiveActiveDocument,
+  type SavedSchema,
+} from "./dokumen/store.ts";
+
+export {
+  SUPPORTED_SOURCE_EXTENSIONS,
+  isSupportedSource,
+  parseSourceFile,
+  parseSourceBytes,
+  pageChunks,
+  findProvenance,
+} from "./dokumen/parse.ts";
+
+export {
+  AUTO_CLEAR_MIN,
+  ESCALATE_BELOW,
+  parseNumber,
+  parseDate,
+  normalizeValue,
+  validateRecord,
+  isVerified,
+  decisionCounts,
+} from "./dokumen/validate.ts";
+
+export { exportData, type DataExportResult } from "./dokumen/export-data.ts";
+export { exportDocumentDocx, exportDocumentPdf, type DocumentExportResult } from "./dokumen/export-docx.ts";
+
+export {
+  inspectDocxStyles,
+  proposeStyleOps,
+  parseStyleInstruction,
+  applyStyleOps,
+  type DocxStyleState,
+  type StyleTarget,
+} from "./dokumen/style-ops.ts";
+
+export {
+  MAX_STAGE_ATTEMPTS as DOKUMEN_MAX_STAGE_ATTEMPTS,
+  DokumenPipelineError,
+  structuredCall as dokumenStructuredCall,
+  classifyStage,
+  proposeSchemaStage,
+  extractSourceStage,
+  proposeOutlineStage,
+  draftSectionStage,
+  criticStage,
+  type OutlineItem as DokumenOutlineItem,
+  type CitationMaterial,
+} from "./dokumen/pipeline.ts";
+
+export { DokumenWebTools, parseDuckDuckGo, type SearchHit, type WebFetch } from "./dokumen/web.ts";
+
+export { DokumenEngine, type DokumenRunEvent, type DokumenEngineOptions, type DokumenRunOptions, type DokumenAskUser } from "./dokumen/engine.ts";
 
 export { VERSION } from "./version.ts";
