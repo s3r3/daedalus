@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
-import { Check, Eye, FileText, Paintbrush, Pencil } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Check, ChevronLeft, ChevronRight, Eye, FileText, Paintbrush, Pencil, RefreshCw } from 'lucide-react'
 import type { DocumentState, ExtractRecord } from '@daedalus/core'
-import { api, dokumenSourceFileUrl } from '../../api/client'
+import { api, dokumenSourceFileUrl, type DokumenPreviewStatus } from '../../api/client'
 import { Button } from '../ui/button'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useDokumen, decisionClass, decisionLabel, fieldStatusClass } from './useDokumen'
@@ -34,7 +34,13 @@ export function DokumenStage() {
   }
 
   const stagedOps = document.styleOps.filter((op) => !op.applied)
-  if (stagedOps.length > 0) {
+  // The style-ops view owns the canvas while changes are staged, and
+  // stays for the result state (all applied) until real extract work
+  // (records) or a reset replaces it — that is where the result
+  // preview lives.
+  const styleResultState =
+    document.kind !== 'compose' && document.records.length === 0 && document.styleOps.length > 0 && Boolean(document.styleTarget)
+  if (stagedOps.length > 0 || styleResultState) {
     return (
       <div className="min-h-0 flex-1 overflow-auto p-3">
         <StyleOpsView document={document} root={root} refresh={refresh} />
@@ -360,25 +366,235 @@ function PdfPage({ root, sourceId, page, bbox }: { root: string; sourceId: strin
 /* ------------------------------------------------------------- Susun */
 
 function ComposeView({ document, root, refresh }: { document: DocumentState; root: string; refresh: () => void }) {
+  // Tulis (section text, editable) vs Pratinjau (the render engine's
+  // own raster of the composed .docx — faithful, not editable). The
+  // preview renders on demand, never per edit.
+  const [view, setView] = useState<'write' | 'preview'>('write')
   return (
-    <div className="min-h-0 flex-1 overflow-auto p-3" data-testid="dokumen-compose-view">
-      <div className="mx-auto flex max-w-3xl flex-col gap-4">
-        {document.sections.length === 0 ? <p className="text-[11px] text-muted">Belum ada bab. Kerangka muncul dulu di panel Outline.</p> : null}
-        {document.sections.map((section, index) => (
-          <SectionCard key={section.id} document={document} index={index} sectionId={section.id} root={root} refresh={refresh} />
-        ))}
-        {Object.keys(document.citations).length > 0 ? (
-          <div className="rounded border border-line bg-surface p-2" data-testid="dokumen-citations">
-            <p className="mb-1 text-[11px] font-semibold">Sitasi</p>
-            <ul className="flex flex-col gap-0.5 text-[11px] text-muted">
-              {Object.values(document.citations).map((c) => (
-                <li key={c.id} className="truncate" title={c.url ?? c.title}>
-                  <span className="font-mono">[{c.id}]</span> {c.title}
-                  {c.url ? <span className="opacity-70"> — {c.url}</span> : null}
-                </li>
-              ))}
-            </ul>
+    <div className="flex min-h-0 flex-1 flex-col" data-testid="dokumen-compose-view">
+      <div className="flex items-center gap-2 border-b border-line px-3 py-1.5">
+        <div className="flex items-center rounded-md border border-line p-0.5" role="group" aria-label="mode tampilan dokumen">
+          <Button
+            variant={view === 'write' ? 'default' : 'ghost'}
+            size="sm"
+            className="border-transparent"
+            onClick={() => setView('write')}
+            aria-pressed={view === 'write'}
+            data-testid="dokumen-view-write"
+          >
+            Tulis
+          </Button>
+          <Button
+            variant={view === 'preview' ? 'default' : 'ghost'}
+            size="sm"
+            className="border-transparent"
+            onClick={() => setView('preview')}
+            aria-pressed={view === 'preview'}
+            data-testid="dokumen-view-preview"
+          >
+            Pratinjau
+          </Button>
+        </div>
+        <span className="truncate text-[10px] text-muted">
+          Pratinjau dirender engine asli dari .docx yang akan diekspor — Microsoft Word di Windows, kalau tidak LibreOffice
+        </span>
+      </div>
+      {view === 'preview' ? (
+        <DokumenPreviewPane root={root} kind="compose" signature={document.updatedAt} />
+      ) : (
+        <div className="min-h-0 flex-1 overflow-auto p-3">
+          <div className="mx-auto flex max-w-3xl flex-col gap-4">
+            {document.sections.length === 0 ? <p className="text-[11px] text-muted">Belum ada bab. Kerangka muncul dulu di panel Outline.</p> : null}
+            {document.sections.map((section, index) => (
+              <SectionCard key={section.id} document={document} index={index} sectionId={section.id} root={root} refresh={refresh} />
+            ))}
+            {Object.keys(document.citations).length > 0 ? (
+              <div className="rounded border border-line bg-surface p-2" data-testid="dokumen-citations">
+                <p className="mb-1 text-[11px] font-semibold">Sitasi</p>
+                <ul className="flex flex-col gap-0.5 text-[11px] text-muted">
+                  {Object.values(document.citations).map((c) => (
+                    <li key={c.id} className="truncate" title={c.url ?? c.title}>
+                      <span className="font-mono">[{c.id}]</span> {c.title}
+                      {c.url ? <span className="opacity-70"> — {c.url}</span> : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ---------------------------------------------------------- Pratinjau */
+
+/**
+ * Pratinjau pane (Slide's Pratinjau Asli pattern): the exported .docx
+ * rasterised by the machine's real engine — Word via COM on Windows,
+ * else LibreOffice — cached per document-state hash. Renders only on
+ * demand (button), polls while rendering, reports stale honestly when
+ * the document moved on. Read-only by nature; editing stays in Tulis.
+ */
+function DokumenPreviewPane({ root, kind, signature }: { root: string; kind: 'compose' | 'style'; signature: string }) {
+  const [preview, setPreview] = useState<DokumenPreviewStatus | null>(null)
+  const [fetchError, setFetchError] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [pageIndex, setPageIndex] = useState(0)
+
+  const refreshPreview = useCallback(async (): Promise<void> => {
+    if (!root) return
+    try {
+      setPreview(await api.dokumenPreview(root, kind))
+      setFetchError(null)
+    } catch (error: unknown) {
+      setFetchError(error instanceof Error ? error.message : String(error))
+    }
+  }, [root, kind])
+
+  // Opening Pratinjau (or a document change while it is open)
+  // re-reads the render status; the render itself only starts from
+  // the button, so plain editing never triggers the renderer.
+  useEffect(() => {
+    void refreshPreview()
+  }, [refreshPreview, signature])
+
+  // While the engine renders, poll the status until it settles.
+  useEffect(() => {
+    if (preview?.status !== 'rendering') return
+    const timer = setInterval(() => void refreshPreview(), 1200)
+    return () => clearInterval(timer)
+  }, [preview?.status, refreshPreview])
+
+  // A fresh render (new key) starts at page 1.
+  useEffect(() => {
+    setPageIndex(0)
+  }, [preview?.key])
+
+  // The engine the server selected for this machine, named in the
+  // preview copy (generic pair before detection / when unavailable).
+  const engineLabel =
+    preview?.engine === 'word' ? 'Microsoft Word' : preview?.engine === 'libreoffice' ? 'LibreOffice' : 'Microsoft Word atau LibreOffice'
+
+  const renderPreview = async (): Promise<void> => {
+    if (!root) return
+    setBusy(true)
+    try {
+      setPreview(await api.dokumenPreviewRender(root, kind))
+      setFetchError(null)
+    } catch (error: unknown) {
+      setFetchError(error instanceof Error ? error.message : String(error))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const pageUrls = preview?.pageUrls ?? []
+  const safeIndex = Math.min(pageIndex, Math.max(0, pageUrls.length - 1))
+
+  return (
+    <div data-testid="dokumen-preview" className="flex min-h-0 flex-1 flex-col gap-2 overflow-auto p-3">
+      {fetchError ? <p className="text-[11px] text-error">Pratinjau gagal dimuat: {fetchError}</p> : null}
+      {!preview ? (
+        <div className="flex flex-1 items-center justify-center text-xs text-muted">Memeriksa pratinjau…</div>
+      ) : preview.status === 'unavailable' ? (
+        <div
+          data-testid="dokumen-preview-unavailable"
+          className="flex flex-1 flex-col items-center justify-center gap-1.5 px-3 py-6 text-center text-muted"
+        >
+          <p className="text-xs text-foreground">Pratinjau butuh Microsoft Word (Windows) atau LibreOffice terpasang di mesin ini.</p>
+          <p className="max-w-[56ch] text-[11px] opacity-80">
+            Halaman persis-asli dirender oleh Microsoft Word lewat COM (Windows) atau LibreOffice (soffice) dan pdftoppm. Tanpa salah
+            satunya fitur ini berhenti di sini — menulis, tata ulang, dan ekspor .docx tetap bekerja seperti biasa.
+          </p>
+        </div>
+      ) : preview.status === 'rendering' ? (
+        <div data-testid="dokumen-preview-rendering" className="flex flex-1 flex-col items-center justify-center gap-2 text-muted">
+          <RefreshCw className="animate-spin" aria-hidden />
+          <p className="text-xs">Merender halaman dengan {engineLabel}…</p>
+        </div>
+      ) : preview.status === 'ready' && pageUrls.length > 0 ? (
+        <>
+          <div className="flex min-h-0 flex-1 items-start justify-center overflow-auto" data-testid="dokumen-preview-stage">
+            <img
+              data-testid="dokumen-preview-image"
+              src={pageUrls[safeIndex]}
+              alt={`Pratinjau halaman ${safeIndex + 1} dari ${pageUrls.length}`}
+              className="max-w-full rounded-md border border-line bg-white object-contain"
+            />
+          </div>
+          <div className="flex shrink-0 items-center justify-center gap-2">
+            <Button variant="outline" size="icon" onClick={() => setPageIndex(Math.max(0, safeIndex - 1))} disabled={safeIndex <= 0} aria-label="halaman sebelumnya" data-testid="dokumen-preview-prev">
+              <ChevronLeft />
+            </Button>
+            <span className="text-[11px] text-muted" data-testid="dokumen-preview-pager">
+              Halaman {safeIndex + 1} dari {pageUrls.length}
+            </span>
+            <Button
+              variant="outline"
+              size="icon"
+              onClick={() => setPageIndex(Math.min(pageUrls.length - 1, safeIndex + 1))}
+              disabled={safeIndex >= pageUrls.length - 1}
+              aria-label="halaman berikutnya"
+              data-testid="dokumen-preview-next"
+            >
+              <ChevronRight />
+            </Button>
+          </div>
+          <div className="flex shrink-0 gap-2 overflow-x-auto pb-1" data-testid="dokumen-preview-filmstrip" aria-label="filmstrip pratinjau">
+            {pageUrls.map((pageUrl, index) => {
+              const active = index === safeIndex
+              return (
+                <button
+                  key={pageUrl}
+                  type="button"
+                  data-testid={`dokumen-preview-thumb-${index}`}
+                  aria-label={`halaman pratinjau ${index + 1}`}
+                  aria-current={active ? 'true' : undefined}
+                  onClick={() => setPageIndex(index)}
+                  className={`w-16 shrink-0 overflow-hidden rounded-md border text-left ${active ? 'border-primary' : 'border-line hover:border-primary'}`}
+                  style={active ? { boxShadow: '0 0 0 1px var(--daedalus-primary)' } : undefined}
+                >
+                  <img src={pageUrl} alt="" className="block aspect-[3/4] w-full object-cover" />
+                  <span className="block truncate px-1.5 py-1 text-[10px] text-muted">{index + 1} · render asli</span>
+                </button>
+              )
+            })}
+          </div>
+        </>
+      ) : (
+        <div
+          data-testid="dokumen-preview-status"
+          className="flex flex-1 flex-col items-center justify-center gap-1.5 px-3 py-6 text-center text-muted"
+        >
+          <p className="max-w-[56ch] text-xs text-foreground">
+            {preview.status === 'stale'
+              ? 'Dokumen berubah sejak pratinjau terakhir dirender — perbarui untuk melihat keadaan terbaru persis-asli.'
+              : preview.status === 'error'
+                ? `Render pratinjau gagal${preview.error ? `: ${preview.error}` : '.'}`
+                : kind === 'style'
+                  ? 'Belum ada pratinjau untuk hasil tata ulang ini.'
+                  : 'Belum ada pratinjau untuk keadaan dokumen ini.'}
+          </p>
+        </div>
+      )}
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        <p className="min-w-0 flex-1 text-[10px] leading-snug text-muted" data-testid="dokumen-preview-caption">
+          Pratinjau: halaman dirender {engineLabel} dari berkas .docx{' '}
+          {kind === 'style' ? 'hasil tata ulang' : 'yang akan diekspor dari dokumen saat ini'} — persis yang terlihat di Word/LibreOffice,
+          bukan teks kanvas. Mengedit tetap di mode Tulis.
+        </p>
+        {preview?.status !== 'unavailable' ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void renderPreview()}
+            disabled={busy || !preview || preview.status === 'rendering'}
+            data-testid="dokumen-preview-render"
+          >
+            {busy || preview?.status === 'rendering' ? 'Merender…' : preview?.status === 'ready' ? 'Perbarui pratinjau' : 'Buat pratinjau'}
+          </Button>
         ) : null}
       </div>
     </div>
@@ -459,7 +675,11 @@ function SectionCard({ document, index, sectionId, root, refresh }: { document: 
 function StyleOpsView({ document, root, refresh }: { document: DocumentState; root: string; refresh: () => void }) {
   const [applying, setApplying] = useState(false)
   const [note, setNote] = useState<string | null>(null)
+  // Result state (every op applied) gains the same Tulis | Pratinjau
+  // toggle as Susun: Pratinjau renders the result .docx itself.
+  const [view, setView] = useState<'write' | 'preview'>('write')
   const ops = document.styleOps
+  const allApplied = ops.length > 0 && ops.every((op) => op.applied)
 
   const apply = async (): Promise<void> => {
     if (!root || applying) return
@@ -481,7 +701,35 @@ function StyleOpsView({ document, root, refresh }: { document: DocumentState; ro
         <Paintbrush className="size-4 text-muted" aria-hidden />
         <h3 className="text-[13px] font-semibold">Tata ulang DOCX</h3>
         {document.styleTarget ? <span className="truncate text-[11px] text-muted">{document.styleTarget}</span> : null}
+        {allApplied ? (
+          <div className="ml-auto flex items-center rounded-md border border-line p-0.5" role="group" aria-label="mode tampilan tata ulang">
+            <Button
+              variant={view === 'write' ? 'default' : 'ghost'}
+              size="sm"
+              className="border-transparent"
+              onClick={() => setView('write')}
+              aria-pressed={view === 'write'}
+              data-testid="dokumen-view-write"
+            >
+              Tulis
+            </Button>
+            <Button
+              variant={view === 'preview' ? 'default' : 'ghost'}
+              size="sm"
+              className="border-transparent"
+              onClick={() => setView('preview')}
+              aria-pressed={view === 'preview'}
+              data-testid="dokumen-view-preview"
+            >
+              Pratinjau
+            </Button>
+          </div>
+        ) : null}
       </div>
+      {allApplied && view === 'preview' ? (
+        <DokumenPreviewPane root={root} kind="style" signature={document.updatedAt} />
+      ) : (
+        <>
       <p className="mb-2 text-[11px] text-muted">Daftar perubahan deterministik (tanpa model). Berkas asli tidak pernah ditimpa — hasil adalah DOCX baru.</p>
       <table className="w-full border-collapse text-[11px]">
         <thead>
@@ -509,6 +757,8 @@ function StyleOpsView({ document, root, refresh }: { document: DocumentState; ro
         </Button>
       ) : null}
       {note ? <p className="mt-2 text-[11px] text-muted">{note}</p> : null}
+        </>
+      )}
     </div>
   )
 }

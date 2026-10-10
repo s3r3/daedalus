@@ -11,6 +11,8 @@ import { DokumenStage } from './components/dokumen/dokumen-stage'
 const createTask = vi.fn()
 const dokumenDocument = vi.fn()
 const dokumenBlocks = vi.fn()
+const dokumenPreview = vi.fn()
+const dokumenPreviewRender = vi.fn()
 
 vi.mock('./api/client', () => ({
   api: {
@@ -44,6 +46,9 @@ vi.mock('./api/client', () => ({
     dokumenSection: vi.fn(async () => ({ document: null })),
     dokumenExportData: vi.fn(async () => ({ result: { recordCount: 0, heldBack: 0, path: '' }, document: null })),
     dokumenExportDocument: vi.fn(async () => ({ result: { recordCount: 0, heldBack: 0, path: '' }, document: null })),
+    dokumenPreview: (...args: unknown[]) => dokumenPreview(...args),
+    dokumenPreviewRender: (...args: unknown[]) => dokumenPreviewRender(...args),
+    dokumenPreviewPageUrl: (root: string, key: string, page: number) => `/dokumen/preview/page?root=${root}&key=${key}&page=${page}`,
   },
   dokumenSourceFileUrl: (root: string, sourceId: string) => `/dokumen/source-file?root=${root}&sourceId=${sourceId}`,
 }))
@@ -94,6 +99,10 @@ beforeEach(() => {
   dokumenDocument.mockResolvedValue({ root: '/ws', document: seededDocument })
   dokumenBlocks.mockReset()
   dokumenBlocks.mockResolvedValue({ pages: 1, pageSizes: [{ width: 0, height: 0 }], blocks: [{ page: 1, text: 'CV Sinar — Total: Rp 999' }] })
+  dokumenPreview.mockReset()
+  dokumenPreview.mockResolvedValue({ root: '/ws', available: false, status: 'unavailable', engine: null, kind: 'compose', key: null, pages: 0 })
+  dokumenPreviewRender.mockReset()
+  dokumenPreviewRender.mockResolvedValue({ root: '/ws', available: true, status: 'idle', engine: 'libreoffice', kind: 'compose', key: null, pages: 0 })
 })
 
 afterEach(() => {
@@ -196,5 +205,85 @@ describe('dokumen panels', () => {
     expect(await screen.findByTestId('dokumen-provenance')).toBeTruthy()
     expect(screen.getByTestId('dokumen-decision-counts')).toBeTruthy()
     expect(screen.getByTestId('dokumen-held-list')).toBeTruthy()
+  })
+})
+
+const seededComposeDocument = {
+  ...seededDocument,
+  id: 'doc-2',
+  kind: 'compose',
+  title: 'Makalah Panel',
+  sources: [],
+  records: [],
+  schema: undefined,
+  sections: [
+    { id: 'sec-1', title: 'Pendahuluan', thesisPoints: [], citations: [], prose: 'Isi pendahuluan yang sudah tertulis.', status: 'drafted' },
+  ],
+}
+
+const seededStyleDocument = {
+  ...seededDocument,
+  id: 'doc-3',
+  kind: 'extract',
+  title: 'Tata ulang Panel',
+  sources: [],
+  records: [],
+  schema: undefined,
+  styleTarget: 'laporan.docx',
+  styleOps: [{ id: 'op-1', target: 'font', before: 'Calibri', after: 'Cambria', applied: true }],
+}
+
+describe('dokumen pratinjau (Tulis | Pratinjau)', () => {
+  test('compose canvas defaults to Tulis (no preview fetch); Pratinjau shows the honest unavailable state', async () => {
+    dokumenDocument.mockResolvedValue({ root: '/ws', document: seededComposeDocument })
+    render(<DokumenStage />)
+    expect(await screen.findByTestId('dokumen-view-preview')).toBeTruthy()
+    expect(dokumenPreview).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByTestId('dokumen-view-preview'))
+    expect(await screen.findByTestId('dokumen-preview-unavailable')).toBeTruthy()
+    expect(dokumenPreview).toHaveBeenCalledWith('/ws', 'compose')
+  })
+
+  test('ready preview shows rendered pages with a pager; Perbarui asks the server to render again', async () => {
+    dokumenDocument.mockResolvedValue({ root: '/ws', document: seededComposeDocument })
+    dokumenPreview.mockResolvedValue({
+      root: '/ws',
+      available: true,
+      status: 'ready',
+      engine: 'libreoffice',
+      kind: 'compose',
+      key: 'a'.repeat(64),
+      pages: 2,
+      pageUrls: ['/dokumen/preview/page?root=%2Fws&page=1', '/dokumen/preview/page?root=%2Fws&page=2'],
+    })
+    render(<DokumenStage />)
+    fireEvent.click(await screen.findByTestId('dokumen-view-preview'))
+    expect(await screen.findByTestId('dokumen-preview-image')).toBeTruthy()
+    expect(screen.getByTestId('dokumen-preview-pager').textContent).toContain('Halaman 1 dari 2')
+    expect(screen.getByTestId('dokumen-preview-caption').textContent).toContain('LibreOffice')
+    fireEvent.click(screen.getByTestId('dokumen-preview-next'))
+    expect(screen.getByTestId('dokumen-preview-pager').textContent).toContain('Halaman 2 dari 2')
+    fireEvent.click(screen.getByTestId('dokumen-preview-render'))
+    await waitFor(() => expect(dokumenPreviewRender).toHaveBeenCalledWith('/ws', 'compose'))
+  })
+
+  test('style result state carries its own Tulis | Pratinjau toggle (kind=style)', async () => {
+    dokumenDocument.mockResolvedValue({ root: '/ws', document: seededStyleDocument })
+    dokumenPreview.mockResolvedValue({
+      root: '/ws',
+      available: true,
+      status: 'error',
+      engine: 'libreoffice',
+      kind: 'style',
+      key: null,
+      pages: 0,
+      error: 'belum ada DOCX hasil tata ulang — tekan Terapkan dulu sebelum pratinjau.',
+    })
+    render(<DokumenStage />)
+    expect(await screen.findByTestId('dokumen-style-view')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('dokumen-view-preview'))
+    expect(await screen.findByTestId('dokumen-preview-status')).toBeTruthy()
+    expect(screen.getByText(/belum ada DOCX hasil tata ulang/)).toBeTruthy()
+    expect(dokumenPreview).toHaveBeenCalledWith('/ws', 'style')
   })
 })
