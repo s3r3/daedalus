@@ -342,7 +342,7 @@ async function selectTask(taskId: string): Promise<void> {
 function summaryTone(status: string): 'success' | 'warning' | 'error' | 'info' | 'neutral' {
   if (status === 'done' || status === 'success') return 'success'
   if (status === 'failed' || status === 'error') return 'error'
-  if (status === 'partial' || status === 'stopped') return 'warning'
+  if (status === 'partial' || status === 'stopped' || status === 'interrupted') return 'warning'
   if (status === 'running') return 'info'
   return 'neutral'
 }

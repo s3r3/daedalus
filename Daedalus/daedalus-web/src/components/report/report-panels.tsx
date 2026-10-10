@@ -124,7 +124,7 @@ export function FinalReportView({ report }: { report: FinalReport | null }) {
     )
   }
 
-  const status: TaskStatus = derived.outcome === 'success' ? 'done' : derived.outcome === 'partial' ? 'partial' : 'failed'
+  const status: TaskStatus = derived.outcome === 'success' ? 'done' : derived.outcome === 'partial' ? 'partial' : derived.outcome === 'interrupted' ? 'interrupted' : 'failed'
   const patch = derived.diff
 
   return (
