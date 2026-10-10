@@ -99,6 +99,11 @@ export type DokumenSection = {
   citations: string[];
   prose: string;
   status: SectionStatus;
+  /** The final critic verdict's issues when this section is 'critic-flagged'
+   * (all drafts rejected) — surfaced in the canvas so the rejection is
+   * reviewable instead of only living in the audit log. Absent when the
+   * section is drafted or has never been judged. */
+  criticIssues?: string[];
 };
 
 export type StyleOp = {

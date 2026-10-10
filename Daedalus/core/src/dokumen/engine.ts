@@ -339,6 +339,7 @@ export class DokumenEngine {
       await writeDocument(root, doc);
 
       let accepted: { prose: string; citations: string[] } | null = null;
+      let lastDraft: { prose: string; citations: string[] } | null = null;
       let lastIssues: string[] = [];
       for (let attempt = 1; attempt <= 3; attempt += 1) {
         const draft = await draftSectionStage(this.#provider, {
@@ -348,6 +349,7 @@ export class DokumenEngine {
           materials,
           ...(attempt > 1 ? { repairIssues: lastIssues } : {}),
         }, this.signal);
+        lastDraft = draft;
         const verdict = await criticStage(this.#provider, { title: section.title, prose: draft.prose, citations: draft.citations, materials }, this.signal);
         if (verdict.ok) {
           accepted = draft;
@@ -356,9 +358,14 @@ export class DokumenEngine {
         lastIssues = verdict.issues;
         await appendAudit(root, doc.id, { action: 'critic-reject', detail: `bab "${section.title}" upaya ${attempt}: ${verdict.issues.join('; ')}` });
       }
-      section.prose = accepted?.prose ?? section.prose;
-      section.citations = accepted ? accepted.citations.filter((id) => doc.citations[id] !== undefined) : [];
+      // A fully-rejected section keeps its LAST draft + the critic's final
+      // issues: the flag must show WHAT was written and WHY it was flagged,
+      // never an empty "not written yet" state over real prose.
+      section.prose = accepted?.prose ?? lastDraft?.prose ?? section.prose;
+      const finalDraft = accepted ?? lastDraft;
+      section.citations = finalDraft ? finalDraft.citations.filter((id) => doc.citations[id] !== undefined) : [];
       section.status = accepted ? 'drafted' : 'critic-flagged';
+      section.criticIssues = accepted ? undefined : [...lastIssues];
       if (!accepted) flagged.push(section.title);
       wordTotal += section.prose.split(/\s+/).filter(Boolean).length;
       await writeDocument(root, doc);

@@ -47,9 +47,11 @@ PPN: Rp 110.000
 Total: Rp 1.110.000
 Jatuh tempo 30 hari. Terima kasih.`;
 
-type Scenario = { wrongTotal?: boolean; unreadableTotal?: boolean };
+type Scenario = { wrongTotal?: boolean; unreadableTotal?: boolean; criticMode?: 'ok' | 'always-reject' | 'reject-first' };
 
 function scriptedProvider(scenario: Scenario = {}): LLMProvider {
+  let draftCalls = 0;
+  let criticCalls = 0;
   const respond = (messages: Message[]): { content: string } => {
     const system = messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
     if (system.includes('classify a document')) return { content: '{"docType":"invoice"}' };
@@ -77,12 +79,18 @@ function scriptedProvider(scenario: Scenario = {}): LLMProvider {
       return { content: '{"sections":[{"title":"Pendahuluan","thesisPoints":["Latar belakang"]},{"title":"Penutup","thesisPoints":["Kesimpulan"]}]}' };
     }
     if (system.includes('write ONE section')) {
+      draftCalls += 1;
       const user = messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
       const ids = [...user.matchAll(/\[(SRC-\d+)\]/g)].map((m) => m[1]!);
       const id = ids[ids.length - 1] ?? 'SRC-1';
-      return { content: JSON.stringify({ prose: `Dokumen ini membahas latar belakang penelitian secara umum dan sistematis. Berdasarkan sumber yang dibaca [${id}], kerangka kerja disusun bertahap.`, citations: [id] }) };
+      return { content: JSON.stringify({ prose: `Dokumen ini membahas latar belakang penelitian secara umum dan sistematis. Berdasarkan sumber yang dibaca [${id}], kerangka kerja disusun bertahap. Upaya tulis ke-${draftCalls}.`, citations: [id] }) };
     }
-    if (system.includes('critic gate')) return { content: '{"ok":true,"issues":[]}' };
+    if (system.includes('critic gate')) {
+      criticCalls += 1;
+      if (scenario.criticMode === 'always-reject') return { content: JSON.stringify({ ok: false, issues: [`sitasi belum menunjang klaim utama (kritik ke-${criticCalls})`] }) };
+      if (scenario.criticMode === 'reject-first' && criticCalls % 2 === 1) return { content: JSON.stringify({ ok: false, issues: [`perlu revisi sebelum lolos (kritik ke-${criticCalls})`] }) };
+      return { content: '{"ok":true,"issues":[]}' };
+    }
     return { content: '{}' };
   };
   return {
@@ -211,6 +219,47 @@ describe('Susun pipeline (outline staged, cited drafting, critic gate)', () => {
     const exported = await exportDocumentDocx(root, doc);
     expect(existsSync(join(root, exported.path))).toBe(true);
     expect(exported.bytes).toBeGreaterThan(1000);
+  });
+});
+
+describe('Susun critic rejects (flagged section keeps its draft + verdict)', () => {
+  test('critic rejects all 3 attempts: last draft stays, final issues recorded on the section', async () => {
+    const root = tmpRoot();
+    const engine = new DokumenEngine(scriptedProvider({ criticMode: 'always-reject' }), { webTools: offlineWeb });
+    const pending = engine.run(root, 'susun makalah tentang agentic framework', { subMode: 'susun' });
+    await until(async () => {
+      const doc = await readActiveDocument(root);
+      return Boolean(doc && doc.sections.length === 2 && doc.sections.every((s) => s.status === 'staged'));
+    });
+    expect(engine.releaseStaged()).toBe(true);
+    const summary = await pending;
+    const doc = (await readActiveDocument(root))!;
+    expect(doc.sections.every((s) => s.status === 'critic-flagged')).toBe(true);
+    // Not the empty-prose bug: bab pertama memakai draf upaya ke-3, bab kedua ke-6.
+    expect(doc.sections[0]!.prose).toContain('Upaya tulis ke-3.');
+    expect(doc.sections[0]!.prose).toMatch(/\[SRC-\d+\]/);
+    expect(doc.sections[1]!.prose).toContain('Upaya tulis ke-6.');
+    expect(doc.sections[0]!.criticIssues).toEqual(['sitasi belum menunjang klaim utama (kritik ke-3)']);
+    expect(doc.sections[1]!.criticIssues).toEqual(['sitasi belum menunjang klaim utama (kritik ke-6)']);
+    expect(summary).toContain('DITANDAI kritikus');
+  });
+
+  test('reject then accept: section drafted with the accepted prose and issues cleared', async () => {
+    const root = tmpRoot();
+    const engine = new DokumenEngine(scriptedProvider({ criticMode: 'reject-first' }), { webTools: offlineWeb });
+    const pending = engine.run(root, 'susun makalah tentang agentic framework', { subMode: 'susun' });
+    await until(async () => {
+      const doc = await readActiveDocument(root);
+      return Boolean(doc && doc.sections.length === 2 && doc.sections.every((s) => s.status === 'staged'));
+    });
+    expect(engine.releaseStaged()).toBe(true);
+    const summary = await pending;
+    const doc = (await readActiveDocument(root))!;
+    expect(doc.sections.every((s) => s.status === 'drafted')).toBe(true);
+    expect(doc.sections[0]!.prose).toContain('Upaya tulis ke-2.');
+    expect(doc.sections[1]!.prose).toContain('Upaya tulis ke-4.');
+    expect(doc.sections.every((s) => (s.criticIssues ?? []).length === 0)).toBe(true);
+    expect(summary).toContain('lolos gerbang kritikus');
   });
 });
 
