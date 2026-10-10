@@ -404,11 +404,11 @@ export function App() {
               {domain === 'dokumen' ? null : <ChildTasksPanel />}
               {domain === 'dokumen' ? null : <FinalReportView report={report} />}
               {domain === 'spreadsheet' ? <SheetReportPanel /> : null}
-              <DiffViewer />
+              {domain === 'spreadsheet' ? null : <DiffViewer />}
               <GitPanel />
               <AttachmentsPanel />
               <ChildTasksPanel />
-              <FinalReportView report={report} />
+              {domain === 'spreadsheet' ? null : <FinalReportView report={report} />}
               <p className="pb-2 text-center text-[9px] uppercase tracking-wider text-muted">daedalus core {VERSION}</p>
             </div>
           </ScrollArea>
