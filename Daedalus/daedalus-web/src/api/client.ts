@@ -219,6 +219,28 @@ export type DeckPreviewStatus = {
   renderedAt?: string
 }
 
+/**
+ * Pratinjau status: the exported .xlsx rendered by a real engine into
+ * per-page images, cached under a hash of workbook.json. Engines:
+ * Microsoft Excel (Windows, COM) first, LibreOffice anywhere as the
+ * fallback — server-selected and named in `engine`/`engineLabel`.
+ * `unavailable` means neither is installed; `stale` means the
+ * workbook changed since the cached render. The raster proves charts,
+ * pivots, values and layout — never slicer interactivity.
+ */
+export type WorkbookPreviewStatus = {
+  root: string
+  available: boolean
+  status: 'unavailable' | 'idle' | 'rendering' | 'ready' | 'stale' | 'error'
+  engine: 'excel' | 'libreoffice' | null
+  engineLabel: string | null
+  key: string | null
+  pages: number
+  pageUrls?: string[]
+  error?: string
+  renderedAt?: string
+}
+
 /** Verdict of POST /slides/deck/reset (Slide new chat's deck reset). */
 export type DeckResetResult = {
   root: string
@@ -550,6 +572,16 @@ export const api = {
 
   /** Download URL for an exported file inside workbook/. */
   workbookDownloadUrl: (root: string, path: string) => `/sheets/workbook/download${query({ root, path })}`,
+
+  /** Pratinjau: status of the engine render (Excel/LibreOffice) of the current workbook state. */
+  workbookPreview: (root: string) => request<WorkbookPreviewStatus>(`/sheets/workbook/preview${query({ root })}`),
+
+  /** Pratinjau: queue a render of the current workbook state (returns immediately; poll workbookPreview). */
+  workbookPreviewRender: (root: string) =>
+    request<WorkbookPreviewStatus>('/sheets/workbook/preview', { method: 'POST', body: JSON.stringify({ root }) }),
+
+  /** URL of one rendered preview page (server-provided pageUrls already carry the key). */
+  workbookPreviewPageUrl: (root: string, key: string, page: number) => `/sheets/workbook/preview/page${query({ root, key, page: String(page) })}`,
 
   /**
    * Export the open deck to .pptx through core's native exporter. A

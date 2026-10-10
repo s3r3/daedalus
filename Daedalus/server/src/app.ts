@@ -115,6 +115,7 @@ import {
 import { TerminalError, TerminalManager } from "./terminals.ts";
 import { UPLOAD_LIMITS, extractZipEntries, guessMimeType, parseMultipart, sanitizeRelativePath, type UploadPart } from "./uploads.ts";
 import { SlidePreviewService } from "./slide-preview.ts";
+import { SheetPreviewService } from "./sheet-preview.ts";
 
 /**
  * REST + WebSocket gateway (PLAN.md §3.0, §3.6). Commands and reads only —
@@ -181,6 +182,8 @@ export type AppContext = {
   taskSummaryCache?: Map<string, { fingerprint: string; summary: Record<string, unknown> }>;
   /** Pratinjau Asli renderer (raster preview of the exported deck; LibreOffice, or PowerPoint on Windows); tests inject a fake-backed service. */
   slidePreview?: SlidePreviewService;
+  /** Pratinjau renderer (raster preview of the exported workbook; Excel on Windows, or LibreOffice); tests inject a fake-backed service. */
+  sheetPreview?: SheetPreviewService;
 };
 
 export function createContext(overrides: Partial<AppContext> = {}): AppContext {
@@ -207,6 +210,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     webDist: overrides.webDist,
     extensionStatusCache: overrides.extensionStatusCache ?? new Map(),
     slidePreview: overrides.slidePreview,
+    sheetPreview: overrides.sheetPreview,
   };
 }
 
@@ -1098,6 +1102,9 @@ export function createApp(ctx: AppContext) {
   const slidePreview = ctx.slidePreview ?? new SlidePreviewService();
   const previewPageUrl = (root: string, key: string, page: number): string =>
     `/slides/deck/preview/page?root=${encodeURIComponent(root)}&key=${key}&page=${page}`;
+  const sheetPreview = ctx.sheetPreview ?? new SheetPreviewService();
+  const sheetPreviewPageUrl = (root: string, key: string, page: number): string =>
+    `/sheets/workbook/preview/page?root=${encodeURIComponent(root)}&key=${key}&page=${page}`;
   // Mirror the harness' command lifecycle into the per-workspace agent
   // terminal sink (the root is resolved from the owning task's state —
   // event payloads do not carry it).
@@ -3475,6 +3482,78 @@ export function createApp(ctx: AppContext) {
           workbook.exports = [record, ...(workbook.exports ?? [])].slice(0, 10);
           await writeWorkbook(root, workbook);
           sendJson(res, 200, { root, records: [record] });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Pratinjau status: is a render (Excel on Windows, or LibreOffice)
+    // of the CURRENT workbook state cached, rendering, stale, or
+    // impossible on this machine? Always 200 with an honest state
+    // (workbook missing is 404, as everywhere else here).
+    if (method === "GET" && url.pathname === "/sheets/workbook/preview") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const workbook = await readWorkbook(root);
+          if (!workbook) {
+            sendJson(res, 404, { error: "workbook_not_found", request_id: requestId });
+            return;
+          }
+          const status = await sheetPreview.status(root, workbook, (key, page) => sheetPreviewPageUrl(root, key, page));
+          sendJson(res, 200, { root, ...status });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // One cached Pratinjau page image. The key is a content hash
+    // (64 hex chars); anything else never reaches the filesystem.
+    if (method === "GET" && url.pathname === "/sheets/workbook/preview/page") {
+      try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+        const key = url.searchParams.get("key") || "";
+        const page = Number(url.searchParams.get("page") || "");
+        if (!key || !Number.isInteger(page) || page < 1) {
+          sendJson(res, 400, { error: "invalid_preview_page", request_id: requestId });
+          return;
+        }
+        const data = sheetPreview.readPageBytes(root, key, page);
+        if (!data) {
+          sendJson(res, 404, { error: "preview_page_not_found", request_id: requestId });
+          return;
+        }
+        res.writeHead(200, { "content-type": "image/png", "content-length": data.length, ...CORS_HEADERS });
+        res.end(data);
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    // Queue a Pratinjau render of the current workbook state (serial,
+    // deduped per state hash). Returns the status immediately; the web
+    // polls GET /sheets/workbook/preview until ready/error.
+    if (method === "POST" && url.pathname === "/sheets/workbook/preview") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const workbook = await readWorkbook(root);
+          if (!workbook) {
+            sendJson(res, 404, { error: "workbook_not_found", request_id: requestId });
+            return;
+          }
+          const status = await sheetPreview.render(root, workbook, (key, page) => sheetPreviewPageUrl(root, key, page));
+          sendJson(res, 200, { root, ...status });
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }

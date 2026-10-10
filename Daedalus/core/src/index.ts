@@ -1036,11 +1036,18 @@ export {
   exportSheetToCsvText,
   exportWorkbookCsv,
   probeSheetSidecar,
+  resolveSheetSidecar,
   runSheetSidecar,
   sidecarCandidates,
+  sheetSidecarCacheDir,
+  sheetSidecarSourceDir,
+  SHEET_SIDECAR_BINARY,
   type SidecarSpec,
   type SidecarRunResult,
   type SidecarProbe,
+  type SidecarDiscoverySeams,
+  type SidecarResolveSeams,
+  type SheetSidecarResolution,
 } from "./sheets/export.ts";
 export {
   verifyWorkbook,

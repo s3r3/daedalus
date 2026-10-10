@@ -19,10 +19,22 @@ exceljs cannot write — charts, pivot tables, slicers — into an exported
 
 ## Discovery (core side, `core/src/sheets/export.ts`)
 
-Mirrors how the server finds Pratinjau Asli engines:
+Mirrors how the server finds Pratinjau Asli engines. In order:
 
 1. `DAEDALUS_SHEET_SIDECAR` env var (explicit path), else
-2. `daedalus-sheet-sidecar` on `PATH`.
+2. `daedalus-sheet-sidecar` on `PATH`, else
+3. this dir's own build output (`sheet-sidecar/bin/`), else
+4. the per-user build cache (`~/.daedalus/bin/`).
+
+An explicit env var is the user's contract: when it is set, only
+(1)–(2) are probed and nothing is ever built. The status probe
+(`--version`) never builds either. **Build-on-first-use happens at
+export time only**: with no binary anywhere but a source checkout
+(this dir with `go.mod`) and a Go toolchain on `PATH`, the core runs
+`go build` once into `~/.daedalus/bin` (memoized per process), and
+the export record says "sidecar dibangun dari sumber (go build)".
+No Go toolchain → the export proceeds without natives and the record
+names the remedy (install Go, or set `DAEDALUS_SHEET_SIDECAR`).
 
 Probe: `--version`. Inject: `daedalus-sheet-sidecar inject` with one
 JSON object on stdin `{input, output, charts, pivots, slicers}`; exit 0

@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowDownAZ, Download, Plus } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ArrowDownAZ, Download, Plus, RefreshCw } from 'lucide-react'
 import type { SheetSpec, WorkbookSpec } from '@daedalus/core'
 import { displayValue, evaluateWorkbook, type WorkbookEvaluation } from '@daedalus/core/sheets/evaluator'
 import { formatCellRef, indexToCol, parseCellRef } from '@daedalus/core/sheets/refs'
 import { tileRefs } from '@daedalus/core/sheets/workbook'
 import { Button } from '../ui/button'
-import { api } from '../../api/client'
+import { api, type WorkbookPreviewStatus } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useWorkbook } from './useWorkbook'
 import { cn } from '../../lib/utils'
@@ -32,6 +32,70 @@ export function SheetStage() {
   const [note, setNote] = useState<string | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [dashView, setDashView] = useState<'canvas' | 'grid'>('canvas')
+  // Edit (grid, live, fully interactive) vs Pratinjau (the render
+  // engine's own raster of the exported .xlsx — faithful, not
+  // editable). The preview renders on demand, never per edit.
+  const [view, setView] = useState<'edit' | 'preview'>('edit')
+  const [preview, setPreview] = useState<WorkbookPreviewStatus | null>(null)
+  const [previewFetchError, setPreviewFetchError] = useState<string | null>(null)
+  const [previewBusy, setPreviewBusy] = useState(false)
+  const [previewPage, setPreviewPage] = useState(0)
+
+  const refreshPreview = useCallback(async (): Promise<void> => {
+    if (!root) return
+    try {
+      setPreview(await api.workbookPreview(root))
+      setPreviewFetchError(null)
+    } catch (fetchError: unknown) {
+      setPreviewFetchError(fetchError instanceof Error ? fetchError.message : String(fetchError))
+    }
+  }, [root])
+
+  const renderPreview = async (): Promise<void> => {
+    if (!root) return
+    setPreviewBusy(true)
+    try {
+      setPreview(await api.workbookPreviewRender(root))
+      setPreviewFetchError(null)
+    } catch (renderError: unknown) {
+      setPreviewFetchError(renderError instanceof Error ? renderError.message : String(renderError))
+    } finally {
+      setPreviewBusy(false)
+    }
+  }
+
+  // Cheap signature of the workbook state — the server is the stale
+  // authority (it hashes workbook.json); this only tells the web when
+  // to re-ask while Pratinjau is open.
+  const workbookSignature = useMemo(() => {
+    if (!workbook) return ''
+    const raw = JSON.stringify(workbook)
+    let h = 0x811c9dc5
+    for (let i = 0; i < raw.length; i += 1) {
+      h ^= raw.charCodeAt(i)
+      h = Math.imul(h, 0x01000193)
+    }
+    return `${raw.length}:${(h >>> 0).toString(16)}`
+  }, [workbook])
+
+  // Entering Pratinjau (and any workbook change while it is open)
+  // re-asks the server: a cache hit answers ready, a changed workbook
+  // answers stale.
+  useEffect(() => {
+    if (view === 'preview' && workbook) void refreshPreview()
+  }, [view, workbookSignature, refreshPreview])
+
+  // While the engine renders, poll until it settles.
+  useEffect(() => {
+    if (view !== 'preview' || preview?.status !== 'rendering') return
+    const timer = setInterval(() => void refreshPreview(), 1200)
+    return () => clearInterval(timer)
+  }, [view, preview?.status, refreshPreview])
+
+  // A fresh render identity selects its first page again.
+  useEffect(() => {
+    setPreviewPage(0)
+  }, [preview?.key])
 
   const sheet = workbook?.sheets[Math.min(activeSheet, Math.max(0, (workbook?.sheets.length ?? 1) - 1))]
   const evaluation = useMemo(() => (workbook ? evaluateWorkbook(workbook) : null), [workbook])
@@ -220,9 +284,41 @@ export function SheetStage() {
           <Button type="button" size="sm" variant="outline" onClick={() => void sortBySelectedColumn()} disabled={busy} data-testid="sheet-sort">
             <ArrowDownAZ className="size-3.5" aria-hidden /> Urutkan
           </Button>
+          <span className="mx-1 h-5 w-px bg-line" aria-hidden />
+          <span className="inline-flex overflow-hidden rounded border border-line" role="group" aria-label="tampilan kanvas">
+            <button
+              type="button"
+              data-testid="sheet-view-edit"
+              aria-pressed={view === 'edit'}
+              onClick={() => setView('edit')}
+              className={`px-2.5 py-1 text-[11px] font-medium ${view === 'edit' ? 'bg-primary text-white' : 'bg-surface text-muted hover:text-foreground'}`}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              data-testid="sheet-view-preview"
+              aria-pressed={view === 'preview'}
+              onClick={() => setView('preview')}
+              className={`px-2.5 py-1 text-[11px] font-medium ${view === 'preview' ? 'bg-primary text-white' : 'bg-surface text-muted hover:text-foreground'}`}
+            >
+              Pratinjau
+            </button>
+          </span>
         </span>
       </div>
 
+      {view === 'preview' ? (
+        <SheetPreviewPane
+          preview={preview}
+          fetchError={previewFetchError}
+          busy={previewBusy}
+          activePage={Math.min(previewPage, Math.max(0, (preview?.pages ?? 1) - 1))}
+          onPage={setPreviewPage}
+          onRender={() => void renderPreview()}
+        />
+      ) : (
+        <>
       <div className="flex items-end gap-1 overflow-x-auto border-b border-line px-2 pt-1" role="tablist" aria-label="sheet tabs">
         {workbook.sheets.map((candidate, index) => (
           <button
@@ -353,6 +449,132 @@ export function SheetStage() {
         ) : null}
       </div>
       )}
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Pratinjau: the exported .xlsx rendered by a real engine into page
+ * images. It REPLACES the grid while open (Slide-stage idiom): the
+ * raster proves charts, pivots, values and layout exactly as the file
+ * carries them, but it is not an editor — editing stays in Edit mode.
+ * Honesty rule: no engine draws slicer interactivity into a picture
+ * (LibreOffice draws a placeholder shape), so slicer clicks remain an
+ * Excel-only proof, stated in the caption.
+ */
+function SheetPreviewPane({
+  preview,
+  fetchError,
+  busy,
+  activePage,
+  onPage,
+  onRender,
+}: {
+  preview: WorkbookPreviewStatus | null
+  fetchError: string | null
+  busy: boolean
+  activePage: number
+  onPage: (page: number) => void
+  onRender: () => void
+}) {
+  const engineLabel = preview?.engineLabel ?? null
+  const pageUrls = preview?.pageUrls ?? []
+  const showRenderButton = preview?.status !== 'unavailable'
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-2 p-3" data-testid="sheet-preview" data-engine={preview?.engine ?? undefined}>
+      <div className="flex flex-wrap items-center gap-2">
+        <p className="text-xs font-semibold text-foreground" data-testid="sheet-preview-title">
+          {engineLabel ? `Pratinjau · ${engineLabel}` : 'Pratinjau'}
+        </p>
+        {preview?.status === 'stale' ? (
+          <span className="rounded border border-amber-400/50 bg-amber-400/10 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-amber-200" data-testid="sheet-preview-stale">
+            usang — workbook berubah
+          </span>
+        ) : null}
+        <span className="ml-auto" />
+        {showRenderButton ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={onRender}
+            disabled={busy || preview?.status === 'rendering'}
+            data-testid="sheet-preview-render"
+          >
+            <RefreshCw className={`size-3.5 ${preview?.status === 'rendering' ? 'animate-spin' : ''}`} aria-hidden />
+            {preview?.status === 'rendering'
+              ? 'Merender…'
+              : preview?.status === 'ready' || preview?.status === 'stale'
+                ? 'Perbarui pratinjau'
+                : 'Buat pratinjau'}
+          </Button>
+        ) : null}
+      </div>
+
+      {preview?.status === 'ready' && pageUrls.length > 0 ? (
+        <div className="flex min-h-0 flex-1 gap-3">
+          <div className="flex w-28 shrink-0 flex-col gap-2 overflow-y-auto pr-1" role="list" aria-label="daftar halaman pratinjau">
+            {pageUrls.map((url, index) => (
+              <button
+                key={url}
+                type="button"
+                data-testid={`sheet-preview-thumb-${index}`}
+                aria-pressed={index === activePage}
+                onClick={() => onPage(index)}
+                className={`overflow-hidden rounded border bg-white ${index === activePage ? 'border-primary outline outline-2 outline-primary' : 'border-line'}`}
+              >
+                <img src={url} alt={`halaman ${index + 1}`} loading="lazy" className="block w-full" />
+                <span className="block bg-surface px-1 py-0.5 text-[9px] text-muted">halaman {index + 1}</span>
+              </button>
+            ))}
+          </div>
+          <div className="min-w-0 flex-1 overflow-auto rounded border border-line bg-white">
+            <img
+              src={pageUrls[activePage]}
+              alt={`halaman ${activePage + 1}`}
+              className="mx-auto block max-w-full"
+              data-testid="sheet-preview-image"
+            />
+          </div>
+        </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 items-center justify-center rounded border border-dashed border-line p-6 text-center">
+          {fetchError && !preview ? (
+            <p className="max-w-md text-xs text-red-300" data-testid="sheet-preview-error">Gagal memuat status pratinjau: {fetchError}</p>
+          ) : !preview ? (
+            <p className="text-xs text-muted">Memeriksa pratinjau…</p>
+          ) : preview.status === 'unavailable' ? (
+            <p className="max-w-md text-xs text-muted" data-testid="sheet-preview-unavailable">
+              Pratinjau butuh Microsoft Excel (Windows) atau LibreOffice terpasang di komputer ini — keduanya tidak terdeteksi,
+              jadi tidak ada yang bisa dirender. Grid Edit tetap menghitung nilai secara langsung.
+            </p>
+          ) : preview.status === 'rendering' ? (
+            <p className="flex items-center gap-2 text-xs text-muted" data-testid="sheet-preview-rendering">
+              <RefreshCw className="size-4 animate-spin" aria-hidden /> Merender halaman dengan {engineLabel ?? 'mesin'}…
+            </p>
+          ) : preview.status === 'stale' ? (
+            <p className="max-w-md text-xs text-muted" data-testid="sheet-preview-stale-note">
+              Workbook berubah sejak render terakhir — halaman lama tidak ditampilkan agar tidak menyesatkan. Tekan Perbarui pratinjau.
+            </p>
+          ) : preview.status === 'error' ? (
+            <p className="max-w-md text-xs text-red-300" data-testid="sheet-preview-error">
+              Render gagal{engineLabel ? ` di ${engineLabel}` : ''}: {preview.error ?? 'tidak diketahui'}. Grid Edit tetap berfungsi.
+            </p>
+          ) : (
+            <p className="max-w-md text-xs text-muted" data-testid="sheet-preview-idle">
+              Belum ada render untuk state workbook ini. Tekan Buat pratinjau — workbook diekspor ke .xlsx dulu, lalu dirender halaman per halaman.
+            </p>
+          )}
+        </div>
+      )}
+
+      <p className="text-[10px] leading-relaxed text-muted" data-testid="sheet-preview-caption">
+        {engineLabel
+          ? `Pratinjau · ${engineLabel}: berkas .xlsx hasil ekspor workbook saat ini dirender halaman per halaman — chart & pivot asli tampil persis seperti di file. Slicer di LibreOffice tampil sebagai placeholder dan di gambar mana pun tidak bisa diklik; interaktivitas slicer hanya terbukti di Excel asli. Mengedit tetap di mode Edit.`
+          : 'Pratinjau merender berkas .xlsx hasil ekspor dengan mesin asli (Excel di Windows, atau LibreOffice) — chart & pivot terlihat persis seperti di file. Slicer tampil sebagai placeholder di LibreOffice dan tidak bisa diklik di gambar mana pun; interaktivitasnya hanya terbukti di Excel.'}
+      </p>
     </div>
   )
 }
