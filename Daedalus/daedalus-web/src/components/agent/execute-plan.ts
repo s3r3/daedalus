@@ -29,8 +29,11 @@ export async function executePlanDocument(options: { workspaceRoot: string; plan
     ...(options.planTaskId ? { plan_task_id: options.planTaskId } : {}),
     auto_approve: store.composer.autoApprove,
     provider_id: store.composer.providerId || undefined,
-    model: store.composer.model || undefined,
-    thinking: store.composer.thinking,
+    // The composer's one-shot model override (`providerId::model`) wins for
+    // this run, else the session model — same rule as the composer submit.
+    ...oneShotModel(store.composer.taskModel, store.composer.providerId, store.composer.model),
+    ...(store.composer.tokenBudget !== undefined ? { token_budget: store.composer.tokenBudget } : {}),
+    tool_rules: { ...store.composer.toolRules },
     ...(activeConversation ? { conversation_id: activeConversation.id } : {}),
   })
   store.setTask(created.id, goal)
@@ -45,4 +48,13 @@ export async function executePlanDocument(options: { workspaceRoot: string; plan
   }
   store.setComposer({ mode: 'auto', goal: '' })
   return created.id
+}
+
+/** Split the composer's `providerId::model` one-shot override (or fall back to the session model). */
+function oneShotModel(taskModel: string, providerId: string, model: string): { provider_id?: string; model?: string } {
+  if (taskModel) {
+    const [overrideProviderId, ...rest] = taskModel.split('::')
+    return { provider_id: overrideProviderId || undefined, model: rest.join('::') || undefined }
+  }
+  return { provider_id: providerId || undefined, model: model || undefined }
 }

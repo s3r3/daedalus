@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { ImagePlus, Paperclip, Play, Square, UploadCloud, X } from 'lucide-react'
-import type { AgentMode, Attachment } from '@daedalus/core'
+import type { AgentMode, Attachment, ThinkingLevel } from '@daedalus/core'
 import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core/skills/origin'
 import { AGENT_MODE_ORDER, nextAgentMode } from '@daedalus/core/interaction/modes'
 import { SlashCommandRegistry, slashCommandSuggestions, type SlashCommandContext, type SlashCommandResult } from '@daedalus/core/interaction/slash-commands'
@@ -8,7 +8,7 @@ import { Button } from '../ui/button'
 import { Textarea } from '../ui/input'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useTaskEvents } from '../../state/hooks'
-import { approvalId, fileChanges, latestPlan, parseModelPool, pendingApprovals, pendingQuestions, taskStatus, validation } from '../../state/selectors'
+import { approvalId, fileChanges, latestPlan, pendingApprovals, pendingQuestions, taskStatus, validation } from '../../state/selectors'
 import { api } from '../../api/client'
 import type { Conversation, ConversationTurn, ExtensionStatus, WorkspaceFileEntry } from '../../api/types'
 import { saveActiveConversationId } from '../../state/prefs'
@@ -18,6 +18,9 @@ import { DokumenComposerControls } from './dokumen-controls'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 
 type UploadKind = 'file' | 'folder' | 'image' | 'zip'
+
+/** The four thinking levels (mirrors core's THINKING_LEVELS; the web never value-imports the core barrel). */
+const THINKING_LEVELS: readonly ThinkingLevel[] = ['off', 'low', 'medium', 'high']
 
 /**
  * Task composer (PLAN.md §3.4 + Phase 8.5). The composer owns only drafts and
@@ -246,14 +249,17 @@ export function Composer() {
     }
   }
 
-  const changeThinking = async (enabled: boolean): Promise<SlashCommandResult> => {
+  const changeThinkingLevel = async (level: ThinkingLevel): Promise<SlashCommandResult> => {
     try {
-      const response = await api.updateSession({ thinking: enabled })
+      const response = await api.updateSession({ thinkingLevel: level })
       applySession(response.session)
-      return { text: `Thinking ${enabled ? 'on' : 'off'}. ${enabled ? 'Provider THOUGHT events will appear in the activity timeline.' : 'THOUGHT events remain in the local event log but are hidden here.'}`, action: 'settings', data: { thinking: enabled } }
+      return {
+        text: `Thinking level ${level}. ${level === 'off' ? 'THOUGHT events remain in the local event log but are hidden here.' : 'Provider THOUGHT events will appear in the activity timeline.'}`,
+        action: 'settings',
+        data: { thinkingLevel: level },
+      }
     } catch (error) {
-      setComposer({ thinking: enabled })
-      return { text: `Thinking set locally ${enabled ? 'on' : 'off'}. Server update failed: ${errorMessage(error)}`, action: 'settings', data: { thinking: enabled } }
+      return { text: `Thinking level update failed: ${errorMessage(error)}`, action: 'settings' }
     }
   }
 
@@ -398,8 +404,12 @@ export function Composer() {
       if (key === 'model') return changeModel(value)
       if (key === 'auto-approve') return changeAutoApprove(value === 'on' || value === 'true')
       if (key === 'thinking') {
-        if (!['on', 'off', 'true', 'false'].includes(value.trim().toLowerCase())) return { text: 'Usage: /settings thinking on|off', action: 'settings' }
-        return changeThinking(value === 'on' || value === 'true')
+        const normalized = value.trim().toLowerCase()
+        // on/off stay as aliases (on = medium); the four levels are the real setting.
+        if (normalized === 'on' || normalized === 'true') return changeThinkingLevel('medium')
+        if (normalized === 'off' || normalized === 'false') return changeThinkingLevel('off')
+        if ((THINKING_LEVELS as readonly string[]).includes(normalized)) return changeThinkingLevel(normalized as ThinkingLevel)
+        return { text: 'Usage: /settings thinking off|low|medium|high', action: 'settings' }
       }
       const response = await api.updateSettings({ [key]: value })
       applySession(response.session)
@@ -449,7 +459,8 @@ export function Composer() {
     },
     status: () => {
       const state = useDaedalusStore.getState()
-      return `Connection: ${state.connection}\nTask: ${state.taskId ?? '(new)'}\nMode: ${state.composer.mode}\nThinking: ${state.composer.thinking ? 'on' : 'off'}\nProvider: ${state.composer.providerId || '(default)'}\nModel: ${state.composer.model || '(default)'}\nWorkspace: ${state.workspace.root || '(none)'}\nEvents: ${events.length}`
+      const level = state.session?.thinkingLevel ?? (state.session?.thinking === false ? 'off' : 'medium')
+      return `Connection: ${state.connection}\nTask: ${state.taskId ?? '(new)'}\nMode: ${state.composer.mode}\nThinking level: ${level}\nProvider: ${state.composer.providerId || '(default)'}\nModel: ${state.composer.model || '(default)'}\nWorkspace: ${state.workspace.root || '(none)'}\nEvents: ${events.length}`
     },
     cancel: async () => {
       const taskId = useDaedalusStore.getState().taskId
@@ -591,10 +602,12 @@ export function Composer() {
     setComposer({ submitting: true, error: null })
     try {
       const attachmentsForTask = visionWarning ? composer.attachments.filter((attachment) => attachment.kind !== 'image') : composer.attachments
-      // A configured pool (settings → model pool) replaces the single-model
-      // pick for this task; the provider still selects the connection, and
-      // core routes across the pool with the chosen strategy.
-      const pool = parseModelPool(composer.modelPool)
+      // One-shot model override for this task: taskModel (`providerId::model`)
+      // wins, else the session model. The token budget and the per-task tool
+      // rules ride the payload; thinking, max iterations, and the model pool
+      // now live in server Settings (the 3-layer restructure).
+      const [taskProviderId, ...taskModelRest] = composer.taskModel ? composer.taskModel.split('::') : []
+      const taskModelName = taskModelRest.join('::')
       // Plan continuity (Cline-style): when the task on screen produced a
       // plan, the follow-up task carries it — switching to Auto/Manual and
       // sending "jalankan rencananya" executes those steps in this context.
@@ -624,12 +637,11 @@ export function Composer() {
         repo_path: workspaceRoot,
         domain,
         auto_approve: composer.autoApprove,
-        max_iterations: composer.maxIterations,
         mode: composer.mode,
-        thinking: composer.thinking,
-        provider_id: composer.providerId || undefined,
-        ...(pool.length > 0 ? { models: pool } : { model: composer.model || undefined }),
-        ...(pool.length > 1 ? { model_strategy: composer.modelStrategy } : {}),
+        provider_id: (taskProviderId || composer.providerId) || undefined,
+        model: (taskModelName || composer.model) || undefined,
+        ...(composer.tokenBudget !== undefined ? { token_budget: composer.tokenBudget } : {}),
+        tool_rules: { ...composer.toolRules },
         attachments: attachmentsForTask,
         ...(skillNames.length ? { skills: skillNames } : {}),
         ...(domain === 'dokumen'
@@ -782,6 +794,29 @@ export function Composer() {
     // '' is the combobox's "default model" entry; changeModel clears both
     // provider and model for it.
     void changeModel(value)
+  }
+
+  // One-shot model override for this task only (`providerId::model`; '' =
+  // follow the session model). The picker speaks `providerId/model`, so
+  // both directions translate at the boundary.
+  const [taskModelProviderId, taskModelName] = useMemo(() => {
+    if (!composer.taskModel) return ['', '']
+    const [providerId, ...rest] = composer.taskModel.split('::')
+    return [providerId ?? '', rest.join('::')]
+  }, [composer.taskModel])
+
+  const onTaskModelSelect = (value: string): void => {
+    if (!value) {
+      setComposer({ taskModel: '' })
+      return
+    }
+    const [providerId, ...rest] = value.split('/')
+    setComposer({ taskModel: `${providerId}::${rest.join('/')}` })
+  }
+
+  const setToolRules = (key: 'allow' | 'ask' | 'deny', text: string): void => {
+    const list = text.split(',').map((entry) => entry.trim()).filter(Boolean)
+    setComposer({ toolRules: { ...composer.toolRules, [key]: [...new Set(list)] } })
   }
 
   return (
@@ -958,33 +993,41 @@ export function Composer() {
         </label>
 
         <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
-          <input
-            type="checkbox"
-            className="size-3 accent-primary"
-            checked={composer.thinking}
-            data-testid="thinking-toggle"
-            aria-label="thinking"
-            onChange={(event) => void changeThinking(event.target.checked).then((result) => setSlashOutput(result.text))}
-          />
-          thinking
+          model
+          <ModelPicker models={models} providerId={composer.providerId} model={composer.model} onSelect={onModelSelect} />
         </label>
 
-        <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
-          max iterations
+        <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted" title="Satu task ini saja; kosong = ikut model sesi">
+          model tugas ini
+          <ModelPicker
+            models={models}
+            providerId={taskModelProviderId}
+            model={taskModelName}
+            onSelect={onTaskModelSelect}
+            buttonTestId="task-model-picker-button"
+          />
+        </label>
+
+        <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted" title="Batas token untuk task ini; kosong = tanpa batas">
+          budget token
           <input
             type="number"
             min={1}
-            max={100}
-            aria-label="max iterations"
-            className="h-6 w-16 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
-            value={composer.maxIterations}
-            onChange={(event) => setComposer({ maxIterations: Math.max(1, Number(event.target.value) || 1) })}
+            aria-label="token budget"
+            data-testid="composer-token-budget"
+            placeholder="budget token · kosong = tanpa batas"
+            className="h-6 w-28 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
+            value={composer.tokenBudget ?? ''}
+            onChange={(event) => {
+              const raw = event.target.value.trim()
+              if (raw === '') {
+                setComposer({ tokenBudget: undefined })
+                return
+              }
+              const value = Math.round(Number(raw))
+              setComposer({ tokenBudget: Number.isInteger(value) && value > 0 ? value : undefined })
+            }}
           />
-        </label>
-
-        <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
-          model
-          <ModelPicker models={models} providerId={composer.providerId} model={composer.model} onSelect={onModelSelect} />
         </label>
 
         <div className="ml-auto flex items-center gap-1">
@@ -1017,6 +1060,45 @@ export function Composer() {
             </Button>
           )}
         </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2" data-testid="composer-tool-rules">
+        <span className="text-[10px] uppercase tracking-wider text-muted" title="Aturan persetujuan tool untuk task ini saja (allow → lewati approval, ask → paksa tanya, deny → tolak)">
+          aturan tool
+        </span>
+        <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+          selalu izinkan
+          <input
+            aria-label="selalu izinkan"
+            data-testid="composer-tool-rules-allow"
+            placeholder="read_file, list_dir"
+            className="h-6 w-40 rounded border border-line bg-surface px-1.5 text-[11px] normal-case text-foreground"
+            value={composer.toolRules.allow.join(', ')}
+            onChange={(event) => setToolRules('allow', event.target.value)}
+          />
+        </label>
+        <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+          selalu tanya
+          <input
+            aria-label="selalu tanya"
+            data-testid="composer-tool-rules-ask"
+            placeholder="run_command"
+            className="h-6 w-40 rounded border border-line bg-surface px-1.5 text-[11px] normal-case text-foreground"
+            value={composer.toolRules.ask.join(', ')}
+            onChange={(event) => setToolRules('ask', event.target.value)}
+          />
+        </label>
+        <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
+          jangan pernah
+          <input
+            aria-label="jangan pernah"
+            data-testid="composer-tool-rules-deny"
+            placeholder="delete_file"
+            className="h-6 w-40 rounded border border-line bg-surface px-1.5 text-[11px] normal-case text-foreground"
+            value={composer.toolRules.deny.join(', ')}
+            onChange={(event) => setToolRules('deny', event.target.value)}
+          />
+        </label>
       </div>
 
       {composer.attachments.length > 0 ? (

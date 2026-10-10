@@ -1,7 +1,7 @@
 import { create } from 'zustand'
-import type { AgentMode, Attachment, Event, FinalReport, ProviderConfigPublic } from '@daedalus/core'
+import type { AgentMode, Attachment, Event, FinalReport, ToolRules } from '@daedalus/core'
 import type { StreamStatus, TerminalWireMessage } from '../api/eventStream'
-import type { Conversation, ProviderModel, ProviderPreset, SessionState, TaskSummary, TerminalSession } from '../api/types'
+import type { Conversation, ProviderModel, ProviderPreset, ProviderPublic, SessionState, TaskSummary, TerminalSession } from '../api/types'
 import { composerPrefsOf, domainFromPathname, saveComposerPrefs, type WebDomain } from './prefs'
 
 export type { WebDomain }
@@ -29,12 +29,13 @@ export type ComposerState = {
   mode: AgentMode
   providerId: string
   model: string
-  /** Comma-separated model pool; with 2+ models the task runs against the pool. */
-  modelPool: string
-  modelStrategy: 'failover' | 'round-robin'
   autoApprove: boolean
-  thinking: boolean
-  maxIterations: number
+  /** Per-task token budget (positive int); undefined = no cap. */
+  tokenBudget: number | undefined
+  /** One-shot model override for the next task, `providerId::model`; '' = follow the session model. */
+  taskModel: string
+  /** Per-task tool approval rules; empty lists = no overrides. */
+  toolRules: ToolRules
   attachments: Attachment[]
   submitting: boolean
   error: string | null
@@ -94,7 +95,7 @@ export type DaedalusState = {
   workspace: WorkspaceState
   composer: ComposerState
   session: SessionState | null
-  providers: ProviderConfigPublic[]
+  providers: ProviderPublic[]
   providerPresets: ProviderPreset[]
   models: ProviderModel[]
   taskAttachments: Attachment[]
@@ -124,7 +125,7 @@ export type DaedalusState = {
   setWorkspace: (patch: Partial<WorkspaceState>) => void
   setComposer: (patch: Partial<ComposerState>) => void
   setSession: (session: SessionState | null) => void
-  setProviders: (providers: ProviderConfigPublic[], presets?: ProviderPreset[]) => void
+  setProviders: (providers: ProviderPublic[], presets?: ProviderPreset[]) => void
   setModels: (models: ProviderModel[]) => void
   setTaskAttachments: (attachments: Attachment[]) => void
   addAttachments: (attachments: Attachment[]) => void
@@ -154,11 +155,10 @@ const initialComposer: ComposerState = {
   mode: 'auto',
   providerId: '',
   model: '',
-  modelPool: '',
-  modelStrategy: 'failover',
   autoApprove: false,
-  thinking: true,
-  maxIterations: 25,
+  tokenBudget: undefined,
+  taskModel: '',
+  toolRules: { allow: [], ask: [], deny: [] },
   attachments: [],
   submitting: false,
   error: null,
@@ -254,7 +254,6 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
               ...state.composer,
               mode: session.mode,
               autoApprove: session.autoApprove,
-              thinking: session.thinking !== false,
               providerId: session.providerId ?? state.composer.providerId,
               model: session.model ?? state.composer.model,
             },

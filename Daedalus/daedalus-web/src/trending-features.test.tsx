@@ -51,7 +51,7 @@ beforeEach(() => {
   createTask.mockResolvedValue({ id: 'task-new', goal: 'do the thing' })
   updateSession.mockReset()
   updateSession.mockImplementation(async (input: Record<string, unknown>) => ({
-    session: { mode: 'auto', autoApprove: false, thinking: true, workspaceRoot: '/workspace', ...input },
+    session: { mode: 'auto', autoApprove: false, thinkingLevel: 'medium' as const, workspaceRoot: '/workspace', ...input },
   }))
   useDaedalusStore.getState().reset()
 })

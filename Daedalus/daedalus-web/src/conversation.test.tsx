@@ -26,13 +26,13 @@ vi.mock('./api/client', () => ({
     cancelTask: vi.fn(async () => ({ cancelled: true, task_id: 'task-1' })),
     files: vi.fn(async (root: string) => ({ root, files: [], truncated: false })),
     updateSession: vi.fn(async () => ({
-      session: { mode: 'auto', autoApprove: false, thinking: true, workspaceRoot: '/workspace' },
+      session: { mode: 'auto', autoApprove: false, thinkingLevel: 'medium' as const, workspaceRoot: '/workspace' },
     })),
     setMode: vi.fn(async () => ({
-      session: { mode: 'auto', autoApprove: false, thinking: true, workspaceRoot: '/workspace' },
+      session: { mode: 'auto', autoApprove: false, thinkingLevel: 'medium' as const, workspaceRoot: '/workspace' },
     })),
     setAutoApprove: vi.fn(async () => ({
-      session: { mode: 'auto', autoApprove: true, thinking: true, workspaceRoot: '/workspace' },
+      session: { mode: 'auto', autoApprove: true, thinkingLevel: 'medium' as const, workspaceRoot: '/workspace' },
     })),
     decideApproval: vi.fn(async () => ({ success: true, decision: 'decline', approval_id: 'a-1' })),
     models: vi.fn(async () => ({ models: [], session: {}, count: 0 })),

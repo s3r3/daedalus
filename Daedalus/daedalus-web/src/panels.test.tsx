@@ -75,7 +75,7 @@ beforeEach(() => {
   })
   updateSession.mockReset()
   updateSession.mockImplementation(async (input: Record<string, unknown>) => ({
-    session: { mode: 'auto', autoApprove: false, thinking: true, workspaceRoot: '/workspace', ...input },
+    session: { mode: 'auto', autoApprove: false, thinkingLevel: 'medium' as const, workspaceRoot: '/workspace', ...input },
   }))
   useDaedalusStore.getState().reset()
 })
@@ -93,7 +93,13 @@ describe('Composer', () => {
   })
 
   test('a populated goal creates a task with the composer options', async () => {
-    useDaedalusStore.getState().setComposer({ goal: 'add a health endpoint', autoApprove: true, maxIterations: 7 })
+    useDaedalusStore.getState().setComposer({
+      goal: 'add a health endpoint',
+      autoApprove: true,
+      tokenBudget: 60000,
+      taskModel: 'nine-router::kr/auto',
+      toolRules: { allow: ['read_file'], ask: [], deny: ['delete_file'] },
+    })
     render(<Composer />)
     await userEvent.click(screen.getByTestId('composer-submit'))
     expect(createTask).toHaveBeenCalledWith({
@@ -101,13 +107,27 @@ describe('Composer', () => {
       repo_path: '',
       domain: 'coding',
       auto_approve: true,
-      max_iterations: 7,
       mode: 'auto',
-      thinking: true,
-      provider_id: undefined,
-      model: undefined,
+      provider_id: 'nine-router',
+      model: 'kr/auto',
+      token_budget: 60000,
+      tool_rules: { allow: ['read_file'], ask: [], deny: ['delete_file'] },
       attachments: [],
     })
+  })
+
+  test('without per-task overrides the payload follows the session model and carries empty tool rules', async () => {
+    useDaedalusStore.getState().setComposer({ goal: 'plain task', providerId: 'kr', model: 'claude-sonnet' })
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('composer-submit'))
+    expect(createTask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider_id: 'kr',
+        model: 'claude-sonnet',
+        tool_rules: { allow: [], ask: [], deny: [] },
+      }),
+    )
+    expect(createTask).not.toHaveBeenCalledWith(expect.objectContaining({ token_budget: expect.anything() }))
   })
 
   test('a failed create surfaces the error instead of the task', async () => {
@@ -233,19 +253,24 @@ describe('Composer', () => {
     expect(createTask).toHaveBeenCalledWith(expect.objectContaining({ goal: 'jalankan rencananya', plan_task_id: 'task-1' }))
   })
 
-  test('thinking toggle persists through the session and /settings thinking works', async () => {
-    render(<Composer />)
-    await userEvent.click(screen.getByTestId('thinking-toggle'))
-    expect(updateSession).toHaveBeenCalledWith({ thinking: false })
-    expect(useDaedalusStore.getState().composer.thinking).toBe(false)
-    expect(textOf(await screen.findByTestId('slash-output'))).toContain('Thinking off')
-
-    cleanup()
-    useDaedalusStore.getState().setComposer({ goal: '/settings thinking on' })
+  test('/settings thinking accepts levels and writes them to the session', async () => {
+    useDaedalusStore.getState().setComposer({ goal: '/settings thinking low' })
     render(<Composer />)
     await userEvent.click(screen.getByTestId('composer-submit'))
-    expect(updateSession).toHaveBeenCalledWith({ thinking: true })
-    expect(useDaedalusStore.getState().composer.thinking).toBe(true)
+    expect(updateSession).toHaveBeenCalledWith({ thinkingLevel: 'low' })
+    expect(textOf(await screen.findByTestId('slash-output'))).toContain('Thinking level low')
+
+    cleanup()
+    useDaedalusStore.getState().setComposer({ goal: '/settings thinking off' })
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('composer-submit'))
+    expect(updateSession).toHaveBeenCalledWith({ thinkingLevel: 'off' })
+
+    cleanup()
+    useDaedalusStore.getState().setComposer({ goal: '/settings thinking nonsense' })
+    render(<Composer />)
+    await userEvent.click(screen.getByTestId('composer-submit'))
+    expect(textOf(await screen.findByTestId('slash-output'))).toContain('Usage: /settings thinking off|low|medium|high')
   })
 })
 
@@ -484,16 +509,16 @@ describe('ActivityTimeline', () => {
     expect(screen.getAllByTestId('tool-call')).toHaveLength(1)
   })
 
-  test('THOUGHT events render distinctly when thinking is on and are filtered when off', () => {
+  test('THOUGHT events render distinctly when the session thinking level is on and are filtered when off', () => {
     seed([ev('THOUGHT', { text: 'inspect the workspace first', source: 'provider_reasoning' })])
-    useDaedalusStore.getState().setComposer({ thinking: true })
+    useDaedalusStore.getState().setSession({ mode: 'auto', autoApprove: false, thinkingLevel: 'medium', workspaceRoot: '/workspace' })
     render(<ActivityTimeline />)
     expect(textOf(screen.getByTestId('activity-panel'))).toContain('thinking')
     expect(textOf(screen.getByTestId('activity-panel'))).toContain('inspect the workspace first')
 
     cleanup()
     seed([ev('THOUGHT', { text: 'inspect the workspace first', source: 'provider_reasoning' })])
-    useDaedalusStore.getState().setComposer({ thinking: false })
+    useDaedalusStore.getState().setSession({ mode: 'auto', autoApprove: false, thinkingLevel: 'off', workspaceRoot: '/workspace' })
     render(<ActivityTimeline />)
     expect(textOf(screen.getByTestId('activity-panel'))).not.toContain('inspect the workspace first')
   })
@@ -590,12 +615,11 @@ describe('ErrorPanel', () => {
 })
 
 describe('TopBar', () => {
-  test('the thinking toggle updates the shared session', async () => {
-    useDaedalusStore.getState().setComposer({ thinking: true })
+  test('the model summary reports the session thinking level (the toggle lives in Settings → Global now)', () => {
+    useDaedalusStore.getState().setSession({ mode: 'auto', autoApprove: false, thinkingLevel: 'low', workspaceRoot: '/workspace' })
     render(<TopBar />)
-    await userEvent.click(screen.getByTestId('topbar-thinking-toggle'))
-    expect(updateSession).toHaveBeenCalledWith({ thinking: false })
-    expect(useDaedalusStore.getState().composer.thinking).toBe(false)
+    expect(textOf(screen.getByTestId('topbar-model-summary'))).toContain('thinking low')
+    expect(screen.queryByTestId('topbar-thinking-toggle')).toBeNull()
   })
 
   test('the theme toggle carries an accessible label and flips the theme', async () => {

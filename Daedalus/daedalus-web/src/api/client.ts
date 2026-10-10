@@ -1,4 +1,4 @@
-import type { AgentMode, Attachment, DocumentState, Event, FinalReport, PermissionKey } from '@daedalus/core'
+import type { AgentMode, Attachment, DocumentState, Event, FinalReport, PermissionKey, ThinkingLevel, ToolRules } from '@daedalus/core'
 import type {
   Conversation,
   FileChange,
@@ -6,6 +6,7 @@ import type {
   ProviderConfigPublic,
   ProviderModel,
   ProviderPreset,
+  ProviderPublic,
   ProviderTestResult,
   ReviewResponse,
   SessionState,
@@ -14,6 +15,7 @@ import type {
   TaskAttachmentsResponse,
   TaskSnapshot,
   TaskSummary,
+  UpdateSettingsInput,
   UploadResponse,
   WorkspaceEntry,
   WorkspaceFile,
@@ -80,16 +82,16 @@ export type CreateTaskInput = {
   /** Domain produk aktif saat submit ('coding'|'slide'|'dokumen'|'spreadsheet'); server meneruskannya ke core agar task berjalan dengan engine domain tersebut. */
   domain?: 'coding' | 'slide' | 'dokumen' | 'spreadsheet'
   auto_approve?: boolean
-  max_iterations?: number
   constraints?: string[]
   done_criteria?: string[]
   mode?: AgentMode
-  thinking?: boolean
   provider_id?: string
+  /** One-shot model for this task: the composer's taskModel override, else the session model. */
   model?: string
-  /** Model pool (2+ models): core routes across them with model_strategy. */
-  models?: string[]
-  model_strategy?: 'failover' | 'round-robin'
+  /** Per-task token budget (positive int); core ends the run budget_exhausted when it is spent. */
+  token_budget?: number
+  /** Per-task tool approval rules: allow → skip approval, ask → force it, deny → hard deny. */
+  tool_rules?: ToolRules
   attachments?: Attachment[]
   isolation?: 'worktree'
   /** Follow up on a plan drafted by this earlier task; core injects its steps as a constraint. */
@@ -406,12 +408,13 @@ export const api = {
 
   settings: () => request<SettingsResponse>('/settings'),
 
-  updateSettings: (input: Record<string, unknown>) =>
+  updateSettings: (input: UpdateSettingsInput) =>
     request<SettingsResponse>('/settings', { method: 'PUT', body: JSON.stringify(input) }),
 
   session: () => request<{ session: SessionState }>('/session'),
 
-  updateSession: (input: Partial<SessionState> & Record<string, unknown>) =>
+  /** PUT /session: thinkingLevel is the current setting; `thinking` stays accepted as the deprecated boolean alias. */
+  updateSession: (input: { thinkingLevel?: ThinkingLevel; thinking?: boolean; providerId?: string; model?: string } & Record<string, unknown>) =>
     request<{ session: SessionState }>('/session', { method: 'PUT', body: JSON.stringify(input) }),
 
   setMode: (mode: AgentMode) =>
@@ -422,7 +425,7 @@ export const api = {
   setAutoApprove: (enabled: boolean) =>
     request<{ session: SessionState }>('/session/auto-approve', { method: 'POST', body: JSON.stringify({ enabled }) }),
 
-  providers: () => request<{ providers: ProviderConfigPublic[]; presets: ProviderPreset[] }>('/providers'),
+  providers: () => request<{ providers: ProviderPublic[]; presets: ProviderPreset[] }>('/providers'),
 
   createProvider: (input: ProviderInput) =>
     request<{ provider: ProviderConfigPublic }>('/providers', { method: 'POST', body: JSON.stringify(input) }),

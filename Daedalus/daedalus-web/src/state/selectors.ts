@@ -1,6 +1,6 @@
 import type { Attachment, ChildTask, Event, FinalReport, Plan, PlanStep, ToolCall, ToolResult, UserQuestionInfo, ValidationResult } from '@daedalus/core'
 import { formatSkillOrigin } from '@daedalus/core/skills/origin'
-import { payloadOf, type ApprovalRequested, type CommandFinished, type CommandStarted, type FileChange, type RecoveryStarted } from '../api/types'
+import { payloadOf, type ApprovalRequested, type CommandFinished, type CommandStarted, type FileChange, type RecoveryStarted, type SessionState } from '../api/types'
 
 /**
  * Pure derivations over the append-only event log. Every panel renders from
@@ -998,6 +998,20 @@ export function parseModelPool(text: string): string[] {
     if (model) seen.add(model)
   }
   return [...seen]
+}
+
+/**
+ * Whether provider THOUGHT events should render, from the 3-layer session
+ * setting: thinking level 'off' hides them, every other level shows them.
+ * The deprecated `thinking` boolean is honored when the level is absent
+ * (old server), and an unknown session defaults to visible — the same
+ * default the composer checkbox used to carry.
+ */
+export function sessionThinkingOn(session: SessionState | null | undefined): boolean {
+  if (!session) return true
+  if (session.thinkingLevel) return session.thinkingLevel !== 'off'
+  if (typeof session.thinking === 'boolean') return session.thinking
+  return true
 }
 
 function failingChecks(event: Event): string {
