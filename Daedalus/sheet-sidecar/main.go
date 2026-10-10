@@ -253,6 +253,10 @@ func addPivot(f *excelize.File, spec pivotSpec) error {
 			return fmt.Errorf("create pivot sheet %q: %w", target, err)
 		}
 	}
+	// The pivot sheet starts at default width; aggregated currency
+	// values would render as ### — widen the label/value columns so
+	// the table reads immediately when the file opens.
+	_ = f.SetColWidth(target, "A", "B", 22)
 	anchor := spec.Anchor
 	if anchor == "" {
 		anchor = "A1"
