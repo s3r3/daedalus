@@ -40,7 +40,7 @@ bash scripts/dev.sh
 Or use the CLI from source:
 
 ```bash
-# Bare launcher: starts/reuses one background server, then offers Daedalus Coding / Daedalus Slide / Hide to Tray / Exit.
+# Bare launcher: starts/reuses one background server, then offers Daedalus Coding / Daedalus Slide / Daedalus Dokumen / Daedalus Spreadsheet / Hide to Tray / Exit.
 node --experimental-strip-types cli/src/index.ts
 
 # Lifecycle commands

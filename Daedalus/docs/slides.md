@@ -95,7 +95,8 @@ di TopBar menulis URL yang sesuai (`history.pushState`), jadi refresh
 dan deep-link konsisten. Server menyajikan shell SPA yang sama untuk
 kedua rute. Launcher CLI menawarkan domain yang sama sejak awal:
 menu `daedalus` telanjang kini **1 Daedalus Coding** (membuka `/`),
-**2 Daedalus Slide** (membuka `/slide`), 3 Hide to Tray, 4 Exit.
+**2 Daedalus Slide** (membuka `/slide`), 3 Daedalus Dokumen,
+4 Daedalus Spreadsheet, 5 Hide to Tray, 6 Exit.
 Saklar domain di TopBar juga persisten (localStorage).
 Domain Slide mengganti kolom tengah editor kode menjadi canvas slide
 (16:9 scaled-to-fit + filmstrip; thumbnail adalah renderer yang sama),
