@@ -208,7 +208,7 @@ describe('dokumen panels', () => {
   })
 })
 
-const seededComposeDocument = {
+const seededComposePreviewDocument = {
   ...seededDocument,
   id: 'doc-2',
   kind: 'compose',
@@ -235,7 +235,7 @@ const seededStyleDocument = {
 
 describe('dokumen pratinjau (Tulis | Pratinjau)', () => {
   test('compose canvas defaults to Tulis (no preview fetch); Pratinjau shows the honest unavailable state', async () => {
-    dokumenDocument.mockResolvedValue({ root: '/ws', document: seededComposeDocument })
+    dokumenDocument.mockResolvedValue({ root: '/ws', document: seededComposePreviewDocument })
     render(<DokumenStage />)
     expect(await screen.findByTestId('dokumen-view-preview')).toBeTruthy()
     expect(dokumenPreview).not.toHaveBeenCalled()
@@ -245,7 +245,7 @@ describe('dokumen pratinjau (Tulis | Pratinjau)', () => {
   })
 
   test('ready preview shows rendered pages with a pager; Perbarui asks the server to render again', async () => {
-    dokumenDocument.mockResolvedValue({ root: '/ws', document: seededComposeDocument })
+    dokumenDocument.mockResolvedValue({ root: '/ws', document: seededComposePreviewDocument })
     dokumenPreview.mockResolvedValue({
       root: '/ws',
       available: true,
