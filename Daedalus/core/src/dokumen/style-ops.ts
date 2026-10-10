@@ -51,7 +51,6 @@ export async function inspectDocxStyles(absPath: string): Promise<DocxStyleState
   const zip = await loadZip(absPath);
   const documentXml = (await zip.file('word/document.xml')?.async('string')) ?? '';
   const stylesXml = (await zip.file('word/styles.xml')?.async('string')) ?? '';
-  const numberingXml = (await zip.file('word/numbering.xml')?.async('string')) ?? '';
 
   const pgMarBlocks = documentXml.match(/<w:pgMar[^>]*\/>/g) ?? [];
   const first = pgMarBlocks[0] ?? '';
@@ -70,7 +69,6 @@ export async function inspectDocxStyles(absPath: string): Promise<DocxStyleState
   const lineSpacing = lineVal ? Number(lineVal) / 240 : 1;
   const headingBlock = stylesXml.match(/<w:style[^>]*w:styleId="Heading1"[^>]*>([\s\S]*?)<\/w:style>/)?.[1] ?? '';
   const headingFont = headingBlock.match(/<w:rFonts[^>]*w:ascii="([^"]+)"/)?.[1] ?? font;
-  const headingNumbered = /<w:numPr>/.test(headingBlock) || /<w:numPr>/.test(numberingXml) && /Heading1/.test(stylesXml) && /<w:numPr>/.test(headingBlock);
 
   return {
     marginsCm,

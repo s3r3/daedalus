@@ -40,6 +40,23 @@ export type ComposerState = {
   error: string | null
 }
 
+/** Dokumen composer choices: Ekstrak|Susun sub-mode (a composer switch, never an ask_user question), picked sources, DOCX re-layout target. */
+export type DokumenOptions = {
+  subMode: 'ekstrak' | 'susun'
+  /** Workspace-relative source paths attached to the next task. */
+  sources: string[]
+  /** DOCX (workspace-relative) to re-layout; the prompt carries the style instruction. */
+  docxPath: string | null
+}
+
+/** Canvas focus in the Dokumen domain: the field whose provenance is being inspected. */
+export type DokumenFocus = {
+  recordId: string
+  field: string
+  sourceId: string
+  page: number
+} | null
+
 /** Slide composer choices (Agentic Slide v2): explicit controls replace ask_user questions for count/language. */
 export type SlideOptions = {
   generation: 'standard' | 'smart'
@@ -90,6 +107,10 @@ export type DaedalusState = {
   slideIndex: number
   /** Slide composer choices (Agentic Slide v2): generation flow, target count (null = auto), content language ('' = auto), pre-picked template. */
   slideOptions: SlideOptions
+  /** Dokumen composer choices (Ekstrak|Susun, picked sources, DOCX re-layout target). */
+  dokumenOptions: DokumenOptions
+  /** Field whose provenance the Dokumen canvas is showing (null = none). */
+  dokumenFocus: DokumenFocus
   openFilePath: string | null
   error: string | null
 
@@ -120,6 +141,8 @@ export type DaedalusState = {
   setDomain: (domain: WebDomain) => void
   setSlideIndex: (index: number) => void
   setSlideOptions: (patch: Partial<SlideOptions>) => void
+  setDokumenOptions: (patch: Partial<DokumenOptions>) => void
+  setDokumenFocus: (focus: DokumenFocus) => void
   setOpenFile: (path: string | null) => void
   setError: (error: string | null) => void
   reset: () => void
@@ -180,6 +203,8 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   domain: initialDomain(),
   slideIndex: 0,
   slideOptions: { generation: 'standard', slideCount: null, language: '', templateId: null, designId: 'standar', customTemplateId: null },
+  dokumenOptions: { subMode: 'ekstrak', sources: [], docxPath: null },
+  dokumenFocus: null,
   openFilePath: null,
   error: null,
 
@@ -313,6 +338,8 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   setDomain: (domain) => set({ domain }),
   setSlideIndex: (slideIndex) => set({ slideIndex: Number.isFinite(slideIndex) ? Math.max(0, Math.floor(slideIndex)) : 0 }),
   setSlideOptions: (patch) => set((state) => ({ slideOptions: { ...state.slideOptions, ...patch } })),
+  setDokumenOptions: (patch: Partial<DokumenOptions>) => set((state) => ({ dokumenOptions: { ...state.dokumenOptions, ...patch } })),
+  setDokumenFocus: (focus: DokumenFocus) => set({ dokumenFocus: focus }),
   setOpenFile: (openFilePath) => set({ openFilePath }),
   setError: (error) => set({ error }),
   reset: () =>
@@ -337,6 +364,8 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
       domain: initialDomain(),
       slideIndex: 0,
       slideOptions: { generation: 'standard', slideCount: null, language: '', templateId: null, designId: 'standar', customTemplateId: null },
+  dokumenOptions: { subMode: 'ekstrak', sources: [], docxPath: null },
+  dokumenFocus: null,
       openFilePath: null,
       error: null,
     })),

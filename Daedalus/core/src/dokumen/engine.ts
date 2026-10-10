@@ -3,6 +3,7 @@ import type { LLMProvider } from '../providers/llm/types.ts';
 import type { DocumentState, DokumenSubMode, ParsedSource, SourceInfo } from './document.ts';
 import {
   appendAudit,
+  listSavedSchemas,
   archiveActiveDocument,
   createActiveDocument,
   ingestSourceFile,
@@ -201,7 +202,6 @@ export class DokumenEngine {
 
       // A saved schema for this kind? ask_user decides reuse vs fresh
       // (the one inherited helper). Without ask_user: reuse silently.
-      const { listSavedSchemas } = await import('./store.ts');
       const saved = (await listSavedSchemas(root)).find((s) => s.docType === first.docType && s.schema.fields.length > 0);
       let reuse = false;
       if (saved) {

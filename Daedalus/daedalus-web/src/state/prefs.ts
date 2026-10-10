@@ -70,11 +70,11 @@ export function saveComposerPrefs(prefs: ComposerPrefs, storage: Storage | undef
  * chat, and core stay shared, so the choice is a view preference that
  * belongs next to the other browser prefs, not on the server.
  */
-export type WebDomain = 'coding' | 'slide'
+export type WebDomain = 'coding' | 'slide' | 'dokumen'
 
 export const DOMAIN_PREFS_KEY = 'daedalus.web.domain.v1'
 
-const DOMAINS: ReadonlySet<string> = new Set(['coding', 'slide'])
+const DOMAINS: ReadonlySet<string> = new Set(['coding', 'slide', 'dokumen'])
 
 export function loadDomain(storage: Storage | undefined = defaultStorage()): WebDomain {
   if (!storage) return 'coding'
@@ -102,12 +102,16 @@ export function saveDomain(domain: WebDomain, storage: Storage | undefined = def
  * URL lands in the domain it names; the pref only mirrors the choice.
  */
 export function domainFromPathname(pathname: string): WebDomain {
-  return pathname.startsWith('/slide') ? 'slide' : 'coding'
+  if (pathname.startsWith('/slide')) return 'slide'
+  if (pathname.startsWith('/dokumen')) return 'dokumen'
+  return 'coding'
 }
 
 /** Canonical path for a domain — the inverse mapping used by the switcher. */
 export function pathForDomain(domain: WebDomain): string {
-  return domain === 'slide' ? '/slide' : '/'
+  if (domain === 'slide') return '/slide'
+  if (domain === 'dokumen') return '/dokumen'
+  return '/'
 }
 
 /**
