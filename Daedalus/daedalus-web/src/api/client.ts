@@ -261,6 +261,28 @@ export type DeckGenerateResult = {
 
 export type { DocumentState }
 
+/**
+ * Dokumen Pratinjau status: the composed DOCX (kind 'compose', Susun)
+ * or the Tata ulang result (kind 'style') rendered by a local engine
+ * into per-page images, cached under a hash of the document state.
+ * Engines: Microsoft Word (COM) on Windows, else LibreOffice
+ * (soffice/pdftoppm) — server-selected, named in `engine`.
+ * `unavailable` means neither is installed; `stale` means the
+ * document changed since the cached render.
+ */
+export type DokumenPreviewStatus = {
+  root: string
+  available: boolean
+  status: 'unavailable' | 'idle' | 'rendering' | 'ready' | 'stale' | 'error'
+  engine: 'libreoffice' | 'word' | null
+  kind: 'compose' | 'style'
+  key: string | null
+  pages: number
+  pageUrls?: string[]
+  error?: string
+  renderedAt?: string
+}
+
 /** Verdict of POST /dokumen/reset (Dokumen new chat's full reset). */
 export type DokumenResetResult = {
   root: string
@@ -370,6 +392,17 @@ export const api = {
   /** Dokumen new chat: archive the active document aside (never deleted) and settle any staged gate. */
   dokumenReset: (root: string) =>
     request<DokumenResetResult>('/dokumen/reset', { method: 'POST', body: JSON.stringify({ root }) }),
+
+  /** Dokumen Pratinjau: status of the local-engine render of the composed/re-laid-out DOCX. */
+  dokumenPreview: (root: string, kind: 'compose' | 'style') =>
+    request<DokumenPreviewStatus>(`/dokumen/preview${query({ root, kind })}`),
+
+  /** Dokumen Pratinjau: queue a render of the current document state (returns immediately; poll dokumenPreview). */
+  dokumenPreviewRender: (root: string, kind: 'compose' | 'style') =>
+    request<DokumenPreviewStatus>('/dokumen/preview', { method: 'POST', body: JSON.stringify({ root, kind }) }),
+
+  /** Cache-busting URL of one rendered preview page (server-provided pageUrls already carry the key). */
+  dokumenPreviewPageUrl: (root: string, key: string, page: number) => `/dokumen/preview/page${query({ root, key, page: String(page) })}`,
 
   settings: () => request<SettingsResponse>('/settings'),
 

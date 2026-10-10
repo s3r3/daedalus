@@ -1,3 +1,4 @@
+import type { DashboardTileSpec } from './workbook.ts';
 /** A1 cell addressing — pure, browser-safe (the Web grid parses/formats refs with these). */
 
 const CELL_REF_RE = /^(\$?)([A-Za-z]{1,3})(\$?)([0-9]{1,7})$/;
@@ -63,4 +64,43 @@ export function sheetHeaders(sheet: { cells: Record<string, { v?: unknown }> }):
     if (typeof cell.v === 'string' && cell.v.trim()) headers.set(ref.col, cell.v.trim());
   }
   return headers;
+}
+
+export const DEFAULT_TILE_COLS = 3;
+export const DEFAULT_TILE_ROWS = 3;
+
+/** Cells a dashboard tile owns: label strip on the anchor row, value below. */
+export function tileRefs(tile: DashboardTileSpec): { labelRef: string; valueRef: string; mergeLabel: string; mergeValue: string } | null {
+  const anchor = parseCellRef(tile.anchor);
+  if (!anchor) return null;
+  const cols = Math.max(1, tile.cols ?? DEFAULT_TILE_COLS);
+  const rows = Math.max(2, tile.rows ?? DEFAULT_TILE_ROWS);
+  const start = formatCellRef(anchor.col, anchor.row);
+  const labelEnd = formatCellRef(anchor.col + cols - 1, anchor.row);
+  const valueStart = formatCellRef(anchor.col, anchor.row + 1);
+  const valueEnd = formatCellRef(anchor.col + cols - 1, anchor.row + rows - 1);
+  return {
+    labelRef: start,
+    valueRef: valueStart,
+    mergeLabel: cols > 1 ? `${start}:${labelEnd}` : start,
+    mergeValue: rows > 2 || cols > 1 ? `${valueStart}:${valueEnd}` : valueStart,
+  };
+}
+
+/** Structural issues for one dashboard tile spec (empty = valid). */
+export function tileIssues(tile: DashboardTileSpec, opts: { anchorRequired?: boolean } = {}): string[] {
+  const issues: string[] = [];
+  if (!tile.id || typeof tile.id !== 'string') issues.push('tile needs an id');
+  if (!tile.label || !tile.label.trim()) issues.push(`tile "${tile.id}" needs a label`);
+  if (typeof tile.formula !== 'string' || !tile.formula.startsWith('=')) {
+    issues.push(`tile "${tile.id}" formula must be a live formula starting with = (got ${JSON.stringify(tile.formula)})`);
+  }
+  // Blueprint tiles may omit the anchor (the build lays them out
+  // sequentially); materialized workbook.json specs always carry one.
+  if ((opts.anchorRequired !== false || tile.anchor) && !parseCellRef(tile.anchor)) issues.push(`tile "${tile.id}" anchor "${tile.anchor}" is not a cell reference`);
+  if (tile.cols !== undefined && (!Number.isInteger(tile.cols) || tile.cols < 1 || tile.cols > 26)) issues.push(`tile "${tile.id}" cols must be 1..26`);
+  if (tile.rows !== undefined && (!Number.isInteger(tile.rows) || tile.rows < 2 || tile.rows > 50)) issues.push(`tile "${tile.id}" rows must be 2..50`);
+  if (tile.fmt !== undefined && typeof tile.fmt !== 'string') issues.push(`tile "${tile.id}" fmt must be a string`);
+  if (tile.accent !== undefined && (typeof tile.accent !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(tile.accent))) issues.push(`tile "${tile.id}" accent must be #rrggbb`);
+  return issues;
 }

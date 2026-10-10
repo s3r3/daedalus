@@ -912,7 +912,7 @@ export {
 } from "./dokumen/validate.ts";
 
 export { exportData, type DataExportResult } from "./dokumen/export-data.ts";
-export { exportDocumentDocx, exportDocumentPdf, type DocumentExportResult } from "./dokumen/export-docx.ts";
+export { buildDocumentDocxBytes, exportDocumentDocx, exportDocumentPdf, type DocumentExportResult } from "./dokumen/export-docx.ts";
 
 export {
   inspectDocxStyles,
