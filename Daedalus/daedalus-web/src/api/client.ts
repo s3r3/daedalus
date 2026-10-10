@@ -77,8 +77,8 @@ function query(params: Record<string, string | number | undefined>): string {
 export type CreateTaskInput = {
   goal: string
   repo_path: string
-  /** Domain produk aktif saat submit ('coding'|'slide'|'dokumen'); server meneruskannya ke core agar task berjalan dengan engine domain tersebut. */
-  domain?: 'coding' | 'slide' | 'dokumen'
+  /** Domain produk aktif saat submit ('coding'|'slide'|'dokumen'|'spreadsheet'); server meneruskannya ke core agar task berjalan dengan engine domain tersebut. */
+  domain?: 'coding' | 'slide' | 'dokumen' | 'spreadsheet'
   auto_approve?: boolean
   max_iterations?: number
   constraints?: string[]
@@ -272,6 +272,22 @@ export type DokumenExportResult = {
 /** Base for direct fetches (PDF bytes for the canvas) — same origin in production. */
 export function dokumenSourceFileUrl(root: string, sourceId: string): string {
   return `${BASE}/dokumen/source-file?root=${encodeURIComponent(root)}&sourceId=${encodeURIComponent(sourceId)}`
+/** Verdict of POST /sheets/workbook/reset (Spreadsheet new chat's reset). */
+export type WorkbookResetResult = {
+  root: string
+  /** Workspace-relative archive path (`.daedalus/workbook-archive/<timestamp>`), null when there was no workbook. */
+  archived: string | null
+  /** True when a staged blueprint run was settled for the fresh start. */
+  staged_abandoned: boolean
+}
+
+/** Verdict of POST /sheets/workbook/generate (the Blueprint panel's Buat button). */
+export type WorkbookGenerateResult = {
+  root: string
+  task_id?: string
+  outcome: 'success' | 'partial' | 'failed'
+  summary: string
+  exported: { path: string; bytes: number; sheets: number } | null
 }
 
 export const api = {
@@ -485,6 +501,53 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ root, ...(input.template_id ? { template_id: input.template_id } : {}), ...(input.design_id ? { design_id: input.design_id } : {}) }),
     }),
+
+  /** The workspace workbook via the core-gated sheet API (404 when no workbook exists). */
+  workbook: (root: string) => request<{ root: string; workbook: import('@daedalus/core').WorkbookSpec }>(`/sheets/workbook${query({ root })}`),
+
+  /** Persist a canvas-edited workbook; the server validates (422 writes nothing). */
+  workbookSave: (root: string, workbook: import('@daedalus/core').WorkbookSpec) =>
+    request<{ root: string; workbook: import('@daedalus/core').WorkbookSpec }>('/sheets/workbook', {
+      method: 'POST',
+      body: JSON.stringify({ root, workbook }),
+    }),
+
+  /**
+   * The Blueprint panel's Buat button: build the staged blueprint
+   * (build → verify → export). The server answers with the run's verdict.
+   */
+  workbookGenerate: (root: string, input: { model?: string; provider_id?: string } = {}) =>
+    request<WorkbookGenerateResult>('/sheets/workbook/generate', {
+      method: 'POST',
+      body: JSON.stringify({ root, ...(input.model ? { model: input.model } : {}), ...(input.provider_id ? { provider_id: input.provider_id } : {}) }),
+    }),
+
+  /**
+   * Spreadsheet new chat's reset: archive the current workbook aside
+   * (never deleted) and settle any staged blueprint.
+   */
+  workbookReset: (root: string) =>
+    request<WorkbookResetResult>('/sheets/workbook/reset', { method: 'POST', body: JSON.stringify({ root }) }),
+
+  /** Open a workspace .csv/.xlsx as the editable workbook (imported into workbook/workbook.json). */
+  workbookOpen: (root: string, path: string) =>
+    request<{ root: string; workbook: import('@daedalus/core').WorkbookSpec }>('/sheets/workbook/open', {
+      method: 'POST',
+      body: JSON.stringify({ root, path }),
+    }),
+
+  /** On-demand export (grid toolbar): XLSX for the whole workbook or CSV per sheet. */
+  workbookExport: (root: string, input: { format: 'xlsx' | 'csv'; sheet?: string }) =>
+    request<{ root: string; records: import('@daedalus/core').SheetExportRecord[] }>('/sheets/workbook/export', {
+      method: 'POST',
+      body: JSON.stringify({ root, format: input.format, ...(input.sheet ? { sheet: input.sheet } : {}) }),
+    }),
+
+  /** Go sidecar availability for native chart/pivot injection (honest export notes). */
+  workbookSidecar: () => request<{ available: boolean; version: string | null; path: string | null }>('/sheets/workbook/sidecar'),
+
+  /** Download URL for an exported file inside workbook/. */
+  workbookDownloadUrl: (root: string, path: string) => `/sheets/workbook/download${query({ root, path })}`,
 
   /**
    * Export the open deck to .pptx through core's native exporter. A

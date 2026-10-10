@@ -859,7 +859,7 @@ export function evaluateWorkbook(workbook: WorkbookSpec): WorkbookEvaluation {
 }
 
 /** Display string for a cell (literal value, evaluated formula, or error literal). */
-export function displayValue(workbook: WorkbookSpec, evaluation: WorkbookEvaluation, sheet: SheetSpec, ref: string): string {
+export function displayValue(_workbook: WorkbookSpec, evaluation: WorkbookEvaluation, sheet: SheetSpec, ref: string): string {
   const cell = sheet.cells[ref];
   if (!cell) return '';
   if (cell.f) {

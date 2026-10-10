@@ -139,6 +139,17 @@ export function ChatPanel() {
       // outline, and deck workspace from the empty state.
       bumpWorkspaceRevision()
     }
+    if (domain === 'spreadsheet' && root) {
+      try {
+        await api.workbookReset(root)
+      } catch (error) {
+        setComposer({ error: `Workbook belum bisa direset: ${error instanceof Error ? error.message : String(error)}` })
+        return
+      }
+      // The workbook left workbook/ (archived, never deleted): repaint
+      // the grid, blueprint, and workspace panels from the empty state.
+      bumpWorkspaceRevision()
+    }
     useDaedalusStore.setState({ taskId: null, events: [], report: null, taskAttachments: [] })
     setComposer({ goal: '', error: null })
     if (!root) {

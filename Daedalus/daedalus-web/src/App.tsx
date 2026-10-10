@@ -26,6 +26,11 @@ import { DokumenWorkspacePanel } from './components/dokumen/dokumen-workspace'
 import { DokumenPanel } from './components/dokumen/dokumen-panel'
 import { DokumenStage } from './components/dokumen/dokumen-stage'
 import { DokumenReportPanel } from './components/dokumen/dokumen-report'
+import { BlueprintPanel } from './components/sheets/blueprint-panel'
+import { SheetDataPanel } from './components/sheets/data-panel'
+import { SheetReportPanel } from './components/sheets/report-panel'
+import { SheetStage } from './components/sheets/sheet-stage'
+import { SheetWorkspacePanel } from './components/sheets/sheet-workspace'
 import { useEventStream } from './api/useEventStream'
 import { api } from './api/client'
 import { readStoredTheme, applyPaletteVars } from './theme/theme'
@@ -308,6 +313,11 @@ export function App() {
               className={workspacePanelHeight > 0 ? 'min-h-0 shrink-0' : 'min-h-0 lg:flex-1'}
               style={workspacePanelHeight > 0 ? { height: `${workspacePanelHeight}px` } : undefined}
             />
+          ) : domain === 'spreadsheet' ? (
+            <SheetWorkspacePanel
+              className={workspacePanelHeight > 0 ? 'min-h-0 shrink-0' : 'min-h-0 lg:flex-1'}
+              style={workspacePanelHeight > 0 ? { height: `${workspacePanelHeight}px` } : undefined}
+            />
           ) : (
             <WorkspacePanel
               className={workspacePanelHeight > 0 ? 'min-h-0 shrink-0' : 'min-h-0 lg:flex-1'}
@@ -315,7 +325,7 @@ export function App() {
             />
           )}
           {domain !== 'coding' ? null : (
-            <div
+                      <div
               role="separator"
               aria-orientation="horizontal"
               aria-label="resize workspace panel"
@@ -340,6 +350,8 @@ export function App() {
               {domain === 'slide' ? <SlideTemplatesPanel /> : null}
               {domain === 'slide' ? <SlidePptTemplatesPanel /> : null}
               {domain === 'dokumen' ? <DokumenPanel /> : null}
+              {domain === 'spreadsheet' ? <BlueprintPanel /> : null}
+              {domain === 'spreadsheet' ? <SheetDataPanel /> : null}
               {domain === 'coding' ? <ExtensionsPanel /> : null}
               <PlanPanel />
               <ActivityTimeline />
@@ -356,6 +368,8 @@ export function App() {
             <SlideStage />
           ) : domain === 'dokumen' ? (
             <DokumenStage />
+          ) : domain === 'spreadsheet' ? (
+            <SheetStage />
           ) : (
             <>
               <EditorPane
@@ -389,6 +403,12 @@ export function App() {
               {domain === 'dokumen' ? null : <AttachmentsPanel />}
               {domain === 'dokumen' ? null : <ChildTasksPanel />}
               {domain === 'dokumen' ? null : <FinalReportView report={report} />}
+              {domain === 'spreadsheet' ? <SheetReportPanel /> : null}
+              <DiffViewer />
+              <GitPanel />
+              <AttachmentsPanel />
+              <ChildTasksPanel />
+              <FinalReportView report={report} />
               <p className="pb-2 text-center text-[9px] uppercase tracking-wider text-muted">daedalus core {VERSION}</p>
             </div>
           </ScrollArea>

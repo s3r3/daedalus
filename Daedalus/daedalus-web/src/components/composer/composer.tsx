@@ -801,6 +801,10 @@ export function Composer() {
           <SlideComposerControls />
         ) : domain === 'dokumen' ? (
           <DokumenComposerControls />
+        ) : domain === 'spreadsheet' ? (
+          <span className="text-[10px] text-muted" data-testid="sheet-composer-note">
+            Spreadsheet: blueprint di-stage dulu di Panel Blueprint — tekan Buat untuk membangun. Mode Ask/Manual/Auto/Plan hanya milik Coding.
+          </span>
         ) : (
           <>
             <span
@@ -852,6 +856,8 @@ export function Composer() {
                 : dokumenOptions.docxPath
                   ? 'Instruksi tata ulang… misalnya: margin 4-3-3-3, font Times New Roman 12pt, spasi 1.5, heading bernomor'
                   : 'Topik dokumen… misalnya: susun makalah tentang agentic framework untuk tugas kuliah'
+            : domain === 'spreadsheet'
+              ? 'Jelaskan spreadsheet-nya… sebut nama file .csv/.xlsx di workspace bila datanya dari file, atau minta "audit workbook ini"'
               : 'Describe the coding task… type @ to reference a file or folder, /help for slash commands'
         }
         value={composer.goal}

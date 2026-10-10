@@ -253,7 +253,6 @@ export class SpreadsheetEngine {
     existing: WorkbookSpec | null,
     ctx: { setStep: (id: string, status: PlanStep['status']) => void; save: (patch: Partial<TaskState>) => void },
   ): Promise<RouteResult> {
-    const root = this.#deps.workspaceRoot;
     const signal = this.#abort.signal;
     ctx.setStep('intake', 'active');
     const intake = await this.#intake(spec, existing);

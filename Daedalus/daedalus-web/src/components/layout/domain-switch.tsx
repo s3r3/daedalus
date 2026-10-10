@@ -1,4 +1,4 @@
-import { Code2, FileText, Presentation } from 'lucide-react'
+import { Code2, FileText, Presentation, Sheet } from 'lucide-react'
 import { useDaedalusStore, type WebDomain } from '../../state/taskStore'
 import { pathForDomain, saveDomain } from '../../state/prefs'
 import { cn } from '../../lib/utils'
@@ -15,6 +15,7 @@ const OPTIONS: Array<{ domain: WebDomain; label: string; Icon: typeof Code2 }> =
   { domain: 'coding', label: 'Coding', Icon: Code2 },
   { domain: 'slide', label: 'Slide', Icon: Presentation },
   { domain: 'dokumen', label: 'Dokumen', Icon: FileText },
+  { domain: 'spreadsheet', label: 'Spreadsheet', Icon: Sheet },
 ]
 
 export function DomainSwitch() {
