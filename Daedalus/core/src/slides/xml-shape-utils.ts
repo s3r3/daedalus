@@ -116,9 +116,13 @@ const IDENTITY_TRANSFORM: SpaceTransform = { ax: 1, bx: 0, ay: 1, by: 0 };
 
 interface XfrmParts { x: number; y: number; cx: number; cy: number }
 
-/** off/ext of the first <a:xfrm> inside `xml` (the shape's own transform). */
+/**
+ * off/ext of the first xfrm inside `xml` (the shape's own transform).
+ * Shapes carry <a:xfrm>, but <p:graphicFrame> carries <p:xfrm> — both
+ * resolve to the same slide-space box.
+ */
 function xfrmOffExt(xml: string): XfrmParts | undefined {
-  const block = /<a:xfrm[^>]*>([\s\S]*?)<\/a:xfrm>/.exec(xml)?.[1];
+  const block = /<([ap]):xfrm[^>]*>([\s\S]*?)<\/\1:xfrm>/.exec(xml)?.[2];
   if (!block) return undefined;
   const off = /<a:off x="(-?\d+)" y="(-?\d+)"/.exec(block);
   const ext = /<a:ext cx="(-?\d+)" cy="(-?\d+)"/.exec(block);
