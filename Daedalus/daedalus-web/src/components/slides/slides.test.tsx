@@ -848,8 +848,8 @@ describe('SlideStage', () => {
 })
 
 describe('SlideStage Pratinjau Asli', () => {
-  test('toggle switches to the true-preview view; without LibreOffice it shows the honest unavailable state and no edit affordances', async () => {
-    deckPreviewMock.mockResolvedValue({ root: '/ws', available: false, status: 'unavailable', key: 'a'.repeat(64), pages: 0 })
+  test('toggle switches to the true-preview view; without LibreOffice/PowerPoint it shows the honest unavailable state and no edit affordances', async () => {
+    deckPreviewMock.mockResolvedValue({ root: '/ws', available: false, status: 'unavailable', engine: null, key: 'a'.repeat(64), pages: 0 })
     const user = userEvent.setup()
     useDaedalusStore.getState().setWorkspace({ root: '/ws' })
     render(<SlideStage />)
@@ -859,7 +859,7 @@ describe('SlideStage Pratinjau Asli', () => {
     await user.click(screen.getByTestId('slide-view-preview'))
 
     const unavailable = await screen.findByTestId('slide-preview-unavailable')
-    expect(unavailable.textContent).toContain('LibreOffice')
+    expect(unavailable.textContent).toContain('LibreOffice atau PowerPoint')
     expect(deckPreviewMock).toHaveBeenCalledWith('/ws')
     // The editable canvas and its edit affordances leave the stage.
     expect(screen.queryByTestId('slide-preview')).toBeNull()
@@ -871,7 +871,7 @@ describe('SlideStage Pratinjau Asli', () => {
   test('ready render shows page images; filmstrip switches pages; Perbarui re-renders on demand', async () => {
     const key = 'b'.repeat(64)
     const pageUrls = [1, 2, 3].map((page) => `/slides/deck/preview/page?root=%2Fws&key=${key}&page=${page}`)
-    const ready = { root: '/ws', available: true, status: 'ready', key, pages: 3, pageUrls }
+    const ready = { root: '/ws', available: true, status: 'ready', engine: 'libreoffice', key, pages: 3, pageUrls }
     deckPreviewMock.mockResolvedValue(ready)
     deckPreviewRenderMock.mockResolvedValue(ready)
     const user = userEvent.setup()
@@ -899,8 +899,23 @@ describe('SlideStage Pratinjau Asli', () => {
     expect(await screen.findByTestId('slide-preview')).toBeTruthy()
   })
 
+  test('a PowerPoint-engine render names PowerPoint in the caption', async () => {
+    const key = 'd'.repeat(64)
+    const pageUrls = [`/slides/deck/preview/page?root=%2Fws&key=${key}&page=1`]
+    deckPreviewMock.mockResolvedValue({ root: '/ws', available: true, status: 'ready', engine: 'powerpoint', key, pages: 1, pageUrls })
+    const user = userEvent.setup()
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-view-preview'))
+
+    expect(await screen.findByTestId('slide-preview-image')).toBeTruthy()
+    expect(screen.getByTestId('slide-preview-caption').textContent).toContain('dirender PowerPoint dari berkas .pptx')
+  })
+
   test('an idle preview offers Buat pratinjau and starts the render from the button only', async () => {
-    deckPreviewRenderMock.mockResolvedValue({ root: '/ws', available: true, status: 'rendering', key: 'c'.repeat(64), pages: 0 })
+    deckPreviewRenderMock.mockResolvedValue({ root: '/ws', available: true, status: 'rendering', engine: 'libreoffice', key: 'c'.repeat(64), pages: 0 })
     const user = userEvent.setup()
     useDaedalusStore.getState().setWorkspace({ root: '/ws' })
     render(<SlideStage />)

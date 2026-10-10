@@ -30,8 +30,8 @@ export function SlideStage() {
   const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
   const [editing, setEditing] = useState(false)
   // Edit (canvas, approximated, fully interactive) vs Pratinjau Asli
-  // (LibreOffice's own raster of the exported .pptx — faithful, not
-  // editable). The preview renders on demand, never per edit.
+  // (the render engine's own raster of the exported .pptx — faithful,
+  // not editable). The preview renders on demand, never per edit.
   const [view, setView] = useState<'edit' | 'preview'>('edit')
   const [preview, setPreview] = useState<DeckPreviewStatus | null>(null)
   const [previewFetchError, setPreviewFetchError] = useState<string | null>(null)
@@ -54,18 +54,23 @@ export function SlideStage() {
 
   // Entering Pratinjau Asli (or a deck change while it is open)
   // re-reads the render status; the render itself only starts from the
-  // button, so plain editing never triggers LibreOffice.
+  // button, so plain editing never triggers the renderer.
   const deckSignature = deck ? `${deck.id}:${deck.slides.length}:${deck.title}` : ''
   useEffect(() => {
     if (view === 'preview' && root && deck) void refreshPreview()
   }, [view, root, deckSignature, refreshPreview, deck])
 
-  // While LibreOffice renders, poll the status until it settles.
+  // While the engine renders, poll the status until it settles.
   useEffect(() => {
     if (view !== 'preview' || preview?.status !== 'rendering') return
     const timer = setInterval(() => void refreshPreview(), 1200)
     return () => clearInterval(timer)
   }, [view, preview?.status, refreshPreview])
+
+  // The engine the server selected for this machine, named in the
+  // preview copy (null before detection / when unavailable).
+  const previewEngineLabel =
+    preview?.engine === 'powerpoint' ? 'PowerPoint' : preview?.engine === 'libreoffice' ? 'LibreOffice' : 'LibreOffice atau PowerPoint'
 
   const renderPreview = async (): Promise<void> => {
     if (!root) return
@@ -424,16 +429,16 @@ export function SlideStage() {
                   data-testid="slide-preview-unavailable"
                   className="flex flex-1 flex-col items-center justify-center gap-1.5 px-3 py-6 text-center text-muted"
                 >
-                  <p className="text-xs text-foreground">Pratinjau Asli butuh LibreOffice terpasang di mesin ini.</p>
+                  <p className="text-xs text-foreground">Pratinjau Asli butuh LibreOffice atau PowerPoint terpasang di mesin ini.</p>
                   <p className="max-w-[56ch] text-[11px] opacity-80">
-                    Halaman persis-asli dirender oleh LibreOffice (soffice) dan pdftoppm. Tanpa keduanya fitur ini berhenti di sini —
-                    canvas Edit dan ekspor .pptx tetap bekerja seperti biasa.
+                    Halaman persis-asli dirender oleh LibreOffice (soffice) dan pdftoppm, atau — di Windows — Microsoft PowerPoint. Tanpa
+                    salah satunya fitur ini berhenti di sini — canvas Edit dan ekspor .pptx tetap bekerja seperti biasa.
                   </p>
                 </div>
               ) : preview.status === 'rendering' ? (
                 <div data-testid="slide-preview-rendering" className="flex flex-1 flex-col items-center justify-center gap-2 text-muted">
                   <RefreshCw className="animate-spin" aria-hidden />
-                  <p className="text-xs">Merender halaman dengan LibreOffice…</p>
+                  <p className="text-xs">Merender halaman dengan {previewEngineLabel}…</p>
                 </div>
               ) : preview.status === 'ready' && preview.pageUrls && preview.pageUrls.length > 0 ? (
                 <>
@@ -482,8 +487,8 @@ export function SlideStage() {
               )}
               <div className="flex shrink-0 flex-wrap items-center gap-2">
                 <p className="min-w-0 flex-1 text-[10px] leading-snug text-muted" data-testid="slide-preview-caption">
-                  Pratinjau Asli: halaman dirender LibreOffice dari berkas .pptx hasil ekspor deck saat ini — persis yang terlihat di
-                  PowerPoint/LibreOffice, bukan gambar canvas. Mengedit tetap di mode Edit.
+                  Pratinjau Asli: halaman dirender {previewEngineLabel} dari berkas .pptx hasil ekspor deck saat ini — persis yang
+                  terlihat di PowerPoint/LibreOffice, bukan gambar canvas. Mengedit tetap di mode Edit.
                 </p>
                 {preview?.status !== 'unavailable' ? (
                   <Button
