@@ -488,19 +488,21 @@ describe('Susun resume (Lanjutkan: stop mid-run, continue writes only the rest)'
   test('stop mid-run strands staged sections; a fresh run resumes only them — written prose byte-identical, no duplicates', async () => {
     const root = tmpRoot();
     const first = resumeProvider();
+    let gateWaiting = false;
     const engine1 = new DokumenEngine(first.provider, {
       webTools: offlineWeb,
       setStage: (label) => {
+        // The gate registers synchronously right after this stage
+        // label fires, so waiting on the label (not just the staged
+        // sections on disk) makes the release race-free under load.
+        if (label === 'Menunggu persetujuan kerangka') gateWaiting = true;
         // Stop exactly when the third section's write begins: two
         // drafted, one still staged — the stranded shape from the field.
         if (label === 'Menulis bab "Bab Tiga"') engine1.stop();
       },
     });
     const pending = engine1.run(root, 'susun makalah tiga bab', { subMode: 'susun' });
-    await until(async () => {
-      const doc = await readActiveDocument(root);
-      return Boolean(doc && doc.sections.length === 3 && doc.sections.every((s) => s.status === 'staged'));
-    });
+    await until(async () => gateWaiting);
     expect(engine1.releaseStaged()).toBe(true);
     await expect(pending).rejects.toThrow();
     const interrupted = (await readActiveDocument(root))!;
