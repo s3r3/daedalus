@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useDaedalusStore } from './state/taskStore'
 import { domainFromPathname, pathForDomain } from './state/prefs'
 import { DomainSwitch } from './components/layout/domain-switch'
@@ -128,6 +128,48 @@ describe('dokumen composer', () => {
     expect(createTask).toHaveBeenCalledWith(
       expect.objectContaining({ domain: 'dokumen', dokumen: expect.objectContaining({ sub_mode: 'susun', sources: ['invoice.txt'] }) }),
     )
+  })
+})
+
+const seededComposeDocument = {
+  ...seededDocument,
+  kind: 'compose',
+  title: 'Makalah: Agentic Framework',
+  sources: [],
+  schema: null,
+  records: [],
+  sections: [
+    {
+      id: 'sec-flag',
+      title: 'Pendahuluan',
+      thesisPoints: ['Latar belakang'],
+      citations: ['SRC-1'],
+      prose: 'Draf bab pembuka tentang framework. [SRC-1]\n\nParagraf kedua draf yang tetap harus terbaca.',
+      status: 'critic-flagged',
+      criticIssues: ['sitasi belum menunjang klaim utama', 'judul bab tidak cocok dengan isi'],
+    },
+    { id: 'sec-staged', title: 'Penutup', thesisPoints: ['Kesimpulan'], citations: [], prose: '', status: 'staged' },
+  ],
+  citations: { 'SRC-1': { id: 'SRC-1', title: 'Sumber Contoh' } },
+}
+
+describe('dokumen compose canvas', () => {
+  test('critic-flagged section renders its kept draft + critic issues, never "Belum ditulis"', async () => {
+    dokumenDocument.mockResolvedValue({ root: '/ws', document: seededComposeDocument })
+    render(<DokumenStage />)
+    const card = await screen.findByTestId('dokumen-section-sec-flag')
+    expect(within(card).getByText(/Draf bab pembuka/)).toBeTruthy()
+    expect(within(card).getByText(/Paragraf kedua draf/)).toBeTruthy()
+    expect(within(card).getByText(/DITANDAI KRITIKUS — periksa/)).toBeTruthy()
+    expect(within(card).getByText(/sitasi belum menunjang klaim utama/)).toBeTruthy()
+    expect(within(card).queryByText(/Belum ditulis/)).toBeNull()
+  })
+
+  test('genuinely staged section still shows the "Belum ditulis" placeholder', async () => {
+    dokumenDocument.mockResolvedValue({ root: '/ws', document: seededComposeDocument })
+    render(<DokumenStage />)
+    const card = await screen.findByTestId('dokumen-section-sec-staged')
+    expect(within(card).getByText(/Belum ditulis/)).toBeTruthy()
   })
 })
 
