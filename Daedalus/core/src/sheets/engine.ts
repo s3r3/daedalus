@@ -11,13 +11,12 @@ import {
   formatCellRef,
 
   sheetBounds,
-  workbookPaths,
   type BlueprintColumn,
   type SheetExportRecord,
   type SheetSpec,
   type WorkbookSpec,
 } from './workbook.ts';
-import { newSheet, newWorkbook, readWorkbook, summarizeWorkbook, validateWorkbook, writeWorkbook } from './store.ts';
+import { newSheet, newWorkbook, readWorkbook, summarizeWorkbook, validateWorkbook, workbookPaths, writeWorkbook } from './store.ts';
 import { importCsvToWorkbook, importXlsxToWorkbook } from './import.ts';
 import { buildExcelJsWorkbook, exportWorkbookCsv, exportWorkbookToXlsx } from './export.ts';
 import { verifyWorkbook } from './verify.ts';
