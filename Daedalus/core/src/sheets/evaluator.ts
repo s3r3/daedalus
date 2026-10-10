@@ -120,8 +120,9 @@ function lex(input: string): Tok[] | null {
         continue;
       }
       // Plain A1 ref on the current sheet? e.g. B2, $B$2 (col letters then digits).
-      const refMatch = /^([A-Za-z]{1,3})([0-9]{1,7})$/.exec(word);
-      if (refMatch && !/^(TRUE|FALSE)$/i.test(word)) {
+      // Not when a '(' follows: LOG10( is a function name, not a ref.
+      const refMatch = /^\$?([A-Za-z]{1,3})\$?([0-9]{1,7})$/.exec(word);
+      if (refMatch && s[next] !== '(' && !/^(TRUE|FALSE)$/i.test(word)) {
         const ref = parseCellRef(word);
         if (ref) {
           if (s[next] === ':') {

@@ -133,7 +133,9 @@ function auditChecks(workbook: WorkbookSpec): VerifyCellIssue[] {
       const ref = parseCellRef(refText);
       if (!ref || ref.row === 0) continue;
       const rowMap = rows.get(ref.row) ?? new Map<number, string>();
-      rowMap.set(ref.col, cell.f ?? (cell.v === undefined ? '' : String(cell.v)));
+      // Formulas compare by relative pattern, not raw text: =C2-D2 and
+      // =C5-D5 are the "same" row content for duplication purposes.
+      rowMap.set(ref.col, cell.f ? normalizedPattern(cell.f, ref.row, ref.col) : (cell.v === undefined ? '' : String(cell.v)));
       rows.set(ref.row, rowMap);
     }
     for (const [rowIdx, rowMap] of [...rows.entries()].sort((a, b) => a[0] - b[0])) {

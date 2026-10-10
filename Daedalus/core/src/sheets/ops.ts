@@ -86,18 +86,38 @@ type ShiftDelta = { rowAt?: number; rowCount?: number; colAt?: number; colCount?
  * (fill semantics / same-sheet structural shift).
  */
 export function shiftFormulaRefs(formula: string, delta: ShiftDelta, onlySheet?: string): string {
-  return formula.replace(REF_TOKEN_RE, (whole, qualifier: string | undefined, cAbs: string, col: string, rAbs: string, row: string) => {
+  const re = new RegExp(REF_TOKEN_RE.source, 'g');
+  let out = '';
+  let last = 0;
+  let inheritedQualifier: string | undefined;
+  for (const match of formula.matchAll(re)) {
+    const idx = match.index ?? 0;
+    const whole = match[0];
+    const qualifier = match[1] as string | undefined;
+    const cAbs = match[2] as string;
+    const col = match[3] as string;
+    const rAbs = match[4] as string;
+    const row = match[5] as string;
+    out += formula.slice(last, idx);
+    last = idx + whole.length;
+    // A function name that merely looks like a ref (LOG10() stays put.
+    if (formula[last] === '(') { out += whole; continue; }
+    // Range continuations (Data!E2:E4) inherit the start's qualifier.
+    const effectiveQualifier = qualifier ?? (formula[idx - 1] === ':' ? inheritedQualifier : undefined);
+    if (qualifier) inheritedQualifier = qualifier;
     if (onlySheet !== undefined) {
-      if (!qualifier) return whole;
-      const name = qualifier.slice(0, -1).replace(/^'|'$/g, '');
-      if (name.toLowerCase() !== onlySheet.toLowerCase()) return whole;
+      if (!effectiveQualifier) { out += whole; continue; }
+      const name = effectiveQualifier.slice(0, -1).replace(/^'|'$/g, '');
+      if (name.toLowerCase() !== onlySheet.toLowerCase()) { out += whole; continue; }
     }
     let colIdx = colToIndex(col);
     let rowIdx = Number(row) - 1;
     if (cAbs !== '$' && delta.colAt !== undefined && delta.colCount && colIdx >= delta.colAt) colIdx += delta.colCount;
     if (rAbs !== '$' && delta.rowAt !== undefined && delta.rowCount && rowIdx >= delta.rowAt) rowIdx += delta.rowCount;
-    return `${qualifier ?? ''}${cAbs}${indexToCol(colIdx)}${rAbs}${rowIdx + 1}`;
-  });
+    out += `${qualifier ?? ''}${cAbs}${indexToCol(colIdx)}${rAbs}${rowIdx + 1}`;
+  }
+  out += formula.slice(last);
+  return out;
 }
 
 function shiftSheetCells(sheet: SheetSpec, delta: { rowAt?: number; rowCount?: number; colAt?: number; colCount?: number }): void {
