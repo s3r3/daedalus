@@ -398,17 +398,12 @@ export function App() {
           <ScrollArea className="min-h-[320px] lg:min-h-0 lg:flex-1">
             <div className="flex flex-col gap-2 pr-1">
               {domain === 'dokumen' ? <DokumenReportPanel /> : null}
-              {domain === 'dokumen' ? null : <DiffViewer />}
-              {domain === 'dokumen' ? null : <GitPanel />}
-              {domain === 'dokumen' ? null : <AttachmentsPanel />}
-              {domain === 'dokumen' ? null : <ChildTasksPanel />}
-              {domain === 'dokumen' ? null : <FinalReportView report={report} />}
               {domain === 'spreadsheet' ? <SheetReportPanel /> : null}
-              {domain === 'spreadsheet' ? null : <DiffViewer />}
-              <GitPanel />
-              <AttachmentsPanel />
-              <ChildTasksPanel />
-              {domain === 'spreadsheet' ? null : <FinalReportView report={report} />}
+              {domain === 'dokumen' || domain === 'spreadsheet' ? null : <DiffViewer />}
+              {domain === 'dokumen' || domain === 'spreadsheet' ? null : <GitPanel />}
+              {domain === 'dokumen' || domain === 'spreadsheet' ? null : <AttachmentsPanel />}
+              {domain === 'dokumen' || domain === 'spreadsheet' ? null : <ChildTasksPanel />}
+              {domain === 'dokumen' || domain === 'spreadsheet' ? null : <FinalReportView report={report} />}
               <p className="pb-2 text-center text-[9px] uppercase tracking-wider text-muted">daedalus core {VERSION}</p>
             </div>
           </ScrollArea>
