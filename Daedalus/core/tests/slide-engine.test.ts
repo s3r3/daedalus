@@ -418,7 +418,17 @@ describe('SlideEngine generation', () => {
     });
     await waitForSkeleton(root, 2);
 
-    const released = await runner.releaseStagedDeck(root, {});
+    // The skeleton hits disk before the run parks at the Buat gate;
+    // poll the release until the engine is actually waiting there (a
+    // premature release is a no-op null, never a partial settle).
+    const released = await (async () => {
+      for (let attempt = 0; attempt < 200; attempt++) {
+        const result = await runner.releaseStagedDeck(root, {});
+        if (result) return result;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error('staged run never parked at the Buat gate');
+    })();
     expect(released?.outcome).toBe('partial');
     const first = await pending;
     expect(first.state.status).toBe('failed');
