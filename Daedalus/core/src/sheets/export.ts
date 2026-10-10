@@ -328,9 +328,10 @@ export async function runSheetSidecar(
   // honor is skipped with a note) — the export record quotes that,
   // never the request. Unparseable output is treated as: file written,
   // counts unknown.
-  let actual: { charts?: number; pivots?: number; slicers?: number; notes?: string[] } | null = null;
+  type SidecarCounts = { charts?: number; pivots?: number; slicers?: number; notes?: string[] };
+  let actual: SidecarCounts | null = null;
   try {
-    actual = JSON.parse(result.stdout) as typeof actual;
+    actual = JSON.parse(result.stdout) as SidecarCounts;
   } catch { actual = null; }
   const injectedCharts = actual?.charts ?? spec.charts.length;
   const injectedPivots = actual?.pivots ?? spec.pivots.length;
