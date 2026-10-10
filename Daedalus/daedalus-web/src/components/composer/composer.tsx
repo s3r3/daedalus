@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type FormEvent, type KeyboardEvent } from 'react'
 import { ImagePlus, Paperclip, Play, Square, UploadCloud, X } from 'lucide-react'
-import type { AgentMode, Attachment } from '@daedalus/core/skills/origin'
+import type { AgentMode, Attachment } from '@daedalus/core'
 import { formatSkillOrigin, type SkillOrigin } from '@daedalus/core/skills/origin'
 import { AGENT_MODE_ORDER, nextAgentMode } from '@daedalus/core/interaction/modes'
 import { SlashCommandRegistry, slashCommandSuggestions, type SlashCommandContext, type SlashCommandResult } from '@daedalus/core/interaction/slash-commands'
