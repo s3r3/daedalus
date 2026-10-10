@@ -60,10 +60,15 @@ type PdfTextItem = {
 
 async function parsePdf(bytes: Buffer): Promise<ParsedSource> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
-  // Node has no DOM worker; point the worker at the bundled file.
+  // Node has no DOM worker; point the worker at the bundled file. The
+  // path must resolve through the pdfjs-dist package — relative to this
+  // source file it would miss node_modules entirely (seen in the field:
+  // "Setting up fake worker failed").
   try {
-    const workerUrl = new URL('pdfjs-dist/legacy/build/pdf.worker.mjs', import.meta.url);
-    (pdfjs as { GlobalWorkerOptions: { workerSrc: string } }).GlobalWorkerOptions.workerSrc = workerUrl.href;
+    const { createRequire } = await import('node:module');
+    const { pathToFileURL } = await import('node:url');
+    const workerPath = createRequire(import.meta.url).resolve('pdfjs-dist/legacy/build/pdf.worker.mjs');
+    (pdfjs as { GlobalWorkerOptions: { workerSrc: string } }).GlobalWorkerOptions.workerSrc = pathToFileURL(workerPath).href;
   } catch {
     /* workerSrc stays unset; pdf.js falls back to its fake worker */
   }

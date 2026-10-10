@@ -154,3 +154,18 @@ describe('validateRecord decisions', () => {
     expect(out.raw).toBe('satu juta rupiah');
   });
 });
+
+describe('native PDF parsing (pdf.js worker resolution)', () => {
+  test('a born-digital PDF yields text blocks with page + bbox provenance', async () => {
+    const { parseSourceBytes, findProvenance } = await import('../src/index.ts');
+    const { readFileSync } = await import('node:fs');
+    const bytes = readFileSync(new URL('./fixtures/tiny-invoice.pdf', import.meta.url));
+    const parsed = await parseSourceBytes(bytes, '.pdf');
+    expect(parsed.pages).toBe(1);
+    expect(parsed.text).toContain('Invoice INV-7');
+    const provenance = findProvenance(parsed, 'Total: Rp 42.000');
+    expect(provenance?.page).toBe(1);
+    expect(provenance?.bbox).toBeDefined();
+    expect(provenance!.bbox![2]).toBeGreaterThan(10);
+  });
+});
