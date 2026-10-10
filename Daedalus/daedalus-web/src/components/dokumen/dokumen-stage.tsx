@@ -293,12 +293,21 @@ function CellEditor({ value, status, onSave }: { value: string | number | boolea
 /** One rendered PDF page (pdf.js) with the focused field's bbox overlaid. */
 function PdfPage({ root, sourceId, page, bbox }: { root: string; sourceId: string; page: number; bbox?: [number, number, number, number] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const renderToken = useRef(0)
   const [scale, setScale] = useState(1)
   const [failed, setFailed] = useState(false)
 
   useEffect(() => {
-    let cancelled = false
+    // Render-generation token: switching sources starts a new render
+    // while the previous page may still be painting asynchronously —
+    // last-finisher would otherwise win and show the WRONG document
+    // under the new selection (seen in the field, 2026-10-10).
+    const token = ++renderToken.current
     setFailed(false)
+    // Clear synchronously: a blank page while the new source loads is
+    // honest; the previous document's page under a new selection is not.
+    const stale = canvasRef.current
+    if (stale) stale.getContext('2d')?.clearRect(0, 0, stale.width, stale.height)
     ;(async () => {
       try {
         const pdfjs = await import('pdfjs-dist')
@@ -309,7 +318,7 @@ function PdfPage({ root, sourceId, page, bbox }: { root: string; sourceId: strin
         const pdf = await pdfjs.getDocument({ data }).promise
         const pdfPage = await pdf.getPage(Math.min(page, pdf.numPages))
         const canvas = canvasRef.current
-        if (!canvas || cancelled) return
+        if (!canvas || renderToken.current !== token) return
         const containerWidth = canvas.parentElement?.clientWidth ?? 560
         const unscaled = pdfPage.getViewport({ scale: 1 })
         const fit = Math.max(0.5, Math.min(1.6, (containerWidth - 8) / unscaled.width))
@@ -319,13 +328,16 @@ function PdfPage({ root, sourceId, page, bbox }: { root: string; sourceId: strin
         setScale(fit)
         const context = canvas.getContext('2d')
         if (!context) return
-        await pdfPage.render({ canvasContext: context, viewport }).promise
+        context.clearRect(0, 0, canvas.width, canvas.height)
+        const renderTask = pdfPage.render({ canvasContext: context, viewport })
+        await renderTask.promise
+        if (renderToken.current !== token) context.clearRect(0, 0, canvas.width, canvas.height)
       } catch {
-        if (!cancelled) setFailed(true)
+        if (renderToken.current === token) setFailed(true)
       }
     })()
     return () => {
-      cancelled = true
+      renderToken.current += 1
     }
   }, [root, sourceId, page])
 

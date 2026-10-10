@@ -254,7 +254,13 @@ function webDistPath(ctx: AppContext): string | undefined {
 }
 
 function serveWebAsset(ctx: AppContext, res: ServerResponse, pathname: string, accept = ""): boolean {
-  if (WEB_API_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))) return false;
+  // API paths never serve the app shell — except a BARE prefix that is
+  // also a domain page route ('/dokumen' the page vs '/dokumen/...' the
+  // API): a browser navigation there (Accept: text/html) wants the SPA.
+  const isApiPath = WEB_API_PREFIXES.some(
+    (prefix) => pathname.startsWith(`${prefix}/`) || (pathname === prefix && !accept.includes("text/html")),
+  );
+  if (isApiPath) return false;
   const dist = webDistPath(ctx);
   if (!dist) return false;
 
