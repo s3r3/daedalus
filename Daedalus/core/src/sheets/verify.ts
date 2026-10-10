@@ -108,6 +108,11 @@ function auditChecks(workbook: WorkbookSpec): VerifyCellIssue[] {
       const total = [...patterns.values()].reduce((a, l) => a + l.length, 0);
       if (total < 3) continue;
       const majority = [...patterns.entries()].sort((a, b) => b[1].length - a[1].length)[0] as [string, string[]];
+      // A KPI/label column legitimately carries a different formula per
+      // row (each row is a different metric): the pattern check only
+      // means something when one pattern actually repeats as a column
+      // pattern (>= 3 rows sharing it).
+      if (majority[1].length < 3) continue;
       for (const [pattern, cells] of patterns) {
         if (pattern === majority[0]) continue;
         for (const refText of cells) {

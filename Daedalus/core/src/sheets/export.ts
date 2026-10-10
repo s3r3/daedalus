@@ -37,6 +37,12 @@ export async function buildExcelJsWorkbook(workbook: WorkbookSpec): Promise<Exce
   const wb = new ExcelJS.Workbook();
   wb.title = workbook.title;
   wb.calcProperties.fullCalcOnLoad = true;
+  // Cached formula results (from the in-core evaluator): viewers show
+  // values immediately, and the Go sidecar reads real numbers when it
+  // builds pivot caches. fullCalcOnLoad still forces Excel/LibreOffice
+  // to recompute the live formulas on open — the cache is a snapshot,
+  // never the source of truth.
+  const evaluation = evaluateWorkbook(workbook);
   for (const sheet of workbook.sheets) {
     const ws = wb.addWorksheet(sheet.name);
     if (sheet.tabColor) {
@@ -48,7 +54,13 @@ export async function buildExcelJsWorkbook(workbook: WorkbookSpec): Promise<Exce
     }
     for (const [refText, cell] of Object.entries(sheet.cells)) {
       const out = ws.getCell(refText);
-      if (cell.f) out.value = { formula: cell.f.replace(/^=/, '') };
+      if (cell.f) {
+        const cached = evaluation.results.get(sheet.name)?.get(refText);
+        const formula = cell.f.replace(/^=/, '');
+        out.value = cached && cached.kind === 'value' && cached.value !== null
+          ? { formula, result: cached.value }
+          : { formula };
+      }
       else if (cell.v !== undefined) out.value = cell.v;
       if (cell.fmt) out.numFmt = cell.fmt;
       if (cell.bold || cell.fill || cell.color) {
@@ -312,6 +324,23 @@ export async function runSheetSidecar(
   if (result.code !== 0) {
     return { applied: false, reason: `sidecar gagal (exit ${String(result.code)}): ${(result.stderr || result.stdout).trim().slice(0, 200)}` };
   }
+  // The sidecar reports what it ACTUALLY injected (a spec it cannot
+  // honor is skipped with a note) — the export record quotes that,
+  // never the request. Unparseable output is treated as: file written,
+  // counts unknown.
+  let actual: { charts?: number; pivots?: number; slicers?: number; notes?: string[] } | null = null;
+  try {
+    actual = JSON.parse(result.stdout) as typeof actual;
+  } catch { actual = null; }
+  const injectedCharts = actual?.charts ?? spec.charts.length;
+  const injectedPivots = actual?.pivots ?? spec.pivots.length;
+  const injectedSlicers = actual?.slicers ?? 0;
+  const skipNotes = (actual?.notes ?? []).filter((n) => n.includes('skipped'));
+  if (injectedCharts + injectedPivots + injectedSlicers === 0) {
+    const { rm } = await import('node:fs/promises');
+    await rm(tmpOut, { force: true }).catch(() => undefined);
+    return { applied: false, reason: `sidecar tidak menyuntikkan apa pun: ${skipNotes.join('; ') || 'hasil kosong'}` };
+  }
   try {
     const { rename } = await import('node:fs/promises');
     await rename(tmpOut, xlsxPath);
@@ -319,8 +348,9 @@ export async function runSheetSidecar(
     return { applied: false, reason: `sidecar output tidak bisa dipasang: ${err instanceof Error ? err.message : String(err)}` };
   }
   const kinds = [
-    spec.charts.length ? `${spec.charts.length} chart native` : '',
-    spec.pivots.length ? `${spec.pivots.length} pivot native` : '',
+    injectedCharts ? `${injectedCharts} chart native` : '',
+    injectedPivots ? `${injectedPivots} pivot native` : '',
+    injectedSlicers ? `${injectedSlicers} slicer native` : '',
   ].filter(Boolean).join(' + ');
-  return { applied: true, note: `${kinds} disuntikkan Go sidecar (${probe.version ?? probe.path})` };
+  return { applied: true, note: `${kinds} disuntikkan Go sidecar (${probe.version ?? probe.path})${skipNotes.length ? `; dilewati: ${skipNotes.join('; ')}` : ''}` };
 }

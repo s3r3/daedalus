@@ -176,7 +176,8 @@ type Node =
 
 class Parser {
   private pos = 0;
-  constructor(private readonly toks: Tok[]) {}
+  private readonly toks: Tok[];
+  constructor(toks: Tok[]) { this.toks = toks; }
   private peek(): Tok | undefined { return this.toks[this.pos]; }
   private next(): Tok | undefined { return this.toks[this.pos++]; }
 

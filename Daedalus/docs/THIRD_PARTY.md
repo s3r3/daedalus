@@ -47,6 +47,13 @@ fragment styles degrade the chat reports users rely on. Nothing stops a
 user from dropping any such `SKILL.md` into a skills directory — see
 `docs/skills.md`.
 
+## Agentic Spreadsheet native-parts sidecar (2026-10-10)
+
+| Source | Licence | What is used | Daedalus's own implementation |
+|---|---|---|---|
+| Excelize (github.com/xuri/excelize/v2, v2.9.1) | BSD-3-Clause | Go library used by the `sheet-sidecar` binary to open an exceljs-produced `.xlsx` and inject native chart/pivot/slicer parts that exceljs cannot write | `Daedalus/sheet-sidecar/main.go` is Daedalus's own code: a stdin-JSON export-stage injector. It never reads `workbook.json` (the TypeScript core stays the sole source of truth), is detected like the Pratinjau Asli engines (env override, then PATH), and a missing/failing sidecar degrades the export honestly (no natives + formula-summary fallback), never silently. Spike record: `Daedalus/sheet-sidecar/README.md`. |
+| exceljs 4.4.0 | MIT | Ordinary npm dependency of `@daedalus/core`: writes XLSX values/formats/frozen panes/validations and reads XLSX on import | Listed here only because it is load-bearing for the Spreadsheet domain; governed by its package licence like every other npm dependency. |
+
 ## Rules applied
 
 - Reference clones remain the pinned origins listed in `PLAN.md` §2.0.
