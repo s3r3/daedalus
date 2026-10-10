@@ -108,6 +108,36 @@ describe('ContextManager', () => {
     const out = truncate('x'.repeat(100), 10);
     expect(out).toContain('[truncated 90 chars of 100]');
   });
+
+  test('direct-URL save goals carry the fetch-first contract; other goals stay prompt-identical', async () => {
+    // Auto-speed Fix 5: a pasted direct file URL + save intent must not
+    // detour through search. Prompt-level only — the guidance section is
+    // conditional on the goal shape, like the slide-goal contract.
+    const urlSpec = await interpretTask('Download https://example.org/cat.jpg and save it here', { id: 't-url' });
+    const urlPlan = await createPlan(urlSpec);
+    const urlState: TaskState = { ...urlSpec, plan: urlPlan, steps: urlPlan.steps, status: 'active' };
+    const urlMessages = await new DefaultContextManager(820).buildMessages(urlState, []);
+    const urlJoined = urlMessages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+    expect(urlJoined).toContain('## direct-url');
+    expect(urlJoined).toContain('Call download_file on that URL FIRST');
+    expect(urlJoined).toContain('Do not run search_images or web_search before it');
+
+    // No URL in the goal → no section, prompt unchanged in shape.
+    const plainSpec = await interpretTask('Download a cat image and save it as cat.jpg', { id: 't-plain' });
+    const plainPlan = await createPlan(plainSpec);
+    const plainState: TaskState = { ...plainSpec, plan: plainPlan, steps: plainPlan.steps, status: 'active' };
+    const plainMessages = await new DefaultContextManager(820).buildMessages(plainState, []);
+    const plainJoined = plainMessages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+    expect(plainJoined).not.toContain('## direct-url');
+
+    // URL without a save intent (e.g. discuss this PDF) → no fast-path.
+    const discussSpec = await interpretTask('Summarize the argument in https://example.org/paper.pdf for me', { id: 't-discuss' });
+    const discussPlan = await createPlan(discussSpec);
+    const discussState: TaskState = { ...discussSpec, plan: discussPlan, steps: discussPlan.steps, status: 'active' };
+    const discussMessages = await new DefaultContextManager(820).buildMessages(discussState, []);
+    const discussJoined = discussMessages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+    expect(discussJoined).not.toContain('## direct-url');
+  });
 });
 
 describe('parseAction', () => {
@@ -441,5 +471,189 @@ describe('AgentLoop ask/plan prose repair', () => {
     expect(calls).toBe(2);
     // The turn after the prose reply carried the Plan-mode repair directive.
     expect(requests[1]).toContain('In Plan mode, either call a tool next');
+  });
+});
+
+describe('auto-speed pack: prose closing acceptance (gate still rules)', () => {
+  const mutatingStub = async (call: { id: string }): Promise<ToolResult> => ({
+    call_id: call.id,
+    status: 'ok',
+    output: 'wrote index.html',
+    truncated: false,
+    meta: { mutating: true },
+  });
+
+  test('a prose closing is accepted once the creation gate passes — no done:-prefix re-prompt tax', async () => {
+    const { store, cleanup } = tmpStore();
+    const bus = new EventBus();
+    let calls = 0;
+    const provider: LLMProvider = {
+      name: 'write-then-prose-close',
+      async chat() {
+        calls++;
+        if (calls === 1) {
+          return { message: { role: 'assistant', content: '', tool_calls: [{ id: 'w1', type: 'function' as const, function: { name: 'write_file', arguments: JSON.stringify({ path: 'index.html', content: '<h1>hi</h1>' }) } }] } };
+        }
+        // The exact failure shape of the live cat run: work done, model
+        // closes with plain prose instead of a `done:`-prefixed claim.
+        return { message: { role: 'assistant', content: 'Created index.html with the landing page. All set!' } };
+      },
+      async *stream() {},
+    };
+    const loop = new AgentLoop({ provider, bus, store, stopPolicy: { max_iterations: 10, max_errors: 3 }, executeTool: mutatingStub });
+    // Two criteria → two plan steps: the write checks off only one, so
+    // the run reaches the model's prose close with a step still open —
+    // exactly the live shape this fixes.
+    const state = await loop.run('Create a landing page in index.html\ndone: index.html exists\ndone: page has a heading');
+    cleanup();
+    expect(state.status).toBe('done');
+    // Two model calls total: the write and the accepted prose close —
+    // not write + up to five invalid_action re-prompts.
+    expect(calls).toBe(2);
+    expect(state.last_error).toBeUndefined();
+    expect(state.last_observation).toContain('All set!');
+  });
+
+  test('a prose closing with nothing delivered is still re-prompted (gate fails)', async () => {
+    const { store, cleanup } = tmpStore();
+    const bus = new EventBus();
+    let calls = 0;
+    const requests: string[] = [];
+    const provider: LLMProvider = {
+      name: 'prose-first-then-write',
+      async chat(messages) {
+        calls++;
+        requests.push(messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n'));
+        if (calls === 1) return { message: { role: 'assistant', content: 'Here is your landing page, all done!' } };
+        if (calls === 2) {
+          return { message: { role: 'assistant', content: '', tool_calls: [{ id: 'w1', type: 'function' as const, function: { name: 'write_file', arguments: JSON.stringify({ path: 'index.html', content: '<h1>hi</h1>' }) } }] } };
+        }
+        if (calls === 3) {
+          return { message: { role: 'assistant', content: '', tool_calls: [{ id: 'w2', type: 'function' as const, function: { name: 'write_file', arguments: JSON.stringify({ path: 'index.html', content: '<h1>Landing</h1>' }) } }] } };
+        }
+        return { message: { role: 'assistant', content: 'done: index.html created' } };
+      },
+      async *stream() {},
+    };
+    const loop = new AgentLoop({ provider, bus, store, stopPolicy: { max_iterations: 10, max_errors: 3 }, executeTool: mutatingStub });
+    // Two writes before the close: plan steps advance one per mutating
+    // result, so the second write checks off the last step and the
+    // loop-top completion finishes the task — the steps gate is
+    // untouched by this pack.
+    const state = await loop.run('Create a landing page in index.html\ndone: index.html exists\ndone: page has a heading');
+    cleanup();
+    expect(state.status).toBe('done');
+    expect(calls).toBe(3);
+    // The empty-handed prose close bought the invalid_action re-prompt,
+    // exactly as before — acceptance only comes after a delivery.
+    expect(requests[1]).toContain('the previous reply was not a tool call');
+  });
+});
+
+describe('auto-speed pack: done: claim completes on delivered work (steps gate must not bounce it)', () => {
+  test('an explicit done: claim lands with a plan step still open once work is delivered', async () => {
+    const { store, cleanup } = tmpStore();
+    const bus = new EventBus();
+    let calls = 0;
+    const provider: LLMProvider = {
+      name: 'write-then-claim',
+      async chat() {
+        calls++;
+        if (calls === 1) {
+          return { message: { role: 'assistant', content: '', tool_calls: [{ id: 'w1', type: 'function' as const, function: { name: 'write_file', arguments: JSON.stringify({ path: 'index.html', content: '<h1>hi</h1>' }) } }] } };
+        }
+        return { message: { role: 'assistant', content: 'done: index.html created' } };
+      },
+      async *stream() {},
+    };
+    const loop = new AgentLoop({
+      provider,
+      bus,
+      store,
+      stopPolicy: { max_iterations: 10, max_errors: 3 },
+      executeTool: async (call) => ({ call_id: call.id, status: 'ok', output: 'wrote index.html', truncated: false, meta: { mutating: true } }),
+    });
+    // Two criteria → the write checks off only one step. The claim used
+    // to bounce off the still-open step until the stall backstop killed
+    // the task (live: the file was downloaded and the model said done:
+    // ten times before dying no_progress).
+    const state = await loop.run('Create a landing page in index.html\ndone: index.html exists\ndone: page has a heading');
+    cleanup();
+    expect(state.status).toBe('done');
+    expect(calls).toBe(2);
+    expect(state.last_observation).toContain('done: index.html created');
+  });
+
+  test('a done: claim with nothing delivered still does not complete', async () => {
+    const { store, cleanup } = tmpStore();
+    const bus = new EventBus();
+    let calls = 0;
+    const provider: LLMProvider = {
+      name: 'claim-then-write',
+      async chat() {
+        calls++;
+        if (calls === 1) return { message: { role: 'assistant', content: 'done: all set' } };
+        if (calls === 2) {
+          return { message: { role: 'assistant', content: '', tool_calls: [{ id: 'w1', type: 'function' as const, function: { name: 'write_file', arguments: JSON.stringify({ path: 'index.html', content: '<h1>hi</h1>' }) } }] } };
+        }
+        return { message: { role: 'assistant', content: 'done: index.html created' } };
+      },
+      async *stream() {},
+    };
+    const loop = new AgentLoop({
+      provider,
+      bus,
+      store,
+      stopPolicy: { max_iterations: 10, max_errors: 3 },
+      executeTool: async (call) => ({ call_id: call.id, status: 'ok', output: 'wrote index.html', truncated: false, meta: { mutating: true } }),
+    });
+    const state = await loop.run('Create a landing page in index.html\ndone: index.html exists');
+    cleanup();
+    // The empty claim bought the creation-gate repair turn (call 2 was
+    // the write, not an accepted finish); the write then completed the
+    // single plan step at the loop top. Two calls total — the claim
+    // itself never landed.
+    expect(state.status).toBe('done');
+    expect(calls).toBe(2);
+  });
+});
+
+describe('auto-speed pack: honest input-token budget meter', () => {
+  test('inflated billed prompt_tokens never fail a completing task (router surcharge is not our spend)', async () => {
+    const { store, cleanup } = tmpStore();
+    const bus = new EventBus();
+    let calls = 0;
+    const provider: LLMProvider = {
+      name: 'inflated-billing',
+      async chat() {
+        calls++;
+        // The kr/ relay bills ~17.6k prompt tokens for a ~1k local
+        // context (router-injected prompt, re-stated each hop). 90k/call
+        // reproduces the shape loudly: six such calls "spend" 540k
+        // billed against a 100k budget while the real context stays ~1k.
+        const usage = { prompt_tokens: 90_000, completion_tokens: 30, total_tokens: 90_030 };
+        if (calls === 1) {
+          return { usage, message: { role: 'assistant', content: '', tool_calls: [{ id: 'w1', type: 'function' as const, function: { name: 'write_file', arguments: JSON.stringify({ path: 'index.html', content: '<h1>hi</h1>' }) } }] } };
+        }
+        return { usage, message: { role: 'assistant', content: 'Created index.html. All set!' } };
+      },
+      async *stream() {},
+    };
+    const loop = new AgentLoop({
+      provider,
+      bus,
+      store,
+      stopPolicy: { max_iterations: 10, max_errors: 3 },
+      inputTokenBudget: 100_000,
+      executeTool: async (call) => ({ call_id: call.id, status: 'ok', output: 'wrote index.html', truncated: false, meta: { mutating: true } }),
+    });
+    const state = await loop.run('Create a landing page in index.html\ndone: index.html exists\ndone: page has a heading');
+    const events = store.replay(state.id);
+    cleanup();
+    expect(state.status).toBe('done');
+    expect(state.last_error).toBeUndefined();
+    expect(calls).toBe(2);
+    // The guardrail never even warned: local spend stayed ~1k of 100k.
+    expect(events.filter((e) => e.type === 'LOOP_WARNING' && e.payload['kind'] === 'token_budget')).toHaveLength(0);
   });
 });

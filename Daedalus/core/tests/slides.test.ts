@@ -356,10 +356,18 @@ describe('slide tools end-to-end', () => {
     expect(statSync(pptxPath).size).toBeGreaterThan(10_000);
   });
 
-  test('default registry also carries the slide tools', () => {
-    const names = createDefaultRegistry().list().map((t) => t.name);
+  test('per-domain surface: slide tools live on the slide registry, not the coding default', () => {
+    // Auto-speed Fix 3 (2026-10-10): the coding default registry no
+    // longer carries the nine deck tools (~3.7k schema tokens per model
+    // call on every coding run); they live exactly on SLIDE_TOOLS,
+    // which the SlideEngine registers.
+    const slideNames = SLIDE_TOOLS.map((t) => t.name);
     for (const n of ['create_deck', 'read_deck', 'add_slide', 'update_slide', 'move_slide', 'delete_slide', 'set_deck_theme', 'validate_deck', 'export_deck']) {
-      expect(names).toContain(n);
+      expect(slideNames).toContain(n);
+    }
+    const codingNames = createDefaultRegistry().list().map((t) => t.name);
+    for (const n of slideNames) {
+      expect(codingNames).not.toContain(n);
     }
   });
 });

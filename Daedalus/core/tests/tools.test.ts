@@ -12,6 +12,7 @@ import {
   listDirTool,
   readFileTool,
   runCommandTool,
+  SLIDE_TOOLS,
   TaskStore,
   ToolRegistry,
   writeFileTool,
@@ -40,6 +41,23 @@ describe('ToolRegistry', () => {
       expect(serialized).not.toContain('"execute"');
       expect(serialized).not.toContain('"timeoutMs"');
     }
+  });
+
+  test('per-domain surface: the coding registry carries no slide tools, the slide surface carries no coding tools', () => {
+    const slideToolNames = [
+      'create_deck', 'read_deck', 'add_slide', 'update_slide', 'move_slide',
+      'delete_slide', 'set_deck_theme', 'validate_deck', 'export_deck',
+    ];
+    const codingNames = createDefaultRegistry().list().map((tool) => tool.name);
+    for (const name of slideToolNames) {
+      expect(codingNames, `coding registry must not carry ${name}`).not.toContain(name);
+    }
+    // Every coding tool the loop relies on is still present (sanity floor).
+    for (const name of ['read_file', 'write_file', 'edit_file', 'run_command', 'download_file', 'search_images', 'view_image']) {
+      expect(codingNames).toContain(name);
+    }
+    // The slide surface is exactly the nine deck tools — no coding tools.
+    expect(SLIDE_TOOLS.map((tool) => tool.name).sort()).toEqual([...slideToolNames].sort());
   });
 
   test('dispatch sets tool meta and mutating flag', async () => {

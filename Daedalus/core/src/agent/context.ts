@@ -109,6 +109,27 @@ export const CODING_SLIDE_GOAL_CONTRACT = [
   'A markdown/text draft, or slides assembled by a script, does not satisfy this goal. The task is complete only after export_deck succeeds and the .pptx exists.',
 ].join('\n');
 
+const DIRECT_FILE_URL = /https?:\/\/[^\s)"']+\.(?:png|jpe?g|gif|webp|svg|pdf|zip|tar\.gz|mp3|mp4)(?:\?[^\s)"']*)?/i;
+const SAVE_INTENT = /\b(download|save|simpan|unduh|ambil|fetch|copy|put|get)\b/i;
+
+/**
+ * The user's prompt pastes a direct file URL and asks for it to be
+ * saved/downloaded. Without steering, models detour through
+ * search_images/web_search to "find" a source the user already gave —
+ * extra model calls and search round-trips on a one-step job (the live
+ * cat-image run spent its first call searching with the URL in hand).
+ */
+export function directUrlSaveGoal(goal: string): boolean {
+  return DIRECT_FILE_URL.test(goal) && SAVE_INTENT.test(goal);
+}
+
+/** Fast-path contract for a pasted direct file URL: fetch first, never search first. */
+export const DIRECT_URL_SAVE_CONTRACT = [
+  'Direct file URL in the task: the user pasted the source URL themselves.',
+  'Call download_file on that URL FIRST, saving it to a sensible workspace path. Do not run search_images or web_search before it, and do not fetch the page around it — search is for finding a source, and here the source is already given.',
+  'After the download, continue with whatever else the task asks (wiring the file in, checking it).',
+].join('\n');
+
 /**
  * Context Manager: ordered prompt sections (role, task, plan, constraints),
  * token budgeting, and observation truncation (PLAN.md §3.1).
@@ -183,6 +204,9 @@ export class DefaultContextManager implements ContextManager {
         { id: 'mode', content: modePromptContract(state.mode ?? 'auto') },
         ...(presentationCreationGoal(state.goal)
           ? [{ id: 'slide-goal', content: CODING_SLIDE_GOAL_CONTRACT }]
+          : []),
+        ...(directUrlSaveGoal(state.goal)
+          ? [{ id: 'direct-url', content: DIRECT_URL_SAVE_CONTRACT }]
           : []),
         { id: 'constraints', content: state.constraints.join('\n') || '(none)' },
         {

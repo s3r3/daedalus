@@ -80,10 +80,16 @@ import { globTool, grepTool } from './search/index.ts';
 import { fetchUrlTool, webSearchTool } from './web/index.ts';
 import { screenshotTool, viewImageTool } from './media/index.ts';
 import { downloadFileTool, searchImagesTool } from './images/index.ts';
-import { createDeckTool, readDeckTool, addSlideTool, updateSlideTool, moveSlideTool, deleteSlideTool, setDeckThemeTool, validateDeckTool, exportDeckTool } from './slides.ts';
 import { ToolRegistry, type ToolDefinition } from './registry.ts';
 
-export const DEFAULT_TOOLS: ToolDefinition[] = [readFileTool, writeFileTool, editFileTool, createDirTool, listDirTool, grepTool, globTool, runCommandTool, commandStatusTool, commandKillTool, gitDiffTool, gitStatusTool, fetchUrlTool, webSearchTool, viewImageTool, screenshotTool, searchImagesTool, downloadFileTool, createDeckTool, readDeckTool, addSlideTool, updateSlideTool, moveSlideTool, deleteSlideTool, setDeckThemeTool, validateDeckTool, exportDeckTool];
+/**
+ * The CODING tool surface — the default registry every coding run gets.
+ * The nine slide (deck) tools are deliberately NOT here: slide tasks run
+ * on the SlideEngine with exactly SLIDE_TOOLS (see tools/slides.ts, which
+ * likewise carries no coding tools), and the extra ~3.7k tokens of slide
+ * schemas per model call is dead weight on every coding turn.
+ */
+export const DEFAULT_TOOLS: ToolDefinition[] = [readFileTool, writeFileTool, editFileTool, createDirTool, listDirTool, grepTool, globTool, runCommandTool, commandStatusTool, commandKillTool, gitDiffTool, gitStatusTool, fetchUrlTool, webSearchTool, viewImageTool, screenshotTool, searchImagesTool, downloadFileTool];
 
 export function createDefaultRegistry(): ToolRegistry {
   const registry = new ToolRegistry();

@@ -149,11 +149,13 @@ export type AgentLoopOptions = {
    */
   earlyEscalation?: boolean;
   /**
-   * Per-task cumulative INPUT-token budget (provider-reported usage;
-   * context estimates when the provider reports none). At the budget
-   * the task stops as partial with the spend stated, instead of
-   * burning on — the incident run reached 264,722 input tokens over 14
-   * requests before a human stopped it. 0/undefined disables.
+   * Per-task cumulative INPUT-token budget, metered on the harness's
+   * own context estimates (see the accounting in #step: billed
+   * prompt_tokens can bill for tokens this harness never sent, e.g.
+   * router-injected prompt on relay endpoints). At the budget the task
+   * stops as partial with the spend stated, instead of burning on —
+   * the incident run reached 264,722 input tokens over 14 requests
+   * before a human stopped it. 0/undefined disables.
    */
   inputTokenBudget?: number;
   /**
@@ -482,10 +484,21 @@ export class AgentLoop {
           await pendingQuestion;
           continue;
         }
-        state = { ...state, status: 'failed', last_error: hardStop.reason, last_observation: hardStop.detail };
-        await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: hardStop.reason, detail: hardStop.detail });
-        this.#store.saveState(state.id, state);
-        return state;
+        // A task whose work is already complete is never failed by the
+        // budget after the fact: the crossing is recorded after the
+        // model responds but before its tool calls run, so the response
+        // that finished the work can be the one that crosses. Let the
+        // normal completion path below judge it (validation + gates
+        // still apply); if it needs more model calls, the next response
+        // re-crosses and ends the task here honestly.
+        if (hardStop.reason === 'input_token_budget' && (state.status === 'done' || this.#done(state))) {
+          this.#hardStops.delete(state.id);
+        } else {
+          state = { ...state, status: 'failed', last_error: hardStop.reason, last_observation: hardStop.detail };
+          await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: hardStop.reason, detail: hardStop.detail });
+          this.#store.saveState(state.id, state);
+          return state;
+        }
       }
       const stop = evaluateStopConditions({ ...state, }, iteration, { ...this.#stopPolicy, max_errors: this.#stopPolicy.max_errors });
       if (errors >= this.#stopPolicy.max_errors) {
@@ -764,16 +777,22 @@ export class AgentLoop {
       await this.#emitThought(state.id, turnId, response.message);
       this.#modelFailures.delete(state.id);
       this.#consecutiveTimeouts.delete(state.id);
-      // Per-task input-token budget: provider-reported usage when the
-      // provider reports it, the harness's own context estimate when it
-      // does not. At the budget the task stops as partial with the
-      // spend stated — a stall must never again reach 264k input
-      // tokens over 14 requests before a human intervenes.
+      // Per-task input-token budget: metered on the harness's OWN context
+      // estimate (what Daedalus actually put on the wire), never on the
+      // provider's billed prompt_tokens. Billed usage can include tokens
+      // this harness never sent — measured 2026-10-10 against the kr/
+      // relay: ~17.6k billed per call against a ~1k local context
+      // (router-injected prompt plus full re-statement each hop), so six
+      // trivial calls "spent" 110k billed and a finished task failed its
+      // 100k budget. The local estimate excludes that hidden surcharge;
+      // the guardrail's job is unchanged — at the budget the task stops
+      // as partial with the spend stated, because a runaway stall must
+      // never reach 264k input tokens over 14 requests before a human
+      // intervenes. Provider-reported totals still land in the events
+      // and the final report via accumulateUsage; only the guardrail
+      // moved to the honest meter.
       if (this.#inputTokenBudget > 0) {
-        const usage = response.usage as { prompt_tokens?: unknown } | undefined;
-        const spent = typeof usage?.prompt_tokens === 'number' && Number.isFinite(usage.prompt_tokens)
-          ? usage.prompt_tokens
-          : meter.context_estimate_tokens;
+        const spent = meter.context_estimate_tokens;
         const totalInput = (this.#inputTokens.get(state.id) ?? 0) + spent;
         this.#inputTokens.set(state.id, totalInput);
         if (totalInput >= this.#inputTokenBudget && !this.#hardStops.has(state.id)) {
@@ -869,6 +888,32 @@ export class AgentLoop {
     const action = parseAction(successfulState, response.message);
     if (action.kind === 'stop' && action.reason === 'invalid_action') {
       const canMutate = turnMode === 'auto' || turnMode === 'manual' || turnMode === 'orchestrator';
+      // Closing acceptance: the gates, not the "done:" prefix, decide
+      // completion (the same creation/slide refusals the run-level
+      // completion point applies). A prose closing that arrives when the
+      // deliverable evidence is already on record IS the completion —
+      // re-prompting it up to max_errors times buys nothing but turns:
+      // the live cat-image run finished its work, then burned three more
+      // model calls (14s) on invalid_action re-prompts and finally FAILED
+      // on the input budget over a downloaded file. Only mutating modes
+      // take this path: ask/plan prose has its own answer/plan semantics
+      // (and their repairs) below. Delivery evidence is required — a
+      // mutation on record or plan steps completed — so prose with
+      // NOTHING delivered (the malformed-output and nothing-done paths)
+      // still re-prompts exactly as before, and when a gate refuses the
+      // re-prompt logic is untouched.
+      const prose = typeof response.message.content === 'string' ? response.message.content.trim() : '';
+      const workDelivered = this.#done(state) || this.#taskMutated.has(state.id);
+      if (
+        canMutate
+        && prose.length > 0
+        && workDelivered
+        && this.#creationRefusal(successfulState) === undefined
+        && this.#slideExportRefusal(successfulState) === undefined
+      ) {
+        this.#invalidActions.delete(state.id);
+        return { ...successfulState, turns: (state.turns ?? 0) + 1, status: 'done', last_observation: prose };
+      }
       const attempts = (this.#invalidActions.get(state.id) ?? 0) + 1;
       this.#invalidActions.set(state.id, attempts);
       // Read-only modes (ask/plan) get the same bounded repair as mutating
@@ -922,6 +967,23 @@ export class AgentLoop {
       }
       if (slideRefusal) {
         return { ...successfulState, turns: (state.turns ?? 0) + 1, status: 'failed', last_error: slideRefusal.reason };
+      }
+      // Symmetric with the prose closing acceptance above: an explicit
+      // done: claim that arrives with deliverable evidence on record is
+      // the completion — plan-step bookkeeping alone must not bounce it.
+      // A generic planner step like "Run the project validation checks"
+      // never self-completes on a download task, so without this the
+      // claim replays identically until the stall backstop fires (live
+      // cat run after this pack: file downloaded, model said done: ten
+      // times, task died no_progress). Routing the claim into the
+      // completion point skips nothing: validation and both gates run
+      // again there, and a failed validation reopens the steps. Only
+      // mutating modes take this route (ask/plan claims keep their
+      // answer/plan semantics), and a claim with NOTHING delivered falls
+      // through to the existing re-prompt exactly as before.
+      const mutatingMode = turnMode === 'auto' || turnMode === 'manual' || turnMode === 'orchestrator';
+      if (mutatingMode && (this.#done(state) || this.#taskMutated.has(state.id))) {
+        return { ...successfulState, turns: (state.turns ?? 0) + 1, status: 'done', last_observation: action.summary };
       }
       return { ...successfulState, turns: (state.turns ?? 0) + 1, last_observation: action.summary };
     }
