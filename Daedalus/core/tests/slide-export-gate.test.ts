@@ -6,11 +6,14 @@ import {
   AgentLoop,
   EventBus,
   TaskStore,
-  createDefaultRegistry,
+  ToolRegistry,
+  readFileTool,
+  writeFileTool,
   type LLMProvider,
   type Message,
   type TaskSpec,
 } from '../src/index.ts';
+import { SLIDE_TOOLS } from '../src/tools/slides.ts';
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
@@ -50,7 +53,12 @@ function scriptedProvider(steps: ScriptStep[], seen?: Message[][]): LLMProvider 
 }
 
 function makeLoop(root: string, provider: LLMProvider): { loop: AgentLoop; store: TaskStore } {
-  const registry = createDefaultRegistry();
+  // This suite exercises the loop-level slide gate, so it composes the
+  // slide surface explicitly (SLIDE_TOOLS — the deck tools left the
+  // coding default registry in the per-domain tool split) plus the two
+  // coding tools its scripts use.
+  const registry = new ToolRegistry();
+  for (const tool of [...SLIDE_TOOLS, writeFileTool, readFileTool]) registry.register(tool);
   const store = new TaskStore(join(root, '.daedalus-tasks'));
   const loop = new AgentLoop({
     provider,

@@ -267,6 +267,66 @@ describe('search_images', () => {
     expect(failed.meta.reason).toBe('http_status');
   });
 
+  test('suggested download prefers the thumbnail; the full-size URL stays in the result', async () => {
+    const { impl } = stubSearch(bothSourcesHandler);
+    const tool = createSearchImagesTool({ fetchImpl: impl });
+    const result = await tool.execute({ query: 'cat' }, ctx('/tmp/daedalus-img-ws'));
+    expect(result.status).toBe('ok');
+    // Ranked first is the CC0 "Shared photo" (no thumbnail in the
+    // fixture, so its own URL is suggested as-is).
+    expect(result.output).toContain('image: https://upload.wikimedia.org/shared.jpg');
+    // The suggested sequence must point at the ~500px thumbnail of the
+    // result it templates, not the multi-MB original.
+    expect(result.output).toContain('Suggested sequence');
+  });
+
+  test('with a thumbnail available the suggested sequence downloads the thumbnail, not the original', async () => {
+    // Single-result fixture where result 1 carries a thumbnail.
+    const body = {
+      result_count: 1,
+      results: [{
+        title: 'Cat in a box',
+        foreign_landing_url: 'https://www.flickr.com/photos/example/1',
+        url: 'https://live.staticflickr.com/1/cat.jpg',
+        thumbnail: 'https://live.staticflickr.com/1/cat_small.jpg',
+        width: 1024,
+        height: 768,
+        license: 'by',
+        license_version: '2.0',
+        license_url: 'https://creativecommons.org/licenses/by/2.0/',
+        creator: 'Jane Photographer',
+        attribution: '"Cat in a box" by Jane Photographer is licensed under CC BY 2.0',
+      }],
+    };
+    const { impl } = stubSearch((url) => (url.includes('openverse') ? jsonResponse(200, body) : jsonResponse(200, { query: { pages: {} } })));
+    const tool = createSearchImagesTool({ fetchImpl: impl });
+    const result = await tool.execute({ query: 'cat' }, ctx('/tmp/daedalus-img-ws'));
+    expect(result.status).toBe('ok');
+    expect(result.output).toContain('download_file { url: "https://live.staticflickr.com/1/cat_small.jpg"');
+    // ...while the full-size original remains available in the listing.
+    expect(result.output).toContain('image: https://live.staticflickr.com/1/cat.jpg');
+    expect(result.output).toContain('full resolution was asked for');
+  });
+
+  test('a text-only model gets no view_image order in the closing guidance', async () => {
+    const { impl } = stubSearch(bothSourcesHandler);
+    const tool = createSearchImagesTool({ fetchImpl: impl });
+    const result = await tool.execute({ query: 'cat' }, ctx('/tmp/daedalus-img-ws', { visionEnabled: false }));
+    expect(result.status).toBe('ok');
+    expect(result.output).toContain('cannot view images');
+    expect(result.output).toContain('do NOT call view_image');
+    expect(result.output).not.toMatch(/2\. view_image/);
+    expect(result.output).not.toContain('view_image { path:');
+  });
+
+  test('a vision-capable model still gets the view_image confirmation step', async () => {
+    const { impl } = stubSearch(bothSourcesHandler);
+    const tool = createSearchImagesTool({ fetchImpl: impl });
+    const result = await tool.execute({ query: 'cat' }, ctx('/tmp/daedalus-img-ws', { visionEnabled: true }));
+    expect(result.status).toBe('ok');
+    expect(result.output).toMatch(/2\. view_image \{ path: "public\//);
+  });
+
   test('search_images is a read tool visible in every mode including Ask', () => {
     expect(classifyToolName('search_images')).toBe('read');
     for (const mode of AGENT_MODE_ORDER) {
@@ -329,6 +389,26 @@ describe('download_file', () => {
     expect(result.output).toContain('attribution not recorded');
     // No leftover temp files next to the destination.
     expect(existsSync(join(root, 'public/images/cat.png.attribution.txt'))).toBe(false);
+  });
+
+  test('a text-only model is told the file is verified by bytes, never ordered to view_image', async () => {
+    const root = temp('daedalus-dl-ws-');
+    const { impl } = stubDownload(() => bodyResponse(200, chunked(PNG_BYTES), { 'content-type': 'image/png' }));
+    const tool = createDownloadFileTool({ fetchImpl: impl });
+    const result = await tool.execute({ url: 'https://images.example.org/cat.png', path: 'public/images/cat.png' }, ctx(root, { visionEnabled: false }));
+    expect(result.status).toBe('ok');
+    expect(result.output).toContain('verified by its bytes');
+    expect(result.output).toContain('Do not call view_image');
+    expect(result.output).not.toContain('view_image public/images/cat.png now');
+  });
+
+  test('a vision-capable model still gets the view_image confirmation order', async () => {
+    const root = temp('daedalus-dl-ws-');
+    const { impl } = stubDownload(() => bodyResponse(200, chunked(PNG_BYTES), { 'content-type': 'image/png' }));
+    const tool = createDownloadFileTool({ fetchImpl: impl });
+    const result = await tool.execute({ url: 'https://images.example.org/cat.png', path: 'public/images/cat.png' }, ctx(root, { visionEnabled: true }));
+    expect(result.status).toBe('ok');
+    expect(result.output).toContain('view_image public/images/cat.png now to confirm');
   });
 
   test('image headers expose dimensions for jpeg too', () => {

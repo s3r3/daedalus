@@ -283,7 +283,21 @@ function slugify(text: string): string {
     .replace(/-+$/g, '');
 }
 
-function renderSearchResults(query: string, results: ImageSearchResult[], notes: string[]): string {
+/** Destination extension matching a download URL's own format (download_file refuses mismatches). */
+function imageDestExtension(url: string): string {
+  const match = /\.(png|jpe?g|gif|webp)(?:[?#]|$)/i.exec(url);
+  return match ? `.${match[1]!.toLowerCase()}` : '.jpg';
+}
+
+function renderSearchResults(
+  query: string,
+  results: ImageSearchResult[],
+  notes: string[],
+  options: { visionEnabled?: boolean } = {},
+): string {
+  // Matches view_image's own contract: only an explicit false means the
+  // serving model cannot see images (undefined = host did not say).
+  const canSeeImages = options.visionEnabled !== false;
   const lines: string[] = [];
   if (results.length === 0) {
     lines.push(`No openly-licensed images found for "${query}".`);
@@ -309,18 +323,31 @@ function renderSearchResults(query: string, results: ImageSearchResult[], notes:
   });
   for (const note of notes) lines.push('', note);
   lines.push('');
-  lines.push('Next: download the chosen image with download_file (pass license, author, and source_url from the result above so the attribution sidecar is written), then view_image the downloaded file to CONFIRM it shows what the user asked for before wiring it into a page. NEVER hotlink these URLs into a page — download first.');
+  lines.push(canSeeImages
+    ? 'Next: download the chosen image with download_file (pass license, author, and source_url from the result above so the attribution sidecar is written), then view_image the downloaded file to CONFIRM it shows what the user asked for before wiring it into a page. NEVER hotlink these URLs into a page — download first.'
+    : 'Next: download the chosen image with download_file (pass license, author, and source_url from the result above so the attribution sidecar is written). The current model cannot view images, so do NOT call view_image on it — the saved file is verified by its bytes (format and dimensions). NEVER hotlink these URLs into a page — download first.');
   // Concrete first-result template: models stall after search when the
   // next call has to be invented; spelling it out with the actual first
   // result's data turns "found images" into an executable next step.
+  // Default to the thumbnail (≈500px): a "give me an image" request is
+  // served just as well by it and downloads in a fraction of the time of
+  // a multi-MB original (the live cat run fetched 9.9 MB for a 144 KB
+  // need); the full-size URL stays in the result above when the user
+  // actually asked for full resolution.
   const first = results[0]!;
   const slug = slugify(first.title) || 'image';
-  const dest = `public/${slug}.jpg`;
+  const downloadUrl = first.thumbnailUrl && first.thumbnailUrl !== first.imageUrl ? first.thumbnailUrl : first.imageUrl;
+  const usedThumbnail = downloadUrl !== first.imageUrl;
+  const dest = `public/${slug}${imageDestExtension(downloadUrl)}`;
   lines.push('');
   lines.push('Suggested sequence (using result 1 above; pick another result by copying its values instead):');
-  lines.push(`1. download_file { url: "${first.imageUrl}", dest: "${dest}"${first.pageUrl ? `, source_url: "${first.pageUrl}"` : ''}${first.author ? `, author: "${first.author}"` : ''}${first.license ? `, license: "${first.license}"` : ''} }`);
-  lines.push(`2. view_image { path: "${dest}" } — confirm it actually shows the subject.`);
-  lines.push(`3. Reference ${dest} from the page (e.g. an <img> or import). Download first, never hotlink.`);
+  lines.push(`1. download_file { url: "${downloadUrl}", dest: "${dest}"${first.pageUrl ? `, source_url: "${first.pageUrl}"` : ''}${first.author ? `, author: "${first.author}"` : ''}${first.license ? `, license: "${first.license}"` : ''} }${usedThumbnail ? ` — the ~500px thumbnail on purpose (fast, plenty for a page); download the full-size image: URL from result 1 instead only when full resolution was asked for.` : ''}`);
+  if (canSeeImages) {
+    lines.push(`2. view_image { path: "${dest}" } — confirm it actually shows the subject.`);
+    lines.push(`3. Reference ${dest} from the page (e.g. an <img> or import). Download first, never hotlink.`);
+  } else {
+    lines.push(`2. Reference ${dest} from the page (e.g. an <img> or import). Download first, never hotlink. (No view_image step: this model cannot see images.)`);
+  }
   return lines.join('\n');
 }
 
@@ -331,7 +358,7 @@ export function createSearchImagesTool(options: { fetchImpl?: ImageSearchFetchIm
     name: 'search_images',
     description: [
       'Search for openly-licensed photos/images on Openverse and Wikimedia Commons (both free, no API key) and get structured results: title, source page, direct image URL, thumbnail, dimensions, license name + URL, author, attribution text, and whether commercial use is allowed. No image bytes come back — only metadata.',
-      'Use it when the user wants a real picture (a person, place, product) in the project: search here, then download_file the chosen image into the workspace (passing its license/author/source_url so attribution is recorded), then view_image the downloaded file to confirm it matches before using it in a page. Results with unknown licenses are excluded unless include_unknown_license is set.',
+      'Use it when the user wants a real picture (a person, place, product) in the project: search here, then download_file the chosen image into the workspace (passing its license/author/source_url so attribution is recorded). For the download, prefer the thumb URL (≈500px — much faster, plenty for a page) unless the user asked for full resolution, which uses the image URL. If the model in use cannot see images (view_image would refuse), skip view_image — never call it just because the flow mentions confirming. Results with unknown licenses are excluded unless include_unknown_license is set.',
       'NEVER hotlink a result URL into a generated page (download first), and NEVER substitute an AI-generated image for a real named person\'s photo — offer generation only as a labelled alternative.',
     ].join(' '),
     mutating: false,
@@ -423,7 +450,7 @@ export function createSearchImagesTool(options: { fetchImpl?: ImageSearchFetchIm
         return {
           call_id: '',
           status: 'ok',
-          output: renderSearchResults(query, merged, notes),
+          output: renderSearchResults(query, merged, notes, { visionEnabled: context.visionEnabled }),
           truncated: false,
           meta: {
             query,
@@ -521,7 +548,7 @@ export function createDownloadFileTool(options: { fetchImpl?: DownloadFetchImpl;
   return {
     name: 'download_file',
     description: [
-      'Download ONE image (png/jpg/gif/webp, up to 10 MB) from a public http/https URL into a workspace-relative path, creating parent folders. This is how a photo found with search_images gets INTO the project — download it, then view_image the saved file to confirm it matches before using it in a page; NEVER hotlink the remote URL into a page instead.',
+      'Download ONE image (png/jpg/gif/webp, up to 10 MB) from a public http/https URL into a workspace-relative path, creating parent folders. This is how a photo found with search_images gets INTO the project — download it (the ≈500px thumb URL is the fast default; the full-size image URL only when full resolution was asked for), then, on a vision-capable model, view_image the saved file to confirm it matches before using it in a page; NEVER hotlink the remote URL into a page instead.',
       'Guards: private/loopback/link-local targets and redirects are refused; an existing destination is refused (pick another name); the bytes, the server Content-Type, and the destination extension must agree, so a wrong extension or an HTML error page is refused instead of saved.',
       'Pass license, author, and source_url from the search_images result and a <file>.attribution.txt sidecar is written next to the image; omit them and the result says attribution was not recorded. NEVER substitute an AI-generated image for a real named person\'s photo.',
     ].join(' '),
@@ -751,10 +778,17 @@ export function createDownloadFileTool(options: { fetchImpl?: DownloadFetchImpl;
         const attributionNote = attributionPath
           ? ` attribution recorded in ${attributionPath}.`
           : ' attribution not recorded (no licence/author/source passed) — if this image came from search_images, re-download with them to record attribution.';
+        // Follow-up guidance is capability-aware: ordering view_image on
+        // a text-only model buys a vision_unsupported rejection and a
+        // wasted model round-trip (live cat run, call 4) — say plainly
+        // how the file was verified instead.
+        const confirmNote = context.visionEnabled === false
+          ? ' The current model cannot view images, so no visual confirmation is possible — the file is verified by its bytes (format, dimensions, sha256). Do not call view_image on it.'
+          : ` If it is meant for the user's page, view_image ${requestedPath} now to confirm it shows the right thing before wiring it in.`;
         return {
           call_id: '',
           status: 'ok',
-          output: `downloaded ${requestedPath} (${mime}, ${sizeNote}${received} bytes) from ${current.href}.${attributionNote} If it is meant for the user's page, view_image ${requestedPath} now to confirm it shows the right thing before wiring it in.`,
+          output: `downloaded ${requestedPath} (${mime}, ${sizeNote}${received} bytes) from ${current.href}.${attributionNote}${confirmNote}`,
           truncated: false,
           meta: {
             path: requestedPath,

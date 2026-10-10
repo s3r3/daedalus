@@ -573,15 +573,27 @@ describe('schema validation before dispatch (P0-4)', () => {
 });
 
 describe('input-token budget (P0-5)', () => {
+  // Since the auto-speed fix, the budget meters the harness's OWN context
+  // estimate (chars/4 of what Daedalus actually sent), never the
+  // provider's billed prompt_tokens — billed usage can include tokens we
+  // never put on the wire (measured 2026-10-10 on the kr/ relay: ~17.6k
+  // billed vs ~1k sent per call, which failed a finished task at 110k).
+  // This usage literal stays as the tripwire: if the meter ever reads
+  // billed tokens again, the first test below crosses its budget on
+  // call 1 and the second fails outright.
   const usage = { prompt_tokens: 60_000, completion_tokens: 10, total_tokens: 60_010 };
+  // Fat tool output fills the history (~975 estimated tokens per result),
+  // so cumulative local spend grows quadratically: measured on this suite
+  // ≈ 370, 1.7k, 4.0k, 7.3k, 11.6k, 16.8k, 23.1k, 30.3k — a 25k budget
+  // is crossed by the 8th of twelve identical reads, well before the
+  // (generous) iteration cap.
+  const fatEntries = 'entry '.repeat(650);
 
-  test('crossing 100k input tokens stops the task with the spend stated', async () => {
+  test('crossing the input-token budget stops the task with the spend stated', async () => {
     const home = temp('daedalus-budget-home-');
     const ws = temp('daedalus-budget-ws-');
     const { provider } = scriptedProvider([
-      { toolCalls: [{ id: 'c1', name: 'list_dir', args: { path: 'a' } }], usage },
-      { toolCalls: [{ id: 'c2', name: 'list_dir', args: { path: 'b' } }], usage },
-      { toolCalls: [{ id: 'c3', name: 'list_dir', args: { path: 'c' } }], usage },
+      ...Array.from({ length: 12 }, (_, i) => ({ toolCalls: [{ id: `c${i + 1}`, name: 'list_dir', args: { path: `.${i}` } }], usage })),
       { content: 'done: never reached' },
     ]);
     const store = new TaskStore(home);
@@ -589,18 +601,44 @@ describe('input-token budget (P0-5)', () => {
       provider,
       bus: new EventBus(),
       store,
+      inputTokenBudget: 25_000,
+      executeTool: async (call) => (call.tool === 'write_file'
+        ? { call_id: call.id, status: 'ok', output: 'wrote', truncated: false, meta: { mutating: true } }
+        : { call_id: call.id, status: 'ok', output: fatEntries, truncated: false, meta: { mutating: false } }),
+      stopPolicy: { max_iterations: 20, max_errors: 5 },
+    });
+    const state = await loop.run({ id: 'budget-task', goal: 'look around', constraints: [], done_criteria: ['result reported'], repo_path: ws, status: 'draft' });
+    expect(state.status).toBe('failed');
+    expect(state.last_error).toBe('input_token_budget');
+    expect(state.last_observation).toMatch(/input token budget reached: \d+ input tokens spent on this task \(budget 25000\)/);
+    const budgetWarnings = store.replay('budget-task').filter((event) => event.type === 'LOOP_WARNING' && (event.payload as { kind?: string }).kind === 'token_budget');
+    expect(budgetWarnings).toHaveLength(1);
+  });
+
+  test('bloated billed usage alone never trips the budget (the router surcharge is not our spend)', async () => {
+    const home = temp('daedalus-budget-home-');
+    const ws = temp('daedalus-budget-ws-');
+    const { provider } = scriptedProvider([
+      { toolCalls: [{ id: 'c1', name: 'list_dir', args: { path: 'a' } }], usage },
+      { toolCalls: [{ id: 'c2', name: 'list_dir', args: { path: 'b' } }], usage },
+      { toolCalls: [{ id: 'c3', name: 'write_file', args: { path: 'end.txt', content: 'x\n' } }], usage },
+      { content: 'done: looked', usage },
+    ]);
+    const loop = new AgentLoop({
+      provider,
+      bus: new EventBus(),
+      store: new TaskStore(home),
+      // 3 × 60k billed = 180k > this budget. Local spend is ~1k total,
+      // so the task runs to its normal done: under the old billed meter
+      // it died mid-way (the live cat-run failure).
       inputTokenBudget: 100_000,
       executeTool: async (call) => (call.tool === 'write_file'
         ? { call_id: call.id, status: 'ok', output: 'wrote', truncated: false, meta: { mutating: true } }
         : { call_id: call.id, status: 'ok', output: 'entries', truncated: false, meta: { mutating: false } }),
       stopPolicy: { max_iterations: 20, max_errors: 5 },
     });
-    const state = await loop.run({ id: 'budget-task', goal: 'look around', constraints: [], done_criteria: ['result reported'], repo_path: ws, status: 'draft' });
-    expect(state.status).toBe('failed');
-    expect(state.last_error).toBe('input_token_budget');
-    expect(state.last_observation).toContain('120000 input tokens');
-    const budgetWarnings = store.replay('budget-task').filter((event) => event.type === 'LOOP_WARNING' && (event.payload as { kind?: string }).kind === 'token_budget');
-    expect(budgetWarnings).toHaveLength(1);
+    const state = await loop.run({ id: 'budget-billed', goal: 'look around', constraints: [], done_criteria: ['result reported'], repo_path: ws, status: 'draft' });
+    expect(state.status).toBe('done');
   });
 
   test('budget 0 disables the stop entirely', async () => {
@@ -836,16 +874,22 @@ describe('search_images next-step template (fix 4)', () => {
 
 describe('hard-pause vs token budget ordering (live bug 2026-10-07)', () => {
   /**
-   * Five identical reads where the 5th reply's usage crosses a small
-   * budget in the SAME step that fires the hard-pause: usage accounting
-   * records input_token_budget before the tool calls are processed, so
-   * the card opens with the budget already blown. The task must wait
-   * for the answer — under the bug it failed behind the card.
+   * Five identical reads where the 5th reply crosses the budget in the
+   * SAME step that fires the hard-pause: budget accounting records
+   * input_token_budget before the tool calls are processed, so the card
+   * opens with the budget already blown. The task must wait for the
+   * answer — under the bug it failed behind the card.
+   *
+   * The meter is the harness's local context estimate (auto-speed fix),
+   * so the crossing is driven by context growth, not billed usage: each
+   * read returns a ~6.5k-char body into the history, and measured
+   * per-request estimates here run ≈ 370 / 3.1k / 4.1k / 5.2k / 6.3k —
+   * cumulative ≈ 12.7k after the 4th reply, ≈ 19k after the 5th. A 15k
+   * budget is crossed by the 5th reply and not before.
    */
   function blownBudgetLoop() {
     const replies: Reply[] = [
-      ...Array.from({ length: 4 }, (_, i) => ({ toolCalls: [readTool(`c${i}`, 'same.txt')], usage: { prompt_tokens: 10, completion_tokens: 0, total_tokens: 10 } })),
-      { toolCalls: [readTool('c4', 'same.txt')], usage: { prompt_tokens: 500, completion_tokens: 0, total_tokens: 500 } },
+      ...Array.from({ length: 5 }, (_, i) => ({ toolCalls: [readTool(`c${i}`, 'same.txt')], usage: { prompt_tokens: 10, completion_tokens: 0, total_tokens: 10 } })),
     ];
     const home = temp('daedalus-pause-budget-home-');
     const ws = temp('daedalus-pause-budget-ws-');
@@ -859,10 +903,10 @@ describe('hard-pause vs token budget ordering (live bug 2026-10-07)', () => {
       provider,
       bus: new EventBus(),
       store,
-      inputTokenBudget: 100,
+      inputTokenBudget: 15_000,
       executeTool: async (call) => {
         executions += 1;
-        return { call_id: call.id, status: 'ok', output: 'file body', truncated: false, meta: { mutating: false } };
+        return { call_id: call.id, status: 'ok', output: 'file body '.repeat(650), truncated: false, meta: { mutating: false } };
       },
       stopPolicy: { max_iterations: 30, max_errors: 10 },
       onLoopHardPause: () => new Promise<'continue' | 'stop'>((resolve) => {

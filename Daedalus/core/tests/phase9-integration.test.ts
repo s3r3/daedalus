@@ -257,12 +257,12 @@ describe('Phase 9 — tool integration and terminal failures', () => {
     // then the background-job pair command_status (read) + command_kill
     // (execution class) behind run_command's background start, then the
     // 2026-10-08 tool-upgrades pair web_search (discovery half of
-    // fetch_url) + screenshot (verify rendered pages by looking), then
-    // the Agentic Slide tools (create/read/add/update/move/delete deck
-    // slides, theme, validate, export) appended at the end.
+    // fetch_url) + screenshot (verify rendered pages by looking). The
+    // Agentic Slide deck tools are NOT part of the coding default set
+    // any more: slide runs on the SlideEngine with exactly SLIDE_TOOLS,
+    // and coding runs stop paying ~3.7k schema tokens per call for them.
     expect(DEFAULT_TOOLS.map((tool) => tool.name)).toEqual([
       'read_file', 'write_file', 'edit_file', 'create_dir', 'list_dir', 'grep', 'glob', 'run_command', 'command_status', 'command_kill', 'git_diff', 'git_status', 'fetch_url', 'web_search', 'view_image', 'screenshot', 'search_images', 'download_file',
-      'create_deck', 'read_deck', 'add_slide', 'update_slide', 'move_slide', 'delete_slide', 'set_deck_theme', 'validate_deck', 'export_deck',
     ]);
     expect((await call('create_dir', { path: 'src' })).status).toBe('ok');
     expect((await call('write_file', { path: 'src/app.ts', content: "export const value = 'broken';\n" })).status).toBe('ok');

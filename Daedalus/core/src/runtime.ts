@@ -861,9 +861,10 @@ export class TaskRunner {
       await extensions.close().catch(() => undefined);
       throw new Error(invocationProblems.join('; '));
     }
-    // Coding runs get the default registry plus extension tools. (Slide
-    // tasks returned earlier, into the SlideEngine — no registry is ever
-    // built for them.)
+    // Coding runs get the default (coding-only) registry plus extension
+    // tools: the slide deck tools are not registered here — slide tasks
+    // returned earlier, into the SlideEngine, which runs exactly the
+    // SLIDE_TOOLS surface.
     const registry = createDefaultRegistry();
     for (const tool of extensions.tools) {
       try {

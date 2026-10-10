@@ -74,14 +74,20 @@ describe('loop-pause question answered over a blown budget', () => {
   test('Continue ends the task partial with input_token_budget; the card closes and nothing stays pending', async () => {
     const home = temp('daedalus-q-life-home-');
     const ws = temp('daedalus-q-life-ws-');
-    writeFileSync(join(ws, 'page.txt'), 'body\n');
+    // Fat page body: the budget meters the harness's LOCAL context
+    // estimate (auto-speed fix — billed prompt_tokens no longer counts),
+    // so the crossing is driven by context growth: each real read adds
+    // ~1k estimated tokens to the history, and cumulative local spend by
+    // the 5th reply lands above the budget while the first four stay
+    // under it, exactly where this ordering test needs the crossing.
+    writeFileSync(join(ws, 'page.txt'), `${'page body '.repeat(430)}\n`);
     const replies: Reply[] = [
       ...Array.from({ length: 4 }, (_, i) => ({ toolCalls: [{ id: `c${i}`, name: 'read_file', args: { path: 'page.txt' } }], usage: usage(10) })),
       { toolCalls: [{ id: 'c4', name: 'read_file', args: { path: 'page.txt' } }], usage: usage(500) },
       { content: 'done: never reached' },
     ];
     const store = new TaskStore(home);
-    const runner = new TaskRunner({ workspaceRoot: ws, store, provider: scriptedProvider(replies), approvalPolicy: 'auto', inputTokenBudget: 100, maxIterations: 20 });
+    const runner = new TaskRunner({ workspaceRoot: ws, store, provider: scriptedProvider(replies), approvalPolicy: 'auto', inputTokenBudget: 15_500, maxIterations: 20 });
 
     let finished = false;
     const runPromise = runner
