@@ -8,10 +8,11 @@ import { createContext, createApp, attachWebSocket, type EventChannel } from '..
 import { SlidePreviewService, type PreviewConverter, type SlidePreviewDeps } from '../src/slide-preview.ts'
 
 /**
- * Pratinjau Asli (True Preview) routes: LibreOffice renders the
- * exported .pptx to per-page PNGs cached by a hash of everything the
- * export depends on. All converter/export seams are injected fakes,
- * so the suite is deterministic on machines without LibreOffice.
+ * Pratinjau Asli (True Preview) routes: a locally installed engine
+ * (LibreOffice, or PowerPoint on Windows) renders the exported .pptx
+ * to per-page PNGs cached by a hash of everything the export depends
+ * on. All converter/export seams are injected fakes, so the suite is
+ * deterministic on machines without either engine.
  */
 
 // 1x1 transparent PNG.
@@ -63,7 +64,7 @@ const fakeExport: SlidePreviewDeps['exportPptx'] = async (root) => {
 
 function serviceWith(overrides: Partial<SlidePreviewDeps>): SlidePreviewService {
   return new SlidePreviewService({
-    availability: () => ({ soffice: true, pdftoppm: true }),
+    availability: () => ({ libreOffice: true, powerPoint: false }),
     exportPptx: fakeExport,
     ...overrides,
   })
@@ -120,16 +121,17 @@ describe('/slides/deck/preview (Pratinjau Asli)', () => {
     expect(render.body.error).toBe('deck_not_found')
   })
 
-  test('unavailable when soffice or pdftoppm is missing — a state, never a 500', async () => {
+  test('unavailable when no engine is installed — a state, never a 500', async () => {
     const fake = fakeConverter()
     const { base, root } = await listen(
-      serviceWith({ availability: () => ({ soffice: false, pdftoppm: true }), converter: fake.converter }),
+      serviceWith({ availability: () => ({ libreOffice: false, powerPoint: false }), converter: fake.converter }),
     )
     await seedDeck(root)
     const status = await reqJson(base, 'GET', statusPath(root))
     expect(status.status).toBe(200)
     expect(status.body.available).toBe(false)
     expect(status.body.status).toBe('unavailable')
+    expect(status.body.engine).toBeNull()
     const render = await reqJson(base, 'POST', '/slides/deck/preview', { root })
     expect(render.status).toBe(200)
     expect(render.body.status).toBe('unavailable')
@@ -153,6 +155,7 @@ describe('/slides/deck/preview (Pratinjau Asli)', () => {
     await reqJson(base, 'POST', '/slides/deck/preview', { root })
     const ready = await waitForStatus(base, root, 'ready')
     expect(fake.calls()).toBe(1)
+    expect(ready.engine).toBe('libreoffice')
     expect(ready.pages).toBe(2)
     const pageUrls = ready.pageUrls as string[]
     expect(Array.isArray(pageUrls)).toBe(true)
@@ -195,6 +198,24 @@ describe('/slides/deck/preview (Pratinjau Asli)', () => {
     await reqJson(base, 'POST', '/slides/deck/preview', { root })
     const errored = await waitForStatus(base, root, 'error')
     expect(String(errored.error)).toContain('soffice meledak')
+  })
+
+  test('PowerPoint engine serves renders when LibreOffice is absent (Windows path)', async () => {
+    const lo = fakeConverter()
+    const ppt = fakeConverter(3)
+    const { base, root } = await listen(
+      serviceWith({
+        availability: () => ({ libreOffice: false, powerPoint: true }),
+        converters: { libreoffice: lo.converter, powerpoint: ppt.converter },
+      }),
+    )
+    await seedDeck(root)
+    await reqJson(base, 'POST', '/slides/deck/preview', { root })
+    const ready = await waitForStatus(base, root, 'ready')
+    expect(ready.engine).toBe('powerpoint')
+    expect(ready.pages).toBe(3)
+    expect(ppt.calls()).toBe(1)
+    expect(lo.calls()).toBe(0)
   })
 
   test('page serving refuses malformed keys, bad pages, and traversal', async () => {
