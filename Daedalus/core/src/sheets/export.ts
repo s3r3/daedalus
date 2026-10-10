@@ -7,13 +7,13 @@ import {
   formatCellRef,
   parseCellRef,
   slugifyTitle,
-  workbookPaths,
   type ChartSpec,
   type PivotSpec,
   type SheetExportRecord,
   type SlicerSpec,
   type WorkbookSpec,
 } from './workbook.ts';
+import { workbookPaths } from './store.ts';
 
 /**
  * Export stage. exceljs writes values, live formulas, number formats,
