@@ -217,7 +217,7 @@ describe('spreadsheet domain tasks', () => {
     await waitForStagedWorkbook((created.body.repo_path as string) ?? workspace as string).catch(() => undefined)
     void id
 
-    const unknown = await req(base, 'POST', '/tasks', { goal: 'halo', provider_id: 'fake', domain: 'dokumen' })
+    const unknown = await req(base, 'POST', '/tasks', { goal: 'halo', provider_id: 'fake', domain: 'bogus' })
     expect(unknown.status).toBe(400)
     expect(unknown.body.error).toBe('invalid_domain')
 
