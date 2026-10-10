@@ -7,7 +7,7 @@ import { payloadOf, type ApprovalRequested, type CommandFinished, type CommandSt
  * these, so the UI is a function of recorded events only (§3.4 rule 6).
  */
 
-export type TaskStatus = 'idle' | 'running' | 'awaiting-approval' | 'awaiting-answer' | 'done' | 'failed' | 'partial' | 'stopped'
+export type TaskStatus = 'idle' | 'running' | 'awaiting-approval' | 'awaiting-answer' | 'done' | 'failed' | 'partial' | 'stopped' | 'interrupted'
 
 export type ToolCallView = {
   call: ToolCall
@@ -656,6 +656,7 @@ export function taskStatus(events: Event[], pendingApprovalsCount: number, pendi
     const payload = payloadOf(completed, 'TASK_COMPLETED')
     if (payload?.outcome === 'success') return 'done'
     if (payload?.outcome === 'partial') return 'partial'
+    if (payload?.outcome === 'interrupted') return 'interrupted'
     // A user-stopped run is not a failure: the loop records outcome
     // 'failed' with reason 'aborted', and the UI owes the user the truth.
     if (payload?.reason === 'aborted' || payload?.reason === 'cancelled') return 'stopped'
@@ -685,7 +686,7 @@ export function reportFromEvents(taskId: string, events: Event[], report: FinalR
   const calls = toolCalls(events)
   return {
     task_id: taskId,
-    outcome: completion.outcome === 'success' ? 'success' : completion.outcome === 'partial' ? 'partial' : 'failed',
+    outcome: completion.outcome === 'success' ? 'success' : completion.outcome === 'partial' ? 'partial' : completion.outcome === 'interrupted' ? 'interrupted' : 'failed',
     diff: changes.map((change) => change.patch).join(''),
     evidence: [
       ...(modelSummary ? [`model failure: ${modelSummary}`] : []),
@@ -956,7 +957,7 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
           role: 'status',
           text: stopped ? 'task stopped' : `task ${completed?.outcome ?? 'done'}`,
           detail: stopped ? undefined : completionDetail(completed),
-          status: stopped ? 'warning' : completed?.outcome === 'success' ? 'ok' : completed?.outcome === 'partial' ? 'warning' : 'error',
+          status: stopped ? 'warning' : completed?.outcome === 'success' ? 'ok' : completed?.outcome === 'partial' ? 'warning' : completed?.outcome === 'interrupted' ? 'warning' : 'error',
         })
         break
       }

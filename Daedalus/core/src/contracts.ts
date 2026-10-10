@@ -8,7 +8,7 @@ export type ToolResult = { call_id: string; status: ToolResultStatus; output: st
 export type ValidationCheck = { name: string; cmd: string; status: 'pass' | 'fail' | 'error' | 'skipped'; exit_code: number | null; summary: string; diagnostics: Array<{ file?: string; line?: number; message: string }>; source?: 'profile' | 'default'; required?: boolean };
 export type ValidationResult = { checks: ValidationCheck[]; source?: 'profile' | 'default'; warning?: string; note?: string };
 export type RecoveryAction = { reason: string; strategy: 'retry' | 'fix' | 'replan' | 'abort'; attempt: number; limits: Record<string, number> };
-export type FinalReport = { task_id: string; outcome: 'success' | 'partial' | 'failed'; diff: string; evidence: string[]; metrics: Record<string, number>; title?: string; rules_files?: string[]; validation_source?: 'profile' | 'default'; /** Declared target directory the task was anchored to (workspace-relative), when it had one. */ target_dir?: string; worktree?: WorktreeReport; review?: ReviewGateReport };
+export type FinalReport = { task_id: string; outcome: 'success' | 'partial' | 'failed' | 'interrupted'; diff: string; evidence: string[]; metrics: Record<string, number>; title?: string; rules_files?: string[]; validation_source?: 'profile' | 'default'; /** Declared target directory the task was anchored to (workspace-relative), when it had one. */ target_dir?: string; worktree?: WorktreeReport; review?: ReviewGateReport };
 /** Strong-model review gate verdict recorded on the final report (tailor suite). */
 export type ReviewGateReport = {
   model: string;

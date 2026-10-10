@@ -1003,7 +1003,58 @@ async function extensionStatus(ctx: AppContext, rootValue: unknown): Promise<Ext
   return value;
 }
 
+/**
+ * Startup reconciliation: tasks whose event log and state say "still
+ * running" but that no runner in this process will ever finish. When the
+ * previous daemon died mid-task (crash, kill, power loss), no final
+ * report was written, so `summarizeFrom` would compute
+ * `running: activeStatus && !report` from the persisted files forever —
+ * a dead task displayed as running. Before serving anything, settle
+ * exactly those tasks (active-looking state, no report, no live runner)
+ * to a truthful `interrupted`: the reconciled report makes list view,
+ * task detail, and the report endpoint agree, and the closing
+ * TASK_COMPLETED event keeps the replayed event log consistent with
+ * them. Events, state, and backups are otherwise preserved as recorded;
+ * tasks with a report or an already-terminal state are never touched.
+ * Runs inside createApp — every server embedding boots through it, and
+ * at that moment no runner of this process can exist yet.
+ */
+export function reconcileInterruptedTasks(ctx: AppContext): string[] {
+  const ACTIVE_STATUSES = ["created", "pending", "active", "running"];
+  const reconciled: string[] = [];
+  for (const store of taskStores(ctx)) {
+    for (const taskId of store.listTasks()) {
+      if (ctx.activeRunners.has(taskId)) continue;
+      if (store.loadReport(taskId)) continue;
+      const state = store.loadState<Record<string, unknown>>(taskId);
+      const status = typeof state?.status === "string" ? state.status : undefined;
+      if (!status || !ACTIVE_STATUSES.includes(status)) continue;
+      const report: FinalReport = {
+        task_id: taskId,
+        outcome: "interrupted",
+        diff: "",
+        evidence: [
+          "The Daedalus daemon stopped while this task was still running, so no final report was written. When the server restarted, the task was reconciled as interrupted; its recorded events and file changes are preserved.",
+        ],
+        metrics: {},
+      };
+      store.saveReport(taskId, report);
+      emitEvent({ bus: ctx.bus, store }, taskId, undefined, "TASK_COMPLETED", {
+        outcome: "interrupted",
+        reason: "interrupted",
+        summary: "the Daedalus daemon stopped before this task finished; reconciled as interrupted when the server restarted",
+      });
+      reconciled.push(taskId);
+    }
+  }
+  if (reconciled.length > 0) {
+    ctx.log.info("reconciled interrupted tasks at startup", { count: reconciled.length, tasks: reconciled });
+  }
+  return reconciled;
+}
+
 export function createApp(ctx: AppContext) {
+  reconcileInterruptedTasks(ctx);
   const slidePreview = ctx.slidePreview ?? new SlidePreviewService();
   const previewPageUrl = (root: string, key: string, page: number): string =>
     `/slides/deck/preview/page?root=${encodeURIComponent(root)}&key=${key}&page=${page}`;
