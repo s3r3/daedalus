@@ -1,6 +1,9 @@
 import { spawn } from 'node:child_process';
+import { accessSync, constants, existsSync } from 'node:fs';
 import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import ExcelJS from 'exceljs';
 import { evaluateWorkbook, displayValue } from './evaluator.ts';
 import {
@@ -131,7 +134,7 @@ export async function buildExcelJsWorkbook(workbook: WorkbookSpec): Promise<Exce
 export async function exportWorkbookToXlsx(
   workbook: WorkbookSpec,
   root: string,
-  opts: { sidecar?: boolean } = {},
+  opts: { sidecar?: boolean; sidecarSeams?: SidecarResolveSeams } = {},
 ): Promise<SheetExportRecord> {
   const paths = workbookPaths(root);
   await mkdir(paths.dir, { recursive: true });
@@ -151,7 +154,7 @@ export async function exportWorkbookToXlsx(
   const dashboard = dashboardComposition(workbook, charts);
   if (dashboard) record = { ...record, dashboard };
   if ((charts.length > 0 || pivots.length > 0 || slicers.length > 0) && opts.sidecar !== false) {
-    const sidecar = await runSheetSidecar(outPath, workbook, { charts, pivots, slicers });
+    const sidecar = await runSheetSidecar(outPath, workbook, { charts, pivots, slicers }, { seams: opts.sidecarSeams });
     if (sidecar.applied) {
       record = { ...record, via: 'exceljs+sidecar', bytes: (await stat(outPath)).size, note: sidecar.note };
     } else {
@@ -312,22 +315,68 @@ export type SidecarRunResult =
 
 export type SidecarProbe = { available: boolean; path: string | null; version: string | null };
 
+/** Bare binary name (PATH lookups and built artifacts share it). */
+export const SHEET_SIDECAR_BINARY = 'daedalus-sheet-sidecar';
+
+function sidecarBinaryName(platform: NodeJS.Platform): string {
+  return platform === 'win32' ? `${SHEET_SIDECAR_BINARY}.exe` : SHEET_SIDECAR_BINARY;
+}
+
 /**
- * Sidecar discovery mirrors how the server finds Pratinjau Asli
- * engines: explicit env override first, then PATH. Bundled-at-install
- * copies land on PATH (see sheet-sidecar/README.md); a missing binary
- * is a normal, honestly-reported state, never an error.
+ * The per-user cache dir for a sidecar built from source:
+ * `~/.daedalus/bin` — the same per-user home convention as the daemon
+ * state (settings' `resolveDaedalusHome`), so a source checkout's
+ * first export warms exactly one personal copy.
  */
-export function sidecarCandidates(env: NodeJS.ProcessEnv = process.env): string[] {
+export function sheetSidecarCacheDir(homeDir: string = homedir()): string {
+  return join(homeDir, '.daedalus', 'bin');
+}
+
+/**
+ * The in-repo Go source dir (`go.mod` + `main.go`), resolved relative
+ * to this module: `core/src/sheets/export.ts` → `Daedalus/sheet-sidecar`.
+ * Only meaningful in a source checkout / the monorepo layout — a
+ * packaged install has no such dir and discovery just skips it.
+ */
+export function sheetSidecarSourceDir(): string {
+  return fileURLToPath(new URL('../../../sheet-sidecar/', import.meta.url));
+}
+
+/**
+ * Sidecar discovery, in order: explicit env override, PATH, the
+ * in-repo build output (`sheet-sidecar/bin/`), then the per-user build
+ * cache (`~/.daedalus/bin`). Bundled-at-install copies land on PATH
+ * (see sheet-sidecar/README.md); a missing binary is a normal,
+ * honestly-reported state, never an error. Probing never builds —
+ * build-on-first-use lives in `resolveSheetSidecar` at export time.
+ */
+export function sidecarCandidates(env: NodeJS.ProcessEnv = process.env, seams: SidecarDiscoverySeams = {}): string[] {
+  const platform = seams.platform ?? process.platform;
+  const name = sidecarBinaryName(platform);
   const out: string[] = [];
   if (env.DAEDALUS_SHEET_SIDECAR) out.push(env.DAEDALUS_SHEET_SIDECAR);
-  out.push('daedalus-sheet-sidecar');
+  out.push(SHEET_SIDECAR_BINARY);
+  out.push(join(seams.sourceDir ?? sheetSidecarSourceDir(), 'bin', name));
+  out.push(join(sheetSidecarCacheDir(seams.homeDir), name));
   return out;
 }
 
-function spawnCapture(cmd: string, args: string[], input: string, timeoutMs: number): Promise<{ code: number | null; stdout: string; stderr: string }> {
+export type SidecarDiscoverySeams = {
+  homeDir?: string;
+  platform?: NodeJS.Platform;
+  /** Override for the in-repo source dir (tests, exotic layouts). */
+  sourceDir?: string;
+};
+
+function spawnCapture(
+  cmd: string,
+  args: string[],
+  input: string,
+  timeoutMs: number,
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolvePromise) => {
-    const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(cmd, args, { stdio: ['pipe', 'pipe', 'pipe'], ...(opts.cwd ? { cwd: opts.cwd } : {}), ...(opts.env ? { env: opts.env } : {}) });
     let stdout = '';
     let stderr = '';
     const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
@@ -343,14 +392,117 @@ function spawnCapture(cmd: string, args: string[], input: string, timeoutMs: num
   });
 }
 
-export async function probeSheetSidecar(env: NodeJS.ProcessEnv = process.env): Promise<SidecarProbe> {
-  for (const candidate of sidecarCandidates(env)) {
-    const result = await spawnCapture(candidate, ['--version'], '', 8000).catch(() => null);
-    if (result && result.code === 0) {
-      return { available: true, path: candidate, version: result.stdout.trim().slice(0, 80) || null };
-    }
+/** `--version` verdict for one candidate; absolute candidates are only spawned when the file exists. */
+async function versionOf(candidate: string): Promise<{ ok: boolean; version: string | null }> {
+  if ((candidate.includes('/') || candidate.includes('\\')) && !existsSync(candidate)) return { ok: false, version: null };
+  const result = await spawnCapture(candidate, ['--version'], '', 8000).catch(() => null);
+  if (result && result.code === 0) return { ok: true, version: result.stdout.trim().slice(0, 80) || null };
+  return { ok: false, version: null };
+}
+
+/**
+ * Cheap discovery probe (status route): reports a binary that already
+ * exists. NEVER builds — building waits for an actual export.
+ */
+export async function probeSheetSidecar(env: NodeJS.ProcessEnv = process.env, seams: SidecarDiscoverySeams = {}): Promise<SidecarProbe> {
+  for (const candidate of sidecarCandidates(env, seams)) {
+    const probe = await versionOf(candidate);
+    if (probe.ok) return { available: true, path: candidate, version: probe.version };
   }
   return { available: false, path: null, version: null };
+}
+
+/** First executable `go` on the env's PATH, or null. Mirrors slide-preview's PATH scan. */
+function findGoOnPath(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | null {
+  const names = platform === 'win32' ? ['go.exe', 'go'] : ['go'];
+  const pathEnv = env.PATH ?? env.Path ?? '';
+  for (const dir of pathEnv.split(platform === 'win32' ? ';' : ':')) {
+    if (!dir) continue;
+    for (const name of names) {
+      const candidate = join(dir, name);
+      try {
+        accessSync(candidate, platform === 'win32' ? constants.F_OK : constants.X_OK);
+        return candidate;
+      } catch { /* keep scanning */ }
+    }
+  }
+  return null;
+}
+
+export type SidecarResolveSeams = SidecarDiscoverySeams & {
+  env?: NodeJS.ProcessEnv;
+  /** Injectable build step seam (default: real `go build`). Receives the source dir and the cache output path. */
+  build?: (input: { sourceDir: string; outPath: string; goPath: string; env: NodeJS.ProcessEnv }) => Promise<{ ok: true } | { ok: false; error: string }>;
+  /** Override `go` discovery (null = pretend Go is absent). */
+  goPath?: string | null;
+  /** Build budget; the first build downloads Excelize once. */
+  buildTimeoutMs?: number;
+};
+
+export type SheetSidecarResolution =
+  | { available: true; path: string; version: string | null; builtFromSource: boolean }
+  | { available: false; reason: string };
+
+const SIDECAR_BUILD_TIMEOUT_MS = 300_000;
+/** In-flight/finished build promises, keyed by output path: one build per process per destination. */
+const sidecarBuilds = new Map<string, Promise<{ ok: true } | { ok: false; error: string }>>();
+
+async function defaultBuildSidecar(input: { sourceDir: string; outPath: string; goPath: string; env: NodeJS.ProcessEnv }, timeoutMs: number): Promise<{ ok: true } | { ok: false; error: string }> {
+  const result = await spawnCapture(input.goPath, ['build', '-trimpath', '-o', input.outPath, '.'], '', timeoutMs, { cwd: input.sourceDir, env: input.env });
+  if (result.code === 0 && existsSync(input.outPath)) return { ok: true };
+  const detail = (result.stderr || result.stdout).trim().split('\n').slice(-2).join(' ').slice(0, 200);
+  return { ok: false, error: detail || `go build keluar dengan kode ${String(result.code)}` };
+}
+
+/**
+ * Export-time resolution. Discovery first (env → PATH → in-repo bin →
+ * per-user cache); when nothing runnable exists but a source checkout
+ * and a Go toolchain are both at hand, the sidecar is built ONCE into
+ * `~/.daedalus/bin` and reused (per-process memoized). An explicitly
+ * set DAEDALUS_SHEET_SIDECAR short-circuits all of this: a configured
+ * path is the user's contract, a broken one reports as not detected
+ * instead of silently substituting a source build. Every failure is a
+ * reason string for the export record — resolution never throws.
+ */
+export async function resolveSheetSidecar(seams: SidecarResolveSeams = {}): Promise<SheetSidecarResolution> {
+  const env = seams.env ?? process.env;
+  const platform = seams.platform ?? process.platform;
+  const name = sidecarBinaryName(platform);
+  const explicit = env.DAEDALUS_SHEET_SIDECAR;
+  const candidates = sidecarCandidates(env, seams);
+  const probeSet = explicit ? candidates.slice(0, 2) : candidates;
+  for (const candidate of probeSet) {
+    const probe = await versionOf(candidate);
+    if (probe.ok) return { available: true, path: candidate, version: probe.version, builtFromSource: false };
+  }
+  if (explicit) return { available: false, reason: 'sidecar-tidak-terdeteksi' };
+
+  const sourceDir = seams.sourceDir ?? sheetSidecarSourceDir();
+  if (!existsSync(join(sourceDir, 'go.mod')) || !existsSync(join(sourceDir, 'main.go'))) {
+    return { available: false, reason: 'sidecar-tidak-terdeteksi' };
+  }
+  const goPath = seams.goPath !== undefined ? seams.goPath : findGoOnPath(env, platform);
+  if (!goPath) {
+    return { available: false, reason: 'Go tidak ditemukan (pasang Go, atau set DAEDALUS_SHEET_SIDECAR ke binary sidecar yang sudah ada)' };
+  }
+  const outPath = join(sheetSidecarCacheDir(seams.homeDir), name);
+  try {
+    await mkdir(sheetSidecarCacheDir(seams.homeDir), { recursive: true });
+  } catch (error) {
+    return { available: false, reason: `cache sidecar tidak bisa dibuat: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  let build = sidecarBuilds.get(outPath);
+  if (!build) {
+    const builder = seams.build ?? ((input: { sourceDir: string; outPath: string; goPath: string; env: NodeJS.ProcessEnv }) =>
+      defaultBuildSidecar(input, seams.buildTimeoutMs ?? SIDECAR_BUILD_TIMEOUT_MS));
+    build = Promise.resolve().then(() => builder({ sourceDir, outPath, goPath, env }));
+    sidecarBuilds.set(outPath, build);
+  }
+  const built = await build;
+  if (!built.ok) return { available: false, reason: `go build sidecar gagal: ${built.error}` };
+  const probe = await versionOf(outPath);
+  if (!probe.ok) return { available: false, reason: 'sidecar hasil build tidak merespons --version' };
+  return { available: true, path: outPath, version: probe.version, builtFromSource: true };
 }
 
 /**
@@ -366,11 +518,15 @@ export async function runSheetSidecar(
   xlsxPath: string,
   workbook: WorkbookSpec,
   spec: SidecarSpec,
-  opts: { env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+  opts: { env?: NodeJS.ProcessEnv; timeoutMs?: number; seams?: SidecarResolveSeams } = {},
 ): Promise<SidecarRunResult> {
   if (spec.charts.length === 0 && spec.pivots.length === 0 && spec.slicers.length === 0) return { applied: false, reason: 'no-native-specs' };
-  const probe = await probeSheetSidecar(opts.env);
-  if (!probe.available || !probe.path) return { applied: false, reason: 'sidecar-tidak-terdeteksi' };
+  // Export time is where build-on-first-use may happen (never in the
+  // cheap probe): a source checkout without an installed binary gets
+  // one built into ~/.daedalus/bin, and the note below says so.
+  const resolved = await resolveSheetSidecar({ ...opts.seams, env: opts.env ?? opts.seams?.env });
+  if (!resolved.available) return { applied: false, reason: resolved.reason };
+  const probe = { path: resolved.path, version: resolved.version };
   const tmpOut = `${xlsxPath}.sidecar-tmp.xlsx`;
   const slicerPayload = spec.slicers.map((sl) => {
     const pivot = sl.pivot ? spec.pivots.find((p) => p.id === sl.pivot) : undefined;
@@ -417,5 +573,5 @@ export async function runSheetSidecar(
     injectedPivots ? `${injectedPivots} pivot native` : '',
     injectedSlicers ? `${injectedSlicers} slicer native` : '',
   ].filter(Boolean).join(' + ');
-  return { applied: true, note: `${kinds} disuntikkan Go sidecar (${probe.version ?? probe.path})${skipNotes.length ? `; dilewati: ${skipNotes.join('; ')}` : ''}` };
+  return { applied: true, note: `${kinds} disuntikkan Go sidecar (${probe.version ?? probe.path})${resolved.builtFromSource ? '; sidecar dibangun dari sumber (go build)' : ''}${skipNotes.length ? `; dilewati: ${skipNotes.join('; ')}` : ''}` };
 }
