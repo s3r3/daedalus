@@ -13,11 +13,23 @@
 //
 //	{ "input": "in.xlsx", "output": "out.xlsx",
 //	  "charts": [{ "type": "column|bar|line|pie", "range": "Data!A1:B13",
-//	               "sheet": "Dashboard", "anchor": "D2", "title": "..." }],
+//	               "sheet": "Dashboard", "anchor": "D2", "title": "...",
+//	               "width": 18, "height": 9 }],
 //	  "pivots": [{ "source": "Data!A1:F100", "target": "Ringkasan",
-//	               "anchor": "A1", "rows": ["Kategori"], "cols": [],
+//	               "name": "pivot-kanal", "anchor": "A1",
+//	               "rows": ["Kategori"], "cols": [],
 //	               "values": [{ "field": "Total", "agg": "sum" }] }],
-//	  "slicers": [] }
+//	  "slicers": [{ "field": "Region", "source": "Data!A1:F100",
+//	                "target": "Dashboard", "cell": "B20",
+//	                "pivot": "pivot-kanal", "pivotSheet": "_PivotData",
+//	                "kind": "field|timeline" }] }
+//
+// A slicer with "pivot" binds to that pivot table (TableSheet/TableName
+// in Excelize terms); without one it binds to a table created over
+// "source" (one table per distinct source, reused across slicers).
+// "kind":"timeline" asks for a date timeline slicer: Excelize 2.9 can
+// only READ timelines, so a regular date-field slicer is substituted
+// and the substitution is reported in the result notes — never faked.
 //
 // Exit 0 = output written. The JSON result on stdout reports what was
 // actually injected (a slicer whose API path fails is skipped with a
@@ -47,6 +59,8 @@ type chartSpec struct {
 	Sheet  string `json:"sheet"`
 	Anchor string `json:"anchor"`
 	Title  string `json:"title"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
 }
 
 type pivotValue struct {
@@ -55,6 +69,7 @@ type pivotValue struct {
 }
 
 type pivotSpec struct {
+	Name   string       `json:"name"`
 	Source string       `json:"source"`
 	Target string       `json:"target"`
 	Anchor string       `json:"anchor"`
@@ -63,17 +78,22 @@ type pivotSpec struct {
 	Values []pivotValue `json:"values"`
 }
 
+type slicerSpec struct {
+	Field      string `json:"field"`
+	Source     string `json:"source"`
+	Target     string `json:"target"`
+	Cell       string `json:"cell"`
+	Pivot      string `json:"pivot"`
+	PivotSheet string `json:"pivotSheet"`
+	Kind       string `json:"kind"`
+}
+
 type injectRequest struct {
 	Input   string      `json:"input"`
 	Output  string      `json:"output"`
 	Charts  []chartSpec `json:"charts"`
 	Pivots  []pivotSpec `json:"pivots"`
-	Slicers []struct {
-		Source string `json:"source"`
-		Field  string `json:"field"`
-		Target string `json:"target"`
-		Cell   string `json:"cell"`
-	} `json:"slicers"`
+	Slicers []slicerSpec `json:"slicers"`
 }
 
 type injectResult struct {
@@ -194,6 +214,12 @@ func addChart(f *excelize.File, spec chartSpec) error {
 	}
 	if spec.Title != "" {
 		chart.Title = []excelize.RichTextRun{{Text: spec.Title}}
+	}
+	if spec.Width > 0 {
+		chart.Dimension.Width = uint(spec.Width)
+	}
+	if spec.Height > 0 {
+		chart.Dimension.Height = uint(spec.Height)
 	}
 	if chartType == excelize.Pie {
 		chart.Legend.Position = "bottom"
@@ -318,6 +344,7 @@ func addPivot(f *excelize.File, spec pivotSpec) error {
 	endCol := anchorRange.MinCol + totalCols - 1
 	endRow := anchorRange.MinRow + totalRows
 	return f.AddPivotTable(&excelize.PivotTableOptions{
+		Name:            spec.Name,
 		DataRange:       spec.Source,
 		// NOTE: Excelize's PivotTableRange parser rejects 'Quoted'!
 		// sheet names; the range must go in unquoted (verified by spike).
@@ -377,20 +404,15 @@ func run() int {
 		}
 		result.Charts++
 	}
-	// Slicers: tied to a table over the pivot source when requested.
+	// Slicers: bound to a pivot table when the spec names one, else to
+	// a table over the slicer's source range (created once per source
+	// and reused — slicers over the same data share one table).
+	tableBySource := map[string]string{}
+	tableSeq := 0
 	for _, slicer := range req.Slicers {
 		src, err := parseRange(slicer.Source)
 		if err != nil {
 			result.Notes = append(result.Notes, fmt.Sprintf("slicer skipped: %v", err))
-			continue
-		}
-		tableName := "SumberData"
-		if err := f.AddTable(src.Sheet, &excelize.Table{
-			Range:     fmt.Sprintf("%s:%s", cellRef(src.MinCol, src.MinRow), cellRef(src.MaxCol, src.MaxRow)),
-			Name:      tableName,
-			StyleName: "TableStyleMedium2",
-		}); err != nil {
-			result.Notes = append(result.Notes, fmt.Sprintf("slicer table skipped: %v", err))
 			continue
 		}
 		targetSheet := slicer.Target
@@ -401,17 +423,48 @@ func run() int {
 		if cell == "" {
 			cell = "A1"
 		}
-		if err := f.AddSlicer(targetSheet, &excelize.SlicerOptions{
-			Name:       slicer.Field,
-			Cell:       cell,
-			TableSheet: src.Sheet,
-			TableName:  tableName,
-			Caption:    slicer.Field,
-		}); err != nil {
-			result.Notes = append(result.Notes, fmt.Sprintf("slicer skipped: %v", err))
+		opts := &excelize.SlicerOptions{
+			Name:    slicer.Field,
+			Cell:    cell,
+			Caption: slicer.Field,
+		}
+		if slicer.Pivot != "" {
+			// Pivot-bound slicer: Excelize resolves the source by the
+			// pivot table's name on its own sheet.
+			opts.TableSheet = slicer.PivotSheet
+			if opts.TableSheet == "" {
+				opts.TableSheet = src.Sheet
+			}
+			opts.TableName = slicer.Pivot
+		} else {
+			tableName, ok := tableBySource[slicer.Source]
+			if !ok {
+				tableSeq++
+				tableName = fmt.Sprintf("SumberData%d", tableSeq)
+				if err := f.AddTable(src.Sheet, &excelize.Table{
+					Range:     fmt.Sprintf("%s:%s", cellRef(src.MinCol, src.MinRow), cellRef(src.MaxCol, src.MaxRow)),
+					Name:      tableName,
+					StyleName: "TableStyleMedium2",
+				}); err != nil {
+					result.Notes = append(result.Notes, fmt.Sprintf("slicer table skipped: %v", err))
+					continue
+				}
+				tableBySource[slicer.Source] = tableName
+			}
+			opts.TableSheet = src.Sheet
+			opts.TableName = tableName
+		}
+		if err := f.AddSlicer(targetSheet, opts); err != nil {
+			result.Notes = append(result.Notes, fmt.Sprintf("slicer %s skipped: %v", slicer.Field, err))
 			continue
 		}
 		result.Slicers++
+		if slicer.Kind == "timeline" {
+			// Excelize 2.9 reads timelines but cannot create them: a
+			// regular date-field slicer stands in, and the result says
+			// so — the export record quotes this note verbatim.
+			result.Notes = append(result.Notes, fmt.Sprintf("timeline slicer %q diganti slicer tanggal biasa (Excelize 2.9 tidak bisa membuat timeline)", slicer.Field))
+		}
 	}
 
 	if err := f.SaveAs(req.Output); err != nil {

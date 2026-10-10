@@ -30,6 +30,19 @@ JSON object on stdin `{input, output, charts, pivots, slicers}`; exit 0
 (specs it cannot honor are skipped with a note — the core quotes that
 in the export record rather than the request).
 
+Dashboard composition (native Excel dashboard, no macro): charts
+land on the Dashboard sheet at their spec anchors (optional
+`width`/`height` dimensions), pivots carry a `name` and usually
+target a hidden helper sheet (the core creates it hidden), and
+slicers either bind a pivot by that name (`pivot` + `pivotSheet` —
+Excelize resolves the slicer source by pivot-table name) or a table
+created over the slicer `source` (one table per distinct source,
+reused). Pivots keep Excelize's `refreshOnLoad` default, so a
+RefreshAll macro is never needed. **Timeline slicers: Excelize 2.9
+only reads timelines (`timelineReader`) — it has no creation API —
+so a `kind:"timeline"` slicer is materialized as a regular
+date-field slicer and the result notes say exactly that.**
+
 ## Bundled at install
 
 Per design decision, the binary ships per-platform at install time
