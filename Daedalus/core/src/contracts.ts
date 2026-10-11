@@ -8,7 +8,7 @@ export type ToolResult = { call_id: string; status: ToolResultStatus; output: st
 export type ValidationCheck = { name: string; cmd: string; status: 'pass' | 'fail' | 'error' | 'skipped'; exit_code: number | null; summary: string; diagnostics: Array<{ file?: string; line?: number; message: string }>; source?: 'profile' | 'default'; required?: boolean };
 export type ValidationResult = { checks: ValidationCheck[]; source?: 'profile' | 'default'; warning?: string; note?: string };
 export type RecoveryAction = { reason: string; strategy: 'retry' | 'fix' | 'replan' | 'abort'; attempt: number; limits: Record<string, number> };
-export type FinalReport = { task_id: string; outcome: 'success' | 'partial' | 'failed' | 'interrupted'; diff: string; evidence: string[]; metrics: Record<string, number>; title?: string; rules_files?: string[]; validation_source?: 'profile' | 'default'; /** Declared target directory the task was anchored to (workspace-relative), when it had one. */ target_dir?: string; worktree?: WorktreeReport; review?: ReviewGateReport };
+export type FinalReport = { task_id: string; outcome: 'success' | 'partial' | 'failed' | 'interrupted' | 'budget_exhausted'; diff: string; evidence: string[]; metrics: Record<string, number>; title?: string; rules_files?: string[]; validation_source?: 'profile' | 'default'; /** Declared target directory the task was anchored to (workspace-relative), when it had one. */ target_dir?: string; worktree?: WorktreeReport; review?: ReviewGateReport };
 /** Strong-model review gate verdict recorded on the final report (tailor suite). */
 export type ReviewGateReport = {
   model: string;
@@ -38,7 +38,104 @@ export type AgentMode = 'ask' | 'manual' | 'auto' | 'plan' | 'orchestrator';
 export const ASK_USER_TOOL_NAME = 'ask_user';
 /** Product domain a task runs in; domains re-skin the harness around the artifact being produced. */
 export type TaskDomain = 'coding' | 'slide' | 'dokumen' | 'spreadsheet';
-export type ModelStrategy = 'failover' | 'round-robin';
+/**
+ * Model-pool strategy. Only `failover` exists now: `round-robin` was
+ * removed and old saved values coerce to `failover` (see
+ * parseModelStrategy in providers/llm/model-pool.ts) instead of
+ * throwing, so legacy provider configs keep loading.
+ */
+export type ModelStrategy = 'failover';
+/**
+ * Reasoning-effort tier (settings layer): how hard the model should
+ * think. `'off'` disables provider reasoning entirely; the three
+ * levels map 1:1 onto the provider wire field `reasoning_effort`.
+ */
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
+/** Per-domain model overrides (settings layer): every field unset = follow the global setting. */
+export type DomainModelSettings = { model?: string; temperature?: number; maxIterations?: number };
+/**
+ * Per-run tool permission overrides (settings layer 2 / run options):
+ * `*` matches any tool. Precedence inside one rule set: deny > ask >
+ * allow — a tool named in `deny` is denied even if it also appears in
+ * `allow`.
+ */
+export type ToolRules = { allow: string[]; ask: string[]; deny: string[] };
+/**
+ * Parse untrusted tool-rules input (API payload / stored prefs).
+ * Returns undefined when the input is not a rules object or carries no
+ * usable entries. Each list is trimmed, emptied, and deduplicated;
+ * `*` is kept as the wildcard.
+ */
+export function parseToolRules(input: unknown): ToolRules | undefined {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return undefined;
+  const record = input as Record<string, unknown>;
+  const parseList = (value: unknown): string[] | undefined => {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) return undefined;
+    const seen = new Set<string>();
+    for (const entry of value) {
+      if (typeof entry !== 'string') return undefined;
+      const name = entry.trim();
+      if (name.length === 0) continue;
+      seen.add(name);
+    }
+    return [...seen];
+  };
+  const allow = parseList(record.allow);
+  const ask = parseList(record.ask);
+  const deny = parseList(record.deny);
+  if (allow === undefined || ask === undefined || deny === undefined) return undefined;
+  if (allow.length === 0 && ask.length === 0 && deny.length === 0) return undefined;
+  return { allow, ask, deny };
+}
+/**
+ * Hard token budget for one run, metered on provider-reported
+ * `total_tokens`. `exhausted` is `used >= limit`; `add` ignores
+ * responses that carry no usage.
+ */
+export type TokenBudget = {
+  readonly limit: number;
+  used: number;
+  readonly exhausted: boolean;
+  add(usage: { total_tokens?: number } | undefined): void;
+};
+/** Create a run-scoped token budget. `limit` must be a positive integer. */
+export function createTokenBudget(limit: number): TokenBudget {
+  if (!Number.isInteger(limit) || limit <= 0) throw new Error(`Invalid token budget: ${String(limit)} (expected a positive integer)`);
+  let used = 0;
+  return {
+    limit,
+    get used() {
+      return used;
+    },
+    get exhausted() {
+      return used >= limit;
+    },
+    add(usage: { total_tokens?: number } | undefined) {
+      const total = usage?.total_tokens;
+      if (typeof total === 'number' && Number.isFinite(total) && total > 0) used += total;
+    },
+  };
+}
+/**
+ * Thrown inside the domain engines when the run's token budget is
+ * already exhausted before a model call. The engines catch it and
+ * finish through their normal partial-completion path — never a crash.
+ */
+export class TokenBudgetExhaustedError extends Error {
+  readonly used: number;
+  readonly limit: number;
+  constructor(budget: { used: number; limit: number }) {
+    super(`Budget token habis (${budget.used}/${budget.limit} token).`);
+    this.name = 'TokenBudgetExhaustedError';
+    this.used = budget.used;
+    this.limit = budget.limit;
+  }
+}
+/** True when the error is the token-budget sentinel (domain engines). */
+export function isTokenBudgetExhausted(error: unknown): error is TokenBudgetExhaustedError {
+  return error instanceof TokenBudgetExhaustedError;
+}
 /**
  * Capability tier of one model in a pool (tailor suite): the harness routes
  * cheap phases to `fast`/`balanced` models and spends `strong` models on
@@ -96,6 +193,8 @@ export type ProviderConfig = {
   promptFamily?: PromptFamilySetting;
   /** Edit dialect for this provider's models; unset = `native`. */
   editFormat?: EditFormat;
+  /** Per-model context window in tokens (unset models = provider default / global limit). */
+  contextWindows?: Record<string, number>;
 };
 
 export type ProviderConfigPublic = Omit<ProviderConfig, 'apiKey'> & { hasApiKey: boolean };

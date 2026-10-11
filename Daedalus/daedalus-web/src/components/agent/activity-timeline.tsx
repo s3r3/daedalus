@@ -5,7 +5,7 @@ import { EmptyState, Panel } from '../common/panel'
 import { Spinner } from '../common/spinner'
 import { useTaskEvents } from '../../state/hooks'
 import { useDaedalusStore } from '../../state/taskStore'
-import { activity, toolCalls } from '../../state/selectors'
+import { activity, sessionThinkingOn, toolCalls } from '../../state/selectors'
 import { KIND_TONE, toneForResult } from './status-tone'
 
 const KIND_LABEL: Record<string, string> = {
@@ -31,7 +31,7 @@ const KIND_LABEL: Record<string, string> = {
  */
 export function ActivityTimeline() {
   const events = useTaskEvents()
-  const thinking = useDaedalusStore((state) => state.composer.thinking)
+  const thinking = useDaedalusStore((state) => sessionThinkingOn(state.session))
   const entries = useMemo(() => activity(events, thinking), [events, thinking])
   const calls = useMemo(() => toolCalls(events), [events])
 

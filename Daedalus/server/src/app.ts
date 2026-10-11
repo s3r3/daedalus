@@ -25,6 +25,7 @@ import {
   loadSkillInventory,
   setSkillDisabled,
   parseModelStrategy,
+  normalizeModelList,
   redactSettings,
   resolveDaedalusHome,
   reviewDiff,
@@ -33,6 +34,7 @@ import {
   unstagedDiff,
   workspaceAgentsDir,
   resolveSkillSearchDirs,
+  resolveThinkingLevel,
   MAX_PPTX_TEMPLATE_BYTES,
   PptxTemplateError,
   applyPptxTemplateTheme,
@@ -70,11 +72,13 @@ import {
   inspectDocxStyles,
   proposeStyleOps,
   parseStyleInstruction,
+  parseToolRules,
   applyStyleOps,
   validateRecord,
   isSupportedSource,
   type DokumenTaskParams,
   type DocumentState,
+  type DomainModelSettings,
   validateDeck,
   writeDeck,
   readWorkbook,
@@ -100,6 +104,9 @@ import {
   type PermissionKey,
   type Settings,
   type SkillOrigin,
+  type TaskDomain,
+  type ThinkingLevel,
+  type ToolRules,
 } from "@daedalus/core";
 import { collectRoots, listDirectory, listFilesFlat, listPlanDocuments, buildTree, resolveInside, MAX_FILE_BYTES, IMAGE_MEDIA_TYPES, MAX_IMAGE_FILE_BYTES } from "./workspace.ts";
 import { classifyWebIntent, executeFastPath } from "./fast-path.ts";
@@ -126,6 +133,12 @@ export type SessionState = {
   mode: AgentMode;
   autoApprove: boolean;
   thinking: boolean;
+  /**
+   * Reasoning-effort tier (settings layer 2). The deprecated `thinking`
+   * boolean is kept for backward compat: thinking=false maps to 'off'
+   * when no explicit level was set (core resolveThinkingLevel semantics).
+   */
+  thinkingLevel: ThinkingLevel;
   providerId?: string;
   model?: string;
   workspaceRoot: string;
@@ -194,7 +207,15 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
   // was invoked in (DAEDALUS_WORKSPACE); the server process cwd is only
   // the fallback. An explicit session override still wins.
   const anchoredWorkspace = process.env.DAEDALUS_WORKSPACE ? resolve(process.env.DAEDALUS_WORKSPACE) : cwd;
-  const session = overrides.session ?? { mode: "auto", autoApprove: false, thinking: settings.session?.thinking ?? true, workspaceRoot: anchoredWorkspace };
+  const session: SessionState = overrides.session ?? {
+    mode: "auto",
+    autoApprove: false,
+    thinking: settings.session?.thinking ?? true,
+    // Boot default honors the env: an explicit DAEDALUS_THINKING_LEVEL
+    // wins; legacy DAEDALUS_THINKING=false maps to 'off'; else 'medium'.
+    thinkingLevel: resolveThinkingLevel({ thinking: settings.session?.thinking }, settings.session?.thinkingLevel ?? "medium"),
+    workspaceRoot: anchoredWorkspace,
+  };
   return {
     bus: overrides.bus ?? new EventBus(),
     store: overrides.store ?? new TaskStore(resolveDaedalusHome(settings.daedalusHome, cwd)),
@@ -435,6 +456,9 @@ function nextMode(current: AgentMode): AgentMode {
   return AGENT_MODES[(index + 1 + AGENT_MODES.length) % AGENT_MODES.length] as AgentMode;
 }
 
+/** Valid reasoning-effort tiers for `thinkingLevel` (mirrors core's THINKING_LEVELS). */
+const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "low", "medium", "high"];
+
 function applySessionUpdate(ctx: AppContext, parsed: Record<string, unknown>): void {
   const mode = parseMode(parsed.mode);
   if (parsed.mode !== undefined && !mode) throw new Error(`invalid mode: ${String(parsed.mode)}`);
@@ -443,11 +467,27 @@ function applySessionUpdate(ctx: AppContext, parsed: Record<string, unknown>): v
     if (typeof parsed.autoApprove !== "boolean") throw new Error("autoApprove must be a boolean");
     ctx.session.autoApprove = parsed.autoApprove;
   }
+  // Reasoning-effort tier (settings layer 2): an explicit level wins; the
+  // deprecated `thinking` boolean stays accepted and maps false → 'off'
+  // only when no level was given (core resolveThinkingLevel semantics).
+  const levelRaw = parsed.thinkingLevel ?? parsed.thinking_level;
+  let thinkingLevel: ThinkingLevel | undefined;
+  if (levelRaw !== undefined) {
+    if (typeof levelRaw !== "string" || !(THINKING_LEVELS as readonly string[]).includes(levelRaw)) {
+      throw new Error("invalid_thinking_level");
+    }
+    thinkingLevel = levelRaw as ThinkingLevel;
+  }
   if (parsed.thinking !== undefined) {
     if (typeof parsed.thinking !== "boolean") throw new Error("thinking must be a boolean");
     ctx.session.thinking = parsed.thinking;
     if (ctx.settings.session) ctx.settings.session.thinking = parsed.thinking;
     else (ctx.settings as { session?: { thinking: boolean } }).session = { thinking: parsed.thinking };
+    if (thinkingLevel === undefined && !parsed.thinking) thinkingLevel = "off";
+  }
+  if (thinkingLevel !== undefined) {
+    ctx.session.thinkingLevel = thinkingLevel;
+    if (ctx.settings.session) ctx.settings.session.thinkingLevel = thinkingLevel;
   }
   if (typeof parsed.providerId === "string") ctx.session.providerId = parsed.providerId;
   if (typeof parsed.provider_id === "string") ctx.session.providerId = parsed.provider_id;
@@ -475,6 +515,11 @@ function applySettingsUpdate(ctx: AppContext, parsed: Record<string, unknown>): 
   // like the tailor toggles; DAEDALUS_OUTPUT_COMPRESSION sets the default.
   if (typeof parsed.outputCompression === "boolean") ctx.settings.outputCompression = parsed.outputCompression;
   if (typeof parsed.output_compression === "boolean") ctx.settings.outputCompression = parsed.output_compression;
+  // Global LLM preferences (settings layer 1). Everything below is
+  // process-local like the tailor toggles above: env vars
+  // (LLM_TEMPERATURE, DAEDALUS_PROMPT_CACHING, LLM_MODELS,
+  // LLM_MODEL_STRATEGY, DAEDALUS_DOMAIN_<DOMAIN>_*) set the boot
+  // defaults; these updates only change the running process.
   const llm = typeof parsed.llm === "object" && parsed.llm !== null ? (parsed.llm as Record<string, unknown>) : undefined;
   if (llm) {
     if (typeof llm.baseUrl === "string") ctx.settings.llm.baseUrl = llm.baseUrl;
@@ -483,10 +528,119 @@ function applySettingsUpdate(ctx: AppContext, parsed: Record<string, unknown>): 
       ctx.settings.llm.model = llm.model;
       ctx.session.model = llm.model;
     }
+    if (llm.temperature !== undefined) ctx.settings.llm.temperature = parseLlmTemperature(llm.temperature);
+    const llmPromptCaching = llm.promptCaching ?? llm.prompt_caching;
+    if (typeof llmPromptCaching === "boolean") ctx.settings.llm.promptCaching = llmPromptCaching;
+    if (llm.models !== undefined) ctx.settings.llm.models = parseLlmModels(llm.models);
+    const llmStrategy = llm.modelStrategy ?? llm.model_strategy;
+    if (llmStrategy !== undefined) ctx.settings.llm.modelStrategy = parseLlmModelStrategy(llmStrategy);
+  }
+  // Flat snake_case aliases for the nested llm.* keys (the Web settings
+  // form sends these); nested keys apply first, flat keys win on conflict.
+  if (parsed.llm_temperature !== undefined) ctx.settings.llm.temperature = parseLlmTemperature(parsed.llm_temperature);
+  if (typeof parsed.llm_prompt_caching === "boolean") ctx.settings.llm.promptCaching = parsed.llm_prompt_caching;
+  if (parsed.llm_models !== undefined) ctx.settings.llm.models = parseLlmModels(parsed.llm_models);
+  if (parsed.llm_model_strategy !== undefined) ctx.settings.llm.modelStrategy = parseLlmModelStrategy(parsed.llm_model_strategy);
+  // Per-domain model overrides (settings layer 1): every field unset =
+  // follow the global setting; merged per domain, never wholesale-replaced.
+  const domainsRaw = parsed.domains ?? parsed.domain_settings;
+  if (domainsRaw !== undefined) applyDomainSettingsUpdate(ctx, domainsRaw);
+  // Global default max iterations (settings layer 1): a positive int sets
+  // it, explicit null clears back to the built-in 25, anything else 400s.
+  // Precedence per run: per-task > domain override > this global > 25.
+  const maxIterationsRaw = parsed.maxIterations !== undefined ? parsed.maxIterations : parsed.max_iterations;
+  if (maxIterationsRaw !== undefined) {
+    if (maxIterationsRaw === null) delete ctx.settings.maxIterations;
+    else if (typeof maxIterationsRaw !== "number" || !Number.isInteger(maxIterationsRaw) || maxIterationsRaw < 1 || maxIterationsRaw > 100) {
+      throw new Error("invalid_max_iterations");
+    } else ctx.settings.maxIterations = maxIterationsRaw;
   }
   if (typeof parsed.model === "string") ctx.session.model = parsed.model;
   if (typeof parsed.providerId === "string") ctx.session.providerId = parsed.providerId;
   if (typeof parsed.provider_id === "string") ctx.session.providerId = parsed.provider_id;
+}
+
+/** `llm.temperature`: a finite number in 0..2, else a named 400. */
+function parseLlmTemperature(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || value > 2) {
+    throw new Error("invalid_temperature");
+  }
+  return value;
+}
+
+/** `llm.models`: comma-separated string or string[] → normalized non-empty list, else a named 400. */
+function parseLlmModels(value: unknown): string[] {
+  const list = typeof value === "string" ? value : Array.isArray(value) && value.every((entry) => typeof entry === "string") ? (value as string[]) : undefined;
+  const models = list === undefined ? [] : normalizeModelList(list);
+  if (models.length === 0) throw new Error("invalid_llm_models");
+  return models;
+}
+
+/**
+ * `llm.modelStrategy`: only 'failover' exists; core's parseModelStrategy
+ * coerces legacy 'round-robin' to 'failover' (migration, no error);
+ * anything else is a named 400.
+ */
+function parseLlmModelStrategy(value: unknown): ModelStrategy {
+  if (typeof value !== "string") throw new Error("invalid_model_strategy");
+  try {
+    return parseModelStrategy(value, "llm_model_strategy");
+  } catch {
+    throw new Error("invalid_model_strategy");
+  }
+}
+
+/** Valid per-domain override keys (core TaskDomain). */
+const DOMAIN_SETTINGS_KEYS: readonly TaskDomain[] = ["coding", "slide", "spreadsheet", "dokumen"];
+
+/**
+ * `domains` / `domain_settings`: per-domain `{ model?, temperature?,
+ * maxIterations? }` overrides merged into `ctx.settings.domains`.
+ * An empty-string model OR explicit null unsets the override
+ * (follow-global); null likewise clears temperature/maxIterations.
+ * Unknown domain keys, non-object values, and out-of-range numbers are
+ * named 400s.
+ */
+function applyDomainSettingsUpdate(ctx: AppContext, value: unknown): void {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("invalid_domain_settings");
+  // Partial test fixtures may omit the domains store; loadSettings always provides it.
+  const store = ctx.settings.domains ?? (ctx.settings.domains = {} as Record<TaskDomain, DomainModelSettings>);
+  for (const [key, domainValue] of Object.entries(value)) {
+    if (!(DOMAIN_SETTINGS_KEYS as readonly string[]).includes(key)) throw new Error("invalid_domain_settings");
+    if (typeof domainValue !== "object" || domainValue === null || Array.isArray(domainValue)) {
+      throw new Error("invalid_domain_settings");
+    }
+    const domain = key as TaskDomain;
+    const record = domainValue as Record<string, unknown>;
+    const next: DomainModelSettings = { ...(store[domain] ?? {}) };
+    if (record.model !== undefined) {
+      if (record.model !== null && typeof record.model !== "string") throw new Error("invalid_domain_settings");
+      const model = record.model === null ? "" : (record.model as string).trim();
+      if (model) next.model = model;
+      else delete next.model;
+    }
+    if (record.temperature !== undefined) {
+      const temperature = record.temperature;
+      if (temperature === null) delete next.temperature;
+      else {
+        if (typeof temperature !== "number" || !Number.isFinite(temperature) || temperature < 0 || temperature > 2) {
+          throw new Error("invalid_domain_temperature");
+        }
+        next.temperature = temperature;
+      }
+    }
+    const maxIterationsRaw = record.maxIterations !== undefined ? record.maxIterations : record.max_iterations;
+    if (maxIterationsRaw !== undefined) {
+      if (maxIterationsRaw === null) delete next.maxIterations;
+      else {
+        if (typeof maxIterationsRaw !== "number" || !Number.isInteger(maxIterationsRaw) || maxIterationsRaw < 1 || maxIterationsRaw > 100) {
+          throw new Error("invalid_domain_max_iterations");
+        }
+        next.maxIterations = maxIterationsRaw;
+      }
+    }
+    store[domain] = next;
+  }
 }
 
 /**
@@ -658,11 +812,38 @@ function providerInput(parsed: Record<string, unknown>): Record<string, unknown>
   if (typeof input.base_url === "string" && typeof input.baseUrl !== "string") input.baseUrl = input.base_url;
   if (typeof input.api_key === "string" && typeof input.apiKey !== "string") input.apiKey = input.api_key;
   if (input.apiKey === "") delete input.apiKey;
+  // Per-model context windows in tokens (settings layer 1, shown in the
+  // Web model picker). Validated here with a named 400; the normalized
+  // map rides the upsert input into the stored config. NOTE: core's
+  // ProviderConfig/sanitizeProviderInput must carry `contextWindows`
+  // for the value to persist and appear in the public provider view —
+  // until then the field validates here but is dropped downstream.
+  const contextWindowsRaw = input.contextWindows ?? input.context_windows;
+  if (contextWindowsRaw !== undefined) input.contextWindows = parseContextWindows(contextWindowsRaw);
   delete input.apiKeyMasked;
   delete input.api_key;
   delete input.base_url;
+  delete input.context_windows;
   delete input.hasApiKey;
   return input;
+}
+
+/**
+ * `contextWindows`: Record<model id, positive-int token count>. Garbage in
+ * (non-object, non-integer or non-positive values) is a named 400.
+ */
+function parseContextWindows(value: unknown): Record<string, number> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("invalid_context_windows");
+  const windows: Record<string, number> = {};
+  for (const [model, tokens] of Object.entries(value)) {
+    const name = model.trim();
+    if (!name) continue;
+    if (typeof tokens !== "number" || !Number.isInteger(tokens) || tokens <= 0) {
+      throw new Error("invalid_context_windows");
+    }
+    windows[name] = tokens;
+  }
+  return windows;
 }
 
 function parseAttachments(value: unknown): Attachment[] {
@@ -1479,10 +1660,42 @@ export function createApp(ctx: AppContext) {
           const doneCriteria = stringList(parsed.done_criteria ?? parsed.doneCriteria);
           const mode = parseMode(parsed.mode) ?? ctx.session.mode;
           const autoApprove = typeof parsed.auto_approve === "boolean" ? parsed.auto_approve : typeof parsed.autoApprove === "boolean" ? parsed.autoApprove : ctx.session.autoApprove;
-          const maxIterations = typeof parsed.max_iterations === "number" ? parsed.max_iterations : typeof parsed.maxIterations === "number" ? parsed.maxIterations : 25;
+          // Per-task max iterations: explicit values only. When the payload
+          // omits it, the runner resolves per-task > domain override >
+          // global settings.maxIterations > 25 (core runtime) — so a
+          // hardcoded 25 here must NOT shadow the domain/global settings.
+          const maxIterationsRaw = parsed.max_iterations !== undefined ? parsed.max_iterations : parsed.maxIterations;
+          if (maxIterationsRaw !== undefined && maxIterationsRaw !== null && (typeof maxIterationsRaw !== "number" || !Number.isInteger(maxIterationsRaw) || maxIterationsRaw < 1)) {
+            sendJson(res, 400, { error: "invalid_max_iterations", request_id: requestId });
+            return;
+          }
+          const maxIterations = typeof maxIterationsRaw === "number" ? maxIterationsRaw : undefined;
           const providerId = typeof parsed.provider_id === "string" ? parsed.provider_id : typeof parsed.providerId === "string" ? parsed.providerId : ctx.session.providerId;
           const model = typeof parsed.model === "string" ? parsed.model : ctx.session.model;
           const thinking = typeof parsed.thinking === "boolean" ? parsed.thinking : ctx.session.thinking;
+          // Per-run settings layer 2: hard token budget (positive int,
+          // metered on provider-reported total_tokens) and tool permission
+          // overrides. Both flow into the runner's RunOptions below;
+          // invalid values are named 400s, never silent drops.
+          const tokenBudgetRaw = parsed.token_budget ?? parsed.tokenBudget;
+          let tokenBudget: number | undefined;
+          if (tokenBudgetRaw !== undefined) {
+            if (typeof tokenBudgetRaw !== "number" || !Number.isInteger(tokenBudgetRaw) || tokenBudgetRaw <= 0) {
+              sendJson(res, 400, { error: "invalid_token_budget", request_id: requestId });
+              return;
+            }
+            tokenBudget = tokenBudgetRaw;
+          }
+          const toolRulesRaw = parsed.tool_rules ?? parsed.toolRules;
+          let toolRules: ToolRules | undefined;
+          if (toolRulesRaw !== undefined) {
+            const parsedRules = parseToolRules(toolRulesRaw);
+            if (!parsedRules) {
+              sendJson(res, 400, { error: "invalid_tool_rules", request_id: requestId });
+              return;
+            }
+            toolRules = parsedRules;
+          }
           // Model pool (Web settings → task payload): core's TaskRunner already
           // routes across models[] with a strategy; until now only the CLI/env
           // could supply one. parseModelStrategy rejects unknown strategies.
@@ -1627,7 +1840,7 @@ export function createApp(ctx: AppContext) {
             workspaceRoot: repoPath,
             approvalPolicy: autoApprove ? "auto" : "ask",
             approvalMemory: ctx.approvalMemory,
-            maxIterations,
+            ...(maxIterations !== undefined ? { maxIterations } : {}),
             bus: ctx.bus,
             store: taskStore,
             settings: ctx.settings,
@@ -1677,6 +1890,8 @@ export function createApp(ctx: AppContext) {
             ...(model ? { model } : {}),
             ...(poolModels.length ? { models: poolModels } : {}),
             ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
+            ...(tokenBudget !== undefined ? { token_budget: tokenBudget } : {}),
+            ...(toolRules ? { tool_rules: toolRules } : {}),
             ...(conversationId ? { conversation_id: conversationId } : {}),
             ...(domain ? { domain } : {}),
             attachments,
@@ -1708,6 +1923,8 @@ export function createApp(ctx: AppContext) {
               ...(model ? { model } : {}),
               ...(poolModels.length ? { models: poolModels } : {}),
               ...(modelStrategy ? { modelStrategy } : {}),
+              ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+              ...(toolRules ? { toolRules } : {}),
               ...(typeof parsed.plan_task_id === "string" && parsed.plan_task_id ? { planTaskId: parsed.plan_task_id } : {}),
               ...(priorContext ? { priorContext } : {}),
               ...(conversationId ? { conversationId } : {}),

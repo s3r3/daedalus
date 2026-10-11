@@ -34,31 +34,46 @@ describe('composer prefs (browser persistence for run defaults)', () => {
     saveComposerPrefs({
       mode: 'plan',
       autoApprove: true,
-      thinking: false,
       providerId: 'nine-router',
       model: 'kr/auto',
-      maxIterations: 9,
-      modelPool: 'alpha, beta',
-      modelStrategy: 'round-robin',
+      tokenBudget: 50000,
+      taskModel: 'nine-router::kr/auto',
+      toolRules: { allow: ['read_file'], ask: ['run_command'], deny: [] },
     })
     expect(loadComposerPrefs()).toEqual({
       mode: 'plan',
       autoApprove: true,
-      thinking: false,
       providerId: 'nine-router',
       model: 'kr/auto',
-      maxIterations: 9,
-      modelPool: 'alpha, beta',
-      modelStrategy: 'round-robin',
+      tokenBudget: 50000,
+      taskModel: 'nine-router::kr/auto',
+      toolRules: { allow: ['read_file'], ask: ['run_command'], deny: [] },
     })
   })
 
-  test('unknown modes, strategies, and non-numeric iterations are dropped, not trusted', () => {
+  test('unknown modes and non-positive token budgets are dropped, not trusted', () => {
     localStorage.setItem(
       COMPOSER_PREFS_KEY,
-      JSON.stringify({ mode: 'bogus', modelStrategy: 'random', maxIterations: 'many', thinking: false }),
+      JSON.stringify({ mode: 'bogus', tokenBudget: -5, taskModel: '  ', toolRules: { allow: 'nope' } }),
     )
-    expect(loadComposerPrefs()).toEqual({ thinking: false })
+    expect(loadComposerPrefs()).toEqual({})
+  })
+
+  test('old 3-layer-moved keys are tolerated: thinking/pool/strategy simply disappear', () => {
+    localStorage.setItem(
+      COMPOSER_PREFS_KEY,
+      JSON.stringify({
+        mode: 'auto',
+        thinking: false,
+        maxIterations: 9,
+        modelPool: 'alpha, beta',
+        modelStrategy: 'round-robin',
+        providerId: 'nine-router',
+      }),
+    )
+    // No storage-key bump needed: unknown keys are ignored gracefully, so
+    // a stored 'round-robin' disappears with the pool and valid keys survive.
+    expect(loadComposerPrefs()).toEqual({ mode: 'auto', providerId: 'nine-router' })
   })
 
   test('corrupt storage degrades to no prefs', () => {
@@ -72,11 +87,10 @@ describe('composer prefs (browser persistence for run defaults)', () => {
       mode: 'auto' as const,
       providerId: '',
       model: '',
-      modelPool: '',
-      modelStrategy: 'failover' as const,
       autoApprove: false,
-      thinking: true,
-      maxIterations: 25,
+      tokenBudget: 12000,
+      taskModel: 'nine-router::kr/auto',
+      toolRules: { allow: [] as string[], ask: [] as string[], deny: ['delete_file'] },
       attachments: [],
       submitting: false,
       error: null,
@@ -84,21 +98,37 @@ describe('composer prefs (browser persistence for run defaults)', () => {
     expect(composerPrefsOf(composer)).toEqual({
       mode: 'auto',
       autoApprove: false,
-      thinking: true,
       providerId: '',
       model: '',
-      maxIterations: 25,
-      modelPool: '',
-      modelStrategy: 'failover',
+      tokenBudget: 12000,
+      taskModel: 'nine-router::kr/auto',
+      toolRules: { allow: [], ask: [], deny: ['delete_file'] },
     })
   })
 
+  test('composerPrefsOf omits empty per-task values', () => {
+    const composer = {
+      goal: '',
+      mode: 'auto' as const,
+      providerId: '',
+      model: '',
+      autoApprove: false,
+      tokenBudget: undefined,
+      taskModel: '',
+      toolRules: { allow: [] as string[], ask: [] as string[], deny: [] as string[] },
+      attachments: [],
+      submitting: false,
+      error: null,
+    }
+    expect(composerPrefsOf(composer)).toEqual({ mode: 'auto', autoApprove: false, providerId: '', model: '' })
+  })
+
   test('changing a composer default persists it through the store', () => {
-    useDaedalusStore.getState().setComposer({ maxIterations: 42, modelPool: 'a-model, b-model', modelStrategy: 'round-robin' })
+    useDaedalusStore.getState().setComposer({ tokenBudget: 42000, taskModel: 'nine-router::kr/auto', toolRules: { allow: ['read_file'], ask: [], deny: [] } })
     const prefs = loadComposerPrefs()
-    expect(prefs.maxIterations).toBe(42)
-    expect(prefs.modelPool).toBe('a-model, b-model')
-    expect(prefs.modelStrategy).toBe('round-robin')
+    expect(prefs.tokenBudget).toBe(42000)
+    expect(prefs.taskModel).toBe('nine-router::kr/auto')
+    expect(prefs.toolRules).toEqual({ allow: ['read_file'], ask: [], deny: [] })
   })
 })
 

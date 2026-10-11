@@ -3,7 +3,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SettingsPanel } from './components/settings/settings-panel'
 
-const session = { mode: 'auto' as const, autoApprove: false, thinking: true, workspaceRoot: '/workspace' }
+const session = { mode: 'auto' as const, autoApprove: false, thinkingLevel: 'medium' as const, workspaceRoot: '/workspace' }
 const provider = {
   id: 'nine-router',
   name: '9Router',

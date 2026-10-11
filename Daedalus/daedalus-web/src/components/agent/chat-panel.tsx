@@ -10,7 +10,7 @@ import type { ConversationTurn } from '../../api/types'
 import { useActiveTaskId, useTaskEvents } from '../../state/hooks'
 import { useDaedalusStore } from '../../state/taskStore'
 import { CHAT_HEIGHT, loadChatHeight, saveChatHeight, saveActiveConversationId } from '../../state/prefs'
-import { approvalId, chatTranscript, pendingApprovals, pendingQuestions, taskStatus, taskUsage, type ChatEntry } from '../../state/selectors'
+import { approvalId, chatTranscript, pendingApprovals, pendingQuestions, sessionThinkingOn, taskStatus, taskUsage, type ChatEntry } from '../../state/selectors'
 import { ApprovalCard } from '../approval/approval-card'
 import { QuestionCard } from '../approval/question-card'
 import { ExecutePlanBar } from './execute-plan-bar'
@@ -40,7 +40,7 @@ type ChatRowModel =
 export function ChatPanel() {
   const events = useTaskEvents()
   const taskId = useActiveTaskId()
-  const thinking = useDaedalusStore((state) => state.composer.thinking)
+  const thinking = useDaedalusStore((state) => sessionThinkingOn(state.session))
   const conversation = useDaedalusStore((state) => state.conversation)
   const workspaceRoot = useDaedalusStore((state) => state.workspace.root)
   const domain = useDaedalusStore((state) => state.domain)

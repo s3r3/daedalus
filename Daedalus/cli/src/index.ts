@@ -21,6 +21,7 @@ import {
   loadProjectRules,
   loadSettings,
   loadSkills,
+  parseThinkingLevel,
   removeTaskWorktree,
   resolveDaedalusHome,
   resolveSkillSearchDirs,
@@ -224,11 +225,23 @@ export function parseModelList(value: string | undefined): string[] | undefined 
 
 export function parseModelStrategy(value: string | undefined): ModelStrategy | undefined {
   if (value === undefined) return undefined;
-  const normalized = value.trim().toLowerCase() as ModelStrategy;
-  if (normalized !== "failover" && normalized !== "round-robin") {
-    throw new Error(`--model-strategy expects failover or round-robin, received "${value}"`);
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "failover") return "failover";
+  // Migration: "round-robin" no longer exists as a pool strategy — old
+  // invocations coerce to failover instead of failing (see core's
+  // parseModelStrategy).
+  if (normalized === "round-robin") return "failover";
+  throw new Error(`--model-strategy expects failover, received "${value}"`);
+}
+
+/** Parse the --token-budget flag: a positive integer number of tokens, else fail fast. */
+export function parseTokenBudget(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`--token-budget expects a positive integer number of tokens, received "${value}"`);
   }
-  return normalized;
+  return parsed;
 }
 
 function askLine(rl: ReturnType<typeof createInterface>, prompt: string): Promise<string | null> {
@@ -590,22 +603,24 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
     .option("--cwd <path>", "target workspace directory", process.cwd())
     .option("--json", "emit JSON events and final report", false)
     .option("--yolo", "auto-approve all mutating tool actions", false)
-    .option("--max-iterations <number>", "max agent loop iterations", "25")
+    .option("--max-iterations <number>", "max agent loop iterations (default: domain override, DAEDALUS_MAX_ITERATIONS, or 25)")
     .option("--model <name>", "override the model from settings (LLM_MODEL)")
-    .option("--models <list>", "comma-separated model pool for failover/round-robin (LLM_MODELS)")
-    .option("--model-strategy <strategy>", "model pool strategy: failover or round-robin")
+    .option("--models <list>", "comma-separated model pool for failover (LLM_MODELS)")
+    .option("--model-strategy <strategy>", "model pool strategy: failover (round-robin coerces to failover)")
     .option("--provider <name>", "override the provider endpoint (LLM_BASE_URL)")
     .option("--provider-id <id>", "use a saved provider from the provider registry")
     .option("--mode <mode>", "agent mode: ask, code, plan, or manual")
     .option("--skill <names>", "comma-separated skill names to force-load into the task (same as /skill <name> in interactive chat; disabled/unknown names fail the run visibly)")
-    .option("--no-thinking", "do not emit THOUGHT events for provider reasoning text")
+    .option("--no-thinking", "do not emit THOUGHT events for provider reasoning text (same as --thinking-level off)")
+    .option("--thinking-level <level>", "reasoning effort: off, low, medium, or high (default from DAEDALUS_THINKING_LEVEL, medium)")
+    .option("--token-budget <n>", "hard token budget for the run in tokens (positive integer); the run stops cleanly when exhausted")
     .option("--ci", "CI mode: implies --json, never prompts, mutating approvals auto-deny unless --yolo", false)
     .option("--isolation <mode>", "run the task in an isolated git worktree (worktree)", undefined)
     .option("--timeout <ms>", "per-request model timeout in milliseconds (LLM_TIMEOUT_MS)")
     .option("--verbose", "also stream the raw JSON event line for every event", false)
     .action(async (
       task: string,
-      options: { cwd: string; json?: boolean; yolo?: boolean; maxIterations?: string; model?: string; models?: string; modelStrategy?: string; provider?: string; providerId?: string; mode?: string; skill?: string; thinking?: boolean; ci?: boolean; isolation?: string; timeout?: string; verbose?: boolean },
+      options: { cwd: string; json?: boolean; yolo?: boolean; maxIterations?: string; model?: string; models?: string; modelStrategy?: string; provider?: string; providerId?: string; mode?: string; skill?: string; thinking?: boolean; thinkingLevel?: string; tokenBudget?: string; ci?: boolean; isolation?: string; timeout?: string; verbose?: boolean },
     ) => {
       const workspaceRoot = options.cwd;
       const ci = options.ci === true;
@@ -616,7 +631,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
       // mutating call that would need approval is denied outright (unless
       // --yolo was passed deliberately). Piped stdin closes are irrelevant.
       const approvalPolicy = options.yolo ? "auto" : ci ? "deny" : "ask";
-      const maxIterations = parseInt(options.maxIterations ?? "25", 10);
+      const maxIterations = parsePositiveInt(options.maxIterations, "--max-iterations");
       const tty = process.stdout.isTTY && !json;
 
       const modelTimeoutMs = parsePositiveInt(options.timeout, "--timeout");
@@ -624,6 +639,13 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
       const settings = loadSettings();
       const models = parseModelList(options.models);
       const modelStrategy = parseModelStrategy(options.modelStrategy);
+      // Settings layer 2: an explicit --thinking-level wins; --no-thinking
+      // is the 'off' shorthand. Invalid levels fail fast here, before the
+      // run starts. --token-budget must be a positive integer.
+      const thinkingLevel = options.thinkingLevel !== undefined
+        ? parseThinkingLevel(options.thinkingLevel, "--thinking-level")
+        : options.thinking === false ? "off" as const : undefined;
+      const tokenBudget = parseTokenBudget(options.tokenBudget);
       if (options.model !== undefined || options.provider !== undefined || models !== undefined || modelStrategy !== undefined) {
         settings.llm.model = options.model ?? settings.llm.model;
         settings.llm.baseUrl = options.provider ?? settings.llm.baseUrl;
@@ -644,7 +666,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
       const runner = new TaskRunner({
         workspaceRoot,
         approvalPolicy,
-        maxIterations,
+        ...(maxIterations !== undefined ? { maxIterations } : {}),
         settings,
         mode,
         autoApprove: options.yolo === true,
@@ -652,7 +674,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
         ...(options.providerId !== undefined ? { providerId: options.providerId } : {}),
         ...(models !== undefined ? { models } : {}),
         ...(modelStrategy !== undefined ? { modelStrategy } : {}),
-        ...(options.thinking === false ? { thinking: false } : {}),
+        ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
         ...(modelTimeoutMs === undefined ? {} : { modelTimeoutMs }),
         // TTY humans get streamed model text (rendered incrementally
         // below); --json/--ci output stays exactly as before.
@@ -723,7 +745,8 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
           ...(options.model !== undefined ? { model: options.model } : {}),
           ...(models !== undefined ? { models } : {}),
           ...(modelStrategy !== undefined ? { modelStrategy } : {}),
-          ...(options.thinking === false ? { thinking: false } : {}),
+          ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+          ...(tokenBudget !== undefined ? { tokenBudget } : {}),
           onEvent: (event: Event) => {
             currentTaskId = event.task_id;
             // --verbose adds the raw event line alongside the human-readable

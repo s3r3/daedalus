@@ -24,13 +24,13 @@ export function TopBar() {
   const tasks = useDaedalusStore((state) => state.tasks)
   const taskId = useDaedalusStore((state) => state.taskId)
   const composer = useDaedalusStore((state) => state.composer)
+  const session = useDaedalusStore((state) => state.session)
+  const thinkingLevelLabel = session?.thinkingLevel ?? (session?.thinking === false ? 'off' : 'medium')
   const settingsOpen = useDaedalusStore((state) => state.settingsOpen)
   const setSettingsOpen = useDaedalusStore((state) => state.setSettingsOpen)
   const setTasks = useDaedalusStore((state) => state.setTasks)
-  const setSession = useDaedalusStore((state) => state.setSession)
-  const setComposer = useDaedalusStore((state) => state.setComposer)
-  const seedEvents = useDaedalusStore((state) => state.seedEvents)
   const setReport = useDaedalusStore((state) => state.setReport)
+  const seedEvents = useDaedalusStore((state) => state.seedEvents)
   const taskEvents = useTaskEvents()
   const { theme, toggle } = useTheme()
   const [refreshing, setRefreshing] = useState(false)
@@ -138,15 +138,8 @@ export function TopBar() {
     }
   }
 
-  const toggleThinking = async (): Promise<void> => {
-    const next = !composer.thinking
-    try {
-      const response = await api.updateSession({ thinking: next })
-      setSession(response.session)
-    } catch {
-      setComposer({ thinking: next })
-    }
-  }
+  // Thinking level lives in Settings → Global now; the top bar only
+  // reports the session's current level next to the model summary.
 
   return (
     <header className="flex flex-wrap items-center gap-2 border-b border-line bg-surface-base px-3 py-2" data-testid="top-bar">
@@ -181,19 +174,8 @@ export function TopBar() {
       <span className="hidden max-w-[260px] truncate text-[10px] text-muted xl:inline" data-testid="topbar-model-summary">
         {composer.providerId || composer.model ? `${composer.providerId ? `${composer.providerId}/` : ''}${composer.model || 'default model'}` : 'default provider/model'}
         {composer.autoApprove ? ' · auto-approve' : ''}
-        {` · thinking ${composer.thinking ? 'on' : 'off'}`}
+        {` · thinking ${thinkingLevelLabel}`}
       </span>
-
-      <Button
-        variant={composer.thinking ? 'default' : 'outline'}
-        size="sm"
-        onClick={() => void toggleThinking()}
-        aria-label="toggle thinking"
-        data-testid="topbar-thinking-toggle"
-        title="Show or hide provider THOUGHT events in the timeline"
-      >
-        thinking {composer.thinking ? 'on' : 'off'}
-      </Button>
 
       {typeof contextPercent === 'number' ? (
         <Badge

@@ -102,11 +102,11 @@ describe('ModelPoolProvider', () => {
     await expect(pool.chat([{ role: 'user', content: 'hi' }])).resolves.toMatchObject({ message: { content: 'done: usable' } });
   });
 
-  test('round-robin starts the next request on the next model', async () => {
+  test('failover keeps serving from the last good model across requests (round-robin is gone)', async () => {
     const calls: string[] = [];
     const pool = new ModelPoolProvider({
       models: ['m1', 'm2'],
-      strategy: 'round-robin',
+      strategy: 'failover',
       createProvider: (model) => fakeProvider(model, async () => {
         calls.push(model);
         return response(`done: ${model}`);
@@ -114,8 +114,19 @@ describe('ModelPoolProvider', () => {
     });
 
     await expect(pool.chat([{ role: 'user', content: 'one' }])).resolves.toMatchObject({ message: { content: 'done: m1' } });
-    await expect(pool.chat([{ role: 'user', content: 'two' }])).resolves.toMatchObject({ message: { content: 'done: m2' } });
-    expect(calls).toEqual(['m1', 'm2']);
+    await expect(pool.chat([{ role: 'user', content: 'two' }])).resolves.toMatchObject({ message: { content: 'done: m1' } });
+    expect(calls).toEqual(['m1', 'm1']);
+    expect(pool.strategy).toBe('failover');
+  });
+
+  test('parseModelStrategy: round-robin coerces to failover instead of throwing (saved-pref migration)', async () => {
+    const { parseModelStrategy } = await import('../src/providers/llm/model-pool.ts');
+    expect(parseModelStrategy(undefined)).toBe('failover');
+    expect(parseModelStrategy('')).toBe('failover');
+    expect(parseModelStrategy('failover')).toBe('failover');
+    expect(parseModelStrategy('round-robin')).toBe('failover');
+    expect(parseModelStrategy('ROUND-ROBIN')).toBe('failover');
+    expect(() => parseModelStrategy('bogus')).toThrow(/Invalid LLM_MODEL_STRATEGY/);
   });
 
   test('cools down a timed-out model, skips it, and retries it after the cooldown', async () => {
@@ -123,7 +134,7 @@ describe('ModelPoolProvider', () => {
     const calls: string[] = [];
     const pool = new ModelPoolProvider({
       models: ['slow-model', 'good-model'],
-      strategy: 'round-robin',
+      strategy: 'failover',
       cooldownMs: 60_000,
       now: () => now,
       createProvider: (model) => fakeProvider(model, async () => {
@@ -138,10 +149,12 @@ describe('ModelPoolProvider', () => {
     expect(calls).toEqual(['slow-model', 'good-model', 'good-model']);
     expect(pool.lastAttemptedModels).toEqual(['good-model']);
 
+    // Failover serves from the last good model: after the cooldown the
+    // primary is still good-model, so no slow-model probe happens.
     now += 60_001;
     await expect(pool.chat([{ role: 'user', content: 'three' }])).resolves.toMatchObject({ message: { content: 'done: good model' } });
-    expect(calls).toEqual(['slow-model', 'good-model', 'good-model', 'slow-model', 'good-model']);
-    expect(pool.lastAttemptedModels).toEqual(['slow-model', 'good-model']);
+    expect(calls).toEqual(['slow-model', 'good-model', 'good-model', 'good-model']);
+    expect(pool.lastAttemptedModels).toEqual(['good-model']);
   });
 
   test('when every model is cooling down, only the earliest-expiring model is probed', async () => {

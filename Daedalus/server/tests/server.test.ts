@@ -85,13 +85,15 @@ describe('server', () => {
     expect(created.status).toBe(201)
     const task = (await created.json()) as { id: string; models?: string[]; model_strategy?: string }
     expect(task.models).toEqual(['model-a', 'model-b'])
-    expect(task.model_strategy).toBe('round-robin')
+    // 'round-robin' no longer exists: legacy values coerce to failover
+    // (core parseModelStrategy migration), they never 400 and never echo raw.
+    expect(task.model_strategy).toBe('failover')
 
     const fetched = await fetch(new URL(`/tasks/${task.id}`, base))
     expect(fetched.status).toBe(200)
     const body = (await fetched.json()) as { state: { models?: string[]; model_strategy?: string } }
     expect(body.state?.models).toEqual(['model-a', 'model-b'])
-    expect(body.state?.model_strategy).toBe('round-robin')
+    expect(body.state?.model_strategy).toBe('failover')
   })
 
   test('POST /tasks rejects an unknown model strategy instead of guessing', async () => {

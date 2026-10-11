@@ -14,7 +14,7 @@ import { TopBar } from './components/layout/top-bar'
 import { AttachmentsPanel, ChildTasksPanel } from './components/report/report-panels'
 import { modeCssVar } from './theme/theme'
 
-const session = { mode: 'auto' as const, autoApprove: false, thinking: true, workspaceRoot: '/workspace' }
+const session = { mode: 'auto' as const, autoApprove: false, thinkingLevel: 'medium' as const, workspaceRoot: '/workspace' }
 const provider = {
   id: 'nine-router',
   name: '9Router (Farid)',
@@ -77,8 +77,22 @@ vi.mock('./api/client', () => ({ api: mocks }))
 
 function resetMocks(): void {
   for (const mock of Object.values(mocks)) mock.mockReset()
-  mocks.settings.mockResolvedValue({ settings: { llm: { apiKey: '«redacted»' } }, session, providers: [provider] })
-  mocks.updateSettings.mockResolvedValue({ settings: {}, session })
+  mocks.settings.mockResolvedValue({
+    settings: {
+      llm: { temperature: 0.7, promptCaching: false, models: ['kr/auto'] },
+      tailor: { modelRouting: true, qualityEscalation: true, reviewGate: false, earlyEscalation: true },
+      outputCompression: true,
+      maxIterations: 25,
+      context: { limitTokens: 128000 },
+      domains: {},
+    },
+    session,
+    providers: [provider],
+  })
+  mocks.updateSettings.mockImplementation(async (input: Record<string, unknown>) => ({
+    settings: { domains: (input.domains as Record<string, unknown> | undefined) ?? {} },
+    session,
+  }))
   mocks.session.mockResolvedValue({ session })
   mocks.updateSession.mockImplementation(async (input: Record<string, unknown>) => ({ session: { ...session, ...input } }))
   mocks.setMode.mockImplementation(async (mode: string) => ({ session: { ...session, mode } }))
@@ -271,47 +285,166 @@ describe('SettingsDialog and functional settings', () => {
     expect(useDaedalusStore.getState().settingsOpen).toBe(false)
   })
 
-  test('the thinking toggle writes through to the gateway session and the composer', async () => {
+  test('the thinking level selector writes through to the gateway session', async () => {
     render(<SettingsPanel />)
     await screen.findByTestId('provider-row')
-    const toggle = screen.getByTestId('settings-thinking') as HTMLInputElement
-    expect(toggle.checked).toBe(true)
-    await userEvent.click(toggle)
-    expect(mocks.updateSession).toHaveBeenCalledWith({ thinking: false })
-    expect(useDaedalusStore.getState().composer.thinking).toBe(false)
+    const select = screen.getByTestId('settings-thinking-level') as HTMLSelectElement
+    expect(select.value).toBe('medium')
+    await userEvent.selectOptions(select, 'off')
+    expect(mocks.updateSession).toHaveBeenCalledWith({ thinkingLevel: 'off' })
+    expect(textOf(await screen.findByTestId('settings-status'))).toContain('Thinking off')
   })
 
-  test('max iterations persists in the browser and flows into the next task payload', async () => {
-    localStorage.clear()
+  test('mode and auto-approve live in the composer only — not in the settings panel', async () => {
     render(<SettingsPanel />)
     await screen.findByTestId('provider-row')
-    fireEvent.change(screen.getByTestId('settings-max-iterations'), { target: { value: '9' } })
-    expect(useDaedalusStore.getState().composer.maxIterations).toBe(9)
-    expect(loadComposerPrefs().maxIterations).toBe(9)
-
-    cleanup()
-    useDaedalusStore.getState().setComposer({ goal: 'ship it' })
-    render(<Composer />)
-    await userEvent.click(screen.getByTestId('composer-submit'))
-    expect(mocks.createTask).toHaveBeenCalledWith(expect.objectContaining({ goal: 'ship it', max_iterations: 9 }))
+    expect(screen.queryByTestId('settings-mode-badge')).toBeNull()
+    expect(screen.queryByLabelText('settings agent mode')).toBeNull()
   })
 
-  test('a saved model pool flows into the next task payload with its strategy', async () => {
-    localStorage.clear()
+  test('max iterations is a server-side global setting now', async () => {
     render(<SettingsPanel />)
     await screen.findByTestId('provider-row')
-    await userEvent.type(screen.getByTestId('settings-model-pool'), 'alpha-model, beta-model')
-    await userEvent.selectOptions(screen.getByTestId('settings-model-strategy'), 'round-robin')
-    expect(useDaedalusStore.getState().composer.modelPool).toBe('alpha-model, beta-model')
-    expect(useDaedalusStore.getState().composer.modelStrategy).toBe('round-robin')
-    expect(loadComposerPrefs().modelPool).toBe('alpha-model, beta-model')
+    const input = screen.getByTestId('settings-max-iterations') as HTMLInputElement
+    expect(input.value).toBe('25')
+    fireEvent.change(input, { target: { value: '9' } })
+    fireEvent.blur(input)
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ maxIterations: 9 })
+    expect(textOf(await screen.findByTestId('settings-status'))).toContain('Max iterations global 9')
+  })
 
+  test('temperature and prompt caching persist server-side', async () => {
+    render(<SettingsPanel />)
+    await screen.findByTestId('provider-row')
+    const temp = screen.getByTestId('settings-temperature') as HTMLInputElement
+    fireEvent.change(temp, { target: { value: '0.2' } })
+    fireEvent.blur(temp)
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ llm: { temperature: 0.2 } })
+
+    const caching = screen.getByTestId('settings-prompt-caching') as HTMLInputElement
+    expect(caching.checked).toBe(false)
+    await userEvent.click(caching)
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ llm: { promptCaching: true } })
+    expect(textOf(screen.getByTestId('prompt-caching-settings'))).toContain('aktif penuh setelah mesin prompt-caching mendarat')
+  })
+
+  test('the model pool moved to Global: comma-separated input, failover-only, round-robin gone', async () => {
+    render(<SettingsPanel />)
+    await screen.findByTestId('provider-row')
+    const pool = screen.getByTestId('settings-model-pool') as HTMLInputElement
+    expect(pool.value).toBe('kr/auto')
+    await userEvent.clear(pool)
+    await userEvent.type(pool, 'alpha-model, beta-model')
+    fireEvent.blur(pool)
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ llm: { models: ['alpha-model', 'beta-model'] } })
+
+    // The strategy dropdown is gone; the label is a static failover.
+    expect(screen.queryByTestId('settings-model-strategy')).toBeNull()
+    expect(textOf(screen.getByTestId('model-pool-strategy'))).toBe('failover')
+    expect(textOf(screen.getByTestId('model-pool-settings'))).toContain('Round-robin dihapus')
+
+    // The composer no longer sends a pool or a strategy with the task.
     cleanup()
     useDaedalusStore.getState().setComposer({ goal: 'pool task' })
     render(<Composer />)
     await userEvent.click(screen.getByTestId('composer-submit'))
+    const payload = mocks.createTask.mock.calls[0]?.[0] as Record<string, unknown>
+    expect(payload).not.toHaveProperty('models')
+    expect(payload).not.toHaveProperty('model_strategy')
+  })
+
+  test('review gate and escalation toggles show the disabled hint with fewer than 2 pool models', async () => {
+    render(<SettingsPanel />)
+    await screen.findByTestId('provider-row')
+    // The mocked settings carry a 1-model pool: every pool-gated toggle is disabled with the hint.
+    for (const testId of ['settings-review-gate', 'settings-early-escalation', 'settings-model-routing', 'settings-quality-escalation']) {
+      expect((screen.getByTestId(testId) as HTMLInputElement).disabled).toBe(true)
+    }
+    expect(screen.getAllByText('butuh pool 2+ model').length).toBeGreaterThanOrEqual(4)
+
+    // With 2+ models typed, the toggles enable and the hints disappear.
+    const pool = screen.getByTestId('settings-model-pool') as HTMLInputElement
+    await userEvent.clear(pool)
+    await userEvent.type(pool, 'alpha-model, beta-model')
+    for (const testId of ['settings-review-gate', 'settings-early-escalation', 'settings-model-routing', 'settings-quality-escalation']) {
+      expect((screen.getByTestId(testId) as HTMLInputElement).disabled).toBe(false)
+    }
+    expect(screen.queryByText('butuh pool 2+ model')).toBeNull()
+
+    // The new tailor toggles write through with honest labels.
+    await userEvent.click(screen.getByTestId('settings-model-routing'))
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ tailor: { modelRouting: false } })
+    expect(textOf(screen.getByTestId('model-routing-settings'))).toContain('routing model per fase')
+    await userEvent.click(screen.getByTestId('settings-quality-escalation'))
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ tailor: { qualityEscalation: false } })
+    expect(textOf(screen.getByTestId('quality-escalation-settings'))).toContain('eskalasi kualitas')
+  })
+
+  test('tab switching renders the domain tab with ikut-global defaults and the effective caption', async () => {
+    render(<SettingsPanel />)
+    await screen.findByTestId('provider-row')
+    await userEvent.click(screen.getByTestId('settings-tab-slide'))
+    const tab = screen.getByTestId('settings-tab-domain-slide')
+    expect(textOf(tab)).toContain('Ikut global')
+    // No overrides stored: the effective line follows the global settings.
+    expect(textOf(screen.getByTestId('domain-effective-slide'))).toContain('efektif:')
+    expect(textOf(screen.getByTestId('domain-effective-slide'))).toContain('temp 0.7')
+  })
+
+  test('a domain override saves through PUT /settings and the draft reflects it', async () => {
+    mocks.models.mockResolvedValue({ models: modelOptions, session, count: modelOptions.length })
+    render(<SettingsPanel />)
+    await screen.findByTestId('provider-row')
+    await userEvent.click(screen.getByTestId('settings-tab-slide'))
+
+    await userEvent.selectOptions(screen.getByTestId('domain-model-slide'), 'nine-router::kr/auto')
+    fireEvent.change(screen.getByTestId('domain-temperature-slide'), { target: { value: '0.3' } })
+    fireEvent.change(screen.getByTestId('domain-max-iterations-slide'), { target: { value: '' } })
+    await userEvent.click(screen.getByTestId('domain-save-slide'))
+
+    expect(mocks.updateSettings).toHaveBeenCalledWith({
+      domains: { slide: { model: 'kr/auto', temperature: 0.3, maxIterations: null } },
+    })
+    expect(textOf(await screen.findByTestId('settings-status'))).toContain('Override Slide disimpan')
+    // The echoed response drives the draft: model kept, temperature kept, iterations cleared.
+    expect((screen.getByTestId('domain-temperature-slide') as HTMLInputElement).value).toBe('0.3')
+    expect((screen.getByTestId('domain-max-iterations-slide') as HTMLInputElement).value).toBe('')
+  })
+
+  test('the composer per-task controls flow into the task payload and persist in this browser', async () => {
+    localStorage.clear()
+    useDaedalusStore.getState().setModels(modelOptions)
+    render(<Composer />)
+    // Token budget.
+    const budget = screen.getByTestId('composer-token-budget') as HTMLInputElement
+    expect(budget.placeholder).toContain('kosong = tanpa batas')
+    fireEvent.change(budget, { target: { value: '75000' } })
+    // Tool rules.
+    fireEvent.change(screen.getByTestId('composer-tool-rules-allow'), { target: { value: 'read_file, list_dir' } })
+    fireEvent.change(screen.getByTestId('composer-tool-rules-deny'), { target: { value: 'delete_file' } })
+    // One-shot model override: the "model tugas ini" picker sets the taskModel override.
+    await userEvent.click(screen.getByTestId('task-model-picker-button'))
+    const options = screen.getAllByTestId('model-option')
+    await userEvent.click(options.find((option) => option.getAttribute('data-value') === 'nine-router/kr/auto') as HTMLElement)
+
+    const composer = useDaedalusStore.getState().composer
+    expect(composer.tokenBudget).toBe(75000)
+    expect(composer.taskModel).toBe('nine-router::kr/auto')
+    expect(composer.toolRules).toEqual({ allow: ['read_file', 'list_dir'], ask: [], deny: ['delete_file'] })
+    // Persisted to the browser prefs.
+    expect(loadComposerPrefs().tokenBudget).toBe(75000)
+    expect(loadComposerPrefs().taskModel).toBe('nine-router::kr/auto')
+
+    useDaedalusStore.getState().setComposer({ goal: 'per-task controls' })
+    await userEvent.click(screen.getByTestId('composer-submit'))
     expect(mocks.createTask).toHaveBeenCalledWith(
-      expect.objectContaining({ goal: 'pool task', models: ['alpha-model', 'beta-model'], model_strategy: 'round-robin' }),
+      expect.objectContaining({
+        goal: 'per-task controls',
+        provider_id: 'nine-router',
+        model: 'kr/auto',
+        token_budget: 75000,
+        tool_rules: { allow: ['read_file', 'list_dir'], ask: [], deny: ['delete_file'] },
+      }),
     )
   })
 })

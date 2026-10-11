@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import type { EditFormat, ModelTier, PromptFamilySetting } from "./contracts.ts";
+import type { DomainModelSettings, EditFormat, ModelTier, PromptFamilySetting, TaskDomain, ThinkingLevel } from "./contracts.ts";
 import { normalizeModelList, normalizeModelTiers, parseModelStrategy, parseModelTiers, type ModelStrategy } from "./providers/llm/model-pool.ts";
 import { parsePromptFamilySetting } from "./agent/prompt-dialects.ts";
 import { parsePromptCacheMechanism, type PromptCacheMechanism } from "./providers/llm/prompt-cache.ts";
@@ -9,9 +9,17 @@ import { TOOL_OUTPUT_MAX_CHARS, TOOL_OUTPUT_MAX_LINES, type ToolOutputLimits } f
 export type { ToolProtocol };
 
 export type Settings = {
-  llm: { baseUrl: string; apiKey: string; model: string; models: string[]; modelStrategy: ModelStrategy; timeoutMs: number | null; helperModel: string; toolProtocol: ToolProtocol; modelTiers: Record<string, ModelTier>; promptFamily: PromptFamilySetting; editFormat: EditFormat; promptCache: PromptCacheMechanism };
+  llm: { baseUrl: string; apiKey: string; model: string; models: string[]; modelStrategy: ModelStrategy; timeoutMs: number | null; helperModel: string; toolProtocol: ToolProtocol; modelTiers: Record<string, ModelTier>; promptFamily: PromptFamilySetting; editFormat: EditFormat; promptCache: PromptCacheMechanism; /** Default sampling temperature for every model call (LLM_TEMPERATURE, 0..2). */ temperature: number; /** UI toggle for the prompt-caching engine (DAEDALUS_PROMPT_CACHING); the wire marker is emitted only when the engine's promptCache mechanism is positively detected. */ promptCaching: boolean };
   server: { host: string; port: number };
-  session: { thinking: boolean };
+  /**
+   * Session thinking controls. `thinkingLevel` is the current setting
+   * (DAEDALUS_THINKING_LEVEL); `thinking` is the deprecated boolean
+   * alias — kept so old configs and fixtures keep loading exactly as
+   * before (thinking=false ≡ level 'off').
+   */
+  session: { thinking: boolean; thinkingLevel: ThinkingLevel };
+  /** Per-domain model overrides; every field unset = follow the global setting (DAEDALUS_DOMAIN_<DOMAIN>_MODEL|_TEMPERATURE|_MAX_ITERATIONS). */
+  domains: Record<TaskDomain, DomainModelSettings>;
   /**
    * Tailor suite: harness features that make weaker routed models perform
    * above their weight. Routing/escalation default on (they are no-ops
@@ -48,6 +56,13 @@ export type Settings = {
    * Default on; off restores pre-gate behavior exactly.
    */
   questionGate: boolean;
+  /**
+   * Global default max loop iterations (DAEDALUS_MAX_ITERATIONS). Unset =
+   * 25. Precedence per run: per-task > domain override > this global >
+   * 25. Domain tabs show "ikut global" for empty overrides, which is
+   * exactly what the runtime resolves.
+   */
+  maxIterations?: number;
   daedalusHome: string;
 };
 
@@ -78,7 +93,10 @@ export function loadSettings(env: Env = process.env): Settings {
       promptFamily: parsePromptFamilySetting(env.LLM_PROMPT_FAMILY),
       editFormat: parseEditFormat(env.LLM_EDIT_FORMAT),
       promptCache: parsePromptCacheMechanism(env.LLM_PROMPT_CACHE),
+      temperature: parseTemperature(env.LLM_TEMPERATURE, "LLM_TEMPERATURE", 0.7),
+      promptCaching: parseBoolean(env.DAEDALUS_PROMPT_CACHING, false, "DAEDALUS_PROMPT_CACHING"),
     },
+    domains: loadDomainSettings(env),
     tailor: {
       modelRouting: parseBoolean(env.DAEDALUS_MODEL_ROUTING, true, "DAEDALUS_MODEL_ROUTING"),
       qualityEscalation: parseBoolean(env.DAEDALUS_QUALITY_ESCALATION, true, "DAEDALUS_QUALITY_ESCALATION"),
@@ -90,7 +108,9 @@ export function loadSettings(env: Env = process.env): Settings {
       port,
     },
     session: {
+      /** @deprecated Use thinkingLevel. Kept as an alias: thinking=false ≡ level 'off'. */
       thinking: parseBoolean(env.DAEDALUS_THINKING, true, "DAEDALUS_THINKING"),
+      thinkingLevel: parseThinkingLevel(env.DAEDALUS_THINKING_LEVEL),
     },
     editGuard: parseBoolean(env.DAEDALUS_EDIT_GUARD, true, "DAEDALUS_EDIT_GUARD"),
     hooks: parseBoolean(env.DAEDALUS_HOOKS, true, "DAEDALUS_HOOKS"),
@@ -106,6 +126,7 @@ export function loadSettings(env: Env = process.env): Settings {
     },
     outputCompression: parseBoolean(env.DAEDALUS_OUTPUT_COMPRESSION, true, "DAEDALUS_OUTPUT_COMPRESSION"),
     questionGate: parseBoolean(env.DAEDALUS_QUESTION_GATE, true, "DAEDALUS_QUESTION_GATE"),
+    maxIterations: parseOptionalPositiveInt(env.DAEDALUS_MAX_ITERATIONS, "DAEDALUS_MAX_ITERATIONS"),
     daedalusHome: env.DAEDALUS_HOME ?? ".daedalus",
   };
 }
@@ -129,6 +150,88 @@ export function parseEditFormat(value: string | undefined, source = "LLM_EDIT_FO
   const normalized = value.trim().toLowerCase();
   if (normalized === "native" || normalized === "search_replace") return normalized;
   throw new Error(`Invalid ${source}: ${value} (expected native or search_replace)`);
+}
+
+const THINKING_LEVELS: readonly ThinkingLevel[] = ["off", "low", "medium", "high"];
+
+/** `DAEDALUS_THINKING_LEVEL`: off|low|medium|high (default medium); anything else fails fast like the other enums. */
+export function parseThinkingLevel(value: string | undefined, source = "DAEDALUS_THINKING_LEVEL"): ThinkingLevel {
+  if (value === undefined || value.trim() === "") return "medium";
+  const normalized = value.trim().toLowerCase();
+  if ((THINKING_LEVELS as readonly string[]).includes(normalized)) return normalized as ThinkingLevel;
+  throw new Error(`Invalid ${source}: ${value} (expected off, low, medium, or high)`);
+}
+
+/**
+ * Resolve the effective thinking level: an explicit level always wins;
+ * otherwise the deprecated `thinking` boolean maps false → 'off';
+ * otherwise the fallback (usually settings.session.thinkingLevel).
+ */
+export function resolveThinkingLevel(
+  input: { thinkingLevel?: ThinkingLevel; thinking?: boolean },
+  fallback: ThinkingLevel,
+): ThinkingLevel {
+  if (input.thinkingLevel !== undefined) return input.thinkingLevel;
+  if (input.thinking === false) return "off";
+  return fallback;
+}
+
+const DOMAIN_ENV_PREFIX: Record<TaskDomain, string> = {
+  coding: "DAEDALUS_DOMAIN_CODING",
+  slide: "DAEDALUS_DOMAIN_SLIDE",
+  spreadsheet: "DAEDALUS_DOMAIN_SPREADSHEET",
+  dokumen: "DAEDALUS_DOMAIN_DOKUMEN",
+};
+
+/**
+ * Per-domain overrides from `DAEDALUS_DOMAIN_<DOMAIN>_MODEL`,
+ * `..._TEMPERATURE`, `..._MAX_ITERATIONS`. Empty = unset = follow the
+ * global setting. Numbers validate like the other numeric settings.
+ */
+function loadDomainSettings(env: Env): Record<TaskDomain, DomainModelSettings> {
+  const domains = {} as Record<TaskDomain, DomainModelSettings>;
+  for (const domain of Object.keys(DOMAIN_ENV_PREFIX) as TaskDomain[]) {
+    const prefix = DOMAIN_ENV_PREFIX[domain];
+    const model = (env[`${prefix}_MODEL`] ?? "").trim();
+    const temperature = parseOptionalTemperature(env[`${prefix}_TEMPERATURE`], `${prefix}_TEMPERATURE`);
+    const maxIterations = parseOptionalPositiveInt(env[`${prefix}_MAX_ITERATIONS`], `${prefix}_MAX_ITERATIONS`);
+    const settings: DomainModelSettings = {};
+    if (model) settings.model = model;
+    if (temperature !== undefined) settings.temperature = temperature;
+    if (maxIterations !== undefined) settings.maxIterations = maxIterations;
+    domains[domain] = settings;
+  }
+  return domains;
+}
+
+/** `LLM_TEMPERATURE`: 0..2, default 0.7; anything else fails fast. */
+function parseTemperature(value: string | undefined, name: string, fallback: number): number {
+  if (value === undefined || value.trim() === "") return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 2) {
+    throw new Error(`Invalid ${name}: ${value} (expected a number between 0 and 2)`);
+  }
+  return parsed;
+}
+
+/** Optional variant for domain overrides: empty = unset. */
+function parseOptionalTemperature(value: string | undefined, name: string): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 2) {
+    throw new Error(`Invalid ${name}: ${value} (expected a number between 0 and 2)`);
+  }
+  return parsed;
+}
+
+/** Optional positive-integer variant for domain overrides: empty = unset. */
+function parseOptionalPositiveInt(value: string | undefined, name: string): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`Invalid ${name}: ${value} (expected a positive integer)`);
+  }
+  return parsed;
 }
 
 /** Lenient variant for stored provider configs: garbage means "unset". */

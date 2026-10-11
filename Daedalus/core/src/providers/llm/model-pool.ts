@@ -2,7 +2,8 @@ import type { ModelTier } from "../../contracts.ts";
 import { LLMContentPolicyError, LLMFormatError, LLMRateLimitError, LLMTimeoutError, isToolSchemaInvalidError } from "./errors.ts";
 import type { ChatOptions, ChatResponse, LLMProvider, Message, ModelPhase, StreamChunk, ToolDefinition } from "./types.ts";
 
-export type ModelStrategy = "failover" | "round-robin";
+/** Only `failover` exists now; `round-robin` values coerce to it (see parseModelStrategy) instead of throwing. */
+export type ModelStrategy = "failover";
 export type { ModelTier };
 
 export type ModelPoolSwitch = {
@@ -124,8 +125,12 @@ export function tierRankForPhase(phase: ModelPhase, tier: ModelTier | undefined)
 export function parseModelStrategy(value: string | undefined, source = "LLM_MODEL_STRATEGY"): ModelStrategy {
   if (value === undefined || value.trim() === "") return "failover";
   const normalized = value.trim().toLowerCase();
-  if (normalized === "failover" || normalized === "round-robin") return normalized;
-  throw new Error(`Invalid ${source}: ${value} (expected failover or round-robin)`);
+  if (normalized === "failover") return "failover";
+  // Migration: old saved preferences may still say "round-robin". The
+  // strategy no longer exists, so they coerce to failover instead of
+  // throwing — a renamed preference must never brick a saved config.
+  if (normalized === "round-robin") return "failover";
+  throw new Error(`Invalid ${source}: ${value} (expected failover)`);
 }
 
 export function normalizeModelList(models: readonly string[] | string | undefined): string[] {
@@ -154,7 +159,6 @@ export class ModelPoolProvider implements LLMProvider, ModelController {
   readonly #routing: boolean;
   #pinnedModel: string | undefined;
   #activeIndex = 0;
-  #roundRobinCursor = 0;
   #lastAttemptedModels: string[] = [];
 
   constructor(options: ModelPoolOptions) {
@@ -299,13 +303,9 @@ export class ModelPoolProvider implements LLMProvider, ModelController {
   }
 
   #attemptOrder(phase?: ModelPhase): string[] {
-    let base: string[];
-    if (this.#models.length === 1) base = [...this.#models];
-    else if (this.#strategy === "round-robin") {
-      const start = this.#roundRobinCursor % this.#models.length;
-      this.#roundRobinCursor = (start + 1) % this.#models.length;
-      base = rotate(this.#models, start);
-    } else base = rotate(this.#models, this.#activeIndex);
+    // Failover only: attempts start at the last model that answered
+    // (the pool primary) and walk the config order from there.
+    const base = rotate(this.#models, this.#models.length === 1 ? 0 : this.#activeIndex);
 
     let order: string[];
     if (this.#cooldownMs <= 0) order = base;

@@ -67,9 +67,9 @@ describe('ChatPanel', () => {
     expect(textOf(entries[0] ?? null)).toContain('add a health endpoint')
   })
 
-  test('renders provider thoughts distinctly and hides them when thinking is off', () => {
+  test('renders provider thoughts distinctly and hides them when the thinking level is off', () => {
     seed([started(), ev('THOUGHT', { text: 'inspect the repository first', source: 'provider_reasoning' })])
-    useDaedalusStore.getState().setComposer({ thinking: true })
+    useDaedalusStore.getState().setSession({ mode: 'auto', autoApprove: false, thinkingLevel: 'medium', workspaceRoot: '/workspace' })
     render(<ChatPanel />)
     const thought = screen.getAllByTestId('chat-entry').find((entry) => entry.getAttribute('data-role') === 'thought')
     expect(thought).toBeTruthy()
@@ -77,7 +77,7 @@ describe('ChatPanel', () => {
 
     cleanup()
     seed([started(), ev('THOUGHT', { text: 'inspect the repository first', source: 'provider_reasoning' })])
-    useDaedalusStore.getState().setComposer({ thinking: false })
+    useDaedalusStore.getState().setSession({ mode: 'auto', autoApprove: false, thinkingLevel: 'off', workspaceRoot: '/workspace' })
     render(<ChatPanel />)
     expect(screen.getAllByTestId('chat-entry').some((entry) => entry.getAttribute('data-role') === 'thought')).toBe(false)
   })

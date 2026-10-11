@@ -94,6 +94,9 @@ async function listen(workspace: string, home: string): Promise<string> {
   const settings: Settings = {
     llm: { baseUrl: 'http://127.0.0.1:1/v1', apiKey: '', model: '', models: [], modelStrategy: 'failover', timeoutMs: null },
     server: { host: '127.0.0.1', port: 3080 },
+    // The core runtime reads settings.session.thinkingLevel on every run;
+    // the Settings type requires session, so the fixture provides it.
+    session: { thinking: true, thinkingLevel: 'medium' },
     daedalusHome: home,
   };
   const ctx = createContext({ settings, store: new TaskStore(join(home, 'state')), bus: new EventBus(), cwd: workspace });

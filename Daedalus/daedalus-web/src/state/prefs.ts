@@ -1,4 +1,4 @@
-import type { AgentMode } from '@daedalus/core'
+import type { AgentMode, ToolRules } from '@daedalus/core'
 import { AGENT_MODE_ORDER } from '@daedalus/core/interaction/modes'
 
 /**
@@ -8,21 +8,56 @@ import { AGENT_MODE_ORDER } from '@daedalus/core/interaction/modes'
  * saved to disk there); these prefs only seed the composer, and every value
  * here is written into the next task payload the composer submits, so a
  * persisted value is a value that actually takes effect.
+ *
+ * 3-layer settings: thinking, max iterations, the model pool, and the pool
+ * strategy moved to the server Settings layer, so they are gone from here.
+ * Old saved values are tolerated — loadComposerPrefs ignores unknown keys,
+ * so a stored 'round-robin' simply disappears with the pool.
  */
 export type ComposerPrefs = {
   mode?: AgentMode
   autoApprove?: boolean
-  thinking?: boolean
   providerId?: string
   model?: string
-  maxIterations?: number
-  modelPool?: string
-  modelStrategy?: 'failover' | 'round-robin'
+  /** Per-task token budget (positive int); empty = no cap. */
+  tokenBudget?: number
+  /** One-shot model override for the next task, `providerId::model`; empty = follow the session model. */
+  taskModel?: string
+  /** Per-task tool approval rules (allow → skip approval, ask → force it, deny → hard deny). */
+  toolRules?: ToolRules
 }
 
 export const COMPOSER_PREFS_KEY = 'daedalus.web.composer-defaults.v1'
 
 const MODES: ReadonlySet<string> = new Set(AGENT_MODE_ORDER)
+
+/**
+ * Local mirror of core's parseToolRules for stored prefs. The web layer
+ * must not value-import the `@daedalus/core` barrel (it pulls node-only
+ * modules like agent/tool-output into the browser bundle), so the tiny
+ * trim/dedupe rule lives here instead of being shared.
+ */
+function parseStoredToolRules(input: unknown): ToolRules | undefined {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return undefined
+  const record = input as Record<string, unknown>
+  const parseList = (value: unknown): string[] | undefined => {
+    if (value === undefined) return []
+    if (!Array.isArray(value)) return undefined
+    const seen = new Set<string>()
+    for (const entry of value) {
+      if (typeof entry !== 'string') return undefined
+      const name = entry.trim()
+      if (name.length > 0) seen.add(name)
+    }
+    return [...seen]
+  }
+  const allow = parseList(record.allow)
+  const ask = parseList(record.ask)
+  const deny = parseList(record.deny)
+  if (allow === undefined || ask === undefined || deny === undefined) return undefined
+  if (allow.length === 0 && ask.length === 0 && deny.length === 0) return undefined
+  return { allow, ask, deny }
+}
 
 function defaultStorage(): Storage | undefined {
   try {
@@ -41,14 +76,17 @@ export function loadComposerPrefs(storage: Storage | undefined = defaultStorage(
     const prefs: ComposerPrefs = {}
     if (typeof parsed.mode === 'string' && MODES.has(parsed.mode)) prefs.mode = parsed.mode as AgentMode
     if (typeof parsed.autoApprove === 'boolean') prefs.autoApprove = parsed.autoApprove
-    if (typeof parsed.thinking === 'boolean') prefs.thinking = parsed.thinking
     if (typeof parsed.providerId === 'string') prefs.providerId = parsed.providerId
     if (typeof parsed.model === 'string') prefs.model = parsed.model
-    if (typeof parsed.maxIterations === 'number' && Number.isFinite(parsed.maxIterations)) {
-      prefs.maxIterations = Math.min(100, Math.max(1, Math.round(parsed.maxIterations)))
+    if (typeof parsed.tokenBudget === 'number' && Number.isInteger(parsed.tokenBudget) && parsed.tokenBudget > 0) {
+      prefs.tokenBudget = parsed.tokenBudget
     }
-    if (typeof parsed.modelPool === 'string') prefs.modelPool = parsed.modelPool
-    if (parsed.modelStrategy === 'failover' || parsed.modelStrategy === 'round-robin') prefs.modelStrategy = parsed.modelStrategy
+    if (typeof parsed.taskModel === 'string' && parsed.taskModel.trim()) prefs.taskModel = parsed.taskModel.trim()
+    const toolRules = parseStoredToolRules(parsed.toolRules)
+    if (toolRules) prefs.toolRules = toolRules
+    // Unknown keys (thinking, maxIterations, modelPool, modelStrategy, …)
+    // are ignored: the 3-layer restructure moved them server-side, and a
+    // stored 'round-robin' simply disappears with the pool.
     return prefs
   } catch {
     return {}
@@ -150,23 +188,24 @@ export function saveActiveConversationId(root: string, id: string | null, storag
 export function composerPrefsOf(composer: {
   mode: AgentMode
   autoApprove: boolean
-  thinking: boolean
   providerId: string
   model: string
-  maxIterations: number
-  modelPool: string
-  modelStrategy: 'failover' | 'round-robin'
+  tokenBudget: number | undefined
+  taskModel: string
+  toolRules: ToolRules
 }): ComposerPrefs {
-  return {
+  const prefs: ComposerPrefs = {
     mode: composer.mode,
     autoApprove: composer.autoApprove,
-    thinking: composer.thinking,
     providerId: composer.providerId,
     model: composer.model,
-    maxIterations: composer.maxIterations,
-    modelPool: composer.modelPool,
-    modelStrategy: composer.modelStrategy,
   }
+  if (composer.tokenBudget !== undefined) prefs.tokenBudget = composer.tokenBudget
+  if (composer.taskModel.trim()) prefs.taskModel = composer.taskModel.trim()
+  if (composer.toolRules.allow.length > 0 || composer.toolRules.ask.length > 0 || composer.toolRules.deny.length > 0) {
+    prefs.toolRules = composer.toolRules
+  }
+  return prefs
 }
 
 /**

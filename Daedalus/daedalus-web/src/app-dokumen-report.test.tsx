@@ -17,7 +17,7 @@ vi.mock('./components/editor/monaco-editor', () => ({
 vi.mock('./api/client', () => ({
   api: {
     settings: async () => ({
-      session: { mode: 'auto', autoApprove: true, thinking: true, workspaceRoot: '/workspace' },
+      session: { mode: 'auto', autoApprove: true, thinkingLevel: 'medium' as const, workspaceRoot: '/workspace' },
       providers: [],
     }),
     providers: async () => ({ providers: [], presets: [] }),
@@ -41,7 +41,7 @@ vi.mock('./api/client', () => ({
     files: async () => ({}),
     taskEvents: async () => ({}),
     taskAttachments: async () => ({ attachments: [] }),
-    updateSession: async () => ({ session: { mode: 'auto', autoApprove: true, thinking: true, workspaceRoot: '/workspace' } }),
+    updateSession: async () => ({ session: { mode: 'auto', autoApprove: true, thinkingLevel: 'medium' as const, workspaceRoot: '/workspace' } }),
     dokumenDocument: async () => ({ root: '/workspace', document: null }),
     dokumenBlocks: async () => ({ source: null, blocks: [] }),
     dokumenSources: async () => ({ root: '/workspace', document: null }),

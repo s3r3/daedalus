@@ -1,5 +1,7 @@
 import { resolve } from 'node:path';
-import type { LLMProvider } from '../providers/llm/types.ts';
+import type { ChatOptions, LLMProvider } from '../providers/llm/types.ts';
+import { TokenBudgetExhaustedError, isTokenBudgetExhausted } from '../contracts.ts';
+import type { TokenBudget } from '../contracts.ts';
 import type { DocumentState, DokumenSubMode, ParsedSource, SourceInfo } from './document.ts';
 import {
   appendAudit,
@@ -52,6 +54,18 @@ export type DokumenEngineOptions = {
    */
   askUser?: DokumenAskUser;
   webTools?: DokumenWebTools;
+  /**
+   * Domain-effective model options (temperature / reasoning effort /
+   * prompt caching) merged into every engine model call — per-call
+   * values win, these fill the gaps.
+   */
+  chatOptions?: ChatOptions;
+  /**
+   * Hard token budget for the run: checked before every model call
+   * and fed the provider-reported usage after; exhaustion ends the
+   * run through the normal partial-completion path.
+   */
+  tokenBudget?: TokenBudget;
 };
 
 export type DokumenRunOptions = {
@@ -145,9 +159,19 @@ export class DokumenEngine {
   async run(root: string, prompt: string, run: DokumenRunOptions): Promise<string> {
     this.#workspaceRoot = root;
     const doc = await this.#ensureDocument(root, run.subMode === 'ekstrak' ? 'extract' : 'compose', prompt);
-    if (run.subMode === 'ekstrak') return this.#runExtract(root, doc, prompt, run);
-    if (run.docxPath) return this.#runRelayout(root, doc, prompt, run.docxPath);
-    return this.#runCompose(root, doc, prompt);
+    try {
+      if (run.subMode === 'ekstrak') return await this.#runExtract(root, doc, prompt, run);
+      if (run.docxPath) return await this.#runRelayout(root, doc, prompt, run.docxPath);
+      return await this.#runCompose(root, doc, prompt);
+    } catch (error) {
+      // Token budget exhausted: the normal partial-completion path —
+      // document.json already holds every finished unit of work, so the
+      // run closes with honest evidence instead of failing.
+      if (isTokenBudgetExhausted(error)) {
+        return this.#report(doc, `${error.message} Progres sejauh ini tersimpan di document.json — kirim prompt lanjutan untuk melanjutkan.`);
+      }
+      throw error;
+    }
   }
 
   /* ------------------------------------------------------------ extract */
@@ -524,10 +548,16 @@ export class DokumenEngine {
     return {
       name: provider.name,
       chat: async (messages, tools, options) => {
+        const budget = this.#options.tokenBudget;
+        if (budget?.exhausted) throw new TokenBudgetExhaustedError(budget);
         const model = provider.name;
         this.#options.onEvent?.({ type: 'model-request-started', model });
         try {
-          const response = await provider.chat(messages, tools, options);
+          // Domain-effective chat options merged under any per-call
+          // values (per-call wins).
+          const merged = this.#options.chatOptions ? { ...this.#options.chatOptions, ...options } : options;
+          const response = await provider.chat(messages, tools, merged);
+          budget?.add(response.usage);
           this.#options.onEvent?.({
             type: 'model-request-finished',
             model,

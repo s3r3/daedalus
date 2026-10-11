@@ -16,11 +16,14 @@ export function ModelPicker({
   providerId,
   model,
   onSelect,
+  buttonTestId = 'model-picker-button',
 }: {
   models: ProviderModel[]
   providerId: string
   model: string
   onSelect: (selection: string) => void
+  /** Test id for the toggle button (the composer renders two pickers: session model + one-shot task model). */
+  buttonTestId?: string
 }) {
   const [open, setOpen] = useState(false)
   const [filter, setFilter] = useState('')
@@ -90,7 +93,7 @@ export function ModelPicker({
     <div ref={rootRef} className="relative" data-testid="model-picker">
       <button
         type="button"
-        data-testid="model-picker-button"
+        data-testid={buttonTestId}
         aria-haspopup="listbox"
         aria-expanded={open}
         className="flex h-6 max-w-[260px] items-center gap-1 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"

@@ -3,6 +3,7 @@ import type {
   ApprovalRequestInfo,
   Attachment,
   ChildTask,
+  DomainModelSettings,
   Event,
   FinalReport,
   PermissionKey,
@@ -10,6 +11,8 @@ import type {
   ProviderConfigPublic,
   SkillLoadedPayload,
   TailorEscalatedPayload,
+  TaskDomain,
+  ThinkingLevel,
   ToolCall,
   ToolResult,
   UserQuestionInfo,
@@ -100,7 +103,10 @@ export type WorkspaceFile = {
 export type SessionState = {
   mode: AgentMode
   autoApprove: boolean
-  thinking: boolean
+  /** Deprecated boolean alias; the server still accepts it on PUT /session. */
+  thinking?: boolean
+  /** 3-layer settings: the session's thinking level (off|low|medium|high). */
+  thinkingLevel?: ThinkingLevel
   providerId?: string;
   model?: string
   workspaceRoot: string
@@ -131,6 +137,35 @@ export type SettingsResponse = {
   session: SessionState
   providers?: ProviderConfigPublic[]
 }
+
+/**
+ * The server's public provider view plus the optional per-model context
+ * windows the gateway reports (`contextWindows[model]`, in tokens). The
+ * settings panel shows the per-model value next to the global limit when
+ * the provider knows it.
+ */
+export type ProviderPublic = ProviderConfigPublic & { contextWindows?: Record<string, number> }
+
+/** PUT /settings body (camelCase; the server also accepts snake_case aliases). */
+export type UpdateSettingsInput = {
+  llm?: {
+    temperature?: number
+    promptCaching?: boolean
+    models?: string[]
+    /** Failover-only since the 3-layer restructure (round-robin was removed). */
+    modelStrategy?: 'failover'
+  }
+  /** Per-domain overrides; null clears a field back to "ikut global". */
+  domains?: Partial<Record<TaskDomain, { model?: string | null; temperature?: number | null; maxIterations?: number | null }>>
+  session?: { thinkingLevel?: ThinkingLevel }
+  tailor?: { modelRouting?: boolean; qualityEscalation?: boolean; reviewGate?: boolean; earlyEscalation?: boolean }
+  outputCompression?: boolean
+  /** Global max-iterations default (the runner-level default core falls back to); null clears it back to 25. */
+  maxIterations?: number | null
+}
+
+/** The domains slice of GET /settings, as DomainModelSettings per domain. */
+export type DomainsSettings = Partial<Record<TaskDomain, DomainModelSettings>>
 
 export type ProviderPreset = {
   id: string

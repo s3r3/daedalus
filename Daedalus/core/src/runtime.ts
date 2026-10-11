@@ -1,4 +1,5 @@
-import type { AgentMode, Attachment, ChildTask, ChildTaskErrorReason, Event, EventType, FinalReport, ModelStrategy, ProviderConfig, TaskDomain, TaskSpec, TaskState, ToolCall, ToolResult, ValidationResult } from './contracts.ts';
+import type { AgentMode, Attachment, ChildTask, ChildTaskErrorReason, Event, EventType, FinalReport, ModelStrategy, ProviderConfig, TaskDomain, TaskSpec, TaskState, ThinkingLevel, TokenBudget, ToolCall, ToolResult, ToolRules, ValidationResult } from './contracts.ts';
+import { createTokenBudget } from './contracts.ts';
 import { EventBus, emitEvent } from './events.ts';
 import { TaskStore } from './persistence.ts';
 import { AgentLoop } from './agent/agent-loop.ts';
@@ -55,7 +56,7 @@ import { reviewDiff } from './agent/review.ts';
 import { loadPins } from './pins.ts';
 import type { EditFormat, ModelTier, PromptFamily, PromptFamilySetting, ReviewGateReport } from './contracts.ts';
 import { TextProtocolProvider, type ProtocolSwitchInfo } from './providers/llm/text-protocol.ts';
-import { ModeController, isPlanDocumentPath, normalizeAgentMode, restrictMode } from './interaction/modes.ts';
+import { ModeController, isPlanDocumentPath, normalizeAgentMode, restrictMode, toolRulesDecision } from './interaction/modes.ts';
 import { QuestionBroker, createAskUserTool, questionResultOutput, resolveQuestionTimeoutMs, type UserQuestionInfo } from './interaction/questions.ts';
 import { hasPlanDocument, parseTasksDocument, planDecisionsFromEvents, planSlugFromGoal, renderAssembledPlanDocuments, PLAN_DOCUMENT_FILES } from './interaction/plans.ts';
 import { replan as defaultReplan } from './agent/planner.ts';
@@ -78,8 +79,8 @@ import {
   type SkillLoadedPayload,
   type SkillSearchDir,
 } from './skills/index.ts';
-import type { LLMProvider } from './providers/llm/types.ts';
-import { loadSettings, resolveDaedalusHome, type Settings } from './settings.ts';
+import type { ChatOptions, LLMProvider } from './providers/llm/types.ts';
+import { loadSettings, resolveDaedalusHome, resolveThinkingLevel, type Settings } from './settings.ts';
 
 /**
  * Runtime facade (PLAN.md §3.0): the single entry point both thin clients —
@@ -111,6 +112,12 @@ export type TaskRunnerOptions = {
   autoApprove?: boolean;
   /** Surface provider thought text as THOUGHT events. Defaults to settings.session.thinking (on). */
   thinking?: boolean;
+  /**
+   * Reasoning-effort tier (settings layer 2). Resolved per run via
+   * resolveThinkingLevel; an explicit level wins over the deprecated
+   * `thinking` boolean.
+   */
+  thinkingLevel?: ThinkingLevel;
   /** Stream model text as MODEL_TEXT_DELTA events during a turn (Web live text). Default: off. */
   streamText?: boolean;
   bus?: EventBus;
@@ -216,6 +223,24 @@ export type RunOptions = {
   /** Dokumen composer parameters (only meaningful with domain 'dokumen'): Ekstrak|Susun sub-mode, sources, DOCX re-layout target. */
   dokumen?: DokumenTaskParams;
   thinking?: boolean;
+  /**
+   * Reasoning-effort tier for this run (settings layer 2). Wins over
+   * the deprecated `thinking` boolean; unset = runner option, else
+   * settings.session.thinkingLevel.
+   */
+  thinkingLevel?: ThinkingLevel;
+  /**
+   * Hard token budget for the run (positive integer, provider-reported
+   * total_tokens). The runtime builds the TokenBudget and hands it to
+   * the AgentLoop and to the domain engines.
+   */
+  tokenBudget?: number;
+  /**
+   * Per-run tool permission overrides (settings layer 2): deny →
+   * hard denial, ask → force the approval question, allow → skip it.
+   * `*` matches any tool.
+   */
+  toolRules?: ToolRules;
   providerId?: string;
   model?: string;
   models?: string[];
@@ -441,6 +466,14 @@ export class TaskRunner {
    * construction: the entry dies with the run.
    */
   readonly #scaffoldChains = new Map<string, { chainId: string; steps: ScaffoldChainStep[] }>();
+  /**
+   * Per-run tool rules (RunOptions.toolRules), keyed by task id. The
+   * execution harness consults them at the approval-question decision
+   * point: deny → deny, ask → force the approval question even where
+   * the mode/auto-approve would auto-allow, allow → skip the question.
+   * Set for the run's lifetime in run(), cleared when it ends.
+   */
+  readonly #toolRulesByTask = new Map<string, ToolRules>();
   #extensionStatus: ExtensionStatus = { mcp: [], lsp: [], skills: [], agents: [] };
   /** Language servers of the in-flight run, used by the edit guard. */
   #activeLsp: LspManager | undefined;
@@ -473,6 +506,17 @@ export class TaskRunner {
           // denies every other mutating path, per call.
           const modePolicy = this.modeController.approvalForCall(tool.name, key.path);
           if (!modePolicy.visible) return 'deny';
+          // Per-run tool rules (settings layer 2) override the mode /
+          // auto-approve decision at this exact point — where 'ask'
+          // triggers the approval broker: deny → deny, ask → force the
+          // question, allow → skip it.
+          const rules = this.#toolRulesByTask.get(key.taskId);
+          if (rules) {
+            const decision = toolRulesDecision(rules, tool.name);
+            if (decision === 'deny') return 'deny';
+            if (decision === 'ask') return 'ask';
+            if (decision === 'allow') return 'auto';
+          }
           if (modePolicy.approval === 'deny') return 'deny';
           if (key.action === 'read') return 'auto';
           if (options.approvalPolicy === 'deny') return 'deny';
@@ -567,13 +611,69 @@ export class TaskRunner {
   }
 
   /**
-   * Per-request model options. An explicit `modelTimeoutMs` (the CLI's
-   * `--timeout`) wins over `LLM_TIMEOUT_MS`; when neither is set the provider
-   * applies its own default.
+   * Per-request model options for the coding loop. Temperature is the
+   * domain's effective temperature (domain override else the global
+   * LLM_TEMPERATURE); reasoningEffort follows the resolved thinking
+   * level ('off' omits it); promptCaching is the settings flag whose
+   * wire marker belongs to the parallel prompt-caching branch. An
+   * explicit `modelTimeoutMs` (the CLI's `--timeout`) wins over
+   * `LLM_TIMEOUT_MS`; when neither is set the provider applies its
+   * own default.
    */
-  #chatOptions(): { timeout_ms?: number } | undefined {
+  #chatOptions(options: RunOptions, thinkingLevel: ThinkingLevel): ChatOptions {
     const timeoutMs = this.#options.modelTimeoutMs ?? this.#settings.llm.timeoutMs;
-    return timeoutMs === null || timeoutMs === undefined ? undefined : { timeout_ms: timeoutMs };
+    return {
+      ...(timeoutMs === null || timeoutMs === undefined ? {} : { timeout_ms: timeoutMs }),
+      temperature: this.#domainTemperature(options.domain),
+      ...(thinkingLevel === 'off' ? {} : { reasoningEffort: thinkingLevel }),
+      promptCaching: this.#settings.llm.promptCaching,
+    };
+  }
+
+  /**
+   * Chat options handed to the domain engines: every engine model call
+   * carries the domain's effective temperature (+ reasoning effort), so
+   * per-domain temperature is real in all four domains, not just coding.
+   */
+  #engineChatOptions(domain: TaskDomain, thinkingLevel: ThinkingLevel): ChatOptions {
+    return {
+      temperature: this.#domainTemperature(domain),
+      ...(thinkingLevel === 'off' ? {} : { reasoningEffort: thinkingLevel }),
+      promptCaching: this.#settings.llm.promptCaching,
+    };
+  }
+
+  /** Domain temperature override (settings.domains, only when the run names a domain) else the global LLM_TEMPERATURE. */
+  #domainTemperature(domain: TaskDomain | undefined): number {
+    const override = domain !== undefined ? this.#settings.domains?.[domain]?.temperature : undefined;
+    return override ?? this.#settings.llm.temperature;
+  }
+
+  /** Domain max-iterations override (settings.domains, only when the run names a domain). */
+  #domainMaxIterations(domain: TaskDomain | undefined): number | undefined {
+    return domain !== undefined ? this.#settings.domains?.[domain]?.maxIterations : undefined;
+  }
+
+  /**
+   * Settings-layer-2 thinking resolution, shared by run() and the
+   * domain-engine runners: an explicit level wins, else the deprecated
+   * `thinking` boolean (false → 'off'), else the session setting.
+   */
+  #resolveRunThinkingLevel(options: RunOptions): ThinkingLevel {
+    return resolveThinkingLevel(
+      {
+        thinkingLevel: options.thinkingLevel ?? this.#options.thinkingLevel,
+        thinking: options.thinking ?? this.#options.thinking ?? settingsThinking(this.#settings),
+      },
+      this.#settings.session.thinkingLevel ?? 'medium',
+    );
+  }
+
+  /** The run's hard token budget from RunOptions.tokenBudget (positive int only; anything else = no budget). */
+  #createRunTokenBudget(options: RunOptions): TokenBudget | undefined {
+    return typeof options.tokenBudget === 'number' && Number.isInteger(options.tokenBudget) && options.tokenBudget > 0
+      ? createTokenBudget(options.tokenBudget)
+      : undefined;
   }
 
   #editGuardEnabled(): boolean {
@@ -725,6 +825,10 @@ export class TaskRunner {
       : options;
     if (effectiveMode) this.modeController.set(effectiveMode);
     if (options.autoApprove !== undefined) this.modeController.setAutoApprove(options.autoApprove);
+    // Settings layer 2: the run's thinking level and its hard token
+    // budget. Both ride into the AgentLoop and the domain engines.
+    const thinkingLevel = this.#resolveRunThinkingLevel(effectiveOptions);
+    const tokenBudget = this.#createRunTokenBudget(effectiveOptions);
     const modelConfig = this.#modelConfig(effectiveOptions);
     const rules = await loadProjectRules(this.#workspaceRoot, {
       globalHome: resolveDaedalusHome(this.#settings.daedalusHome, this.#workspaceRoot),
@@ -751,6 +855,10 @@ export class TaskRunner {
       if (title) spec.title = title;
     }
     if (options.parentTaskId) this.#taskParents.set(spec.id, options.parentTaskId);
+    // The execution harness reads the run's tool rules off this map at
+    // the approval-question decision point (see the policyFor closure in
+    // the constructor). Cleared with the run in the finally below.
+    if (effectiveOptions.toolRules) this.#toolRulesByTask.set(spec.id, effectiveOptions.toolRules);
     // Plan continuity (Cline-style: context carries across the mode switch,
     // unlike Cursor's fresh context per mode): "execute the plan" loads the
     // steps an earlier plan-mode task recorded and hands them to this task
@@ -1049,10 +1157,15 @@ export class TaskRunner {
       }),
       validator: this.validator,
       tools: toolSchemas,
-      stopPolicy: { max_iterations: options.maxIterations ?? this.#options.maxIterations ?? 25, max_errors: options.maxErrors ?? 5 },
-      chatOptions: this.#chatOptions(),
+      stopPolicy: { max_iterations: options.maxIterations ?? this.#options.maxIterations ?? this.#domainMaxIterations(options.domain) ?? this.#settings.maxIterations ?? 25, max_errors: options.maxErrors ?? 5 },
+      chatOptions: this.#chatOptions(options, thinkingLevel),
       modeController: this.modeController,
       thinking: spec.thinking ?? options.thinking ?? this.#options.thinking ?? settingsThinking(this.#settings),
+      // Settings layer 2: the resolved thinking level (not just the
+      // boolean), the run's hard token budget, and its tool rules.
+      thinkingLevel,
+      tokenBudget,
+      toolRules: effectiveOptions.toolRules,
       streamText: this.#options.streamText === true,
       contextLimitTokens: this.#options.contextLimitTokens ?? this.#settings.context?.limitTokens,
       condense: this.#options.condense ?? (this.#settings.context?.condense !== false),
@@ -1140,6 +1253,7 @@ export class TaskRunner {
     } finally {
       this.#activeLoops.delete(spec.id);
       this.#scaffoldChains.delete(spec.id);
+      this.#toolRulesByTask.delete(spec.id);
       // A question still pending at task end (natural finish, error,
       // provider failure, harness throw — or an asker whose wait was
       // abandoned) settles as cancelled, so it can never outlive the
@@ -1333,7 +1447,10 @@ export class TaskRunner {
       }, 0);
     const report: FinalReport = {
       task_id: spec.id,
-      outcome: outcome === 'success' ? 'success' : outcome === 'partial' ? 'partial' : 'failed',
+      // A provider-reported token-budget stop keeps its own outcome
+      // ('budget_exhausted') instead of collapsing into failed/partial —
+      // the run outcome above still reads 'partial' for it.
+      outcome: state.last_error === 'budget_exhausted' ? 'budget_exhausted' : outcome === 'success' ? 'success' : outcome === 'partial' ? 'partial' : 'failed',
       diff: this.#aggregateDiff(collected),
       evidence: [
         ...(modelFailureEvidence ? [`model failure: ${modelFailureEvidence}`] : []),
@@ -1349,7 +1466,7 @@ export class TaskRunner {
             const payload = e.payload as { reason?: string; from_model?: string; to_model?: string };
             return `tailor early escalation: ${payload.reason ?? 'loop'} — pinned to strong model ${payload.to_model ?? 'unknown'} for the rest of the task${payload.from_model ? ` (from ${payload.from_model})` : ''}`;
           }),
-        ...(outcome === 'partial' && ['no_progress', 'loop_hard_pause', 'input_token_budget'].includes(state.last_error ?? '') && state.last_observation
+        ...(outcome === 'partial' && ['no_progress', 'loop_hard_pause', 'input_token_budget', 'budget_exhausted'].includes(state.last_error ?? '') && state.last_observation
           ? [state.last_observation]
           : []),
         ...this.#validationEvidence(validation),
@@ -1446,6 +1563,11 @@ export class TaskRunner {
       store: this.store,
       questions: this.questions,
       workspaceRoot: this.#workspaceRoot,
+      // Settings layer 2: the slide domain's effective temperature +
+      // reasoning effort on every engine model call, and the run's hard
+      // token budget (partial stop, never a crash).
+      chatOptions: this.#engineChatOptions('slide', this.#resolveRunThinkingLevel(options)),
+      tokenBudget: this.#createRunTokenBudget(options),
     });
     this.#activeEngines.set(spec.id, engine);
     try {
@@ -1539,6 +1661,11 @@ export class TaskRunner {
 
     const engine = new DokumenEngine(provider, {
       askUser,
+      // Settings layer 2: the dokumen domain's effective temperature +
+      // reasoning effort on every engine model call, and the run's hard
+      // token budget (partial stop, never a crash).
+      chatOptions: this.#engineChatOptions('dokumen', this.#resolveRunThinkingLevel(options)),
+      tokenBudget: this.#createRunTokenBudget(options),
       onEvent: (event) => {
         if (event.type === 'model-request-started') {
           emit('MODEL_REQUEST_STARTED', { model: event.model });
@@ -1662,6 +1789,11 @@ export class TaskRunner {
       store: this.store,
       questions: this.questions,
       workspaceRoot: this.#workspaceRoot,
+      // Settings layer 2: the spreadsheet domain's effective temperature
+      // + reasoning effort on every engine model call, and the run's hard
+      // token budget (partial stop, never a crash).
+      chatOptions: this.#engineChatOptions('spreadsheet', this.#resolveRunThinkingLevel(options)),
+      tokenBudget: this.#createRunTokenBudget(options),
     });
     this.#activeSheetEngines.set(spec.id, engine);
     try {
@@ -1986,6 +2118,7 @@ export class TaskRunner {
       approvalPolicy: this.#options.approvalPolicy,
       autoApprove: this.#options.autoApprove,
       thinking: this.#options.thinking,
+      thinkingLevel: this.#options.thinkingLevel,
       maxIterations: this.#options.maxIterations,
       modelTimeoutMs: this.#options.modelTimeoutMs,
       editGuard: this.#options.editGuard,
@@ -2079,6 +2212,7 @@ export class TaskRunner {
           modelStrategy: options.modelStrategy ?? this.#options.modelStrategy,
           attachments: options.attachments,
           thinking: options.thinking ?? this.#options.thinking ?? settingsThinking(this.#settings),
+          thinkingLevel: options.thinkingLevel ?? this.#options.thinkingLevel,
           autoApprove: options.autoApprove,
           maxIterations: child.budget?.max_iterations,
           maxErrors: child.budget?.max_errors,
@@ -2291,7 +2425,19 @@ export class TaskRunner {
         },
       });
     }
-    if (!selection) return this.#provider();
+    if (!selection) {
+      // No provider registry (the CLI default): the per-task and domain
+      // model overrides still apply, in the same precedence as the
+      // registry branch (per-task > domain > runner > settings) — they
+      // rewrite the settings model for this run's provider. Without
+      // overrides the behavior is exactly as before.
+      const domainModel = options.domain !== undefined ? this.#settings.domains?.[options.domain]?.model?.trim() : undefined;
+      const override = options.model ?? (domainModel ? domainModel : undefined) ?? this.#options.model;
+      if (override) {
+        return createProviderFromSettings({ ...this.#settings, llm: { ...this.#settings.llm, model: override, models: [] } });
+      }
+      return this.#provider();
+    }
     const { config, model } = selection;
     return this.#textProtocol(taskId, options, config, modelConfig.models[0] ?? model, new OpenAICompatProvider({
       baseUrl: config.baseUrl || this.#settings.llm.baseUrl,
@@ -2307,7 +2453,16 @@ export class TaskRunner {
     const providerId = options.providerId ?? this.#options.providerId;
     const config = providerId ? registry.get(providerId) : registry.listInternal().find((provider) => provider.enabled);
     if (!config || !config.enabled) return undefined;
-    const model = options.model ?? this.#options.model ?? config.defaultModel ?? config.models[0] ?? this.#settings.llm.model;
+    // Model precedence: per-task one-shot > domain override (settings,
+    // non-empty, only when the run names a domain) > runner default >
+    // provider config > global setting.
+    const domainModel = options.domain !== undefined ? this.#settings.domains?.[options.domain]?.model : undefined;
+    const model = options.model
+      ?? (domainModel && domainModel.trim().length > 0 ? domainModel : undefined)
+      ?? this.#options.model
+      ?? config.defaultModel
+      ?? config.models[0]
+      ?? this.#settings.llm.model;
     return { config, model };
   }
 
@@ -2534,9 +2689,10 @@ export class TaskRunner {
     if (state.status === 'done') return 'success';
     if (state.status === 'failed') {
       // Harness hard stops (stall backstop, hard-pause stop, input-token
-      // budget): the task stopped before burning more turns — partial
-      // with the stop detail as evidence, never a plain failure.
-      if (['no_progress', 'loop_hard_pause', 'input_token_budget'].includes(state.last_error ?? '')) return 'partial';
+      // budget, provider-reported token budget): the task stopped before
+      // burning more turns — partial with the stop detail as evidence,
+      // never a plain failure.
+      if (['no_progress', 'loop_hard_pause', 'input_token_budget', 'budget_exhausted'].includes(state.last_error ?? '')) return 'partial';
       return state.last_error !== undefined && STOP_REASONS.has(state.last_error) ? 'stopped' : 'failed';
     }
     return validation !== undefined ? 'partial' : 'stopped';

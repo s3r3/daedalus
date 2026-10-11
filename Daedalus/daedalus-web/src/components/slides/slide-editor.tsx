@@ -105,17 +105,20 @@ export function SlideEditor({ root, deck, slide, index, onChanged }: {
     // Engine endpoint, not a task: the slide engine regenerates this one
     // slide in place and the fresh deck comes back in the response.
     // Send the composer's current selection — the same model/provider a
-    // task run would use. Without it the resolution chain comes up
-    // empty for dynamic-model providers (9Router stores no model list)
-    // and the request dies upstream with a bare "Missing model".
+    // task run would use, honoring the one-shot taskModel override.
+    // Without it the resolution chain comes up empty for dynamic-model
+    // providers (9Router stores no model list) and the request dies
+    // upstream with a bare "Missing model".
     const composer = useDaedalusStore.getState().composer
-    const pool = composer.modelPool.split(',').map((entry) => entry.trim()).filter(Boolean)
-    const model = composer.model || pool[0] || undefined
+    const [overrideProviderId, ...overrideRest] = composer.taskModel ? composer.taskModel.split('::') : []
+    const overrideModel = overrideRest.join('::')
+    const model = overrideModel || composer.model || undefined
+    const providerId = overrideProviderId || composer.providerId || undefined
     void run(
       () =>
         api.deckRegenerateSlide(root, slide.id, {
           ...(model ? { model } : {}),
-          ...(composer.providerId ? { provider_id: composer.providerId } : {}),
+          ...(providerId ? { provider_id: providerId } : {}),
         }),
       'Slide diganti dengan varian baru.',
     )

@@ -5,7 +5,7 @@ import { useDaedalusStore } from './state/taskStore'
 import { SettingsPanel } from './components/settings/settings-panel'
 import { WorkspacePanel } from './components/workspace/workspace-panel'
 
-const session = { mode: 'auto' as const, autoApprove: false, thinking: true, workspaceRoot: '/workspace' }
+const session = { mode: 'auto' as const, autoApprove: false, thinkingLevel: 'medium' as const, workspaceRoot: '/workspace' }
 const provider = {
   id: 'nine-router',
   name: '9Router (Farid)',
@@ -45,7 +45,10 @@ vi.mock('./api/client', () => ({ api: mocks }))
 beforeEach(() => {
   vi.clearAllMocks()
   mocks.settings.mockResolvedValue({
-    settings: { llm: { apiKey: '«redacted»' }, tailor: { reviewGate: false, modelRouting: true, qualityEscalation: true } },
+    settings: {
+      llm: { models: ['weak-m', 'strong-m'] },
+      tailor: { reviewGate: false, modelRouting: true, qualityEscalation: true },
+    },
     session,
     providers: [provider],
   })
