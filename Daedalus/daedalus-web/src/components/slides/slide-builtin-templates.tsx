@@ -51,7 +51,7 @@ function MiniSlide({ template, kind, label }: { template: BuiltinTemplateInfo; k
  * design source; the two never combine on one deck. A Warna & Font
  * pick afterwards re-skins the deck without removing its design.
  */
-export function SlideBuiltinTemplatesPanel() {
+export function SlideBuiltinTemplatesPanel({ bare = false }: { bare?: boolean }) {
   const { deck, root } = useDeck()
   const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
   const pendingDesignId = useDaedalusStore((state) => state.slideOptions.designId)
@@ -94,8 +94,10 @@ export function SlideBuiltinTemplatesPanel() {
     }
   }
 
-  return (
-    <Panel title="Template bawaan" data-testid="slide-builtin-templates">
+  // The body, shared by the standalone panel and the merged "Desain"
+  // panel's bare section: same fetch, same pick logic, same card testids.
+  const body = (
+    <>
       {error ? <p className="px-1 py-1 text-[11px] text-muted">{error}</p> : null}
       {templates.length === 0 && !error ? <p className="px-1 py-1 text-[11px] text-muted">Memuat template bawaan…</p> : null}
       <div className="flex max-h-96 flex-col gap-1.5 overflow-y-auto pr-0.5">
@@ -132,6 +134,23 @@ export function SlideBuiltinTemplatesPanel() {
           )
         })}
       </div>
+    </>
+  )
+
+  // Bare mode: a pure section inside the merged "Desain" panel — no own
+  // Panel wrapper, title, or footer.
+  if (bare) {
+    return (
+      <section data-testid="slide-builtin-templates">
+        <p className="px-1 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted">Desain bawaan</p>
+        {body}
+      </section>
+    )
+  }
+
+  return (
+    <Panel title="Template bawaan" data-testid="slide-builtin-templates">
+      {body}
       <p className="px-1 pt-1.5 text-[10px] text-muted">
         {deck
           ? 'Klik template untuk mengganti desain deck ini (layout pilihan tetap, kulit & ornamen ikut desain baru).'

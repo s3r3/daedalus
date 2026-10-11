@@ -43,6 +43,7 @@ beforeEach(() => {
   vi.mocked(api.restoreTask).mockClear()
   useDaedalusStore.setState({
     taskId: 'task-1',
+    domain: 'coding',
     events: [],
     workspace: { ...useDaedalusStore.getState().workspace, root: '/ws' },
   })
@@ -133,6 +134,50 @@ describe('Changes surface', () => {
     render(<DiffViewer />)
     expect(await screen.findByTestId('diff-file')).toBeTruthy()
     expect(screen.queryByLabelText('revert changed file new.txt')).toBeNull()
+  })
+})
+
+describe('Changes surface in the Slide domain', () => {
+  test('hides the branch badge, git status badges, the git-only section, and all revert buttons — task diffs and checkpoints stay', async () => {
+    useDaedalusStore.setState({
+      domain: 'slide',
+      events: [
+        ev(1, 'FILE_CHANGED', {
+          call_id: 'c1',
+          path: 'tracked.txt',
+          tool: 'write_file',
+          operation: 'modified',
+          added: 1,
+          removed: 1,
+          lines: [{ kind: 'add', text: 'agent edit' }],
+          patch: '',
+        }),
+      ],
+    })
+    render(<DiffViewer />)
+    expect(await screen.findByTestId('changes-panel')).toBeTruthy()
+    // Task diffs stay: the file chip and diff body render.
+    const file = await screen.findByTestId('diff-file')
+    expect(file.textContent).toContain('tracked.txt')
+    expect(screen.getByTestId('diff-body')).toBeTruthy()
+    // The git parts are gone: no branch badge, no per-file status badges,
+    // no git-only section, no revert buttons anywhere.
+    await waitFor(() => expect(vi.mocked(api.gitStatus)).toHaveBeenCalled())
+    expect(screen.queryByText('main')).toBeNull()
+    expect(file.textContent).not.toContain('modified')
+    expect(screen.queryByTestId('changes-git-only')).toBeNull()
+    expect(screen.queryByLabelText(/revert/i)).toBeNull()
+    // Checkpoints/restore survive the scoping.
+    expect(await screen.findByTestId('changes-checkpoints')).toBeTruthy()
+  })
+
+  test('the empty state shows when only git-only files exist in slide', async () => {
+    useDaedalusStore.setState({ domain: 'slide', events: [] })
+    vi.mocked(api.checkpoints).mockResolvedValueOnce({ checkpoints: [], count: 0 })
+    render(<DiffViewer />)
+    await waitFor(() => expect(vi.mocked(api.gitStatus)).toHaveBeenCalled())
+    expect(screen.queryByTestId('changes-git-only')).toBeNull()
+    expect(screen.getByText('No file changes yet')).toBeTruthy()
   })
 })
 

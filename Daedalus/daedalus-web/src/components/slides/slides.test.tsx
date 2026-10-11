@@ -982,6 +982,31 @@ describe('SlideStage editing', () => {
     expect(payload.content.title).toBe('Judul Baru')
   })
 
+  test('the speaker notes field initializes from slide.notes and rides the save', async () => {
+    const user = userEvent.setup()
+    const noted: DeckSpec = {
+      ...fixtureDeck,
+      slides: fixtureDeck.slides.map((slide) => (slide.id === 's1' ? { ...slide, notes: 'Buka dengan lelucon.' } : slide)),
+    }
+    fileMock.mockResolvedValue(deckFile(noted))
+    useDaedalusStore.getState().setWorkspace({ root: '/ws' })
+    render(<SlideStage />)
+
+    await screen.findByTestId('slide-counter')
+    await user.click(screen.getByTestId('slide-edit-toggle'))
+
+    const notes = screen.getByTestId('slide-editor-notes') as HTMLTextAreaElement
+    expect(notes.value).toBe('Buka dengan lelucon.')
+    await user.clear(notes)
+    await user.type(notes, 'Tutup dengan ringkasan.')
+    await user.click(screen.getByTestId('slide-editor-save'))
+
+    expect(deckUpdateSlideMock).toHaveBeenCalledTimes(1)
+    const [, slideId, payload] = deckUpdateSlideMock.mock.calls[0] as [string, string, { content: Record<string, unknown>; layout?: string; notes?: string }]
+    expect(slideId).toBe('s1')
+    expect(payload.notes).toBe('Tutup dengan ringkasan.')
+  })
+
   test('the variant button regenerates the slide through the engine endpoint, not a task', async () => {
     const user = userEvent.setup()
     useDaedalusStore.getState().setWorkspace({ root: '/ws' })

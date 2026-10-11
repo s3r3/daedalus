@@ -199,6 +199,9 @@ export type BuiltinTemplateInfo = {
 }
 
 export type DeckExportResult = { root: string; path: string; bytes: number; slides: number; note?: string }
+
+/** One entry of the new-chat deck archive (<root>/.daedalus/deck-archive/<name>/). */
+export type DeckArchiveInfo = { name: string; title: string; slides: number; archivedAt: string }
 /** A deck image asset saved through POST /slides/deck/asset (deck/assets/). */
 export type DeckAssetUploadResult = { root: string; name: string; path: string; size: number }
 
@@ -526,7 +529,7 @@ export const api = {
       body: JSON.stringify({ root, slide_id: slideId, ...input }),
     }),
 
-  deckUpdateSlide: (root: string, slideId: string, input: { content?: Record<string, unknown>; layout?: string; positions?: Record<string, import('@daedalus/core').BlockPosition> | null }) =>
+  deckUpdateSlide: (root: string, slideId: string, input: { content?: Record<string, unknown>; layout?: string; positions?: Record<string, import('@daedalus/core').BlockPosition> | null; notes?: string | null }) =>
     request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/slide/update', {
       method: 'POST',
       body: JSON.stringify({ root, slide_id: slideId, ...input }),
@@ -552,6 +555,21 @@ export const api = {
   deckReset: (root: string) =>
     request<DeckResetResult>('/slides/deck/reset', { method: 'POST', body: JSON.stringify({ root }) }),
 
+  /** List archived decks (new-chat resets) under .daedalus/deck-archive/. */
+  deckArchives: (root: string) =>
+    request<{ root: string; archives: DeckArchiveInfo[] }>(`/slides/deck/archive${query({ root })}`),
+
+  /**
+   * Restore an archived deck: the current deck is archived aside first
+   * (same naming as new-chat reset — never destructive), then the
+   * archive is copied back over deck/.
+   */
+  deckArchiveRestore: (root: string, name: string) =>
+    request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/archive/restore', {
+      method: 'POST',
+      body: JSON.stringify({ root, name }),
+    }),
+
   /**
    * The Outline panel's Buat button: generate the staged outline deck
    * (fill → validate → export) with the settled template. The server
@@ -561,6 +579,13 @@ export const api = {
     request<DeckGenerateResult>('/slides/deck/generate', {
       method: 'POST',
       body: JSON.stringify({ root, ...(input.template_id ? { template_id: input.template_id } : {}), ...(input.design_id ? { design_id: input.design_id } : {}) }),
+    }),
+
+  /** Export the open deck to PDF (via the .pptx exporter + LibreOffice headless). */
+  deckExportPdf: (root: string) =>
+    request<DeckExportResult>('/slides/deck/export-pdf', {
+      method: 'POST',
+      body: JSON.stringify({ root }),
     }),
 
   /** The workspace workbook via the core-gated sheet API (404 when no workbook exists). */
@@ -631,7 +656,7 @@ export const api = {
       body: JSON.stringify({ root, ...(choice?.design_id ? { design_id: choice.design_id } : {}), ...(choice?.custom_template_id ? { custom_template_id: choice.custom_template_id } : {}) }),
     }),
 
-  /** Direct download URL for an exported deck file (deck/*.pptx). */
+  /** Direct download URL for an exported deck file (deck/*.pptx or deck/*.pdf). */
   deckDownloadUrl: (root: string, path: string) => `/slides/deck/download${query({ root, path })}`,
 
   /** Pratinjau Asli: status of the LibreOffice render of the current deck state. */

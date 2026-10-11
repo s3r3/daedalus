@@ -19,7 +19,7 @@ function messageOf(error: unknown): string {
  * persists), or stays pending and rides the next task's create_deck when no
  * deck exists yet.
  */
-export function SlideTemplatesPanel() {
+export function SlideTemplatesPanel({ bare = false }: { bare?: boolean }) {
   const { deck, root } = useDeck()
   const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
   const pendingTemplateId = useDaedalusStore((state) => state.slideOptions.templateId)
@@ -62,8 +62,10 @@ export function SlideTemplatesPanel() {
     }
   }
 
-  return (
-    <Panel title="Warna & Font" data-testid="slide-templates">
+  // The body, shared by the standalone panel and the merged "Desain"
+  // panel's bare section: same fetch, same pick logic, same card testids.
+  const body = (
+    <>
       {error ? <p className="px-1 py-1 text-[11px] text-muted">{error}</p> : null}
       {templates.length === 0 && !error ? <p className="px-1 py-1 text-[11px] text-muted">Memuat warna & font…</p> : null}
       <div className="flex flex-col gap-1.5">
@@ -101,6 +103,23 @@ export function SlideTemplatesPanel() {
           )
         })}
       </div>
+    </>
+  )
+
+  // Bare mode: a pure section inside the merged "Desain" panel — no own
+  // Panel wrapper, title, or footer.
+  if (bare) {
+    return (
+      <section data-testid="slide-templates">
+        <p className="px-1 pb-1 text-[10px] font-medium uppercase tracking-wide text-muted">Warna &amp; Font</p>
+        {body}
+      </section>
+    )
+  }
+
+  return (
+    <Panel title="Warna & Font" data-testid="slide-templates">
+      {body}
       <p className="px-1 pt-1.5 text-[10px] text-muted">
         {deck ? 'Klik warna & font untuk menerapkannya ke deck ini.' : 'Warna & font terpilih dipakai saat deck berikutnya dibuat.'}
       </p>

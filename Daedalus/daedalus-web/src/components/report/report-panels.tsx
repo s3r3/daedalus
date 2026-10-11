@@ -114,6 +114,7 @@ export function ChildTasksPanel() {
 export function FinalReportView({ report }: { report: FinalReport | null }) {
   const events = useTaskEvents()
   const taskId = useActiveTaskId() ?? 'task'
+  const domain = useDaedalusStore((state) => state.domain)
   const derived = useMemo(() => reportFromEvents(taskId, events, report), [events, report, taskId])
   const outcome = outcomeOf(events)
 
@@ -124,6 +125,9 @@ export function FinalReportView({ report }: { report: FinalReport | null }) {
   }
 
   if (!derived) {
+    // Slide has no idle empty box: without a derived report the panel
+    // renders nothing (other domains keep the "No report yet" state).
+    if (domain === 'slide') return null
     return (
       <Panel title="final report" data-testid="final-report-panel">
         <EmptyState title="No report yet" hint="A report is produced when the task completes, with evidence and metrics." />

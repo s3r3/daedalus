@@ -4,24 +4,18 @@ import userEvent from '@testing-library/user-event'
 import type { DeckSpec } from '@daedalus/core'
 import { BUILTIN_TEMPLATES } from '@daedalus/core/slides/builtin-templates'
 import { useDaedalusStore } from '../../state/taskStore'
-import { SlideBuiltinTemplatesPanel } from './slide-builtin-templates'
-import { SlidePptTemplatesPanel } from './slide-ppt-templates'
+import { SlideDesignPanel } from './slide-design-panel'
 
 const fileMock = vi.fn()
 const builtinTemplatesMock = vi.fn()
-const pptTemplatesMock = vi.fn()
-const pptTemplateUploadMock = vi.fn()
-const pptTemplateDeleteMock = vi.fn()
+const slideTemplatesMock = vi.fn()
 const deckThemeMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
   api: {
     file: (...args: unknown[]) => fileMock(...args),
     builtinTemplates: (...args: unknown[]) => builtinTemplatesMock(...args),
-    pptTemplates: (...args: unknown[]) => pptTemplatesMock(...args),
-    pptTemplateUpload: (...args: unknown[]) => pptTemplateUploadMock(...args),
-    pptTemplateDelete: (...args: unknown[]) => pptTemplateDeleteMock(...args),
-    pptTemplateBackgroundUrl: (root: string, id: string) => `/slides/ppt-templates/background?root=${encodeURIComponent(root)}&id=${encodeURIComponent(id)}`,
+    slideTemplates: (...args: unknown[]) => slideTemplatesMock(...args),
     deckTheme: (...args: unknown[]) => deckThemeMock(...args),
   },
 }))
@@ -37,21 +31,17 @@ const builtinInfos = BUILTIN_TEMPLATES.map((template) => ({
   typography: template.typography,
 }))
 
+const skinInfos = [
+  { id: 'general', name: 'General', description: 'Default', theme: { background: '#201f26', accent: '#6b50ff', text: '#ecebf0', headingFont: 'Arial', bodyFont: 'Arial' } },
+  { id: 'ocean', name: 'Ocean', description: 'Biru laut', theme: { background: '#0e2a47', accent: '#2dd4bf', text: '#e8f4ff', headingFont: 'Verdana', bodyFont: 'Arial' } },
+]
+
 const fixtureDeck: DeckSpec = {
   version: 1,
   id: 'deck-uji',
   title: 'Deck Uji',
   theme: {},
   slides: [{ id: 's1', layout: 'title', content: { title: 'Judul Besar' } }],
-}
-
-const importedTemplate = {
-  id: 'emerald-gold',
-  name: 'Emerald Gold',
-  sourceFile: 'Emerald Gold.pptx',
-  createdAt: '2026-10-09T12:00:00.000Z',
-  theme: { background: '#0f2d1e', accent: '#c59a46', text: '#f7f3e8', headingFont: 'Georgia', bodyFont: 'Verdana' },
-  slideSize: { cx: 12192000, cy: 6858000, label: '16:9' },
 }
 
 function deckFile(deck: DeckSpec = fixtureDeck): { path: string; content: string; size: number } {
@@ -65,12 +55,8 @@ beforeEach(() => {
   fileMock.mockResolvedValue(deckFile())
   builtinTemplatesMock.mockReset()
   builtinTemplatesMock.mockResolvedValue({ templates: builtinInfos })
-  pptTemplatesMock.mockReset()
-  pptTemplatesMock.mockResolvedValue({ root: '/ws', templates: [importedTemplate] })
-  pptTemplateUploadMock.mockReset()
-  pptTemplateUploadMock.mockResolvedValue({ root: '/ws', template: { ...importedTemplate, id: 'baru', name: 'Baru' } })
-  pptTemplateDeleteMock.mockReset()
-  pptTemplateDeleteMock.mockResolvedValue({ root: '/ws', id: 'emerald-gold', deleted: true })
+  slideTemplatesMock.mockReset()
+  slideTemplatesMock.mockResolvedValue({ templates: skinInfos })
   deckThemeMock.mockReset()
   deckThemeMock.mockResolvedValue({ root: '/ws', deck: fixtureDeck })
   useDaedalusStore.getState().reset()
@@ -79,26 +65,29 @@ beforeEach(() => {
 
 afterEach(() => cleanup())
 
-describe('Template gallery (Template bawaan + Template impor)', () => {
-  test('both sections render: built-in design cards beside the imported list', async () => {
-    render(
-      <>
-        <SlideBuiltinTemplatesPanel />
-        <SlidePptTemplatesPanel />
-      </>,
-    )
-    expect(await screen.findByTestId('slide-builtin-templates')).toBeTruthy()
-    expect(await screen.findByTestId('slide-ppt-templates')).toBeTruthy()
+describe('SlideDesignPanel (merged Desain panel)', () => {
+  test('renders one panel with both sections: Desain bawaan cards and Warna & Font skins', async () => {
+    render(<SlideDesignPanel />)
+
+    const panel = await screen.findByTestId('slide-design-panel')
+    expect(panel.textContent).toContain('Desain')
+    expect(screen.getByText('Desain bawaan')).toBeTruthy()
+    expect(screen.getByText('Warna & Font')).toBeTruthy()
+    // The old standalone panel titles are gone: one merged panel only.
+    expect(screen.queryByText('Template bawaan')).toBeNull()
+    expect(screen.queryByText('Template impor')).toBeNull()
+
     for (const id of ['standar', 'editorial', 'arena', 'cendekia', 'galeri', 'verve']) {
       expect(await screen.findByTestId(`slide-builtin-template-${id}`)).toBeTruthy()
     }
-    expect(await screen.findByTestId('slide-ppt-template-emerald-gold')).toBeTruthy()
+    expect(await screen.findByTestId('slide-template-general')).toBeTruthy()
+    expect(await screen.findByTestId('slide-template-ocean')).toBeTruthy()
   })
 
   test('clicking a built-in card applies the design to the open deck and retires a pending PPT pick', async () => {
     const user = userEvent.setup()
     useDaedalusStore.getState().setSlideOptions({ customTemplateId: 'emerald-gold' })
-    render(<SlideBuiltinTemplatesPanel />)
+    render(<SlideDesignPanel />)
 
     await user.click(await screen.findByTestId('slide-builtin-template-galeri'))
     expect(deckThemeMock).toHaveBeenCalledWith('/ws', { design_id: 'galeri' })
@@ -107,13 +96,26 @@ describe('Template gallery (Template bawaan + Template impor)', () => {
     expect(options.customTemplateId).toBeNull()
   })
 
-  test('without a deck, clicking a built-in card selects it for the next generation only', async () => {
+  test('clicking a skin applies it through the same API, keeping the design layer', async () => {
+    const user = userEvent.setup()
+    render(<SlideDesignPanel />)
+
+    await user.click(await screen.findByTestId('slide-template-ocean'))
+    expect(deckThemeMock).toHaveBeenCalledWith('/ws', { template_id: 'ocean' })
+    expect(useDaedalusStore.getState().slideOptions.templateId).toBe('ocean')
+  })
+
+  test('without a deck, picks select for the next generation only', async () => {
     const user = userEvent.setup()
     fileMock.mockRejectedValue(new Error('404 Not Found'))
-    render(<SlideBuiltinTemplatesPanel />)
+    render(<SlideDesignPanel />)
 
     await user.click(await screen.findByTestId('slide-builtin-template-arena'))
     expect(deckThemeMock).not.toHaveBeenCalled()
     expect(useDaedalusStore.getState().slideOptions.designId).toBe('arena')
+
+    await user.click(await screen.findByTestId('slide-template-general'))
+    expect(deckThemeMock).not.toHaveBeenCalled()
+    expect(useDaedalusStore.getState().slideOptions.templateId).toBe('general')
   })
 })

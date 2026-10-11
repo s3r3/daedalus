@@ -28,6 +28,7 @@ export function SlideEditor({ root, deck, slide, index, onChanged }: {
   const setSlideIndex = useDaedalusStore((state) => state.setSlideIndex)
   const [layout, setLayout] = useState(slide.layout)
   const [json, setJson] = useState('')
+  const [notes, setNotes] = useState(slide.notes ?? '')
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -36,9 +37,10 @@ export function SlideEditor({ root, deck, slide, index, onChanged }: {
   useEffect(() => {
     setLayout(slide.layout)
     setJson(JSON.stringify(slide.content, null, 2))
+    setNotes(slide.notes ?? '')
     setError(null)
     setStatus(null)
-  }, [slide.id, slide.layout, slide.content])
+  }, [slide.id, slide.layout, slide.content, slide.notes])
 
   const parsed = useMemo(() => {
     try {
@@ -77,7 +79,10 @@ export function SlideEditor({ root, deck, slide, index, onChanged }: {
       setError('JSON konten tidak valid — perbaiki dulu sebelum menyimpan.')
       return
     }
-    void run(() => api.deckUpdateSlide(root, slide.id, { content: parsed, layout }), 'Slide tersimpan.')
+    // Speaker notes ride along with every save: the server stores them
+    // on slide.notes (exported to .pptx by addNotes) and drops the key
+    // when the field is empty.
+    void run(() => api.deckUpdateSlide(root, slide.id, { content: parsed, layout, notes }), 'Slide tersimpan.')
   }
 
   const duplicate = (): void => {
@@ -218,6 +223,18 @@ export function SlideEditor({ root, deck, slide, index, onChanged }: {
           spellCheck={false}
           data-testid="slide-editor-json"
           className="rounded border border-line bg-surface-raised px-2 py-1.5 font-mono text-[11px] text-foreground"
+        />
+      </label>
+
+      <label className="flex flex-col gap-1 text-[11px] text-muted">
+        Catatan pembicara
+        <textarea
+          value={notes}
+          onChange={(event) => setNotes(event.target.value)}
+          rows={3}
+          data-testid="slide-editor-notes"
+          placeholder="Catatan untuk presenter — ikut diekspor ke .pptx sebagai speaker notes."
+          className="rounded border border-line bg-surface-raised px-2 py-1.5 text-[11px] text-foreground"
         />
       </label>
 
