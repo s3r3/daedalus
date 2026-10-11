@@ -6,74 +6,65 @@ import { useTaskEvents } from '../../state/hooks'
 import { errors, recoveries, replanCount, type ErrorEntry } from '../../state/selectors'
 
 /**
- * Recovery + error surfaces: RECOVERY_STARTED attempts, REPLAN_CREATED
- * revisions, and the classified errors (model / tool / validation / task).
+ * Failure surface: the task's classified errors (model / tool /
+ * validation / task), RECOVERY_STARTED attempts, and the REPLAN_CREATED
+ * count — one failed task is one state, not two panels.
+ *
+ * Rendered only when errors were recorded or a recovery/replan actually
+ * happened: an always-on "no failures" box is decoration, not
+ * information. The error entries stay expandable, exactly as before.
  */
-export function RecoveryPanel() {
+export function FailurePanel() {
   const events = useTaskEvents()
+  const entries = useMemo(() => errors(events), [events])
   const attempts = useMemo(() => recoveries(events), [events])
   const replans = useMemo(() => replanCount(events), [events])
+  const [expanded, setExpanded] = useState<number | null>(null)
 
-  // Rendered only when a recovery actually happened: an always-on
-  // "No recovery needed" box is decoration, not information.
-  if (attempts.length === 0 && replans === 0) return null
+  if (entries.length === 0 && attempts.length === 0 && replans === 0) return null
 
   return (
     <Panel
-      title="recovery"
-      data-testid="recovery-panel"
+      title="failure"
+      data-testid="failure-panel"
       action={
-        <Badge tone="warning" data-testid="recovery-count">
-          {attempts.length} retries · {replans} replans
+        <Badge tone="error" data-testid="failure-count">
+          {entries.length} errors · {attempts.length} retries · {replans} replans
         </Badge>
       }
       bodyClassName="flex flex-col gap-1.5"
     >
-        <>
-          {attempts.map((attempt, index) => (
-            <div
-              key={`${attempt.reason}-${index}`}
-              data-testid="recovery-attempt"
-              className="motion-retry-enter rounded border border-line px-1.5 py-1 text-[11px]"
-            >
-              <div className="flex items-center gap-1.5">
-                <Badge tone="warning">{attempt.strategy}</Badge>
-                <span className="text-foreground">{attempt.reason}</span>
-                <span className="ml-auto text-[10px] text-muted">attempt {attempt.attempt}</span>
-              </div>
-            </div>
-          ))}
-          {replans > 0 ? (
-            <p className="text-[10px] text-muted" data-testid="replan-indicator">
-              plan revised {replans}× (REPLAN_CREATED)
-            </p>
-          ) : null}
-        </>
-    </Panel>
-  )
-}
-
-export function ErrorPanel() {
-  const events = useTaskEvents()
-  const entries = useMemo(() => errors(events), [events])
-  const [expanded, setExpanded] = useState<number | null>(null)
-
-  // Rendered only when errors were actually recorded: an always-on
-  // "No errors recorded" box is decoration, not information.
-  if (entries.length === 0) return null
-
-  return (
-    <Panel
-      title="errors"
-      data-testid="error-panel"
-      action={<Badge tone="error">{entries.length}</Badge>}
-      bodyClassName="flex flex-col gap-1"
-    >
-        <ul className="flex flex-col gap-1">
+      {entries.length > 0 ? (
+        <ul className="flex flex-col gap-1" data-testid="failure-errors">
           {entries.map((entry) => (
-            <ErrorRow key={`${entry.seq}-${entry.type}`} entry={entry} expanded={expanded === entry.seq} onToggle={() => setExpanded(expanded === entry.seq ? null : entry.seq)} />
+            <ErrorRow
+              key={`${entry.seq}-${entry.type}`}
+              entry={entry}
+              expanded={expanded === entry.seq}
+              onToggle={() => setExpanded(expanded === entry.seq ? null : entry.seq)}
+            />
           ))}
         </ul>
+      ) : null}
+
+      {attempts.map((attempt, index) => (
+        <div
+          key={`${attempt.reason}-${index}`}
+          data-testid="recovery-attempt"
+          className="motion-retry-enter rounded border border-line px-1.5 py-1 text-[11px]"
+        >
+          <div className="flex items-center gap-1.5">
+            <Badge tone="warning">{attempt.strategy}</Badge>
+            <span className="text-foreground">{attempt.reason}</span>
+            <span className="ml-auto text-[10px] text-muted">attempt {attempt.attempt}</span>
+          </div>
+        </div>
+      ))}
+      {replans > 0 ? (
+        <p className="text-[10px] text-muted" data-testid="replan-indicator">
+          plan revised {replans}× (REPLAN_CREATED)
+        </p>
+      ) : null}
     </Panel>
   )
 }

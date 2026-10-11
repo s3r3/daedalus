@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo } from 'react'
 import type { FinalReport } from '@daedalus/core'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -106,15 +106,22 @@ export function ChildTasksPanel() {
 }
 
 /**
- * Final report: outcome, evidence, and metrics. The diff body expands once the
- * task completes (§3.4 "task complete → report card expands to reveal the diff").
+ * Final report: outcome, evidence, and metrics. The diff lives in the one
+ * Changes surface — this panel links to it instead of rendering a second
+ * copy (§3.4 "task complete → report card expands to reveal the diff" now
+ * resolves to the Changes panel below).
  */
 export function FinalReportView({ report }: { report: FinalReport | null }) {
   const events = useTaskEvents()
   const taskId = useActiveTaskId() ?? 'task'
   const derived = useMemo(() => reportFromEvents(taskId, events, report), [events, report, taskId])
   const outcome = outcomeOf(events)
-  const [showDiff, setShowDiff] = useState(false)
+
+  // No second diff renderer: the Changes surface is the single place
+  // diffs render. This button just brings it into view.
+  const scrollToChanges = (): void => {
+    document.querySelector('[data-testid="changes-panel"]')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
 
   if (!derived) {
     return (
@@ -160,15 +167,9 @@ export function FinalReportView({ report }: { report: FinalReport | null }) {
         ) : null}
 
         {patch.length > 0 ? (
-          <Button variant="outline" size="sm" className="self-start" onClick={() => setShowDiff((value) => !value)} data-testid="report-diff-toggle">
-            {showDiff ? 'hide diff' : `show diff (${derived.metrics.files_changed ?? 0} files)`}
+          <Button variant="outline" size="sm" className="self-start" onClick={scrollToChanges} data-testid="report-view-changes">
+            view diff in changes ({derived.metrics.files_changed ?? 0} files)
           </Button>
-        ) : null}
-
-        {showDiff && patch.length > 0 ? (
-          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded border border-line bg-surface p-2 text-[10px] text-foreground" data-testid="report-diff">
-            {patch}
-          </pre>
         ) : null}
       </div>
     </Panel>

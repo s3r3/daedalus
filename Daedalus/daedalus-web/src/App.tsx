@@ -2,18 +2,16 @@ import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, ty
 import { TopBar } from './components/layout/top-bar'
 import { Composer } from './components/composer/composer'
 import { WorkspacePanel } from './components/workspace/workspace-panel'
-import { GitPanel } from './components/workspace/git-panel'
 import { SettingsDialog } from './components/settings/settings-dialog'
 import { ExtensionsPanel } from './components/settings/extensions-panel'
 import { EditorPane } from './components/editor/editor-pane'
 import { DiffViewer } from './components/editor/diff-viewer'
 import { PlanPanel } from './components/agent/plan-panel'
-import { ActivityTimeline } from './components/agent/activity-timeline'
 import { ChatPanel } from './components/agent/chat-panel'
 import { PlanChipsBar } from './components/agent/plan-chips-bar'
 import { TerminalPane } from './components/terminal/terminal-pane'
 import { ValidationPanel } from './components/validation/validation-panel'
-import { ErrorPanel, RecoveryPanel } from './components/recovery/recovery-panel'
+import { FailurePanel } from './components/recovery/recovery-panel'
 import { AttachmentsPanel, ChildTasksPanel, FinalReportView } from './components/report/report-panels'
 import { ScrollArea } from './components/ui/scroll-area'
 import { SlideStage } from './components/slides/slide-stage'
@@ -354,10 +352,8 @@ export function App() {
               {domain === 'spreadsheet' ? <SheetDataPanel /> : null}
               {domain === 'coding' ? <ExtensionsPanel /> : null}
               <PlanPanel />
-              <ActivityTimeline />
               <ValidationPanel />
-              <RecoveryPanel />
-              <ErrorPanel />
+              <FailurePanel />
             </div>
           </ScrollArea>
         </aside>
@@ -400,7 +396,6 @@ export function App() {
               {domain === 'dokumen' ? <DokumenReportPanel /> : null}
               {domain === 'spreadsheet' ? <SheetReportPanel /> : null}
               {domain === 'dokumen' || domain === 'spreadsheet' ? null : <DiffViewer />}
-              {domain === 'dokumen' || domain === 'spreadsheet' ? null : <GitPanel />}
               {domain === 'dokumen' || domain === 'spreadsheet' ? null : <AttachmentsPanel />}
               {domain === 'dokumen' || domain === 'spreadsheet' ? null : <ChildTasksPanel />}
               {domain === 'dokumen' || domain === 'spreadsheet' ? null : <FinalReportView report={report} />}

@@ -283,6 +283,16 @@ export type FileChange = {
   mirrored?: boolean
 }
 
+/**
+ * One pre-mutation backup the task recorded (the CLI `restore` command's
+ * data, now surfaced in Web): `path` is workspace-relative, `created`
+ * means the file did not exist before the task (restore deletes it).
+ */
+export type TaskCheckpoint = {
+  path: string
+  created: boolean
+}
+
 /** The parent ran the goal itself: the decomposition was a single sequential path. */
 export type OrchestrationSkipped = { reason: 'single_path' | string; mode?: string; decomposed_children?: number; note?: string }
 

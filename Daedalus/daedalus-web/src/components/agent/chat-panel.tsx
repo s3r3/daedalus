@@ -14,6 +14,7 @@ import { approvalId, chatTranscript, pendingApprovals, pendingQuestions, session
 import { ApprovalCard } from '../approval/approval-card'
 import { QuestionCard } from '../approval/question-card'
 import { ExecutePlanBar } from './execute-plan-bar'
+import { ContextGauge } from './context-gauge'
 import { STATUS_TONE, type Tone } from './status-tone'
 import { ToolResultImage } from './tool-result-image'
 
@@ -250,6 +251,7 @@ export function ChatPanel() {
       bodyClassName="min-h-0"
       action={
         <span className="flex items-center gap-1">
+          <ContextGauge />
           <Button
             type="button"
             variant="outline"
@@ -509,26 +511,35 @@ function ChatRow({ entry }: { entry: ChatEntry }) {
           )}
         </li>
       )
+    // The single transcript's tool rows: one collapsible row per tool call
+    // (the old ActivityTimeline's ToolCallList folded in here). Finished
+    // calls collapse to their title line; a running call stays open.
     case 'tool':
       return (
-        <li className="rounded border border-line px-2 py-1.5" data-testid="chat-entry" data-role="tool" data-tool={entry.tool}>
-          <div className="flex items-center gap-1.5">
-            <span className="text-[11px] font-semibold text-foreground">{entry.tool}</span>
-            {entry.status === 'running' ? (
-              <Spinner label={`${entry.tool} running`} />
-            ) : (
-              <Badge tone={toneForChatStatus(entry.status)}>{entry.status ?? 'done'}</Badge>
-            )}
-          </div>
-          {entry.text ? <p className="mt-0.5 break-words font-mono text-[10px] text-muted">{entry.text}</p> : null}
-          {entry.detail ? (
-            <pre className="mt-1 max-h-24 overflow-auto whitespace-pre-wrap break-words rounded bg-surface px-1.5 py-1 text-[10px] text-foreground">
-              {entry.detail}
-            </pre>
-          ) : entry.status === 'running' ? (
-            <p className="mt-0.5 text-[10px] text-muted">awaiting result…</p>
-          ) : null}
-          {entry.image ? <ToolResultImage path={entry.image.path} /> : null}
+        <li className="rounded border border-line" data-testid="chat-entry" data-role="tool" data-tool={entry.tool}>
+          <details data-testid="chat-tool-row" open={entry.status === 'running'}>
+            <summary className="flex cursor-pointer items-center gap-1.5 px-2 py-1.5">
+              <span className="shrink-0 text-[11px] font-semibold text-foreground">{entry.tool}</span>
+              {entry.status === 'running' ? (
+                <Spinner label={`${entry.tool} running`} />
+              ) : (
+                <Badge tone={toneForChatStatus(entry.status)}>{entry.status ?? 'done'}</Badge>
+              )}
+              {entry.text ? (
+                <span className="min-w-0 flex-1 truncate break-words font-mono text-[10px] text-muted">{entry.text}</span>
+              ) : null}
+            </summary>
+            <div className="border-t border-line px-2 py-1.5">
+              {entry.detail ? (
+                <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words rounded bg-surface px-1.5 py-1 text-[10px] text-foreground">
+                  {entry.detail}
+                </pre>
+              ) : entry.status === 'running' ? (
+                <p className="text-[10px] text-muted">awaiting result…</p>
+              ) : null}
+              {entry.image ? <ToolResultImage path={entry.image.path} /> : null}
+            </div>
+          </details>
         </li>
       )
     case 'approval':
