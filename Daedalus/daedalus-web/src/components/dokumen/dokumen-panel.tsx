@@ -201,7 +201,8 @@ function OutlinePanel({ document, loading, error, root, refresh }: { document: D
         domain: 'dokumen',
         auto_approve: store.composer.autoApprove,
         mode: store.composer.mode,
-        thinking: store.composer.thinking,
+        // thinking level lives in server Settings now (3-layer restructure),
+        // not on the task payload.
         ...(store.composer.model ? { model: store.composer.model } : {}),
         dokumen: { sub_mode: 'susun' },
         ...(store.conversation && store.conversation.root === root ? { conversation_id: store.conversation.id } : {}),
