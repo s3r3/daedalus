@@ -86,6 +86,9 @@ import {
   readWorkbook,
   writeWorkbook,
   validateWorkbook,
+  listWorkbookCheckpoints,
+  restoreWorkbookCheckpoint,
+  verifyWorkbook,
   workbookPaths,
   exportWorkbookToXlsx,
   exportWorkbookCsv,
@@ -4001,6 +4004,83 @@ export function createApp(ctx: AppContext) {
           sendJson(res, 200, { root, records: [record] });
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Verify on demand (the SheetStage toolbar's Verify button): the
+    // deterministic gate — export to .xlsx, run the core evaluator
+    // plus the LibreOffice recalc arm when present — persisted onto
+    // workbook.verify exactly like the engine's own gate, no model
+    // call involved.
+    if (method === "POST" && url.pathname === "/sheets/workbook/verify") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const workbook = await readWorkbook(root);
+          if (!workbook) {
+            sendJson(res, 404, { error: "workbook_not_found", request_id: requestId });
+            return;
+          }
+          const record = await exportWorkbookToXlsx(workbook, root);
+          const verify = await verifyWorkbook(workbook, { exportPath: record.path });
+          workbook.verify = verify;
+          workbook.exports = [record, ...(workbook.exports ?? [])].slice(0, 10);
+          await writeWorkbook(root, workbook);
+          sendJson(res, 200, { root, verify, record, request_id: requestId });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Workbook checkpoints: previous states of workbook.json kept
+    // under .daedalus/workbook-history (snapshotted on every
+    // writeWorkbook). Restore is never destructive — the current
+    // state is snapshotted first, so it stays in history.
+    if (method === "GET" && url.pathname === "/sheets/workbook/checkpoints") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const checkpoints = await listWorkbookCheckpoints(root);
+          sendJson(res, 200, { checkpoints, count: checkpoints.length, request_id: requestId });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/sheets/workbook/restore") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const name = typeof parsed.name === "string" ? parsed.name : "";
+          const restored = await restoreWorkbookCheckpoint(root, name);
+          sendJson(res, 200, { root, name, workbook: restored, request_id: requestId });
+        } catch (error) {
+          const message = errorMessage(error);
+          const status =
+            message === "nama checkpoint tidak valid"
+              ? 400
+              : message === "checkpoint tidak ditemukan"
+                ? 404
+                : message === "checkpoint bukan workbook yang valid" || message === "checkpoint rusak (bukan JSON valid)"
+                  ? 422
+                  : errorStatus(error);
+          sendJson(res, status, { error: message, request_id: requestId });
         }
       })();
       return;

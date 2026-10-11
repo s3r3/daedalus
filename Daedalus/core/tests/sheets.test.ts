@@ -23,6 +23,8 @@ import {
   verifyWorkbook,
   verifyWorkbookCore,
   writeWorkbook,
+  listWorkbookCheckpoints,
+  restoreWorkbookCheckpoint,
   type WorkbookSpec,
 } from '../src/index.ts';
 import type { LLMProvider } from '../src/providers/llm/types.ts';
@@ -458,4 +460,56 @@ describe('SpreadsheetEngine end to end (scripted provider)', () => {
     editEngine.stop();
     badEngine.stop();
   }, 90_000);
+});
+
+describe('workbook checkpoints', () => {
+  test('each save snapshots its predecessor; restore is never destructive', async () => {
+    const root = tempWorkspace();
+    const wb = goldenWorkbook();
+    wb.title = 'V1';
+    await writeWorkbook(root, wb);
+    expect(await listWorkbookCheckpoints(root)).toHaveLength(0);
+
+    const v2 = { ...structuredClone(wb), title: 'V2' };
+    await writeWorkbook(root, v2);
+    const v3 = { ...structuredClone(wb), title: 'V3' };
+    await writeWorkbook(root, v3);
+
+    const checkpoints = await listWorkbookCheckpoints(root);
+    expect(checkpoints).toHaveLength(2);
+    // Newest first.
+    expect(checkpoints[0]?.title).toBe('V2');
+    expect(checkpoints[1]?.title).toBe('V1');
+    expect(checkpoints[0]?.sheets).toBeGreaterThan(0);
+
+    // Restore the oldest: current state must survive as a checkpoint.
+    const restored = await restoreWorkbookCheckpoint(root, checkpoints[1]!.name);
+    expect(restored.title).toBe('V1');
+    expect((await readWorkbook(root))?.title).toBe('V1');
+    const titles = (await listWorkbookCheckpoints(root)).map((c) => c.title);
+    expect(titles).toContain('V3');
+  });
+
+  test('identical saves do not create checkpoints; history is capped', async () => {
+    const root = tempWorkspace();
+    const wb = goldenWorkbook();
+    await writeWorkbook(root, wb);
+    await writeWorkbook(root, structuredClone(wb));
+    expect(await listWorkbookCheckpoints(root)).toHaveLength(0);
+
+    for (let i = 0; i < 25; i += 1) {
+      const next = { ...structuredClone(wb), title: `V${i}` };
+      await writeWorkbook(root, next);
+    }
+    const checkpoints = await listWorkbookCheckpoints(root);
+    expect(checkpoints.length).toBeLessThanOrEqual(20);
+    expect(checkpoints.length).toBeGreaterThan(0);
+  });
+
+  test('restore rejects traversal names and corrupt checkpoints', async () => {
+    const root = tempWorkspace();
+    await writeWorkbook(root, goldenWorkbook());
+    await expect(restoreWorkbookCheckpoint(root, '../evil.json')).rejects.toThrow('nama checkpoint tidak valid');
+    await expect(restoreWorkbookCheckpoint(root, 'nope.json')).rejects.toThrow('checkpoint tidak ditemukan');
+  });
 });
