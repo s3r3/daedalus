@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
-import { ChevronDown, ChevronRight, Download, File as FileIcon, FileJson2, FileType2, Folder, FolderOpen, RefreshCw } from 'lucide-react'
+import { Archive, ChevronDown, ChevronRight, Download, File as FileIcon, FileJson2, FileType2, Folder, FolderOpen, RefreshCw } from 'lucide-react'
 import { api } from '../../api/client'
 import { Button } from '../ui/button'
 import type { WorkspaceEntry } from '../../api/types'
 import { useDaedalusStore } from '../../state/taskStore'
 import { cn } from '../../lib/utils'
+import { SlideArchiveBrowser } from './slide-archive-browser'
 
 /**
  * Slide-domain workspace panel (Farid's rule): in Slide mode the workspace
@@ -25,6 +26,7 @@ export function SlideWorkspacePanel({ className, style }: { className?: string; 
   const [expanded, setExpanded] = useState<string[]>([])
   const [loadingPath, setLoadingPath] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [archiveOpen, setArchiveOpen] = useState(false)
   const expandedRef = useRef<string[]>([])
   const autoExpandedRoot = useRef<string | null>(null)
   expandedRef.current = expanded
@@ -116,10 +118,22 @@ export function SlideWorkspacePanel({ className, style }: { className?: string; 
           type="button"
           variant="ghost"
           size="sm"
+          onClick={() => setArchiveOpen(true)}
+          disabled={!root}
+          data-testid="slide-archive-open"
+          className="ml-auto"
+          aria-label="buka arsip deck"
+          title="Arsip deck (chat baru mengarsipkan deck ke sini)"
+        >
+          <Archive /> arsip
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
           onClick={bumpWorkspaceRevision}
           disabled={!root}
           data-testid="slide-ws-refresh"
-          className="ml-auto"
           aria-label="refresh workspace"
         >
           <RefreshCw /> refresh
@@ -151,6 +165,7 @@ export function SlideWorkspacePanel({ className, style }: { className?: string; 
         )}
       </div>
       {root ? <p className="truncate border-t border-line px-3 py-1.5 text-[10px] text-muted" title={root}>{root}</p> : null}
+      {archiveOpen ? <SlideArchiveBrowser onClose={() => setArchiveOpen(false)} /> : null}
     </section>
   )
 }

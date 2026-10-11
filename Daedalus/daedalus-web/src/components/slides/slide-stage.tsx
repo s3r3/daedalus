@@ -226,6 +226,22 @@ export function SlideStage() {
     }
   }
 
+  const exportPdf = async (): Promise<void> => {
+    if (!root) return
+    setExportMenuOpen(false)
+    setExporting(true)
+    setExportError(null)
+    try {
+      const result = await api.deckExportPdf(root)
+      setExported(result)
+      bumpWorkspaceRevision()
+    } catch (exportErr: unknown) {
+      setExportError(exportErr instanceof Error ? exportErr.message : String(exportErr))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <div data-testid="slide-stage" className={`flex h-full min-h-0 flex-col gap-2 p-3 ${editing ? 'overflow-y-auto' : 'overflow-hidden'}`}>
       <div className="flex flex-wrap items-center gap-2">
@@ -332,6 +348,15 @@ export function SlideStage() {
                 >
                   Sesuai deck{deckDesignName(deck, builtinTemplates) ? ` (${deckDesignName(deck, builtinTemplates)})` : ''}
                 </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="block w-full rounded px-1.5 py-1 text-left text-[11px] text-foreground hover:bg-surface-raised"
+                  data-testid="slide-export-pdf"
+                  onClick={() => void exportPdf()}
+                >
+                  Export PDF
+                </button>
                 <p className="px-1.5 pb-0.5 pt-1.5 text-[10px] font-medium uppercase tracking-wide text-muted">Template bawaan</p>
                 {builtinTemplates.map((template) => (
                   <button
@@ -379,7 +404,7 @@ export function SlideStage() {
         <p data-testid="slide-exported" className="text-[11px] text-muted">
           Terekspor: {exported.path} ({Math.max(1, Math.round(exported.bytes / 1024))} KB, {exported.slides} slide) —{' '}
           <a className="text-primary underline" href={api.deckDownloadUrl(exported.root, exported.path)} download>
-            unduh .pptx
+            {exported.path.toLowerCase().endsWith('.pdf') ? 'unduh .pdf' : 'unduh .pptx'}
           </a>
           {exported.note ? <span className="block">{exported.note}</span> : null}
         </p>
