@@ -1881,7 +1881,7 @@ export class AgentLoop {
       try {
         return this.#streamText
           ? await this.#chatStreamed(taskId, turnId, messages, tools, phase)
-          : await this.#provider.chat(messages, tools, { ...this.#chatOptions, phase });
+          : await this.#provider.chat(messages, tools, { ...this.#chatOptions, phase, cachePrefix: true });
       } catch (error) {
         if (modelPoolFailureReason(error) !== 'format_or_empty' || attempt >= backoffMs.length) throw error;
         await this.#emit(taskId, turnId, 'LOOP_WARNING', { tool: '', repeats: attempt + 1, suppressed: false, kind: 'empty_response_retry', attempt: attempt + 1 });
@@ -1901,7 +1901,7 @@ export class AgentLoop {
     let lastEmitAt = 0;
     let emitted = false;
     try {
-      for await (const chunk of this.#provider.stream(messages, tools, { ...this.#chatOptions, phase })) {
+      for await (const chunk of this.#provider.stream(messages, tools, { ...this.#chatOptions, phase, cachePrefix: true })) {
         assembler.push(chunk);
         if (chunk.type === 'delta' && chunk.content) {
           const now = Date.now();
@@ -1914,12 +1914,12 @@ export class AgentLoop {
       }
     } catch (error) {
       if (!emitted && assembler.empty) {
-        return this.#provider.chat(messages, tools, { ...this.#chatOptions, phase });
+        return this.#provider.chat(messages, tools, { ...this.#chatOptions, phase, cachePrefix: true });
       }
       throw error;
     }
     if (assembler.empty) {
-      return this.#provider.chat(messages, tools, { ...this.#chatOptions, phase });
+      return this.#provider.chat(messages, tools, { ...this.#chatOptions, phase, cachePrefix: true });
     }
     // Only text turns produce delta events: a tool-call turn with no
     // prose must leave the event sequence exactly as it was before
