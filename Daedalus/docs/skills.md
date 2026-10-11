@@ -83,13 +83,18 @@ double-report.
 ## Bundled starter skills
 
 Daedalus ships a small catalog of starter skills in `Daedalus/skills/`.
-They are a *catalog*, not an install: `daedalus skills list` shows them,
-`daedalus skills install <name>` (or `--all`) copies one into the
-workspace skills directory, and only then does the loader see it. Nothing
-bundled is loaded, indexed, or active by default.
+They are **permanent**: on the first task run (and at server start) any
+bundled skill missing from the Daedalus-global skills directory
+(`~/.daedalus/skills`) is copied there automatically — present and enabled
+by default in every workspace, with zero downloads. An existing same-name
+copy is never overwritten, and any skill stays disable-able per workspace
+(`.daedalus/skills.json`, Web Settings → Extensions, or
+`daedalus skills disable <name>`). `daedalus skills install <name>
+--global --force` refreshes a bundled copy after a Daedalus update.
 
-The catalog: `code-review`, `git-workflow`, `spec-driven-development`,
-`systematic-debugging`, `test-driven-development`, and `ponytail`.
+The catalog: `anti-slop`, `code-review`, `git-workflow`, `ponytail`,
+`spec-driven-development`, `systematic-debugging`,
+`test-driven-development`.
 
 **`ponytail`** is the lazy-senior-dev discipline: before writing code,
 climb the ladder — does it need to exist, is it already in this codebase,
@@ -98,10 +103,8 @@ dependency do it, can it be one line — then write the minimum that works,
 with a "lazy about the solution, never about reading" guard and
 `ponytail:` comments marking deliberate shortcuts. It is adapted from the
 MIT-licensed Ponytail skill concept (provenance in
-`docs/THIRD_PARTY.md`), ships **default-off**, and is enabled per
-workspace exactly like any other skill: install it, then leave it enabled,
-disable it in `.daedalus/skills.json`, or force-load it with
-`/skill ponytail` for one task.
+`docs/THIRD_PARTY.md`), ships **enabled by default** like the rest of the
+permanent set, and is disabled per workspace exactly like any other skill.
 
 Prose-compression skills (caveman-style terse output) are deliberately
 not bundled — Daedalus's token problem is tool output on the input side,

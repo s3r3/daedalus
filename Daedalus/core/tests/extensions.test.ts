@@ -199,6 +199,7 @@ describe('LSP client/manager', () => {
   test('lsp_diagnostics returns the fake server diagnostic', async () => {
     const workspace = temp('daedalus-lsp-');
     writeFileSync(join(workspace, 'main.ts'), 'const unused = 1;\n');
+
     const manager = new LspManager([{ name: 'fake-lsp', command: process.execPath, args: [FAKE_LSP], extensions: ['.ts'] }]);
     closers.push(() => manager.closeAll());
 
@@ -269,6 +270,12 @@ describe('Runtime integration with extensions', () => {
     writeFileSync(join(skillDir, 'SKILL.md'), '---\nname: greeter\ndescription: Greets users warmly\n---\nAlways greet with "Halo" first.');
     writeFileSync(join(workspace, 'main.ts'), 'const unused = 1;\n');
 
+    // Point the Daedalus-global skills dir at the temp home so the bundled
+    // permanent skills install hermetically (never the real ~/.daedalus).
+    const prevDaedalusHome = process.env.DAEDALUS_HOME;
+    process.env.DAEDALUS_HOME = home;
+    try {
+
     const events: Event[] = [];
     const runner = new TaskRunner({
       workspaceRoot: workspace,
@@ -296,8 +303,25 @@ describe('Runtime integration with extensions', () => {
     expect(outputs.some((output) => output.includes('fake diagnostic: unused variable'))).toBe(true);
 
     expect(runner.extensionStatus.mcp).toEqual([{ name: 'fake', connected: false, toolCount: 3 }]);
-    expect(runner.extensionStatus.skills.map((skill) => skill.name)).toEqual(['greeter']);
+    // Permanent bundled skills are auto-installed into the (temp) global
+    // home at run start: workspace 'greeter' first, then the bundled set
+    // with origin 'global'.
+    expect(runner.extensionStatus.skills.map((skill) => skill.name)).toEqual([
+      'greeter',
+      'anti-slop',
+      'code-review',
+      'git-workflow',
+      'ponytail',
+      'spec-driven-development',
+      'systematic-debugging',
+      'test-driven-development',
+    ]);
+    expect(runner.extensionStatus.skills.find((skill) => skill.name === 'anti-slop')?.origin).toBe('global');
     expect(runner.extensionStatus.lsp[0]).toMatchObject({ name: 'fake-lsp', running: false });
+    } finally {
+      if (prevDaedalusHome === undefined) delete process.env.DAEDALUS_HOME;
+      else process.env.DAEDALUS_HOME = prevDaedalusHome;
+    }
   });
 
   test('workspace .daedalus/mcp.json auto-loads when no servers are injected', async () => {

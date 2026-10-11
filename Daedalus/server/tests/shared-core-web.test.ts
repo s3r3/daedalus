@@ -10,6 +10,7 @@ import {
   ProviderRegistryStore,
   TaskRunner,
   TaskStore,
+  ensureBundledSkillsInstalled,
   loadSettings,
   type LLMProvider,
   type ValidationResult,
@@ -239,16 +240,39 @@ describe('shared local core, Web prompts, extensions, and shared workspace', () 
     const { base } = await listen();
     writeExtensionFixtures(workspace!);
 
+    // Hermetic global home: the bundled permanent skills install there
+    // (never the real ~/.daedalus), so the inventory assertion is stable.
+    const globalHome = mkdtempSync(join(tmpdir(), 'daedalus-ext-status-home-'));
+    const previousDaedalusHome = process.env.DAEDALUS_HOME;
+    process.env.DAEDALUS_HOME = globalHome;
+    try {
+      await ensureBundledSkillsInstalled();
+
     const status = await json<{
       root: string;
       mcp: Array<{ name: string; connected: boolean; toolCount: number; error?: string }>;
-      skills: Array<{ name: string; description: string }>;
+      skills: Array<{ name: string; description: string; origin: string; disabled: boolean }>;
       lsp: Array<{ name: string; extensions: string[]; configured: boolean }>;
       problems: string[];
     }>(await fetch(new URL(`/extensions/status?root=${encodeURIComponent(workspace!)}`, base)));
     expect(status.root).toBe(workspace);
     expect(status.mcp).toEqual([{ name: 'demo', connected: true, toolCount: 3 }]);
-    expect(status.skills).toEqual([{ name: 'greeter', description: 'Greets users warmly', origin: 'workspace', disabled: false }]);
+    // Permanent bundled skills are auto-installed into the Daedalus-global
+    // skills dir: workspace 'greeter' first, then the bundled set with
+    // origin 'global'. Install into a temp global home so the assertion is
+    // hermetic (never the real ~/.daedalus).
+    expect(status.skills.map((skill) => skill.name)).toEqual([
+      'greeter',
+      'anti-slop',
+      'code-review',
+      'git-workflow',
+      'ponytail',
+      'spec-driven-development',
+      'systematic-debugging',
+      'test-driven-development',
+    ]);
+    expect(status.skills).toContainEqual({ name: 'greeter', description: 'Greets users warmly', origin: 'workspace', disabled: false });
+    expect(status.skills.find((skill) => skill.name === 'anti-slop')).toMatchObject({ origin: 'global', disabled: false });
     expect(status.lsp).toEqual([{ name: 'fake-lsp', extensions: ['.ts'], configured: true, running: false }]);
     expect(status.problems).toEqual([]);
 
@@ -260,6 +284,11 @@ describe('shared local core, Web prompts, extensions, and shared workspace', () 
     );
     expect(broken.mcp[0]).toMatchObject({ name: 'broken', connected: false, toolCount: 0 });
     expect(broken.mcp[0]?.error).toBeTruthy();
+    } finally {
+      if (previousDaedalusHome === undefined) delete process.env.DAEDALUS_HOME;
+      else process.env.DAEDALUS_HOME = previousDaedalusHome;
+      rmSync(globalHome, { recursive: true, force: true });
+    }
   });
 
   test('GET /extensions/status reports the auto TypeScript server on a TS workspace with no lsp.json', async () => {

@@ -70,6 +70,7 @@ import { LspManager, loadLspConfig, withDefaultLspServers, type LspServerConfig,
 import {
   SkillRegistry,
   createReadSkillTool,
+  ensureBundledSkillsInstalled,
   loadSkillConfig,
   loadSkillInventory,
   loadSkills,
@@ -566,6 +567,14 @@ export class TaskRunner {
     // server, so lsp_diagnostics and the edit guard cover TS/TSX with
     // zero user config instead of staying dormant until lsp.json exists.
     const lspServers = this.#options.lspServers ?? (await withDefaultLspServers(this.#workspaceRoot, (await loadLspConfig(this.#workspaceRoot)).servers));
+    // Permanent bundled skills: copy any bundled starter skill missing
+    // from the Daedalus-global skills dir, so the permanent set is present
+    // and enabled by default in every workspace. Existing same-name copies
+    // (and per-workspace disable toggles) always win — this never overwrites.
+    // Coding-domain only: this method runs after the slide/dokumen/
+    // spreadsheet engines have returned early, so bundled coding skills can
+    // never leak into the domain engines.
+    await ensureBundledSkillsInstalled();
     // Workspace skills first (they shadow same-name globals), then any
     // caller-provided dirs, then the global directories (~/.daedalus/skills,
     // other AI tools' skill folders) so global skills work in every workspace.
