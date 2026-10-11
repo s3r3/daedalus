@@ -6,9 +6,10 @@ import { useDaedalusStore } from './state/taskStore'
 import { Composer } from './components/composer/composer'
 import { ApprovalCard } from './components/approval/approval-card'
 import { PlanPanel } from './components/agent/plan-panel'
-import { ActivityTimeline } from './components/agent/activity-timeline'
+import { ChatPanel } from './components/agent/chat-panel'
 import { ValidationPanel } from './components/validation/validation-panel'
-import { ErrorPanel, RecoveryPanel } from './components/recovery/recovery-panel'
+import { chatTranscript } from './state/selectors'
+import { FailurePanel } from './components/recovery/recovery-panel'
 import { TopBar } from './components/layout/top-bar'
 import { AttachmentsPanel, ChildTasksPanel, FinalReportView } from './components/report/report-panels'
 
@@ -489,38 +490,89 @@ describe('PlanPanel', () => {
   })
 })
 
-describe('ActivityTimeline', () => {
-  test('empty log renders without crashing', () => {
-    seed([])
-    render(<ActivityTimeline />)
-    expect(screen.getByTestId('activity-panel')).toBeTruthy()
-  })
-
-  test('pairs a tool call with its result', () => {
+describe('Chat transcript (activity fold-in)', () => {
+  test('pairs a tool call with its result as a collapsible row', () => {
     const call = { id: 'call-1', task_id: 'task-1', tool: 'read_file', args: { path: 'README.md' } }
     seed([
       ev('TOOL_CALL_STARTED', { call }),
       ev('TOOL_CALL_FINISHED', { call, result: { call_id: 'call-1', status: 'ok', output: 'hello there', truncated: false, meta: {} } }),
     ])
-    render(<ActivityTimeline />)
-    const panel = screen.getByTestId('activity-panel')
+    render(<ChatPanel />)
+    const panel = screen.getByTestId('chat-panel')
     expect(textOf(panel)).toContain('read_file')
-    expect(textOf(panel)).toContain('hello there')
-    expect(screen.getAllByTestId('tool-call')).toHaveLength(1)
+    expect(screen.getAllByTestId('chat-tool-row')).toHaveLength(1)
+    const row = screen.getByTestId('chat-tool-row')
+    expect(row.tagName).toBe('DETAILS')
+    // A finished call collapses to its title line; its output stays reachable inside.
+    expect((row as HTMLDetailsElement).open).toBe(false)
+    expect(textOf(row)).toContain('hello there')
   })
 
-  test('THOUGHT events render distinctly when the session thinking level is on and are filtered when off', () => {
+  test('a running tool call stays expanded', () => {
+    const call = { id: 'call-2', task_id: 'task-1', tool: 'run_command', args: { command: 'sleep 30' } }
+    seed([ev('TOOL_CALL_STARTED', { call })])
+    render(<ChatPanel />)
+    expect((screen.getByTestId('chat-tool-row') as HTMLDetailsElement).open).toBe(true)
+  })
+
+  test('every former timeline kind reaches the transcript', () => {
+    const call = { id: 'call-3', task_id: 'task-1', tool: 'read_file', args: { path: 'a.txt' } }
+    const entries = chatTranscript([
+      ev('TASK_STARTED', { spec: { goal: 'do the thing' } }),
+      ev('THOUGHT', { text: 'inspect the workspace first', source: 'provider_reasoning' }),
+      ev('PLAN_CREATED', { plan: { steps: [] } }),
+      ev('TOOL_CALL_STARTED', { call }),
+      ev('VALIDATION_STARTED', {}),
+      ev('VALIDATION_PASSED', {}),
+      ev('RECOVERY_STARTED', { reason: 'flaky test', strategy: 'retry', attempt: 1 }),
+      ev('REPLAN_CREATED', { reason: 'new approach' }),
+      ev('APPROVAL_REQUESTED', { key: { tool: 'run_command', action: 'run' } }),
+      ev('FILE_CHANGED', { path: 'a.txt', operation: 'modified' }),
+      ev('ATTACHMENT_ADDED', { attachment: { id: 'a1', kind: 'file', name: 'log.txt', workspacePath: 'log.txt', size: 4 } }),
+      ev('PROVIDER_CHANGED', { reason: 'quality_escalation', from_model: 'weak', to_model: 'strong' }),
+      ev('REVIEW_COMPLETED', { model: 'strong', author_model: 'weak', findings: [], blocking: false }),
+      ev('MODE_CHANGED', { from: 'ask', to: 'auto' }),
+      ev('ORCHESTRATION_SKIPPED', { note: 'single path' }),
+      ev('MODEL_REQUEST_FAILED', { error: 'boom' }),
+      ev('TASK_COMPLETED', { outcome: 'success' }),
+    ])
+    const text = entries.map((entry) => `${entry.role}:${entry.text}`).join('\n')
+    for (const expected of [
+      'user:do the thing',
+      'thought:inspect the workspace first',
+      'status:plan created · 0 steps',
+      'tool:{"path":"a.txt"}',
+      'status:validation running',
+      'status:validation passed',
+      'status:recovery retry — flaky test',
+      'status:plan revised',
+      'approval:approval requested — run_command [run]',
+      'status:file modified — a.txt',
+      'status:attached file — log.txt',
+      'status:escalated to stronger model',
+      'status:strong-model review: no blocking issues',
+      'status:mode ask → auto',
+      'status:orchestration skipped — running directly',
+      'status:model request failed',
+      'status:task success',
+    ]) {
+      expect(text).toContain(expected)
+    }
+  })
+
+  test('THOUGHT entries are filtered when the session thinking level is off', () => {
     seed([ev('THOUGHT', { text: 'inspect the workspace first', source: 'provider_reasoning' })])
-    useDaedalusStore.getState().setSession({ mode: 'auto', autoApprove: false, thinkingLevel: 'medium', workspaceRoot: '/workspace' })
-    render(<ActivityTimeline />)
-    expect(textOf(screen.getByTestId('activity-panel'))).toContain('thinking')
-    expect(textOf(screen.getByTestId('activity-panel'))).toContain('inspect the workspace first')
+    useDaedalusStore.getState().setSession({ mode: 'auto', autoApprove: false, thinkingLevel: 'off', workspaceRoot: '/workspace' })
+    render(<ChatPanel />)
+    // With thinking off the only entry vanishes, leaving the empty state —
+    // assert on the panel, not the (absent) entries list.
+    expect(textOf(screen.getByTestId('chat-panel'))).not.toContain('inspect the workspace first')
 
     cleanup()
     seed([ev('THOUGHT', { text: 'inspect the workspace first', source: 'provider_reasoning' })])
-    useDaedalusStore.getState().setSession({ mode: 'auto', autoApprove: false, thinkingLevel: 'off', workspaceRoot: '/workspace' })
-    render(<ActivityTimeline />)
-    expect(textOf(screen.getByTestId('activity-panel'))).not.toContain('inspect the workspace first')
+    useDaedalusStore.getState().setSession({ mode: 'auto', autoApprove: false, thinkingLevel: 'medium', workspaceRoot: '/workspace' })
+    render(<ChatPanel />)
+    expect(textOf(screen.getByTestId('chat-entries'))).toContain('inspect the workspace first')
   })
 })
 
@@ -567,37 +619,32 @@ describe('ValidationPanel', () => {
   })
 })
 
-describe('RecoveryPanel', () => {
+describe('FailurePanel', () => {
   test('renders nothing when nothing failed', () => {
     seed([ev('TASK_STARTED', { spec: { goal: 'x' } })])
-    render(<RecoveryPanel />)
-    expect(screen.queryByTestId('recovery-panel')).toBeNull()
+    render(<FailurePanel />)
+    expect(screen.queryByTestId('failure-panel')).toBeNull()
   })
 
-  test('counts retries and replans and names the strategy', () => {
+  test('counts errors, retries, and replans and names the strategy', () => {
     seed([
       ev('RECOVERY_STARTED', { reason: 'test failed', strategy: 'retry', attempt: 1 }),
       ev('RECOVERY_STARTED', { reason: 'test failed again', strategy: 'fix', attempt: 2 }),
       ev('REPLAN_CREATED', { reason: 'approach was wrong' }),
     ])
-    render(<RecoveryPanel />)
-    expect(textOf(screen.getByTestId('recovery-count'))).toContain('2 retries')
-    expect(textOf(screen.getByTestId('recovery-count'))).toContain('1 replans')
+    render(<FailurePanel />)
+    // RECOVERY_STARTED events also surface as classified error entries
+    // (type 'recovery') — pre-existing errors() behavior, kept as-is.
+    expect(textOf(screen.getByTestId('failure-count'))).toContain('2 errors')
+    expect(textOf(screen.getByTestId('failure-count'))).toContain('2 retries')
+    expect(textOf(screen.getByTestId('failure-count'))).toContain('1 replans')
     expect(screen.getByTestId('replan-indicator')).toBeTruthy()
     expect(textOf(screen.getAllByTestId('recovery-attempt')[1])).toContain('fix')
-  })
-})
-
-describe('ErrorPanel', () => {
-  test('renders nothing with no errors', () => {
-    seed([ev('TASK_STARTED', { spec: { goal: 'x' } })])
-    render(<ErrorPanel />)
-    expect(screen.queryByTestId('error-panel')).toBeNull()
   })
 
   test('classifies a model failure and expands its context on demand', async () => {
     seed([ev('MODEL_REQUEST_FAILED', { error: 'rate limited' })])
-    render(<ErrorPanel />)
+    render(<FailurePanel />)
     const entry = screen.getByTestId('error-entry')
     expect(entry.getAttribute('data-error-type')).toBe('model')
     expect(textOf(entry)).toContain('rate limited')
@@ -607,7 +654,7 @@ describe('ErrorPanel', () => {
 
   test('a non-success completion is surfaced as a task error', () => {
     seed([ev('TASK_COMPLETED', { outcome: 'failed', reason: 'max iterations reached' })])
-    render(<ErrorPanel />)
+    render(<FailurePanel />)
     const entry = screen.getByTestId('error-entry')
     expect(entry.getAttribute('data-error-type')).toBe('task')
     expect(textOf(entry)).toContain('max iterations reached')

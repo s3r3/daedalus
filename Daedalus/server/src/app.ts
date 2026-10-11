@@ -2191,6 +2191,48 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
+    const checkpointsMatch = /^\/tasks\/([^/]+)\/checkpoints$/.exec(url.pathname);
+    const restoreMatch = /^\/tasks\/([^/]+)\/restore$/.exec(url.pathname);
+    if (method === "GET" && checkpointsMatch?.[1] !== undefined) {
+      const taskId = checkpointsMatch[1] as string;
+      const lookup = findTask(ctx, taskId);
+      if (!lookup) {
+        sendJson(res, 404, { error: "not_found", request_id: requestId });
+        return;
+      }
+      const checkpoints = lookup.store.listBackups(taskId);
+      sendJson(res, 200, { checkpoints, count: checkpoints.length, request_id: requestId });
+      return;
+    }
+
+    if (method === "POST" && restoreMatch?.[1] !== undefined) {
+      const taskId = restoreMatch[1] as string;
+      const lookup = findTask(ctx, taskId);
+      if (!lookup) {
+        sendJson(res, 404, { error: "not_found", request_id: requestId });
+        return;
+      }
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          // The root the restore is allowed to touch: an explicit root from
+          // the caller (confined to the gateway's allowed workspaces), else
+          // the repo the task itself recorded. Both stay inside a workspace
+          // root — restoreTask refuses escaping targets before writing.
+          const root = typeof parsed.root === "string" && parsed.root.length > 0 ? resolveAllowedRoot(ctx, parsed.root) : undefined;
+          const { restored, deleted } = lookup.store.restoreTask(taskId, root);
+          sendJson(res, 200, { restored, deleted, request_id: requestId });
+        } catch (error) {
+          sendJson(res, 400, { error: "restore_failed", message: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
     const taskMatch = /^\/tasks\/([^/]+)$/.exec(url.pathname);
     if (method === "GET" && taskMatch?.[1] !== undefined) {
       const taskId = taskMatch[1] as string;

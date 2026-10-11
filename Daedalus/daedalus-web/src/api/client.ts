@@ -2,6 +2,7 @@ import type { AgentMode, Attachment, DocumentState, Event, FinalReport, Permissi
 import type {
   Conversation,
   FileChange,
+  TaskCheckpoint,
   ProviderInput,
   ProviderConfigPublic,
   ProviderModel,
@@ -665,6 +666,17 @@ export const api = {
   report: (taskId: string) => request<{ report: FinalReport }>(`/tasks/${encodeURIComponent(taskId)}/report`),
 
   changes: (taskId: string) => request<{ changes: FileChange[]; count: number }>(`/tasks/${encodeURIComponent(taskId)}/changes`),
+
+  /** Pre-mutation backups the task recorded (the CLI `restore` command's data). */
+  checkpoints: (taskId: string) =>
+    request<{ checkpoints: TaskCheckpoint[]; count: number }>(`/tasks/${encodeURIComponent(taskId)}/checkpoints`),
+
+  /** Rewind the task's recorded files to their checkpointed state. Destructive — the UI asks first. */
+  restoreTask: (taskId: string, root?: string) =>
+    request<{ restored: string[]; deleted: string[] }>(`/tasks/${encodeURIComponent(taskId)}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ ...(root ? { root } : {}) }),
+    }),
 
   taskAttachments: (taskId: string) => request<TaskAttachmentsResponse>(`/tasks/${encodeURIComponent(taskId)}/attachments`),
 

@@ -649,6 +649,44 @@ export function latestContextPercent(events: Event[]): number | undefined {
   return undefined
 }
 
+export type ContextGauge = {
+  /**
+   * Live context fill, from the newest MODEL_REQUEST_* meter the loop
+   * recorded (its own estimate against its own limit — real, never
+   * inferred). Null when the server never reported one; the panel then
+   * shows plain token counts with no percentage.
+   */
+  percent: number | null
+  /** The limit the meter measured against (tokens), when recorded. */
+  limitTokens: number | null
+  /** The model that served the newest request, when recorded. */
+  model: string | null
+  /** Cumulative provider-reported accounting for the whole task (taskUsage). */
+  usage: TaskUsage
+}
+
+/**
+ * Live context pressure for the gauge, derived only from recorded events:
+ * the newest request's own meter for the percentage, plus the cumulative
+ * taskUsage roll-up. Nothing is estimated — when the loop never reported
+ * a meter, `percent` stays null and callers must not invent one.
+ */
+export function contextGauge(events: Event[]): ContextGauge {
+  let percent: number | null = null
+  let limitTokens: number | null = null
+  let model: string | null = null
+  for (let index = events.length - 1; index >= 0; index--) {
+    const event = events[index]
+    if (!event || (event.type !== 'MODEL_REQUEST_STARTED' && event.type !== 'MODEL_REQUEST_FINISHED')) continue
+    const payload = event.payload as { context_percent?: unknown; context_limit_tokens?: unknown; model?: unknown }
+    if (typeof payload.context_percent === 'number') percent = payload.context_percent
+    if (typeof payload.context_limit_tokens === 'number') limitTokens = payload.context_limit_tokens
+    if (typeof payload.model === 'string' && payload.model) model = payload.model
+    break
+  }
+  return { percent, limitTokens, model, usage: taskUsage(events) }
+}
+
 export function taskStatus(events: Event[], pendingApprovalsCount: number, pendingQuestionsCount = 0): TaskStatus {
   const completed = [...events].reverse().find((event) => event.type === 'TASK_COMPLETED')
   const hasStarted = events.some((event) => event.type === 'TASK_STARTED')
@@ -915,12 +953,73 @@ export function chatTranscript(events: Event[], thinking = true): ChatEntry[] {
         })
         break
       }
+      case 'VALIDATION_STARTED':
+        entries.push({ ...base, role: 'status', text: 'validation running', status: 'running' })
+        break
       case 'VALIDATION_PASSED':
         entries.push({ ...base, role: 'status', text: 'validation passed', status: 'ok' })
         break
       case 'VALIDATION_FAILED':
         entries.push({ ...base, role: 'status', text: 'validation failed', detail: failingChecks(event), status: 'error' })
         break
+      case 'FILE_CHANGED': {
+        const changed = payloadOf(event, 'FILE_CHANGED')
+        entries.push({ ...base, role: 'status', text: `file ${changed?.operation ?? 'changed'} — ${changed?.path ?? 'unknown'}`, status: 'info' })
+        break
+      }
+      case 'ATTACHMENT_ADDED': {
+        const attachment = payloadOf(event, 'ATTACHMENT_ADDED')?.attachment
+        entries.push({
+          ...base,
+          role: 'status',
+          text: `attached ${attachment?.kind ?? 'file'} — ${attachment?.name ?? 'unknown'}`,
+          detail: attachment?.workspacePath,
+          status: 'info',
+        })
+        break
+      }
+      case 'REVIEW_COMPLETED': {
+        const review = payloadOf(event, 'REVIEW_COMPLETED')
+        entries.push({
+          ...base,
+          role: 'status',
+          text: review?.blocking ? 'strong-model review: blocking issues' : 'strong-model review: no blocking issues',
+          detail: review
+            ? `${review.model} reviewed ${review.author_model ?? 'the task model'}'s changes · ${review.findings.length} finding${review.findings.length === 1 ? '' : 's'}${review.blocking ? ' · outcome demoted to partial' : ''}`
+            : undefined,
+          status: review?.blocking ? 'warning' : 'ok',
+        })
+        break
+      }
+      case 'PROVIDER_CHANGED': {
+        const changed = payloadOf(event, 'PROVIDER_CHANGED')
+        if (changed?.protocol_switched) {
+          entries.push({
+            ...base,
+            role: 'status',
+            text: 'switched to text tool protocol',
+            detail: `${changed.model ?? 'model'} answered native tool calls unusably, so this task now uses XML-style text tool calls${changed.reason ? ` · ${changed.reason}` : ''}`,
+            status: 'info',
+          })
+        } else if (changed?.reason === 'quality_escalation') {
+          entries.push({
+            ...base,
+            role: 'status',
+            text: 'escalated to stronger model',
+            detail: `validation failed under ${changed.from_model ?? 'a weaker model'}, so the rest of this task runs on ${changed.to_model ?? 'the strongest model'}`,
+            status: 'info',
+          })
+        } else {
+          entries.push({
+            ...base,
+            role: 'status',
+            text: 'provider changed',
+            detail: `${changed?.providerId ?? changed?.provider_id ?? 'default'}${changed?.model ? `/${changed.model}` : ''}`,
+            status: 'info',
+          })
+        }
+        break
+      }
       case 'RECOVERY_STARTED': {
         const recovery = payloadOf(event, 'RECOVERY_STARTED')
         entries.push({ ...base, role: 'status', text: `recovery ${recovery?.strategy ?? ''} — ${recovery?.reason ?? ''}`, detail: `attempt ${recovery?.attempt ?? 0}`, status: 'warning' })
