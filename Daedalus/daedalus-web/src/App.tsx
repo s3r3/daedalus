@@ -349,8 +349,11 @@ export function App() {
               {domain === 'spreadsheet' ? <BlueprintPanel /> : null}
               {domain === 'spreadsheet' ? <SheetDataPanel /> : null}
               {domain === 'coding' ? <ExtensionsPanel /> : null}
-              <PlanPanel />
-              <ValidationPanel />
+              {/* PlanPanel/ValidationPanel are dead in Dokumen: DokumenEngine
+                  never emits PLAN_CREATED or VALIDATION_* (only SlideEngine
+                  does), so both would render "No plan yet" forever. */}
+              {domain === 'dokumen' ? null : <PlanPanel />}
+              {domain === 'dokumen' ? null : <ValidationPanel />}
               <FailurePanel />
             </div>
           </ScrollArea>

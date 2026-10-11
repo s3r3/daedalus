@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { FileText, X } from 'lucide-react'
 import { useDaedalusStore } from '../../state/taskStore'
 import { cn } from '../../lib/utils'
@@ -12,9 +13,16 @@ import { cn } from '../../lib/utils'
 export function DokumenComposerControls() {
   const dokumenOptions = useDaedalusStore((state) => state.dokumenOptions)
   const setDokumenOptions = useDaedalusStore((state) => state.setDokumenOptions)
+  const [tataUlangHint, setTataUlangHint] = useState(false)
 
   const removeSource = (path: string): void => {
     setDokumenOptions({ sources: dokumenOptions.sources.filter((s) => s !== path) })
+  }
+
+  const pickTataUlangTarget = (): void => {
+    if (dokumenOptions.docxPath) return
+    setTataUlangHint(true)
+    document.querySelector('[data-testid="dokumen-workspace"]')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
   }
 
   return (
@@ -32,7 +40,10 @@ export function DokumenComposerControls() {
             type="button"
             data-testid={`dokumen-submode-${subMode}`}
             aria-pressed={dokumenOptions.subMode === subMode}
-            onClick={() => setDokumenOptions({ subMode })}
+            onClick={() => {
+              setDokumenOptions({ subMode })
+              setTataUlangHint(false)
+            }}
             className={cn(
               'px-2 py-0.5 text-[11px] font-semibold capitalize transition-colors',
               dokumenOptions.subMode === subMode ? 'bg-primary text-on-primary' : 'text-muted hover:text-foreground',
@@ -41,7 +52,25 @@ export function DokumenComposerControls() {
             {subMode}
           </button>
         ))}
+        <button
+          type="button"
+          data-testid="dokumen-submode-tata-ulang"
+          aria-pressed={dokumenOptions.docxPath !== null}
+          onClick={pickTataUlangTarget}
+          title={dokumenOptions.docxPath ? `Target tata ulang: ${dokumenOptions.docxPath}` : 'Pilih file .docx dari panel Workspace sebagai target tata ulang'}
+          className={cn(
+            'px-2 py-0.5 text-[11px] font-semibold capitalize transition-colors',
+            dokumenOptions.docxPath !== null ? 'bg-primary text-on-primary' : 'text-muted hover:text-foreground',
+          )}
+        >
+          tata ulang
+        </button>
       </div>
+      {tataUlangHint && !dokumenOptions.docxPath ? (
+        <span className="text-[10px] text-muted" data-testid="dokumen-tata-ulang-hint">
+          Pilih file .docx di panel Workspace lalu tekan tombol <strong>Tata ulang</strong> pada file itu — lalu tulis instruksinya di sini.
+        </span>
+      ) : null}
       {dokumenOptions.docxPath ? (
         <span className="inline-flex items-center gap-1 rounded border border-line bg-surface px-1.5 py-0.5 text-[11px]" data-testid="dokumen-docx-target">
           <FileText className="size-3" aria-hidden />
