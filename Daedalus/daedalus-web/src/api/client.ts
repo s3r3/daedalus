@@ -638,6 +638,33 @@ export const api = {
   /** Go sidecar availability for native chart/pivot injection (honest export notes). */
   workbookSidecar: () => request<{ available: boolean; version: string | null; path: string | null }>('/sheets/workbook/sidecar'),
 
+  /**
+   * Verify on demand (the toolbar's Verify button): the deterministic
+   * gate — export + core evaluator + LibreOffice recalc arm when
+   * present — persisted onto workbook.verify, no model call.
+   */
+  workbookVerify: (root: string) =>
+    request<{ root: string; verify: import('@daedalus/core').VerifyReport; record: import('@daedalus/core').SheetExportRecord }>(
+      '/sheets/workbook/verify',
+      { method: 'POST', body: JSON.stringify({ root }) },
+    ),
+
+  /** Workbook checkpoints: previous states of workbook.json (.daedalus/workbook-history). */
+  workbookCheckpoints: (root: string) =>
+    request<{ checkpoints: import('@daedalus/core').WorkbookCheckpoint[]; count: number }>(
+      `/sheets/workbook/checkpoints${query({ root })}`,
+    ),
+
+  /**
+   * Restore a workbook checkpoint by name. Never destructive: the
+   * current state is snapshotted into history first.
+   */
+  workbookRestore: (root: string, name: string) =>
+    request<{ root: string; name: string; workbook: import('@daedalus/core').WorkbookSpec }>('/sheets/workbook/restore', {
+      method: 'POST',
+      body: JSON.stringify({ root, name }),
+    }),
+
   /** Download URL for an exported file inside workbook/. */
   workbookDownloadUrl: (root: string, path: string) => `/sheets/workbook/download${query({ root, path })}`,
 

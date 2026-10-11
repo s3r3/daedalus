@@ -3,14 +3,14 @@ import { Database } from 'lucide-react'
 import { Panel } from '../common/panel'
 import { api } from '../../api/client'
 import { useWorkbook } from './useWorkbook'
-import { cn } from '../../lib/utils'
 
 /**
- * Panel Data: what the workbook is made of right now — sources, per-
- * sheet size (rows × cols, formula vs literal counts), validation
- * (verify) status, and whether the Go sidecar is available for native
- * chart/pivot injection at export. Read-only by design; edits happen
- * on the grid.
+ * Panel Data: what the workbook is made of right now — per-sheet size
+ * (rows × cols, formula vs literal counts) and whether the Go sidecar
+ * is available for native chart/pivot injection at export. Read-only
+ * by design; edits happen on the grid. (The Verify verdict lives in
+ * the Laporan panel; sources live in the Blueprint panel — this panel
+ * renders neither twice.)
  */
 export function SheetDataPanel() {
   const { workbook, root } = useWorkbook()
@@ -39,8 +39,6 @@ export function SheetDataPanel() {
     )
   }
 
-  const verify = workbook.verify
-
   return (
     <Panel title="Data" data-testid="sheet-data">
       <div className="flex flex-col gap-2 px-1 py-1">
@@ -48,9 +46,6 @@ export function SheetDataPanel() {
           <Database className="size-3" aria-hidden />
           workbook/workbook.json · stage: {workbook.stage}
         </p>
-        {workbook.blueprint?.sources.length ? (
-          <p className="text-[10px] text-muted">Sumber: {workbook.blueprint.sources.join(', ')}</p>
-        ) : null}
         <ul className="flex flex-col gap-1" data-testid="sheet-data-sheets">
           {workbook.sheets.map((sheet) => {
             const refs = Object.keys(sheet.cells)
@@ -78,16 +73,6 @@ export function SheetDataPanel() {
             )
           })}
         </ul>
-        <p className="flex items-center gap-1.5 text-[10px]" data-testid="sheet-data-verify">
-          <span className={cn('inline-block size-2 rounded-full', verify ? (verify.ok ? 'bg-emerald-400' : 'bg-red-400') : 'bg-zinc-500')} />
-          {verify ? (
-            <span className="text-muted">
-              Verify {verify.ok ? 'lulus' : 'ada error'} ({verify.path}) · {verify.formulasChecked} formula dicek
-            </span>
-          ) : (
-            <span className="text-muted">Verify belum pernah jalan untuk workbook ini.</span>
-          )}
-        </p>
         <p className="text-[10px] text-muted" data-testid="sheet-data-sidecar">
           {sidecar === null
             ? 'Sidecar Go: memeriksa…'

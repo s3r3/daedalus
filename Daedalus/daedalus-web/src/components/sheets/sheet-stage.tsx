@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowDownAZ, Download, Plus, RefreshCw } from 'lucide-react'
+import { ArrowDownAZ, Download, Plus, RefreshCw, ShieldCheck } from 'lucide-react'
 import type { SheetSpec, WorkbookSpec } from '@daedalus/core'
 import { displayValue, evaluateWorkbook, type WorkbookEvaluation } from '@daedalus/core/sheets/evaluator'
 import { formatCellRef, indexToCol, parseCellRef, tileRefs } from '@daedalus/core/sheets/refs'
@@ -24,6 +24,7 @@ const MAX_GRID_COLS = 26
 export function SheetStage() {
   const { workbook, loading, error, refresh, root } = useWorkbook()
   const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
+  const setComposer = useDaedalusStore((state) => state.setComposer)
   const [activeSheet, setActiveSheet] = useState(0)
   const [selected, setSelected] = useState<{ col: number; row: number }>({ col: 0, row: 0 })
   const [draft, setDraft] = useState('')
@@ -260,6 +261,69 @@ export function SheetStage() {
     }
   }
 
+  /**
+   * Verify on demand: the deterministic gate (export + core evaluator
+   * + LibreOffice recalc arm when present), run without a model call.
+   * The verdict lands on workbook.verify — the Laporan panel is its
+   * home — and the workbook is refreshed so the UI reflects it.
+   */
+  const doVerify = async (): Promise<void> => {
+    if (!root || busy) return
+    setBusy(true)
+    setActionError(null)
+    try {
+      const result = await api.workbookVerify(root)
+      setNote(`Verify: ${result.verify.summary}`)
+      refresh()
+      bumpWorkspaceRevision()
+    } catch (verifyError: unknown) {
+      setActionError(verifyError instanceof Error ? verifyError.message : String(verifyError))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * "Jelaskan formula": drops a question about the selected cell's
+   * formula into the chat composer — formula plus the values of the
+   * cells it references — so the user reviews and sends it. Chat-
+   * routed, no engine change.
+   */
+  const explainFormula = (): void => {
+    const formula = selectedCell?.f
+    if (!formula || !workbook || !evaluation) return
+    const currentSheetName = sheet?.name ?? ''
+    const refs: Array<{ sheetName: string; ref: string }> = []
+    const seen = new Set<string>()
+    const push = (sheetName: string, ref: string): void => {
+      if (!sheetName || !ref) return
+      const key = `${sheetName}!${ref}`
+      if (seen.has(key)) return
+      seen.add(key)
+      refs.push({ sheetName, ref })
+    }
+    for (const match of formula.matchAll(/(?:'([^']+)'|([A-Za-z0-9_]+))!([A-Za-z]{1,3}[0-9]{1,7})/g)) {
+      push(match[1] ?? match[2] ?? '', match[3] ?? '')
+    }
+    for (const match of formula.matchAll(/(?<![A-Za-z0-9_!'$])([A-Za-z]{1,3}[0-9]{1,7})(?![A-Za-z0-9_(])/g)) {
+      push(currentSheetName, match[1] ?? '')
+    }
+    const context = refs.slice(0, 12).map(({ sheetName: targetName, ref }) => {
+      const target = workbook.sheets.find((candidate) => candidate.name === targetName)
+      const value = target ? displayValue(workbook, evaluation, target, ref) : '—'
+      const raw = target?.cells[ref]?.f ? ` (${target.cells[ref]?.f})` : ''
+      return `- ${targetName}!${ref} = ${value}${raw}`
+    })
+    const question = [
+      `Jelaskan formula di ${currentSheetName}!${selectedRef} ini:`,
+      '',
+      formula,
+      '',
+      ...(context.length > 0 ? ['Nilai sel yang dirujuk:', ...context] : []),
+    ].join('\n')
+    setComposer({ goal: question })
+  }
+
   return (
     <div className="flex h-full min-h-0 flex-col" data-testid="sheet-stage">
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
@@ -282,6 +346,9 @@ export function SheetStage() {
           </Button>
           <Button type="button" size="sm" variant="outline" onClick={() => void sortBySelectedColumn()} disabled={busy} data-testid="sheet-sort">
             <ArrowDownAZ className="size-3.5" aria-hidden /> Urutkan
+          </Button>
+          <Button type="button" size="sm" variant="outline" onClick={() => void doVerify()} disabled={busy} data-testid="sheet-verify">
+            <ShieldCheck className="size-3.5" aria-hidden /> Verify
           </Button>
           <span className="mx-1 h-5 w-px bg-line" aria-hidden />
           <span className="inline-flex overflow-hidden rounded border border-line" role="group" aria-label="tampilan kanvas">
@@ -362,6 +429,17 @@ export function SheetStage() {
           className="h-6 min-w-0 flex-1 rounded border border-line bg-surface-base px-2 font-mono text-[11px] text-foreground outline-none focus:border-primary"
         />
         {selectedCell?.f ? <span className="text-[10px] text-emerald-300">formula live</span> : null}
+        {selectedCell?.f ? (
+          <button
+            type="button"
+            onClick={explainFormula}
+            data-testid="sheet-explain-formula"
+            title="Taruh pertanyaan tentang formula ini ke chat"
+            className="rounded border border-line px-1.5 py-0.5 text-[10px] text-muted hover:border-primary hover:text-foreground"
+          >
+            Jelaskan
+          </button>
+        ) : null}
       </div>
 
       {note ? <p className="border-b border-line bg-emerald-500/10 px-3 py-1 text-[10px] text-emerald-200" data-testid="sheet-stage-note">{note}</p> : null}

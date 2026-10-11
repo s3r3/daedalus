@@ -1,8 +1,118 @@
-import { ClipboardCheck, Download } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { ClipboardCheck, Download, History } from 'lucide-react'
+import type { WorkbookCheckpoint } from '@daedalus/core'
 import { Panel } from '../common/panel'
 import { api } from '../../api/client'
+import { useDaedalusStore } from '../../state/taskStore'
 import { useWorkbook } from './useWorkbook'
 import { cn } from '../../lib/utils'
+
+/**
+ * Riwayat workbook: previous states of workbook.json, snapshotted on
+ * every save under .daedalus/workbook-history. Restore is ask-first
+ * and never destructive — the current state is snapshotted before it
+ * is replaced, so it stays in history.
+ */
+function WorkbookHistory() {
+  const { root } = useWorkbook()
+  const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
+  const [open, setOpen] = useState(false)
+  const [checkpoints, setCheckpoints] = useState<WorkbookCheckpoint[]>([])
+  const [confirmName, setConfirmName] = useState<string | null>(null)
+  const [restoring, setRestoring] = useState(false)
+  const [historyError, setHistoryError] = useState<string | null>(null)
+
+  const load = useCallback(async (): Promise<void> => {
+    if (!root) return
+    try {
+      const result = await api.workbookCheckpoints(root)
+      setCheckpoints(result.checkpoints)
+    } catch {
+      setCheckpoints([])
+    }
+  }, [root])
+
+  useEffect(() => {
+    if (open) void load()
+  }, [open, load])
+
+  const restore = async (name: string): Promise<void> => {
+    if (!root || restoring) return
+    if (confirmName !== name) {
+      // Ask-first: the first click arms, the second one restores.
+      setConfirmName(name)
+      return
+    }
+    setConfirmName(null)
+    setRestoring(true)
+    setHistoryError(null)
+    try {
+      await api.workbookRestore(root, name)
+      bumpWorkspaceRevision()
+      await load()
+    } catch (restoreError: unknown) {
+      setHistoryError(restoreError instanceof Error ? restoreError.message : String(restoreError))
+    } finally {
+      setRestoring(false)
+    }
+  }
+
+  return (
+    <div data-testid="sheet-report-history">
+      <button
+        type="button"
+        onClick={() => setOpen((was) => !was)}
+        aria-expanded={open}
+        data-testid="sheet-history-toggle"
+        className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground"
+      >
+        <History className="size-3.5 text-muted" aria-hidden />
+        Riwayat workbook
+        <span className="text-[10px] font-normal text-muted">{open ? '▾' : '▸'}</span>
+      </button>
+      {open ? (
+        <div className="mt-1">
+          {checkpoints.length === 0 ? (
+            <p className="text-[10px] text-muted">Belum ada checkpoint — setiap penyimpanan workbook otomatis meninggalkan versi sebelumnya di sini.</p>
+          ) : (
+            <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto" data-testid="sheet-history-list">
+              {checkpoints.map((checkpoint) => (
+                <li
+                  key={checkpoint.name}
+                  className="flex items-center justify-between gap-2 rounded border border-line bg-surface px-2 py-1 text-[10px]"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate font-medium text-foreground">{checkpoint.title ?? 'workbook'}</span>
+                    <span className="block text-muted">
+                      {new Date(checkpoint.at).toLocaleString()} · {checkpoint.sheets} sheet
+                      {checkpoint.stage ? ` · ${checkpoint.stage}` : ''}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void restore(checkpoint.name)}
+                    disabled={restoring}
+                    data-testid={`sheet-history-restore-${checkpoint.name}`}
+                    className={cn(
+                      'shrink-0 rounded border px-1.5 py-0.5',
+                      confirmName === checkpoint.name
+                        ? 'border-amber-400/60 bg-amber-400/10 text-amber-200'
+                        : 'border-line text-muted hover:border-primary hover:text-foreground',
+                    )}
+                  >
+                    {confirmName === checkpoint.name ? 'Klik lagi: pulihkan?' : 'Pulihkan'}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {historyError ? <p className="mt-1 text-[10px] text-red-300">Gagal memulihkan: {historyError}</p> : null}
+          <p className="mt-1 text-[9px] text-muted">Pemulihan tidak menghapus apa pun: state saat ini ikut tersimpan sebagai checkpoint.</p>
+        </div>
+      ) : null}
+    </div>
+  )
+}
 
 /**
  * Panel Laporan: the Verify gate's verdict per cell (errors with their
@@ -68,10 +178,12 @@ export function SheetReportPanel() {
               </>
             ) : (
               <p className="mt-1 text-[10px] text-muted">
-                Verify belum jalan. Ia wajib sebelum klaim selesai: picu lewat Buat, ekspor, atau minta “audit workbook ini” di chat.
+                Verify belum jalan. Ia wajib sebelum klaim selesai: picu lewat tombol Verify di toolbar kanvas, Buat, ekspor, atau minta “audit workbook ini” di chat.
               </p>
             )}
           </div>
+
+          <WorkbookHistory />
 
           <div data-testid="sheet-report-exports">
             <p className="text-[11px] font-semibold text-foreground">File ekspor</p>

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   formatCellRef,
@@ -105,9 +105,116 @@ export async function readWorkbook(root: string): Promise<WorkbookSpec | null> {
 
 export async function writeWorkbook(root: string, workbook: WorkbookSpec): Promise<void> {
   const paths = await ensureWorkbookDir(root);
+  const next = `${JSON.stringify(workbook, null, 2)}\n`;
+  let previous: string | null = null;
+  try {
+    previous = await readFile(paths.file, 'utf8');
+  } catch {
+    previous = null;
+  }
   const tmp = `${paths.file}.tmp-${process.pid}-${Date.now()}`;
-  await writeFile(tmp, `${JSON.stringify(workbook, null, 2)}\n`, 'utf8');
+  await writeFile(tmp, next, 'utf8');
   await rename(tmp, paths.file);
+  // Checkpoint the previous state (never destructive): every persisted
+  // change leaves its predecessor restorable under .daedalus/. History
+  // is best-effort — a failed snapshot must never fail the save itself.
+  if (previous !== null && previous !== next) {
+    await snapshotWorkbookCheckpoint(root, previous).catch(() => {
+      /* history is progressive enhancement, not the save path */
+    });
+  }
+}
+
+/**
+ * Workbook checkpoints: previous states of workbook.json, kept under
+ * `.daedalus/workbook-history/` (same hidden area as the deck and
+ * workbook archives). The newest MAX_WORKBOOK_CHECKPOINTS are kept;
+ * restore is never destructive because writeWorkbook snapshots the
+ * current state first — the pre-restore workbook becomes a checkpoint
+ * itself.
+ */
+export const MAX_WORKBOOK_CHECKPOINTS = 20;
+
+export type WorkbookCheckpoint = {
+  /** File basename inside .daedalus/workbook-history — the restore key. */
+  name: string;
+  /** ISO timestamp of the snapshot. */
+  at: string;
+  /** Bytes on disk. */
+  size: number;
+  /** Workbook title at snapshot time (best effort). */
+  title: string | null;
+  /** Sheet count at snapshot time. */
+  sheets: number;
+  /** Stage at snapshot time. */
+  stage: string | null;
+};
+
+async function snapshotWorkbookCheckpoint(root: string, previousText: string): Promise<void> {
+  const dir = join(root, '.daedalus', 'workbook-history');
+  await mkdir(dir, { recursive: true });
+  const name = `${Date.now()}-${randomUUID().slice(0, 6)}.json`;
+  await writeFile(join(dir, name), previousText, 'utf8');
+  const entries = (await readdir(dir)).filter((f) => f.endsWith('.json')).sort();
+  for (const stale of entries.slice(0, Math.max(0, entries.length - MAX_WORKBOOK_CHECKPOINTS))) {
+    await rm(join(dir, stale), { force: true });
+  }
+}
+
+export async function listWorkbookCheckpoints(root: string): Promise<WorkbookCheckpoint[]> {
+  const dir = join(root, '.daedalus', 'workbook-history');
+  let entries: string[];
+  try {
+    entries = (await readdir(dir)).filter((f) => f.endsWith('.json')).sort().reverse();
+  } catch {
+    return [];
+  }
+  const out: WorkbookCheckpoint[] = [];
+  for (const name of entries) {
+    try {
+      const full = join(dir, name);
+      const fileStat = await stat(full);
+      const parsed: unknown = JSON.parse(await readFile(full, 'utf8'));
+      const ms = Number(name.split('-')[0]);
+      out.push({
+        name,
+        at: Number.isFinite(ms) ? new Date(ms).toISOString() : new Date(fileStat.mtimeMs).toISOString(),
+        size: fileStat.size,
+        title: isObj(parsed) && typeof parsed.title === 'string' ? (parsed.title as string) : null,
+        sheets: isObj(parsed) && Array.isArray(parsed.sheets) ? (parsed.sheets as unknown[]).length : 0,
+        stage: isObj(parsed) && typeof parsed.stage === 'string' ? (parsed.stage as string) : null,
+      });
+    } catch {
+      // Bad entry: tolerated and skipped, never breaks the listing.
+    }
+  }
+  return out;
+}
+
+export async function restoreWorkbookCheckpoint(root: string, name: string): Promise<WorkbookSpec> {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.json$/.test(name) || name.includes('..')) {
+    throw new Error('nama checkpoint tidak valid');
+  }
+  const full = join(root, '.daedalus', 'workbook-history', name);
+  let raw: string;
+  try {
+    raw = await readFile(full, 'utf8');
+  } catch {
+    throw new Error('checkpoint tidak ditemukan');
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('checkpoint rusak (bukan JSON valid)');
+  }
+  if (!isWorkbookShape(parsed)) {
+    throw new Error('checkpoint bukan workbook yang valid');
+  }
+  // writeWorkbook snapshots the current state first — restoring is
+  // never destructive: the pre-restore workbook stays in history.
+  await writeWorkbook(root, parsed);
+  return parsed;
 }
 
 /**

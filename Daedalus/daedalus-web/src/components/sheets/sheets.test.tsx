@@ -7,6 +7,7 @@ import { BlueprintPanel } from './blueprint-panel'
 import { SheetStage } from './sheet-stage'
 import { SheetReportPanel } from './report-panel'
 import { SheetWorkspacePanel } from './sheet-workspace'
+import { SheetDataPanel } from './data-panel'
 
 const workbookMock = vi.fn()
 const workbookGenerateMock = vi.fn()
@@ -16,6 +17,9 @@ const workbookOpenMock = vi.fn()
 const workbookSidecarMock = vi.fn()
 const workbookPreviewMock = vi.fn()
 const workbookPreviewRenderMock = vi.fn()
+const workbookVerifyMock = vi.fn()
+const workbookCheckpointsMock = vi.fn()
+const workbookRestoreMock = vi.fn()
 const listMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
@@ -26,6 +30,9 @@ vi.mock('../../api/client', () => ({
     workbookExport: (...args: unknown[]) => workbookExportMock(...args),
     workbookOpen: (...args: unknown[]) => workbookOpenMock(...args),
     workbookSidecar: (...args: unknown[]) => workbookSidecarMock(...args),
+    workbookVerify: (...args: unknown[]) => workbookVerifyMock(...args),
+    workbookCheckpoints: (...args: unknown[]) => workbookCheckpointsMock(...args),
+    workbookRestore: (...args: unknown[]) => workbookRestoreMock(...args),
     workbookDownloadUrl: (root: string, path: string) => `/sheets/workbook/download?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
     workbookPreview: (...args: unknown[]) => workbookPreviewMock(...args),
     workbookPreviewRender: (...args: unknown[]) => workbookPreviewRenderMock(...args),
@@ -87,6 +94,13 @@ beforeEach(() => {
   workbookSaveMock.mockResolvedValue({ root: '/ws', workbook: fixtureWorkbook })
   workbookExportMock.mockResolvedValue({ root: '/ws', records: [{ at: 'x', path: '/ws/workbook/rekap-uji.xlsx', format: 'xlsx', bytes: 2048, via: 'exceljs' }] })
   workbookSidecarMock.mockResolvedValue({ available: false, version: null, path: null })
+  workbookVerifyMock.mockResolvedValue({
+    root: '/ws',
+    verify: { at: '2026-10-11T00:00:00Z', path: 'core', ok: true, formulasChecked: 1, unsupported: 0, errors: [], warnings: [], summary: 'Verify (core): 1 formula dievaluasi di core · 0 error' },
+    record: { at: 'x', path: '/ws/workbook/rekap-uji.xlsx', format: 'xlsx', bytes: 2048, via: 'exceljs' },
+  })
+  workbookCheckpointsMock.mockResolvedValue({ checkpoints: [], count: 0 })
+  workbookRestoreMock.mockResolvedValue({ root: '/ws', name: 'cp1.json', workbook: fixtureWorkbook })
   workbookPreviewMock.mockResolvedValue({ root: '/ws', available: true, status: 'idle', engine: 'libreoffice', engineLabel: 'LibreOffice', key: null, pages: 0 })
   workbookPreviewRenderMock.mockResolvedValue({ root: '/ws', available: true, status: 'rendering', engine: 'libreoffice', engineLabel: 'LibreOffice', key: 'abc', pages: 0 })
   listMock.mockResolvedValue({ path: '.', items: [] })
@@ -96,6 +110,18 @@ beforeEach(() => {
 })
 
 afterEach(() => cleanup())
+
+describe('SheetDataPanel (dedup)', () => {
+  test('renders sheet contents and sidecar status without the duplicated verify/sumber lines', async () => {
+    render(<SheetDataPanel />)
+    await waitFor(() => expect(screen.getByTestId('sheet-data-sheets')).toBeTruthy())
+    expect(screen.queryByTestId('sheet-data-verify')).toBeNull()
+    expect(screen.getByTestId('sheet-data').textContent).not.toContain('Sumber:')
+    // What stays: per-sheet sizes and the honest sidecar line.
+    expect(screen.getByTestId('sheet-data-sheets').textContent).toContain('Data')
+    expect(screen.getByTestId('sheet-data-sidecar').textContent).toContain('Sidecar Go')
+  })
+})
 
 describe('DomainSwitch spreadsheet entry', () => {
   test('shows Coding/Slide/Spreadsheet and routes to /spreadsheet', () => {
@@ -150,6 +176,29 @@ describe('SheetStage (Kanvas Grid)', () => {
     fireEvent.click(screen.getByTestId('sheet-export-csv'))
     await waitFor(() => expect(workbookExportMock).toHaveBeenCalledWith('/ws', { format: 'csv', sheet: 'Data' }))
   })
+
+  test('Verify button runs the deterministic gate and shows its summary', async () => {
+    render(<SheetStage />)
+    await waitFor(() => expect(screen.getByTestId('sheet-verify')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('sheet-verify'))
+    await waitFor(() => expect(workbookVerifyMock).toHaveBeenCalledWith('/ws'))
+    await waitFor(() => expect(screen.getByTestId('sheet-stage-note').textContent).toContain('Verify (core)'))
+    // The workbook is refreshed so the Laporan panel picks up the verdict.
+    await waitFor(() => expect(workbookMock.mock.calls.length).toBeGreaterThan(1))
+  })
+
+  test('Jelaskan formula drops the formula with referenced values into the chat composer', async () => {
+    render(<SheetStage />)
+    await waitFor(() => expect(screen.getByTestId('sheet-cell-D2')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('sheet-cell-D2'))
+    const explain = await screen.findByTestId('sheet-explain-formula')
+    fireEvent.click(explain)
+    const goal = useDaedalusStore.getState().composer.goal
+    expect(goal).toContain('Data!D2')
+    expect(goal).toContain('=B2-C2')
+    expect(goal).toContain('Data!B2 = 100')
+    expect(goal).toContain('Data!C2 = 40')
+  })
 })
 
 describe('SheetReportPanel', () => {
@@ -178,6 +227,38 @@ describe('SheetReportPanel', () => {
     expect(screen.getByText(/tidak disuntikkan/)).toBeTruthy()
     const link = screen.getByTestId('sheet-report-download') as HTMLAnchorElement
     expect(link.getAttribute('href')).toContain('/sheets/workbook/download')
+  })
+
+  test('history toggle lists checkpoints; restore is ask-first and bumps the revision', async () => {
+    workbookCheckpointsMock.mockResolvedValue({
+      checkpoints: [
+        { name: 'cp-1.json', at: '2026-10-10T10:00:00Z', size: 512, title: 'Rekap Uji', sheets: 2, stage: 'ready' },
+        { name: 'cp-2.json', at: '2026-10-10T09:00:00Z', size: 480, title: 'Rekap Uji', sheets: 2, stage: 'blueprint' },
+      ],
+      count: 2,
+    })
+    render(<SheetReportPanel />)
+    await waitFor(() => expect(screen.getByTestId('sheet-history-toggle')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('sheet-history-toggle'))
+    await waitFor(() => expect(workbookCheckpointsMock).toHaveBeenCalledWith('/ws'))
+    await waitFor(() => expect(screen.getByTestId('sheet-history-list')).toBeTruthy())
+    expect(screen.getByTestId('sheet-history-list').textContent).toContain('ready')
+    // First click arms, second click restores.
+    const restoreBtn = screen.getByTestId('sheet-history-restore-cp-1.json')
+    fireEvent.click(restoreBtn)
+    expect(restoreBtn.textContent).toContain('Klik lagi')
+    expect(workbookRestoreMock).not.toHaveBeenCalled()
+    fireEvent.click(restoreBtn)
+    await waitFor(() => expect(workbookRestoreMock).toHaveBeenCalledWith('/ws', 'cp-1.json'))
+    expect(useDaedalusStore.getState().workspaceRevision).toBeGreaterThan(0)
+  })
+
+  test('empty history is honest about automatic checkpointing', async () => {
+    render(<SheetReportPanel />)
+    fireEvent.click(await screen.findByTestId('sheet-history-toggle'))
+    await waitFor(() => expect(screen.getByTestId('sheet-history-toggle')).toBeTruthy())
+    await waitFor(() => expect(workbookCheckpointsMock).toHaveBeenCalled())
+    expect(screen.getByText(/setiap penyimpanan workbook otomatis/)).toBeTruthy()
   })
 })
 
