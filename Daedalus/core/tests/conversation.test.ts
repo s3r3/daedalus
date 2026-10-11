@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'vitest';
@@ -7,9 +7,12 @@ import {
   QUESTION_SYSTEM_PROMPT,
   answerConversational,
   answerQuestion,
+  answerWorkspaceQuestion,
   classifyChatIntent,
   conversationalFallbackReply,
   gatherWorkspaceContext,
+  isWorkspaceContentQuestion,
+  parseWorkspaceQARequest,
   questionFallbackReply,
   type LLMProvider,
   type Message,
@@ -83,7 +86,6 @@ describe('classifyChatIntent — task', () => {
     'halo, perbaiki error di src/app.ts',
     'selamat pagi, jalankan test-nya',
     'run npm test',
-    'lihat isi folder src',
     'create a README',
     'buatkan landing page untuk kopi',
     'hai tolong fix bug ini',
@@ -136,6 +138,63 @@ describe('classifyChatIntent — question', () => {
   test('an imperative verb vetoes the question path even inside a question frame', () => {
     expect(classifyChatIntent('kenapa kamu tidak fix bug ini')).toBe('task');
     expect(classifyChatIntent('gimana cara deploy aplikasi ini')).toBe('task');
+  });
+});
+
+describe('classifyChatIntent — workspace-content questions (grounded Q&A)', () => {
+  const questions = [
+    // The old imperative-verb veto routed these into full tasks; they are
+    // read-only questions and now take the direct-answer path instead.
+    'lihat isi folder src',
+    'tampilkan isi folder src',
+    'hai, lihat isi folder src',
+    'ada file apa aja di folder src',
+    'ada file apa saja di src',
+    'file apa aja yang ada di src',
+    'daftar file di folder src',
+    'isi file README apa',
+    'isi file README.md',
+    'tampilkan isi file config.ts',
+    'apa isi folder src?',
+    'di mana file config.ts',
+    'dimana file index.ts',
+    'list files in src',
+    "what's in the src folder",
+    'show me the content of README.md',
+    'where is the config file',
+  ];
+  for (const input of questions) {
+    test(`"${input}" is a question, not a task`, () => {
+      expect(classifyChatIntent(input)).toBe('question');
+      expect(isWorkspaceContentQuestion(input)).toBe(true);
+    });
+  }
+
+  const stillTasks = [
+    // Imperatives to modify/create/delete/run stay on the full task path.
+    'buatkan file src/data.ts',
+    'edit file src/index.ts',
+    'jalankan npm test',
+    'hapus file lama.ts',
+    'tolong perbaiki fungsi ini',
+    'tambah kolom baru ke tabel users',
+    // Ambiguous/mixed lines fail toward the safe established path: task.
+    'lihat isi folder src dan hapus yang tidak perlu',
+    'tampilkan isi folder lalu refactor semuanya',
+    'cek isi folder src terus perbaiki yang rusak',
+    'baca file src/index.ts berulang kali dan analisis isinya',
+  ];
+  for (const input of stillTasks) {
+    test(`"${input}" is still a task`, () => {
+      expect(classifyChatIntent(input)).toBe('task');
+      expect(isWorkspaceContentQuestion(input)).toBe(false);
+    });
+  }
+
+  test('isWorkspaceContentQuestion needs a workspace-content phrase, not just a file mention', () => {
+    expect(isWorkspaceContentQuestion('kenapa test ini gagal?')).toBe(false);
+    expect(isWorkspaceContentQuestion('apa fungsi file config.ts?')).toBe(false);
+    expect(isWorkspaceContentQuestion('halo! bisa tolong cek file ini?')).toBe(false);
   });
 });
 
@@ -202,6 +261,120 @@ describe('gatherWorkspaceContext', () => {
     expect(context).toContain('line 60');
     expect(context).not.toContain('line 61');
     await expect(gatherWorkspaceContext(join(dir, 'does-not-exist'))).resolves.toBe('');
+  });
+});
+
+describe('answerWorkspaceQuestion — deterministic grounded answers, zero model calls', () => {
+  function richWorkspace(): string {
+    const dir = mkdtempSync(join(tmpdir(), 'daedalus-workspace-qa-'));
+    cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+    writeFileSync(join(dir, 'README.md'), '# Widget Kit\n\nA tiny kit of widgets for demos.\n');
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'widget-kit', description: 'Widgets for demos' }));
+    mkdirSync(join(dir, 'src'));
+    writeFileSync(join(dir, 'src', 'index.ts'), 'export const widget = 1;\n');
+    writeFileSync(join(dir, 'src', 'util.ts'), 'export const util = 2;\n');
+    mkdirSync(join(dir, 'docs'));
+    writeFileSync(join(dir, 'docs', 'guide.md'), '# Guide\n\nHow to use the kit.\n');
+    mkdirSync(join(dir, 'node_modules'));
+    mkdirSync(join(dir, '.git'));
+    return dir;
+  }
+
+  test('parses the three single-shape operations', () => {
+    expect(parseWorkspaceQARequest('lihat isi folder src')).toEqual({ kind: 'list', target: 'src', lang: 'id' });
+    expect(parseWorkspaceQARequest('ada file apa aja di folder src')).toEqual({ kind: 'list', target: 'src', lang: 'id' });
+    expect(parseWorkspaceQARequest('isi file README apa')).toEqual({ kind: 'read', target: 'readme', lang: 'id' });
+    expect(parseWorkspaceQARequest('show me the content of README.md')).toEqual({ kind: 'read', target: 'readme.md', lang: 'en' });
+    expect(parseWorkspaceQARequest('di mana file config.ts')).toEqual({ kind: 'locate', target: 'config.ts', lang: 'id', wantDir: false });
+    expect(parseWorkspaceQARequest('where is the config file')).toEqual({ kind: 'locate', target: 'config', lang: 'en', wantDir: false });
+  });
+
+  test('returns null for mixed lines and synthesis questions (model fallback)', () => {
+    expect(parseWorkspaceQARequest('apa fungsi file config.ts?')).toBeNull();
+    expect(parseWorkspaceQARequest('jelaskan struktur repo ini')).toBeNull();
+    expect(parseWorkspaceQARequest('lihat isi folder src dan hapus yang lama')).toBeNull();
+    expect(parseWorkspaceQARequest('buatkan file x.ts')).toBeNull();
+    expect(parseWorkspaceQARequest('repo ini tentang apa?')).toBeNull();
+  });
+
+  test('lists a folder without any provider', async () => {
+    const dir = richWorkspace();
+    const reply = await answerWorkspaceQuestion('lihat isi folder src', dir);
+    expect(reply).toContain('Isi folder src/:');
+    expect(reply).toContain('- index.ts');
+    expect(reply).toContain('- util.ts');
+    expect(reply).not.toContain('node_modules');
+
+    const reply2 = await answerWorkspaceQuestion('ada file apa aja di folder docs', dir);
+    expect(reply2).toContain('- guide.md');
+
+    const replyEn = await answerWorkspaceQuestion("what's in the src folder", dir);
+    expect(replyEn).toContain('Contents of src/:');
+    expect(replyEn).toContain('- index.ts');
+  });
+
+  test('reads a file excerpt without any provider', async () => {
+    const dir = richWorkspace();
+    const reply = await answerWorkspaceQuestion('isi file README apa', dir);
+    expect(reply).toContain('Isi file README.md:');
+    expect(reply).toContain('A tiny kit of widgets for demos.');
+
+    const reply2 = await answerWorkspaceQuestion('tampilkan isi file src/index.ts', dir);
+    expect(reply2).toContain('export const widget = 1;');
+  });
+
+  test('locates a file by name', async () => {
+    const dir = richWorkspace();
+    const reply = await answerWorkspaceQuestion('di mana file guide.md', dir);
+    expect(reply).toContain('docs/guide.md');
+
+    const reply2 = await answerWorkspaceQuestion('dimana file index.ts', dir);
+    expect(reply2).toContain('src/index.ts');
+  });
+
+  test('returns null for missing targets so the model path can answer honestly', async () => {
+    const dir = richWorkspace();
+    await expect(answerWorkspaceQuestion('lihat isi folder tidak-ada', dir)).resolves.toBeNull();
+    await expect(answerWorkspaceQuestion('isi file tidak-ada.txt', dir)).resolves.toBeNull();
+    await expect(answerWorkspaceQuestion('di mana file tidak-ada.txt', dir)).resolves.toBeNull();
+  });
+
+  test('never escapes the workspace', async () => {
+    const dir = richWorkspace();
+    await expect(answerWorkspaceQuestion('lihat isi folder ../../..', dir)).resolves.toBeNull();
+    await expect(answerWorkspaceQuestion('isi file /etc/hostname', dir)).resolves.toBeNull();
+  });
+
+  test('is read-only: workspace content is byte-identical before and after', async () => {
+    const dir = richWorkspace();
+    const snapshot = new Map<string, string>();
+    const walk = (d: string): void => {
+      for (const entry of readdirSync(d, { withFileTypes: true })) {
+        const full = join(d, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else snapshot.set(full, readFileSync(full, 'utf8'));
+      }
+    };
+    const countFiles = (d: string): number => {
+      let n = 0;
+      for (const entry of readdirSync(d, { withFileTypes: true })) {
+        n += entry.isDirectory() ? countFiles(join(d, entry.name)) : 1;
+      }
+      return n;
+    };
+    walk(dir);
+    const before = countFiles(dir);
+
+    await answerWorkspaceQuestion('lihat isi folder src', dir);
+    await answerWorkspaceQuestion('isi file README.md', dir);
+    await answerWorkspaceQuestion('di mana file guide.md', dir);
+    await answerWorkspaceQuestion("what's in the docs folder", dir);
+    await answerWorkspaceQuestion('show me the content of package.json', dir);
+
+    expect(countFiles(dir)).toBe(before);
+    for (const [full, content] of snapshot) {
+      expect(readFileSync(full, 'utf8')).toBe(content);
+    }
   });
 });
 

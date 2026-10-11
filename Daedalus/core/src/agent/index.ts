@@ -122,12 +122,16 @@ export {
   QUESTION_SYSTEM_PROMPT,
   answerConversational,
   answerQuestion,
+  answerWorkspaceQuestion,
   classifyChatIntent,
   conversationalFallbackReply,
   gatherWorkspaceContext,
+  isWorkspaceContentQuestion,
+  parseWorkspaceQARequest,
   questionFallbackReply,
   type AnswerQuestionOptions,
   type ChatIntent,
+  type WorkspaceQAOperation,
 } from './conversation.ts';
 export { handleObservation } from './observation.ts';
 export {
