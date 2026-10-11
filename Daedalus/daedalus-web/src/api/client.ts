@@ -1,4 +1,4 @@
-import type { AgentMode, Attachment, DocumentState, Event, FinalReport, PermissionKey, ThinkingLevel, ToolRules } from '@daedalus/core'
+import type { AgentMode, Attachment, DocumentState, Event, FinalReport, PermissionKey, SavedSchema, ThinkingLevel, ToolRules } from '@daedalus/core'
 import type {
   Conversation,
   FileChange,
@@ -360,6 +360,12 @@ export const api = {
   /** Save Panel Skema edits (fields/target); optionally also store as the saved schema for a document kind. */
   dokumenSchema: (root: string, schema: unknown, saveTemplate = false) =>
     request<{ root: string; document: DocumentState }>('/dokumen/schema', { method: 'POST', body: JSON.stringify({ root, schema, save_template: saveTemplate }) }),
+
+  /** Saved per-document-kind schema templates (written by dokumenSchema with saveTemplate=true). */
+  dokumenSchemaTemplates: (root: string) =>
+    request<{ root: string; templates: SavedSchema[] }>(
+      `/dokumen/schema-templates?root=${encodeURIComponent(root)}`,
+    ),
 
   /** The panel release buttons: Ekstrak / Susun / Terapkan. */
   dokumenRelease: (root: string) =>

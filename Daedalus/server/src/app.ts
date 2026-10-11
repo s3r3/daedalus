@@ -65,6 +65,7 @@ import {
   parseSourceFile,
   writeParsedBlocks,
   saveSchema,
+  listSavedSchemas,
   archiveActiveDocument,
   createActiveDocument,
   exportData,
@@ -2993,6 +2994,19 @@ export function createApp(ctx: AppContext) {
           const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
           const document = await readActiveDocument(root);
           sendJson(res, 200, { root, document });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/dokumen/schema-templates") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const templates = await listSavedSchemas(root);
+          sendJson(res, 200, { root, templates });
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { FilePlus2, Play, Plus, Save, Trash2 } from 'lucide-react'
-import type { DocumentState, FieldDef } from '@daedalus/core'
+import type { DocumentState, FieldDef, SavedSchema } from '@daedalus/core'
 import { Panel } from '../common/panel'
 import { Button } from '../ui/button'
 import { api } from '../../api/client'
@@ -66,12 +66,37 @@ function SchemaPanel({ document, loading, error, root, refresh }: { document: Do
   const [target, setTarget] = useState<string>('per_doc')
   const [saving, setSaving] = useState(false)
   const [saveNote, setSaveNote] = useState<string | null>(null)
+  const [templates, setTemplates] = useState<SavedSchema[]>([])
   const { releasing, note, release } = useRelease(root, refresh)
+
+  const hasSchema = Boolean(document?.schema)
 
   useEffect(() => {
     setFields(document?.schema?.fields ?? [])
     setTarget(document?.schema?.extractionTarget ?? 'per_doc')
   }, [document?.schema])
+
+  useEffect(() => {
+    // Templates are only listed when there is a schema being edited —
+    // the picker lives inside the schema editor, so no schema means
+    // no fetch.
+    if (!root || !hasSchema) {
+      setTemplates([])
+      return
+    }
+    api
+      .dokumenSchemaTemplates(root)
+      .then(({ templates: list }) => setTemplates(list))
+      .catch(() => setTemplates([]))
+  }, [root, hasSchema])
+
+  const applyTemplate = (docType: string): void => {
+    const found = templates.find((t) => t.docType === docType)
+    if (!found) return
+    setFields(found.schema.fields)
+    setTarget(found.schema.extractionTarget)
+    setSaveNote(`Templat "${found.docType}" dimuat ke editor — tekan Simpan untuk memakai.`)
+  }
 
   const staged = Boolean(document?.schema && !document.schema.approved)
 
@@ -143,6 +168,26 @@ function SchemaPanel({ document, loading, error, root, refresh }: { document: Do
             <Button size="sm" variant="ghost" onClick={() => setFields((c) => [...c, { name: `field_${c.length + 1}`, type: 'string' }])}>
               <Plus className="size-3.5" aria-hidden /> Field
             </Button>
+            {templates.length > 0 ? (
+              <select
+                aria-label="pakai templat tersimpan"
+                data-testid="dokumen-schema-template-picker"
+                className="h-6 max-w-40 rounded border border-line bg-surface px-1 text-[11px]"
+                defaultValue=""
+                onChange={(e) => {
+                  if (e.target.value) applyTemplate(e.target.value)
+                  e.target.value = ''
+                }}
+                title="Muat skema yang pernah disimpan sebagai templat untuk jenis dokumen ini"
+              >
+                <option value="">Templat tersimpan…</option>
+                {templates.map((t) => (
+                  <option key={t.docType} value={t.docType}>
+                    {t.docType} ({t.schema.fields.length} field)
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <select aria-label="target ekstraksi" className="h-6 rounded border border-line bg-surface px-1 text-[11px]" value={target} onChange={(e) => setTarget(e.target.value)}>
               <option value="per_doc">per dokumen</option>
               <option value="per_page">per halaman</option>
@@ -307,8 +352,6 @@ function OutlinePanel({ document, loading, error, root, refresh }: { document: D
 }
 
 function SourcesPanel({ document, root, refresh }: { document: DocumentState | null; root: string; refresh: () => void }) {
-  const setDokumenOptions = useDaedalusStore((state) => state.setDokumenOptions)
-  const dokumenOptions = useDaedalusStore((state) => state.dokumenOptions)
   const [path, setPath] = useState('')
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
@@ -370,19 +413,7 @@ function SourcesPanel({ document, root, refresh }: { document: DocumentState | n
             Lampirkan
           </Button>
         </div>
-        {dokumenOptions.sources.length > 0 ? (
-          <p className="text-[10px] text-muted">Terpilih untuk tugas berikut: {dokumenOptions.sources.map((s) => s.split('/').pop()).join(', ')}</p>
-        ) : null}
         {note ? <p className="text-[10px] text-muted">{note}</p> : null}
-        <Button
-          size="sm"
-          variant="ghost"
-          className="self-start"
-          onClick={() => setDokumenOptions({ sources: [] })}
-          disabled={dokumenOptions.sources.length === 0}
-        >
-          Kosongkan pilihan
-        </Button>
       </div>
     </Panel>
   )
