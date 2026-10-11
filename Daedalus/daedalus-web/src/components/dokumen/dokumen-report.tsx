@@ -4,6 +4,7 @@ import { Panel } from '../common/panel'
 import { Button } from '../ui/button'
 import { api } from '../../api/client'
 import { useDokumen, decisionClass, decisionLabel } from './useDokumen'
+import { useDaedalusStore } from '../../state/taskStore'
 import { cn } from '../../lib/utils'
 
 /**
@@ -15,6 +16,7 @@ import { cn } from '../../lib/utils'
  */
 export function DokumenReportPanel() {
   const { document, root, refresh } = useDokumen()
+  const setDokumenFocus = useDaedalusStore((state) => state.setDokumenFocus)
   const [busy, setBusy] = useState<string | null>(null)
   const [note, setNote] = useState<string | null>(null)
 
@@ -76,15 +78,44 @@ export function DokumenReportPanel() {
                     .filter(([, f]) => f.status === 'flagged' || f.status === 'escalated')
                     .map(([name, f]) => `${name}: ${f.note ?? f.status}`),
                 ]
+                const focusField =
+                  Object.entries(record.fields).find(([, f]) => f.status === 'flagged' || f.status === 'escalated')?.[0] ??
+                  Object.keys(record.fields)[0]
                 return (
-                  <li key={record.id} className="rounded border border-line bg-surface px-1.5 py-1 text-[11px]">
-                    <span className={cn('mr-1 inline-block rounded border px-1 py-0.5 text-[9px] font-semibold uppercase', decisionClass(record.decision))}>
-                      {decisionLabel(record.decision)}
-                    </span>
-                    <span className="font-medium">{doc.sources.find((s) => s.id === record.sourceId)?.filename ?? record.sourceId}</span>
-                    {reasons.slice(0, 2).map((reason, i) => (
-                      <span key={i} className="block text-muted">{reason}</span>
-                    ))}
+                  <li key={record.id}>
+                    <button
+                      type="button"
+                      data-testid={`dokumen-held-${record.id}`}
+                      className="w-full rounded border border-line bg-surface px-1.5 py-1 text-left text-[11px] transition-colors hover:border-primary"
+                      title="Klik untuk memfokuskan sel yang bermasalah di kanvas"
+                      onClick={() => {
+                        if (!focusField) return
+                        setDokumenFocus({
+                          recordId: record.id,
+                          field: focusField,
+                          sourceId: record.sourceId,
+                          page: record.page ?? 1,
+                        })
+                        try {
+                          // Best-effort: scroll is unavailable in some
+                          // environments (e.g. jsdom); the focus state
+                          // above is what the canvas actually reacts to.
+                          globalThis.document
+                            .querySelector(`[data-testid="dokumen-cell-${record.id}-${focusField}"]`)
+                            ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                        } catch {
+                          /* ignore */
+                        }
+                      }}
+                    >
+                      <span className={cn('mr-1 inline-block rounded border px-1 py-0.5 text-[9px] font-semibold uppercase', decisionClass(record.decision))}>
+                        {decisionLabel(record.decision)}
+                      </span>
+                      <span className="font-medium">{doc.sources.find((s) => s.id === record.sourceId)?.filename ?? record.sourceId}</span>
+                      {reasons.slice(0, 2).map((reason, i) => (
+                        <span key={i} className="block text-muted">{reason}</span>
+                      ))}
+                    </button>
                   </li>
                 )
               })}

@@ -187,6 +187,29 @@ describe('Dokumen panel routes', () => {
     expect(again.status).toBe(409)
   })
 
+  test('schema templates: empty at first, then listed after save_template with a doc type', async () => {
+    const { base, root } = await listen()
+    const empty = await req(base, 'GET', `/dokumen/schema-templates?root=${encodeURIComponent(root)}`)
+    expect(empty.status).toBe(200)
+    expect(empty.body.templates).toEqual([])
+    writeFileSync(join(root, 'invoice.txt'), INVOICE)
+    await req(base, 'POST', '/dokumen/sources', { root, paths: ['invoice.txt'] })
+    const saved = await req(base, 'POST', '/dokumen/schema', {
+      root,
+      schema: { fields: [{ name: 'vendor', type: 'string', required: true }, { name: 'total', type: 'money', required: true }], extraction_target: 'per_doc' },
+      save_template: true,
+      doc_type: 'invoice',
+    })
+    expect(saved.status).toBe(200)
+    const listed = await req(base, 'GET', `/dokumen/schema-templates?root=${encodeURIComponent(root)}`)
+    expect(listed.status).toBe(200)
+    const templates = listed.body.templates as Array<{ docType: string; schema: { fields: Array<{ name: string }>; extractionTarget: string }; savedAt: string }>
+    expect(templates).toHaveLength(1)
+    expect(templates[0]!.docType).toBe('invoice')
+    expect(templates[0]!.schema.fields.map((f) => f.name)).toEqual(['vendor', 'total'])
+    expect(templates[0]!.schema.extractionTarget).toBe('per_doc')
+  })
+
   test('style-inspect proposes deterministic ops for a DOCX', async () => {
     const { base, root } = await listen()
     const doc = await createActiveDocument(root, 'compose', 'Inspeksi')

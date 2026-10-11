@@ -411,13 +411,48 @@ function ComposeView({ document, root, refresh }: { document: DocumentState; roo
             {Object.keys(document.citations).length > 0 ? (
               <div className="rounded border border-line bg-surface p-2" data-testid="dokumen-citations">
                 <p className="mb-1 text-[11px] font-semibold">Sitasi</p>
-                <ul className="flex flex-col gap-0.5 text-[11px] text-muted">
-                  {Object.values(document.citations).map((c) => (
-                    <li key={c.id} className="truncate" title={c.url ?? c.title}>
-                      <span className="font-mono">[{c.id}]</span> {c.title}
-                      {c.url ? <span className="opacity-70"> — {c.url}</span> : null}
-                    </li>
-                  ))}
+                <ul className="flex flex-col gap-1 text-[11px] text-muted">
+                  {Object.values(document.citations).map((c) => {
+                    const citing = document.sections.filter((s) => s.citations.includes(c.id))
+                    return (
+                      <li key={c.id} className="rounded border border-line bg-surface-base px-1.5 py-1" data-testid={`dokumen-citation-${c.id}`}>
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono font-semibold text-foreground">[{c.id}]</span>
+                          <span className="min-w-0 flex-1 truncate" title={c.title}>{c.title}</span>
+                          <span className="shrink-0 text-[10px]">{citing.length > 0 ? `dikutip di ${citing.length} bab` : 'belum dikutip'}</span>
+                          {citing.length > 0 ? (
+                            <button
+                              type="button"
+                              className="shrink-0 text-[10px] text-primary hover:underline"
+                              title={`Lompat ke ${citing[0].title}`}
+                              onClick={() => {
+                                try {
+                                  // Best-effort scroll (unavailable in jsdom).
+                                  globalThis.document
+                                    .querySelector(`[data-testid="dokumen-section-${citing[0].id}"]`)
+                                    ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+                                } catch {
+                                  /* ignore */
+                                }
+                              }}
+                            >
+                              Lompat
+                            </button>
+                          ) : null}
+                          {c.url ? (
+                            <a href={c.url} target="_blank" rel="noreferrer" className="shrink-0 text-[10px] text-primary hover:underline" title={c.url}>
+                              Buka
+                            </a>
+                          ) : null}
+                        </div>
+                        {citing.length > 0 ? (
+                          <p className="mt-0.5 truncate text-[10px] opacity-80" title={citing.map((s) => s.title).join(', ')}>
+                            {citing.map((s) => s.title).join(' · ')}
+                          </p>
+                        ) : null}
+                      </li>
+                    )
+                  })}
                 </ul>
               </div>
             ) : null}

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useDaedalusStore } from './state/taskStore'
 import { domainFromPathname, pathForDomain } from './state/prefs'
 import { DomainSwitch } from './components/layout/domain-switch'
@@ -13,6 +13,7 @@ const dokumenDocument = vi.fn()
 const dokumenBlocks = vi.fn()
 const dokumenPreview = vi.fn()
 const dokumenPreviewRender = vi.fn()
+const dokumenSchemaTemplates = vi.fn()
 
 vi.mock('./api/client', () => ({
   api: {
@@ -40,6 +41,7 @@ vi.mock('./api/client', () => ({
     dokumenBlocks: (...args: unknown[]) => dokumenBlocks(...args),
     dokumenSources: vi.fn(async () => ({ document: null })),
     dokumenSchema: vi.fn(async () => ({ document: null })),
+    dokumenSchemaTemplates: (...args: unknown[]) => dokumenSchemaTemplates(...args),
     dokumenRelease: vi.fn(async () => ({ released: true })),
     dokumenField: vi.fn(async () => ({ document: null, record: null })),
     dokumenOutline: vi.fn(async () => ({ document: null })),
@@ -103,6 +105,8 @@ beforeEach(() => {
   dokumenPreview.mockResolvedValue({ root: '/ws', available: false, status: 'unavailable', engine: null, kind: 'compose', key: null, pages: 0 })
   dokumenPreviewRender.mockReset()
   dokumenPreviewRender.mockResolvedValue({ root: '/ws', available: true, status: 'idle', engine: 'libreoffice', kind: 'compose', key: null, pages: 0 })
+  dokumenSchemaTemplates.mockReset()
+  dokumenSchemaTemplates.mockResolvedValue({ root: '/ws', templates: [] })
 })
 
 afterEach(() => {
@@ -323,5 +327,65 @@ describe('dokumen pratinjau (Tulis | Pratinjau)', () => {
     expect(await screen.findByTestId('dokumen-preview-status')).toBeTruthy()
     expect(screen.getByText(/belum ada DOCX hasil tata ulang/)).toBeTruthy()
     expect(dokumenPreview).toHaveBeenCalledWith('/ws', 'style')
+  })
+})
+
+describe('dokumen panel consolidation', () => {
+  test('SourcesPanel no longer shows the duplicated selection line or Kosongkan pilihan', async () => {
+    useDaedalusStore.setState({ dokumenOptions: { subMode: 'ekstrak', sources: ['invoice.txt'], docxPath: null } })
+    render(<DokumenPanel />)
+    expect(await screen.findByTestId('dokumen-sources-panel')).toBeTruthy()
+    expect(screen.queryByText(/Terpilih untuk tugas berikut/)).toBeNull()
+    expect(screen.queryByText('Kosongkan pilihan')).toBeNull()
+    // parse-status list still works
+    expect(screen.getByText('invoice.txt')).toBeTruthy()
+    expect(screen.getByText('terbaca')).toBeTruthy()
+  })
+
+  test('composer has an explicit Tata ulang segment: pressed when a docx target is set, guides otherwise', async () => {
+    useDaedalusStore.setState({ dokumenOptions: { subMode: 'susun', sources: [], docxPath: null } })
+    render(<Composer />)
+    const segment = screen.getByTestId('dokumen-submode-tata-ulang')
+    expect(segment.getAttribute('aria-pressed')).toBe('false')
+    fireEvent.click(segment)
+    expect(screen.getByTestId('dokumen-tata-ulang-hint')).toBeTruthy()
+    act(() => {
+      useDaedalusStore.setState({ dokumenOptions: { subMode: 'susun', sources: [], docxPath: 'laporan.docx' } })
+    })
+    expect(screen.getByTestId('dokumen-submode-tata-ulang').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.queryByTestId('dokumen-tata-ulang-hint')).toBeNull()
+  })
+
+  test('clicking a held-back record focuses its flagged grid cell', async () => {
+    render(
+      <>
+        <DokumenStage />
+        <DokumenReportPanel />
+      </>,
+    )
+    const held = await screen.findByTestId('dokumen-held-rec-1')
+    fireEvent.click(held)
+    expect(useDaedalusStore.getState().dokumenFocus).toEqual({ recordId: 'rec-1', field: 'total', sourceId: 'src-1', page: 1 })
+  })
+
+  test('schema template picker loads a saved template into the editor', async () => {
+    dokumenSchemaTemplates.mockResolvedValue({
+      root: '/ws',
+      templates: [{ docType: 'kwitansi', schema: { fields: [{ name: 'nomor', type: 'string', required: true }], extractionTarget: 'per_page' }, savedAt: '2026-10-11T00:00:00.000Z' }],
+    })
+    render(<DokumenPanel />)
+    const picker = await screen.findByTestId('dokumen-schema-template-picker')
+    fireEvent.change(picker, { target: { value: 'kwitansi' } })
+    await waitFor(() => expect((screen.getByLabelText('nama field 1') as HTMLInputElement).value).toBe('nomor'))
+    expect((screen.getByLabelText('target ekstraksi') as HTMLSelectElement).value).toBe('per_page')
+  })
+
+  test('citation manager shows usage counts and jump links', async () => {
+    dokumenDocument.mockResolvedValue({ root: '/ws', document: seededComposeDocument })
+    render(<DokumenStage />)
+    const item = await screen.findByTestId('dokumen-citation-SRC-1')
+    expect(item.textContent).toContain('dikutip di 1 bab')
+    expect(item.textContent).toContain('Pendahuluan')
+    expect(within(item).getByText('Lompat')).toBeTruthy()
   })
 })
