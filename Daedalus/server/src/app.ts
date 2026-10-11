@@ -33,6 +33,7 @@ import {
   seedProviderFromSettings,
   unstagedDiff,
   workspaceAgentsDir,
+  ensureBundledSkillsInstalled,
   resolveSkillSearchDirs,
   resolveThinkingLevel,
   MAX_PPTX_TEMPLATE_BYTES,
@@ -1281,6 +1282,11 @@ export function reconcileInterruptedTasks(ctx: AppContext): string[] {
 
 export function createApp(ctx: AppContext) {
   reconcileInterruptedTasks(ctx);
+  // Permanent bundled skills: make sure the starter set is installed in the
+  // Daedalus-global skills dir at startup, so the Web inventory (Settings →
+  // Extensions) shows them even before the first task runs. Idempotent and
+  // never overwrites existing copies; failures must not take the server down.
+  void ensureBundledSkillsInstalled().catch(() => undefined);
   const slidePreview = ctx.slidePreview ?? new SlidePreviewService();
   const previewPageUrl = (root: string, key: string, page: number): string =>
     `/slides/deck/preview/page?root=${encodeURIComponent(root)}&key=${key}&page=${page}`;

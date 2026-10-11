@@ -38,7 +38,7 @@ external binary is bundled or required.
 | Source | Licence | Concept studied | Daedalus's own implementation |
 |---|---|---|---|
 | rtk-ai/rtk ("Rust Token Killer") | Apache-2.0 | A CLI proxy that filters/compresses command output (git, test runners, builds, installs) before an AI agent reads it, claiming large token savings on noisy commands | `core/src/agent/output-compression.ts`: original per-family filters (git/test/build/install/listing/generic) applied to `run_command` results in the agent loop, in front of the existing caps+spill layer. Failure lines + exit code stay verbatim, raw text is spilled to the task store, savings land on the final report (`compressed_outputs`, `output_chars_before/after_compression`). Default on; `DAEDALUS_OUTPUT_COMPRESSION=off` or the Web Settings toggle disables it. No Rust binary is shipped or invoked. |
-| DietrichGebert/ponytail | MIT | A "lazy senior dev" skill: a decision ladder (need exists? already in codebase? stdlib? native feature? installed dependency? one-liner? minimum code) that biases the agent against over-building | `skills/ponytail/SKILL.md`: the ladder and its "lazy about the solution, never about reading" guard, rewritten in Daedalus's own words, shipped as a bundled starter skill. It is **not** installed or loaded by default — users install it with `daedalus skills install ponytail` and enable it per workspace like any other skill. |
+| DietrichGebert/ponytail | MIT | A "lazy senior dev" skill: a decision ladder (need exists? already in codebase? stdlib? native feature? installed dependency? one-liner? minimum code) that biases the agent against over-building | `skills/ponytail/SKILL.md`: the ladder and its "lazy about the solution, never about reading" guard, rewritten in Daedalus's own words, shipped as a bundled starter skill. Since 2026-10-11 it is part of the **permanent set**: auto-installed into the Daedalus-global skills dir (`~/.daedalus/skills`) on first task run / server start, enabled by default, still disable-able per workspace. |
 
 Prose-compression skills in the caveman family were deliberately **not**
 bundled: Daedalus's observed token problem is on the input side (tool
@@ -46,6 +46,24 @@ output flooding the context), not in the agent's reply length, and terse
 fragment styles degrade the chat reports users rely on. Nothing stops a
 user from dropping any such `SKILL.md` into a skills directory — see
 `docs/skills.md`.
+
+## Permanent bundled skills (2026-10-11)
+
+Five skills ship in `Daedalus/skills/` and are auto-installed into the
+Daedalus-global skills dir (`~/.daedalus/skills`, origin `global`) on first
+task run / server start — present and enabled by default in every
+workspace, still disable-able per workspace via the existing toggles. They
+are data (Markdown), not code: zero dependencies, zero downloads while a
+task runs. Skill bodies were reviewed for external-fetch instructions
+(none). They are Coding-domain only: the slide/dokumen/spreadsheet engines
+never load a skill registry.
+
+| Source | Licence | Pinned SHA | What was adapted | Daedalus location |
+|---|---|---|---|---|
+| mattpocock/skills `tdd` | MIT | `49dd158d1076134a641b33efb035946536778336` | Red → green loop discipline: seams, anti-patterns (implementation-coupled, tautological, horizontal slicing), mock-at-boundaries-only, one-slice-at-a-time; companion `tests.md`/`mocking.md` guidance folded in | `skills/test-driven-development/SKILL.md` (replaces the earlier Daedalus-original version) |
+| mattpocock/skills `diagnosing-bugs` | MIT | `49dd158d1076134a641b33efb035946536778336` | Six-phase debug discipline (feedback loop → reproduce/minimise → hypothesise → instrument → fix+regression → cleanup) with secret redaction; the upstream HITL shell template is described inline instead of shipped, keeping the bundle Markdown-only | `skills/systematic-debugging/SKILL.md` (replaces the earlier Daedalus-original version) |
+| mattpocock/skills `code-review` | MIT | `49dd158d1076134a641b33efb035946536778336` | Two-axis diff review (Standards + Spec) with Fowler smell baseline; upstream's `/setup-matt-pocock-skills` tracker reference removed, parallel sub-agents mapped to Daedalus's `spawn_subagent` | `skills/code-review/SKILL.md` (replaces the earlier Daedalus-original version) |
+| miqdadbadjuber/anti-slop (core filter) | MIT | `388cbe3b6c37d5175b9f460015bb092ef9e34894` | 38 mandatory rules (hard gate / purpose-gate / quality locks), craftsmanship standard, liveliness toolkit, delivery gate; install wizard and per-session mode question removed — usage mode preset to `during` at bundle time; only the core filter is bundled (concern sub-skills not shipped) | `skills/anti-slop/SKILL.md` (new) |
 
 ## Agentic Spreadsheet native-parts sidecar (2026-10-10)
 

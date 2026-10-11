@@ -20,13 +20,15 @@ function temp(prefix: string): string {
   return dir;
 }
 
-// The bundled catalog gains `ponytail` (docs/THIRD_PARTY.md): a starter
-// skill like the other five — listed and installable, never loaded by
-// default. The list grows with the catalog; that is the point of pinning it.
-const EXPECTED_BUNDLED = ['code-review', 'git-workflow', 'ponytail', 'spec-driven-development', 'systematic-debugging', 'test-driven-development'];
+// The bundled catalog: six original starter skills plus `anti-slop`
+// (docs/THIRD_PARTY.md). Bundled skills are auto-installed into the
+// Daedalus-global skills dir on first task run / server start, so they are
+// present and enabled by default. The list grows with the catalog; that is
+// the point of pinning it.
+const EXPECTED_BUNDLED = ['anti-slop', 'code-review', 'git-workflow', 'ponytail', 'spec-driven-development', 'systematic-debugging', 'test-driven-development'];
 
 describe('bundled starter skills', () => {
-  test('lists the six bundled skills with provenance', async () => {
+  test('lists the seven bundled skills with provenance', async () => {
     const workspace = temp('daedalus-skills-list-');
     const listing = await listSkills({ workspaceRoot: workspace });
     expect(listing.bundled.map((skill) => skill.name)).toEqual(EXPECTED_BUNDLED);

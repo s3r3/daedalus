@@ -32,3 +32,10 @@ export {
   writeSkillConfig,
   type SkillConfig,
 } from './config.ts';
+
+export {
+  bundledSkillsDir,
+  ensureBundledSkillsInstalled,
+  type BundledInstallOptions,
+  type BundledInstallResult,
+} from './bundled.ts';
