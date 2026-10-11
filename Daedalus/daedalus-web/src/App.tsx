@@ -16,8 +16,7 @@ import { AttachmentsPanel, ChildTasksPanel, FinalReportView } from './components
 import { ScrollArea } from './components/ui/scroll-area'
 import { SlideStage } from './components/slides/slide-stage'
 import { DeckOutlinePanel } from './components/slides/deck-outline'
-import { SlideBuiltinTemplatesPanel } from './components/slides/slide-builtin-templates'
-import { SlideTemplatesPanel } from './components/slides/slide-templates'
+import { SlideDesignPanel } from './components/slides/slide-design-panel'
 import { SlidePptTemplatesPanel } from './components/slides/slide-ppt-templates'
 import { SlideWorkspacePanel } from './components/slides/slide-workspace'
 import { DokumenWorkspacePanel } from './components/dokumen/dokumen-workspace'
@@ -344,8 +343,7 @@ export function App() {
           <ScrollArea className="min-h-[240px] lg:min-h-0 lg:flex-1">
             <div className="flex flex-col gap-2 pr-1">
               {domain === 'slide' ? <DeckOutlinePanel /> : null}
-              {domain === 'slide' ? <SlideBuiltinTemplatesPanel /> : null}
-              {domain === 'slide' ? <SlideTemplatesPanel /> : null}
+              {domain === 'slide' ? <SlideDesignPanel /> : null}
               {domain === 'slide' ? <SlidePptTemplatesPanel /> : null}
               {domain === 'dokumen' ? <DokumenPanel /> : null}
               {domain === 'spreadsheet' ? <BlueprintPanel /> : null}
@@ -397,7 +395,7 @@ export function App() {
               {domain === 'spreadsheet' ? <SheetReportPanel /> : null}
               {domain === 'dokumen' || domain === 'spreadsheet' ? null : <DiffViewer />}
               {domain === 'dokumen' || domain === 'spreadsheet' ? null : <AttachmentsPanel />}
-              {domain === 'dokumen' || domain === 'spreadsheet' ? null : <ChildTasksPanel />}
+              {domain === 'dokumen' || domain === 'spreadsheet' || domain === 'slide' ? null : <ChildTasksPanel />}
               {domain === 'dokumen' || domain === 'spreadsheet' ? null : <FinalReportView report={report} />}
               <p className="pb-2 text-center text-[9px] uppercase tracking-wider text-muted">daedalus core {VERSION}</p>
             </div>

@@ -36,6 +36,14 @@ const STATUS_TONE: Record<GitFileStatus, 'success' | 'warning' | 'info' | 'error
 export function DiffViewer() {
   const events = useTaskEvents()
   const taskId = useActiveTaskId()
+  const domain = useDaedalusStore((state) => state.domain)
+  // Slide scope-down (the panel is shared with Coding — Coding keeps the
+  // full surface): in the Slide domain the git branch badge, per-file git
+  // status badges, the git-only section, and every revert button are
+  // hidden. A two-click revert on deck.json can silently discard the
+  // deck, so it has no place here. Task diffs, checkpoints/restore, and
+  // the empty state stay.
+  const isSlide = domain === 'slide'
   const changes = useMemo(() => fileChanges(events), [events])
   const [selected, setSelected] = useState<string | null>(null)
   const root = useDaedalusStore((state) => state.workspace.root)
@@ -145,7 +153,7 @@ export function DiffViewer() {
     }
   }
 
-  if (changes.length === 0 && gitOnly.length === 0 && checkpoints.length === 0) {
+  if (changes.length === 0 && (isSlide || gitOnly.length === 0) && checkpoints.length === 0) {
     return (
       <Panel title="changes" data-testid="changes-panel">
         <EmptyState title="No file changes yet" hint="Every file the agent writes appears here as a live diff." />
@@ -161,7 +169,7 @@ export function DiffViewer() {
       data-testid="changes-panel"
       action={
         <span className="flex items-center gap-1">
-          {inRepo && gitStatus?.branch ? <Badge tone="primary">{gitStatus.branch}</Badge> : null}
+          {!isSlide && inRepo && gitStatus?.branch ? <Badge tone="primary">{gitStatus.branch}</Badge> : null}
           <Badge tone="primary">{changes.length} files</Badge>
         </span>
       }
@@ -178,7 +186,7 @@ export function DiffViewer() {
               }`}
               data-testid="diff-file"
             >
-              {gitByPath.get(change.path) ? <Badge tone={STATUS_TONE[gitByPath.get(change.path) as GitFileStatus]}>{gitByPath.get(change.path)}</Badge> : null}
+              {!isSlide && gitByPath.get(change.path) ? <Badge tone={STATUS_TONE[gitByPath.get(change.path) as GitFileStatus]}>{gitByPath.get(change.path)}</Badge> : null}
               {change.path} <span className="text-success">+{change.added}</span>{' '}
               <span className="text-error">-{change.removed}</span>
             </button>
@@ -186,7 +194,7 @@ export function DiffViewer() {
         ))}
       </ul>
 
-      {gitOnly.length > 0 ? (
+      {!isSlide && gitOnly.length > 0 ? (
         <ul className="flex flex-col gap-0.5" data-testid="changes-git-only">
           {gitOnly.map((file) => (
             <GitOnlyRow
@@ -262,7 +270,9 @@ export function DiffViewer() {
           key={active.path}
           change={active}
           onOpen={(path) => void openChangedFile(path)}
-          onRevert={active.operation !== 'created' ? (path) => void revertChangedFile(path) : undefined}
+          // Slide: no revert at all (a stray two-click revert on
+          // deck.json silently discards the deck); Coding keeps it.
+          onRevert={!isSlide && active.operation !== 'created' ? (path) => void revertChangedFile(path) : undefined}
         />
       ) : null}
     </Panel>
