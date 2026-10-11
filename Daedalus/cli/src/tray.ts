@@ -1,5 +1,6 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { LINUX_TRAY_BACKEND_NAME, linuxTrayAvailable, trayDependencyHint, type AppIndicatorProbe } from './tray-linux.ts';
 
 export type TrayAction = 'open-cli' | 'open-web' | 'status' | 'quit';
 
@@ -10,6 +11,13 @@ export type TrayAction = 'open-cli' | 'open-web' | 'status' | 'quit';
  * swapping the file later is all a real tray backend needs.
  */
 export const TRAY_ICON_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'tray-icon.svg');
+
+/**
+ * Raster version of the placeholder icon for backends that need pixels
+ * (AppIndicator). Generated from the SVG by `cli/tray/render-icon.py`;
+ * re-run that script when the SVG is replaced.
+ */
+export const TRAY_ICON_PNG_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'tray-icon.png');
 
 export type TrayMenuItem = {
   id: TrayAction;
@@ -48,7 +56,7 @@ export function trayMenuItems(): TrayMenuItem[] {
   ];
 }
 
-export function detectTray(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): TrayStatus {
+export function detectTray(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform, probe?: AppIndicatorProbe): TrayStatus {
   const desktopSession = platform === 'darwin' || platform === 'win32' || Boolean(env.DISPLAY || env.WAYLAND_DISPLAY);
   if (!desktopSession) {
     return {
@@ -59,10 +67,22 @@ export function detectTray(env: NodeJS.ProcessEnv = process.env, platform: NodeJ
       icon: TRAY_ICON_PATH,
     };
   }
+  if (linuxTrayAvailable(env, platform, probe)) {
+    return {
+      available: true,
+      desktopSession: true,
+      reason: 'tray backend ready (AppIndicator3)',
+      backend: LINUX_TRAY_BACKEND_NAME,
+      icon: TRAY_ICON_PATH,
+    };
+  }
+  const hint = platform === 'linux'
+    ? ` ${trayDependencyHint()}; use \`daedalus status\` / \`daedalus stop\``
+    : 'no tray backend is bundled for this platform yet; use `daedalus status` / `daedalus stop`';
   return {
     available: false,
     desktopSession: true,
-    reason: 'desktop session detected, but no native tray backend is bundled in this build; use `daedalus status` / `daedalus stop`',
+    reason: `desktop session detected, but the tray icon cannot start.${hint}`,
     backend: 'none',
     icon: TRAY_ICON_PATH,
   };

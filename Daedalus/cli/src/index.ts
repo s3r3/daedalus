@@ -66,6 +66,8 @@ function runSkillNames(value: string | undefined): string[] {
     .filter((name) => name.length > 0);
 }
 import { TrayManager } from "./tray.ts";
+import { createTrayBackend } from "./tray-linux.ts";
+import { createTrayHandlers } from "./tray-actions.ts";
 import { DeltaSuffixTracker, formatCount, scrambleText, spinnerGlyph, tokenSummary } from "./live-render.ts";
 import { formatSkillsListing, installBundledSkills, listSkills, setSkillDisabledForWorkspace } from "./skills-bundled.ts";
 
@@ -512,10 +514,42 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
       print(`Opening Web with ${browser.command}: ${targetUrl}\n`);
     };
     const hideToTray = async (): Promise<void> => {
-      // Honest background mode: no native tray backend is bundled, so this
-      // just reports that state (the tray slot in the frame already shows
-      // it) and leaves the daemon as the only background process.
-      await new TrayManager().start();
+      const backend = createTrayBackend();
+      let releaseTray: () => void = () => undefined;
+      const trayDone = new Promise<void>((resolve) => {
+        releaseTray = resolve;
+      });
+      const manager = new TrayManager(
+        createTrayHandlers({
+          serverUrl: ensured.status.server_url,
+          cwd,
+          openBrowser: deps.openBrowser ?? openBrowser,
+          print,
+          stopDaemon: async () => stopServer(),
+          onQuit: () => releaseTray(),
+        }),
+        backend,
+      );
+      let status;
+      try {
+        status = await manager.start();
+      } catch (error) {
+        // Honest: the helper failed (e.g. AppIndicator died on start).
+        print(`Tray: could not start the tray icon: ${error instanceof Error ? error.message : String(error)}\n`);
+        return;
+      }
+      if (!status.available) {
+        // Honest background mode: no working tray backend (e.g. missing
+        // AppIndicator3) — the daemon stays the only background process.
+        print(`Tray: ${status.reason}\n`);
+        return;
+      }
+      print(
+        `Tray icon shown — server keeps running at ${ensured.status.server_url}. ` +
+          `Use the tray menu (Open CLI / Open Web / Status / Quit).\n`,
+      );
+      await trayDone;
+      await manager.stop();
     };
 
     const stdin = process.stdin as NodeJS.ReadStream;
@@ -548,7 +582,10 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
             renderer.close();
             await openWeb(joinServerUrl(ensured.status.server_url, path));
           },
-          hideToTray,
+          hideToTray: async () => {
+            renderer.close();
+            await hideToTray();
+          },
           stopServer,
           render: renderer.paint,
           readKey: keys.readKey,
@@ -863,7 +900,7 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
       const settings = loadSettings();
       const port = options.port === undefined ? settings.server.port : parsePositiveInt(options.port, "--port");
       const host = options.host ?? settings.server.host;
-      const tray = new TrayManager();
+      const tray = new TrayManager({}, createTrayBackend());
       const trayStatus = await tray.start();
       if (options.daemon) {
         const ensured = await ensureDaemon({ host, port });
