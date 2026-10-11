@@ -393,14 +393,17 @@ describe('SlideEngine generation', () => {
 
   test('Buat again after a partial staged fill resumes the leftover skeletons with no live run', async () => {
     const root = temp('daedalus-engine-staged-retry-');
-    let fills = 0;
-    const flaky = scripted((system) => {
+    const flaky = scripted((system, user) => {
       if (system.includes(OUTLINE_SYSTEM_MARKER)) {
         return [0, 1].map((index) => ({ title: `Slide ${index + 1}`, layoutId: 'bullets', keyMessage: 'poin' }));
       }
       if (system.includes(FILL_SYSTEM_MARKER)) {
-        fills += 1;
-        if (fills <= 3) return 'bukan JSON';
+        // Slide 1's fill is persistently unusable JSON (all 3 attempts
+        // fail); slide 2 fills fine. The failure is keyed by slide
+        // title, not by a global call counter — parallel fill runs
+        // slides concurrently, so call order across slides is not
+        // deterministic.
+        if (user.includes('slide title: Slide 1')) return 'bukan JSON';
         return { title: 'Terisi', points: ['satu'] };
       }
       return {};
@@ -415,7 +418,17 @@ describe('SlideEngine generation', () => {
     });
     await waitForSkeleton(root, 2);
 
-    const released = await runner.releaseStagedDeck(root, {});
+    // The skeleton hits disk before the run parks at the Buat gate;
+    // poll the release until the engine is actually waiting there (a
+    // premature release is a no-op null, never a partial settle).
+    const released = await (async () => {
+      for (let attempt = 0; attempt < 200; attempt++) {
+        const result = await runner.releaseStagedDeck(root, {});
+        if (result) return result;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      throw new Error('staged run never parked at the Buat gate');
+    })();
     expect(released?.outcome).toBe('partial');
     const first = await pending;
     expect(first.state.status).toBe('failed');
@@ -455,15 +468,15 @@ describe('SlideEngine generation', () => {
 
   test('a fill that never validates leaves an honest partial: failed state, skeleton kept, no export — and a later run resumes it', async () => {
     const root = temp('daedalus-engine-partial-');
-    let fills = 0;
-    const flaky = scripted((system) => {
+    const flaky = scripted((system, user) => {
       if (system.includes(OUTLINE_SYSTEM_MARKER)) {
         return [0, 1, 2].map((index) => ({ title: `Slide ${index + 1}`, layoutId: 'bullets', keyMessage: 'poin' }));
       }
       if (system.includes(FILL_SYSTEM_MARKER)) {
-        fills += 1;
-        // The middle slide's fill is persistently unusable JSON.
-        if (fills >= 2 && fills <= 4) return 'ini bukan JSON sama sekali';
+        // The middle slide's fill is persistently unusable JSON. Keyed
+        // by slide title rather than a global call counter: parallel
+        // fill interleaves attempts across slides.
+        if (user.includes('slide title: Slide 2')) return 'ini bukan JSON sama sekali';
         return { title: 'Terisi', points: ['satu', 'dua'] };
       }
       return {};

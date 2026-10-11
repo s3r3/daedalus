@@ -664,7 +664,9 @@ function SectionCard({ document, index, sectionId, root, refresh }: { document: 
           Draf ditandai kritikus tetapi teksnya tidak tersimpan — tekan Susun lagi untuk menulis ulang.
         </p>
       ) : (
-        <p className="text-[11px] text-muted">Belum ditulis — bab ini menunggu tombol Susun di panel Outline.</p>
+        <p className="text-[11px] text-muted">
+          Belum ditulis — bab ini menunggu tombol {document.sections.some((s) => s.status !== 'staged') ? 'Lanjutkan' : 'Susun'} di panel Outline.
+        </p>
       )}
     </article>
   )
