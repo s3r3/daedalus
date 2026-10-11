@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { basename, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -122,7 +122,7 @@ import {
 } from "./conversations.ts";
 import { TerminalError, TerminalManager } from "./terminals.ts";
 import { UPLOAD_LIMITS, extractZipEntries, guessMimeType, parseMultipart, sanitizeRelativePath, type UploadPart } from "./uploads.ts";
-import { SlidePreviewService } from "./slide-preview.ts";
+import { SlidePreviewService, convertPptxToPdf, SofficeMissingError } from "./slide-preview.ts";
 import { SheetPreviewService } from "./sheet-preview.ts";
 import { DokumenPreviewService, type DocPreviewKind } from "./dokumen-preview.ts";
 /**
@@ -2627,16 +2627,18 @@ export function createApp(ctx: AppContext) {
         try {
           const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
           const rel = url.searchParams.get("path") || "";
-          // Only exported decks are downloadable: a deck/*.pptx path that
-          // cannot escape the workspace.
-          if (!rel.startsWith("deck/") || !rel.toLowerCase().endsWith(".pptx") || rel.includes("..")) {
+          // Only exported decks are downloadable: a deck/*.pptx or
+          // deck/*.pdf path that cannot escape the workspace.
+          if (!rel.startsWith("deck/") || !rel.toLowerCase().match(/\.(pptx|pdf)$/) || rel.includes("..")) {
             sendJson(res, 400, { error: "invalid_download_path", request_id: requestId });
             return;
           }
           const absolute = resolveInside(root, rel);
           const data = readFileSync(absolute);
           res.writeHead(200, {
-            "content-type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            "content-type": rel.toLowerCase().endsWith(".pdf")
+              ? "application/pdf"
+              : "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             "content-length": data.length,
             "content-disposition": `attachment; filename="${basename(rel)}"`,
             ...CORS_HEADERS,
@@ -2858,6 +2860,118 @@ export function createApp(ctx: AppContext) {
           }
           await rename(deckDir, join(archiveParent, name));
           sendJson(res, 200, { root, archived: `.daedalus/deck-archive/${name}`, staged_abandoned: stagedAbandoned });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Deck archive browser: new-chat resets archive the deck aside under
+    // <root>/.daedalus/deck-archive/<timestamp>/ (write-only until now).
+    // This lists what is there and restores an entry back to deck/ —
+    // restoring never deletes: a current deck is archived aside first,
+    // with the same timestamp(+suffix) naming as the reset route.
+    if (method === "GET" && url.pathname === "/slides/deck/archive") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const archiveParent = join(root, ".daedalus", "deck-archive");
+          const names = await readdir(archiveParent).catch(() => [] as string[]);
+          const archives: Array<{ name: string; title: string; slides: number; archivedAt: string }> = [];
+          for (const name of names) {
+            const entryDir = join(archiveParent, name);
+            const entryStat = await stat(entryDir).catch(() => null);
+            if (!entryStat?.isDirectory()) continue;
+            const raw = await readFile(join(entryDir, "deck.json"), "utf8").catch(() => null);
+            let parsed: unknown = null;
+            try {
+              parsed = raw ? (JSON.parse(raw) as unknown) : null;
+            } catch {
+              parsed = null;
+            }
+            // Tolerate unreadable entries: omit them, never crash the list.
+            if (!parsed || typeof parsed !== "object" || (parsed as { version?: unknown }).version !== 1) continue;
+            const deck = parsed as { title?: unknown; slides?: unknown };
+            archives.push({
+              name,
+              title: typeof deck.title === "string" && deck.title.length > 0 ? deck.title : name,
+              slides: Array.isArray(deck.slides) ? deck.slides.length : 0,
+              archivedAt: entryStat.mtime.toISOString(),
+            });
+          }
+          archives.sort((a, b) => (a.name < b.name ? 1 : b.name < a.name ? -1 : 0));
+          sendJson(res, 200, { root, archives });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/slides/deck/archive/restore") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const name = typeof parsed.name === "string" ? parsed.name : "";
+          // Plain basename only: no separators, no "..", no empty names —
+          // the entry must live directly under deck-archive/.
+          if (!name || name === "." || name === ".." || name.includes("/") || name.includes("\\") || basename(name) !== name) {
+            sendJson(res, 400, { error: "invalid_archive_name", message: "nama arsip tidak valid", request_id: requestId });
+            return;
+          }
+          const archiveParent = join(root, ".daedalus", "deck-archive");
+          const entryDir = join(archiveParent, name);
+          const entryStat = await stat(entryDir).catch(() => null);
+          if (!entryStat?.isDirectory()) {
+            sendJson(res, 404, { error: "archive_not_found", message: `arsip "${name}" tidak ditemukan`, request_id: requestId });
+            return;
+          }
+          // Validate the archived deck BEFORE touching the current one —
+          // assets resolve against the archive dir itself. A broken
+          // archive is an honest 422 and the workspace is untouched.
+          const raw = await readFile(join(entryDir, "deck.json"), "utf8").catch(() => null);
+          let archived: unknown = null;
+          try {
+            archived = raw ? (JSON.parse(raw) as unknown) : null;
+          } catch {
+            archived = null;
+          }
+          if (!archived || typeof archived !== "object") {
+            sendJson(res, 422, { error: "archive_invalid", message: `arsip "${name}" tidak berisi deck yang valid`, request_id: requestId });
+            return;
+          }
+          const archivedErrors = validateDeck(archived as DeckSpec, { root: entryDir }).filter((issue) => issue.severity === "error");
+          if (archivedErrors.length > 0) {
+            sendJson(res, 422, { error: "archive_invalid", issues: archivedErrors, request_id: requestId });
+            return;
+          }
+          // Non-destructive: archive the current deck first, same
+          // timestamp(+suffix) naming as the reset route.
+          const deckDir = join(root, "deck");
+          const deckStat = await stat(deckDir).catch(() => null);
+          if (deckStat?.isDirectory()) {
+            const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+            await mkdir(archiveParent, { recursive: true });
+            let archiveName = stamp;
+            for (let suffix = 2; await stat(join(archiveParent, archiveName)).then(() => true, () => false); suffix += 1) {
+              archiveName = `${stamp}-${suffix}`;
+            }
+            await rename(deckDir, join(archiveParent, archiveName));
+          }
+          // COPY, never rename: the archive entry stays restorable.
+          await cp(entryDir, deckDir, { recursive: true });
+          const deck = await readDeck(root);
+          if (!deck) {
+            sendJson(res, 422, { error: "restored_deck_invalid", message: "deck hasil restore tidak bisa dibaca kembali", request_id: requestId });
+            return;
+          }
+          sendJson(res, 200, { root, deck });
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
@@ -3441,6 +3555,42 @@ export function createApp(ctx: AppContext) {
             return;
           }
 
+          if (url.pathname === "/slides/deck/export-pdf") {
+            // Same contract as the .pptx export: never export a deck core
+            // validation rejects, and never report success for an empty
+            // deck — the same deck_invalid codes the pptx export answers.
+            const exportErrors = validateDeck(deck, { root }).filter((issue) => issue.severity === "error");
+            if (deck.slides.length === 0 || exportErrors.length > 0) {
+              badDeck(422, "deck_invalid", {
+                issues: deck.slides.length === 0
+                  ? [{ code: "empty-deck", message: "deck has no slides yet — add slides before exporting", severity: "error" }, ...exportErrors]
+                  : exportErrors,
+              });
+              return;
+            }
+            // Export through the .pptx exporter first, then convert with
+            // LibreOffice headless (the preview engine's own pass); the
+            // PDF lands next to the .pptx in deck/ with the same basename.
+            const pptx = await exportDeckToPptx(deck, root);
+            let pdfPath: string;
+            try {
+              pdfPath = await convertPptxToPdf(join(root, pptx.relativePath), join(root, "deck"));
+            } catch (error) {
+              if (error instanceof SofficeMissingError) {
+                badDeck(503, "pdf_unavailable", { message: "LibreOffice (soffice) tidak ditemukan di server ini — instal LibreOffice untuk ekspor PDF." });
+                return;
+              }
+              throw error;
+            }
+            const pdfStat = await stat(pdfPath).catch(() => null);
+            if (!pdfStat) {
+              badDeck(502, "pdf_export_failed", { message: "LibreOffice tidak menghasilkan PDF dari deck ini." });
+              return;
+            }
+            sendJson(res, 200, { root, path: `deck/${basename(pdfPath)}`, bytes: pdfStat.size, slides: deck.slides.length });
+            return;
+          }
+
           const slideId = typeof parsed.slide_id === "string" ? parsed.slide_id : typeof parsed.slideId === "string" ? parsed.slideId : undefined;
           const index = deck.slides.findIndex((slide) => slide.id === slideId);
 
@@ -3503,10 +3653,21 @@ export function createApp(ctx: AppContext) {
             // along without content; commit() validates them via
             // validateDeck, so garbage coordinates are a 422, never a
             // silent write. positions: null clears all placements.
+            // `notes` (speaker notes) likewise: a string sets them, null
+            // or "" clears them. A non-string is rejected by the
+            // invalid_notes guard above — never a silent write.
             const hasPositions = "positions" in parsed;
+            const hasNotes = "notes" in parsed;
             const content = parsed.content;
-            if (!hasPositions && (!content || typeof content !== "object" || Array.isArray(content))) {
+            if (!hasPositions && !hasNotes && (!content || typeof content !== "object" || Array.isArray(content))) {
               badDeck(400, "content_required");
+              return;
+            }
+            // validateDeck does not type-check notes itself (only
+            // readDeck's shape gate does), so reject a non-string here:
+            // garbage notes are a 400, never a silent write.
+            if (hasNotes && parsed.notes !== null && parsed.notes !== "" && typeof parsed.notes !== "string") {
+              badDeck(400, "invalid_notes");
               return;
             }
             const current = deck.slides[index]!;
@@ -3524,6 +3685,10 @@ export function createApp(ctx: AppContext) {
               if (hasPositions) {
                 if (parsed.positions === null) delete next.positions;
                 else next.positions = parsed.positions as Slide["positions"];
+              }
+              if (hasNotes) {
+                if (parsed.notes === null || parsed.notes === "") delete next.notes;
+                else next.notes = parsed.notes as Slide["notes"];
               }
               return next;
             });

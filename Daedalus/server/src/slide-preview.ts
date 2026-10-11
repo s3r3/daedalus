@@ -248,6 +248,37 @@ function runCommand(command: string, args: string[], timeoutMs: number): Promise
   });
 }
 
+/** Error when soffice cannot be found — the server answers 503, never crashes. */
+export class SofficeMissingError extends Error {
+  constructor() {
+    super("pdf_unavailable");
+    this.name = "SofficeMissingError";
+  }
+}
+
+/** Test seams for the deck PDF export: force the soffice-missing branch or stub the conversion. */
+export type PptxToPdfSeams = {
+  findSoffice?: () => string | null;
+  runConversion?: (soffice: string, pptxPath: string, outDir: string) => Promise<void>;
+};
+
+/**
+ * Deck PDF export: the preview engine's own LibreOffice pass (headless
+ * `soffice --convert-to pdf`) writing the PDF next to the .pptx in
+ * `outDir`. Returns the written PDF's absolute path. Throws
+ * SofficeMissingError when soffice is not installed — the route turns
+ * that into an honest 503 — or when LibreOffice produces nothing.
+ */
+export async function convertPptxToPdf(pptxPath: string, outDir: string, seams: PptxToPdfSeams = {}): Promise<string> {
+  const soffice = seams.findSoffice ? seams.findSoffice() : findExecutableOnPath(executableCandidates("soffice", process.platform));
+  if (!soffice) throw new SofficeMissingError();
+  const run = seams.runConversion ?? ((tool, input, dir) => runCommand(tool, ["--headless", "--norestore", "--convert-to", "pdf", "--outdir", dir, input], SOFFICE_TIMEOUT_MS));
+  await run(soffice, pptxPath, outDir);
+  const pdfPath = join(outDir, `${basename(pptxPath).replace(/\.pptx$/i, "")}.pdf`);
+  if (!existsSync(pdfPath)) throw new Error("LibreOffice tidak menghasilkan PDF dari berkas .pptx ini.");
+  return pdfPath;
+}
+
 /** Per-page PNGs a converter left in `workDir`, in page order; throws when empty. */
 async function collectPages(workDir: string, emptyMessage: string): Promise<string[]> {
   const entries = await readdir(workDir);
