@@ -10,3 +10,7 @@ dist/
 
 # local test workspace
 tesvite/
+
+# environment — never commit real env files
+.env
+!.env.example
