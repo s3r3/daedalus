@@ -15,6 +15,8 @@ import { saveActiveConversationId } from '../../state/prefs'
 import { ModelPicker } from './model-picker'
 import { SlideComposerControls } from './slide-controls'
 import { DokumenComposerControls } from './dokumen-controls'
+import { SheetComposerControls } from './sheet-controls'
+import { useAnalysis } from '../sheets/useAnalysis'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 
 type UploadKind = 'file' | 'folder' | 'image' | 'zip'
@@ -32,6 +34,8 @@ export function Composer() {
   const domain = useDaedalusStore((state) => state.domain)
   const slideOptions = useDaedalusStore((state) => state.slideOptions)
   const dokumenOptions = useDaedalusStore((state) => state.dokumenOptions)
+  const sheetOptions = useDaedalusStore((state) => state.sheetOptions)
+  const { planAnalysis } = useAnalysis()
   const workspaceRoot = useDaedalusStore((state) => state.workspace.root)
   const activeTaskId = useDaedalusStore((state) => state.taskId)
   const models = useDaedalusStore((state) => state.models)
@@ -585,6 +589,22 @@ export function Composer() {
       }
       return
     }
+    // Mode Analis: the question never becomes a coding task — it stages
+    // an analysis plan (question + the dataset picked above) for review
+    // in the Blueprint panel, where "Jalankan analisis" runs it. The same
+    // call as the composer row's "Buat rencana analisis" button.
+    if (domain === 'spreadsheet' && sheetOptions.mode === 'analis') {
+      const stagedDataset = useDaedalusStore.getState().analysisDataset
+      if (!stagedDataset) {
+        setComposer({ error: 'Pilih dataset dulu di atas — upload CSV/XLSX atau "Pakai workbook saat ini" — sebelum membuat rencana analisis.' })
+        setTouched(true)
+        return
+      }
+      setComposer({ submitting: true, error: null })
+      await planAnalysis(goal, stagedDataset)
+      setComposer({ submitting: false })
+      return
+    }
     await runTask(goal, invokedSkills)
   }
 
@@ -830,9 +850,7 @@ export function Composer() {
         ) : domain === 'dokumen' ? (
           <DokumenComposerControls />
         ) : domain === 'spreadsheet' ? (
-          <span className="text-[10px] text-muted" data-testid="sheet-composer-note">
-            Spreadsheet: blueprint di-stage dulu di Panel Blueprint — tekan Buat untuk membangun. Mode Ask/Manual/Auto/Plan hanya milik Coding.
-          </span>
+          <SheetComposerControls />
         ) : (
           <>
             <span
@@ -885,7 +903,9 @@ export function Composer() {
                   ? 'Instruksi tata ulang… misalnya: margin 4-3-3-3, font Times New Roman 12pt, spasi 1.5, heading bernomor'
                   : 'Topik dokumen… misalnya: susun makalah tentang agentic framework untuk tugas kuliah'
             : domain === 'spreadsheet'
-              ? 'Jelaskan spreadsheet-nya… sebut nama file .csv/.xlsx di workspace bila datanya dari file, atau minta "audit workbook ini"'
+              ? sheetOptions.mode === 'analis'
+                ? 'Tulis pertanyaan bisnisnya… mis. "kanal mana yang paling menguntungkan bulan ini?"'
+                : 'Jelaskan spreadsheet-nya… sebut nama file .csv/.xlsx di workspace bila datanya dari file, atau minta "audit workbook ini"'
               : 'Describe the coding task… type @ to reference a file or folder, /help for slash commands'
         }
         value={composer.goal}

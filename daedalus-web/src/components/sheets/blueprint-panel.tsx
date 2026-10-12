@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Hammer, ListTree } from 'lucide-react'
+import { Hammer, ListTree, Play } from 'lucide-react'
 import { Panel } from '../common/panel'
 import { Button } from '../ui/button'
 import { api } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
 import { useWorkbook } from './useWorkbook'
+import { useAnalysis } from './useAnalysis'
 import { cn } from '../../lib/utils'
 
 const SOURCE_BADGE: Record<string, string> = {
@@ -14,19 +15,153 @@ const SOURCE_BADGE: Record<string, string> = {
 }
 
 /**
- * Panel Blueprint: the staged workbook design (sheets, columns+types,
- * key formulas, Asumsi values) the user reviews before anything is
- * built. The Buat button releases the staged run — build → verify →
- * export happen through the engine, and this panel reports the run's
- * own verdict. Standard-only in v1: a fresh spreadsheet is never built
- * unstaged.
+ * Mode Analis: the staged analysis plan under review. Nothing computes
+ * until "Jalankan analisis" releases the run — the same staging
+ * doctrine as Susun's blueprint, different content (question, metrics
+ * with formula templates, groupings, charts, assumptions, steps).
+ */
+function AnalysisPlanView({ analysis }: { analysis: ReturnType<typeof useAnalysis> }) {
+  const { plan, planning, planError, running, runAnalysis } = analysis
+
+  if (planning) {
+    return (
+      <p className="px-1 py-1 text-[11px] text-muted" data-testid="sheet-blueprint-analisis-planning">
+        Menyusun rencana analisis…
+      </p>
+    )
+  }
+
+  if (!plan) {
+    return (
+      <div className="flex flex-col gap-1.5 px-1 py-1" data-testid="sheet-blueprint-analisis-empty">
+        <p className="text-[11px] font-semibold text-foreground">Rencana analisis</p>
+        <p className="text-[11px] text-muted">
+          Belum ada rencana. Pilih dataset di composer (upload CSV/XLSX atau “Pakai workbook saat ini”), tulis pertanyaan
+          bisnis, lalu tekan Buat rencana — rencananya di-review di sini sebelum dijalankan.
+        </p>
+        {planError ? (
+          <p className="rounded border border-red-500/40 bg-red-500/10 px-2 py-1 text-[10px] text-red-200" data-testid="sheet-blueprint-analisis-error">
+            Gagal menyusun rencana: {planError}
+          </p>
+        ) : null}
+      </div>
+    )
+  }
+
+  const staged = plan.plan
+  const run = (): void => {
+    void runAnalysis(plan.planId)
+  }
+
+  return (
+    <div className="flex flex-col gap-2 px-1 py-1" data-testid="sheet-blueprint-analisis">
+      <p className="text-[11px] font-semibold text-foreground" data-testid="sheet-blueprint-analisis-question">
+        {staged.question}
+        {plan.complexity ? (
+          <span className="ml-2 rounded border border-line px-1 py-0.5 text-[9px] uppercase tracking-wide text-muted">{plan.complexity}</span>
+        ) : null}
+      </p>
+      <Button type="button" size="sm" onClick={run} disabled={running} data-testid="sheet-blueprint-analisis-run" className="w-full">
+        <Play className="size-3.5" aria-hidden />
+        {running ? 'Menjalankan analisis…' : 'Jalankan analisis'}
+      </Button>
+      <p className="text-[10px] text-muted">
+        Rencana di bawah belum dihitung. Periksa metrik, grouping, dan asumsinya — Jalankan analisis menghitung lewat
+        engine, melewati gerbang Verify, lalu menulis laporannya di Panel Laporan.
+      </p>
+      {staged.metrics.length > 0 ? (
+        <div data-testid="sheet-blueprint-analisis-metrics">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Metrik</p>
+          <ul className="mt-0.5 flex flex-col gap-1">
+            {staged.metrics.map((metric) => (
+              <li key={metric.id} className="rounded border border-line bg-surface px-2 py-1.5">
+                <p className="text-[11px] font-medium text-foreground">{metric.label}</p>
+                <code className="mt-0.5 block truncate text-[9px] text-emerald-300/80">{metric.formulaTemplate}</code>
+                {metric.format ? <p className="mt-0.5 text-[9px] text-muted">format: {metric.format}</p> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {staged.groupBys.length > 0 ? (
+        <div data-testid="sheet-blueprint-analisis-groupbys">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Grouping</p>
+          <p className="mt-0.5 text-[10px] text-muted">{staged.groupBys.join(' · ')}</p>
+        </div>
+      ) : null}
+      {staged.comparisons.length > 0 ? (
+        <div data-testid="sheet-blueprint-analisis-comparisons">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Perbandingan</p>
+          <p className="mt-0.5 text-[10px] text-muted">{staged.comparisons.join(' · ')}</p>
+        </div>
+      ) : null}
+      {staged.charts.length > 0 ? (
+        <div data-testid="sheet-blueprint-analisis-charts">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Chart</p>
+          <ul className="mt-0.5 flex flex-col gap-0.5">
+            {staged.charts.map((chart, index) => (
+              <li key={index} className="text-[10px] text-muted">
+                {chart.title ?? chart.type} <span className="text-muted/70">({chart.type})</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {staged.assumptions.length > 0 ? (
+        <div data-testid="sheet-blueprint-analisis-assumptions">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Asumsi</p>
+          <ul className="mt-0.5 flex flex-col gap-0.5">
+            {staged.assumptions.map((assumption, index) => (
+              <li key={index} className="text-[10px] text-muted">
+                • <span className="text-foreground">{assumption.name}</span>
+                {': '}
+                <span className="font-mono">{String(assumption.value)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {staged.steps.length > 0 ? (
+        <div data-testid="sheet-blueprint-analisis-steps">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Langkah</p>
+          <ol className="mt-0.5 flex list-decimal flex-col gap-0.5 pl-4">
+            {staged.steps.map((step, index) => (
+              <li key={index} className="text-[10px] text-muted">{step}</li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/**
+ * Panel Blueprint: the staged design the user reviews before anything
+ * is built or computed. In Susun mode it is the workbook design
+ * (sheets, columns+types, key formulas, Asumsi values); the Buat button
+ * releases the staged run — build → verify → export happen through the
+ * engine, and this panel reports the run's own verdict. In Analis mode
+ * it is the staged analysis plan (question, metrics, groupings, charts,
+ * assumptions, steps); the "Jalankan analisis" button releases compute
+ * → verify → insight report. Either way the doctrine holds: a fresh
+ * spreadsheet run never starts unstaged.
  */
 export function BlueprintPanel() {
+  const mode = useDaedalusStore((state) => state.sheetOptions.mode)
+  const analysis = useAnalysis()
   const { workbook, loading, error, refresh, root } = useWorkbook()
   const bumpWorkspaceRevision = useDaedalusStore((state) => state.bumpWorkspaceRevision)
   const [building, setBuilding] = useState(false)
   const [buildError, setBuildError] = useState<string | null>(null)
   const [buildNote, setBuildNote] = useState<string | null>(null)
+
+  if (mode === 'analis') {
+    return (
+      <Panel title="Blueprint" data-testid="sheet-blueprint">
+        <AnalysisPlanView analysis={analysis} />
+      </Panel>
+    )
+  }
 
   const blueprint = workbook?.blueprint
   const staged = workbook !== null && workbook.stage === 'blueprint' && blueprint !== undefined

@@ -24,6 +24,8 @@ import { verifyWorkbook } from './verify.ts';
 import { applySheetOps, SHEET_OP_NAMES } from './ops.ts';
 import { composeDashboard } from './dashboard.ts';
 import { fillSheetRowsStage, generateBlueprintStage, SheetPipelineError, structuredCall, type BlueprintStageInput } from './pipeline.ts';
+import { runAnalysisPipeline, type AnalysisPipelineResult } from './analysis-pipeline.ts';
+import type { AnalysisPlan } from './analysis-plan.ts';
 
 /**
  * SpreadsheetEngine: the Spreadsheet domain's own task executor,
@@ -59,6 +61,14 @@ export type SpreadsheetEngineDeps = {
 };
 
 export type SpreadsheetEngineOutcome = 'success' | 'partial' | 'failed';
+
+/**
+ * Spreadsheet domain modes: Susun builds workbooks (the existing
+ * flow), Analis answers business questions from a dataset through
+ * the frozen analysis pipeline. One domain, one engine, two modes —
+ * the panel set is shared, only the content changes.
+ */
+export type SpreadsheetMode = 'susun' | 'analis';
 
 export type SpreadsheetEngineRunResult = {
   state: TaskState;
@@ -191,6 +201,28 @@ export class SpreadsheetEngine {
     const completion = this.#runTask(spec);
     this.#completion = completion;
     return completion;
+  }
+
+  /**
+   * Mode Analis entry: answer a business question from an imported
+   * dataset. Delegates to the frozen analysis pipeline
+   * (profile → plan → compute → verify → synthesize → export) with
+   * the engine's workspaceRoot; the existing Susun flow is untouched.
+   */
+  async runAnalysis(input: {
+    question: string;
+    dataset: WorkbookSpec;
+    plan: AnalysisPlan;
+    provider: LLMProvider;
+  }): Promise<AnalysisPipelineResult> {
+    return runAnalysisPipeline({
+      question: input.question,
+      dataset: input.dataset,
+      plan: input.plan,
+      provider: input.provider,
+      workspaceRoot: this.#deps.workspaceRoot,
+      signal: this.#abort.signal,
+    });
   }
 
   async #runTask(spec: TaskSpec): Promise<SpreadsheetEngineRunResult> {

@@ -38,10 +38,13 @@ const BASE = (import.meta.env.VITE_DAEDALUS_API ?? '').replace(/\/$/, '')
 
 export class ApiError extends Error {
   readonly status: number
-  constructor(status: number, message: string) {
+  /** Parsed error body when the server sent JSON (e.g. the issues of a 422 verify_failed). */
+  readonly data: unknown
+  constructor(status: number, message: string, data?: unknown) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.data = data
   }
 }
 
@@ -53,8 +56,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   })
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`
+    let data: unknown
     try {
       const body = (await response.json()) as { error?: string; message?: string }
+      data = body
       // Prefer the server's human sentence when it sends one (e.g. the
       // task-ended question answer); machine error tokens are a last
       // resort, never what the user should read.
@@ -63,7 +68,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* keep the status text */
     }
-    throw new ApiError(response.status, message)
+    throw new ApiError(response.status, message, data)
   }
   return (await response.json()) as T
 }
@@ -245,6 +250,89 @@ export type WorkbookPreviewStatus = {
   pageUrls?: string[]
   error?: string
   renderedAt?: string
+}
+
+/**
+ * Mode Analis dataset for POST /sheets/analyze/plan. Sent inline in the
+ * request body: CSV as text, XLSX as base64, or the current workbook by
+ * workspace key. The web never uploads the dataset as a file first.
+ */
+export type AnalysisDataset =
+  | { kind: 'csv'; text: string; name?: string }
+  | { kind: 'xlsx'; base64: string; name?: string }
+  | { kind: 'workbook'; key: string }
+
+/** One metric the planner proposes: label plus formula template (the engine fills placeholders, never the model). */
+export type AnalysisMetric = {
+  id: string
+  label: string
+  formulaTemplate: string
+  format?: string
+}
+
+/** A chart the planner proposes (fields beyond type/title are chart-kind-specific; the web renders them as text). */
+export type AnalysisChart = {
+  type: string
+  title?: string
+  [key: string]: unknown
+}
+
+/**
+ * The staged analysis plan (POST /sheets/analyze/plan): what the
+ * engine intends to compute, reviewed in the Blueprint panel before
+ * "Jalankan analisis" releases the run. A spec, never numbers.
+ */
+export type AnalysisPlan = {
+  question: string
+  metrics: AnalysisMetric[]
+  groupBys: string[]
+  comparisons: string[]
+  charts: AnalysisChart[]
+  /** Mirrors the core contract: the server sends {name, value} objects, never bare strings. */
+  assumptions: Array<{ name: string; value: string | number | boolean }>
+  steps: string[]
+}
+
+/** Verdict of POST /sheets/analyze/plan. */
+export type AnalysisPlanResult = {
+  planId: string
+  plan: AnalysisPlan
+  /** Deterministic profiler output that grounded the planner (opaque to the web). */
+  profiles: unknown
+  complexity: string | null
+}
+
+/** One verified finding: prose plus the cell refs backing every number in it. */
+export type InsightFinding = {
+  text: string
+  refs: string[]
+}
+
+/**
+ * The insight report (POST /sheets/analyze/run): narrated only around
+ * numbers that passed the verify gate, each carrying its cell ref.
+ */
+export type InsightReport = {
+  question: string
+  findings: InsightFinding[]
+  recommendations: string[]
+  verifiedAt: string
+  verifySummary: string
+}
+
+/** The verify gate's verdict on an analysis run (only this path lets numbers into the report). */
+export type AnalysisVerify = {
+  ok: boolean
+  summary: string
+  errors: Array<{ sheet?: string; cell?: string; message: string; [key: string]: unknown }>
+  warnings: Array<{ sheet?: string; cell?: string; message: string; [key: string]: unknown }>
+}
+
+/** Verdict of POST /sheets/analyze/run. */
+export type AnalysisRunResult = {
+  verify: AnalysisVerify
+  report: InsightReport
+  exported?: unknown
 }
 
 /** Verdict of POST /slides/deck/reset (Slide new chat's deck reset). */
@@ -677,6 +765,35 @@ export const api = {
 
   /** URL of one rendered preview page (server-provided pageUrls already carry the key). */
   workbookPreviewPageUrl: (root: string, key: string, page: number) => `/sheets/workbook/preview/page${query({ root, key, page: String(page) })}`,
+
+  /**
+   * Mode Analis: stage an analysis plan. The dataset rides inline in the
+   * request body (CSV text / XLSX base64 / current workbook) — it is
+   * never uploaded as a workspace file first. The server answers with
+   * the plan staged for review; nothing computes until
+   * sheetsAnalyzeRun releases it.
+   */
+  sheetsAnalyzePlan: (question: string, dataset: AnalysisDataset) =>
+    request<AnalysisPlanResult>('/sheets/analyze/plan', {
+      method: 'POST',
+      body: JSON.stringify({ question, dataset }),
+    }),
+
+  /**
+   * Mode Analis: run a staged plan (compute → verify → insight report).
+   * The server answers 410 plan_expired when the plan is gone and 422
+   * verify_failed (with issues) when the verify gate refuses the
+   * numbers — in both cases no report is produced.
+   */
+  sheetsAnalyzeRun: (planId: string) =>
+    request<AnalysisRunResult>('/sheets/analyze/run', {
+      method: 'POST',
+      body: JSON.stringify({ planId }),
+    }),
+
+  /** Mode Analis: re-read a staged plan (e.g. after a reload). 404 when it is gone. */
+  sheetsAnalyzeGetPlan: (planId: string) =>
+    request<{ plan: AnalysisPlan; profiles: unknown; question: string }>(`/sheets/analyze/plan/${encodeURIComponent(planId)}`),
 
   /**
    * Export the open deck to .pptx through core's native exporter. A

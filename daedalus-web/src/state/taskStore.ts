@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { AgentMode, Attachment, Event, FinalReport, ToolRules } from '@daedalus/core'
 import type { StreamStatus, TerminalWireMessage } from '../api/eventStream'
 import type { Conversation, ProviderModel, ProviderPreset, ProviderPublic, SessionState, TaskSummary, TerminalSession } from '../api/types'
+import type { AnalysisDataset, AnalysisPlan, AnalysisRunResult } from '../api/client'
 import { composerPrefsOf, domainFromPathname, saveComposerPrefs, type WebDomain } from './prefs'
 
 export type { WebDomain }
@@ -58,6 +59,38 @@ export type DokumenFocus = {
   page: number
 } | null
 
+/**
+ * Spreadsheet composer mode: 'susun' builds a workbook (the existing
+ * blueprint → build → verify → export flow), 'analis' answers a
+ * business question from a dataset (question + dataset → staged plan
+ * → run → insight report). An explicit switch in the composer, never
+ * an ask_user question — Slide's Standard|Smart picker is the model.
+ */
+export type SheetOptions = {
+  mode: 'susun' | 'analis'
+}
+
+/** An analysis plan staged for review (Analis mode): the server's plan id plus its spec. */
+export type StagedAnalysisPlan = {
+  planId: string
+  plan: AnalysisPlan
+  /** Deterministic profiler output that grounded the planner (opaque to the web). */
+  profiles: unknown
+  complexity: string | null
+}
+
+/** Why an analysis run produced no report. */
+export type AnalysisRunError = {
+  /**
+   * 'verify_failed' — the 422 gate verdict: issues are listed, no
+   * report is shown. 'plan_expired' — the 410: the staged plan is
+   * gone, the user re-creates it. 'error' — anything else.
+   */
+  code: 'verify_failed' | 'plan_expired' | 'error'
+  message: string
+  issues?: Array<{ message: string; [key: string]: unknown }>
+}
+
 /** Slide composer choices (Agentic Slide v2): explicit controls replace ask_user questions for count/language. */
 export type SlideOptions = {
   generation: 'standard' | 'smart'
@@ -112,6 +145,22 @@ export type DaedalusState = {
   dokumenOptions: DokumenOptions
   /** Field whose provenance the Dokumen canvas is showing (null = none). */
   dokumenFocus: DokumenFocus
+  /** Spreadsheet composer choices (Susun|Analis mode switch). */
+  sheetOptions: SheetOptions
+  /** Analis mode: the dataset staged for the next plan (CSV text / XLSX base64 / current workbook). */
+  analysisDataset: AnalysisDataset | null
+  /** Analis mode: true while POST /sheets/analyze/plan is in flight. */
+  analysisPlanning: boolean
+  /** Analis mode: the last plan failure, cleared on the next attempt. */
+  analysisPlanError: string | null
+  /** Analis mode: the staged plan under review in the Blueprint panel. */
+  analysisPlan: StagedAnalysisPlan | null
+  /** Analis mode: true while POST /sheets/analyze/run is in flight. */
+  analysisRunning: boolean
+  /** Analis mode: the last run's verify verdict + insight report. */
+  analysisResult: AnalysisRunResult | null
+  /** Analis mode: why the last run produced no report (422/410/other). */
+  analysisRunError: AnalysisRunError | null
   openFilePath: string | null
   error: string | null
 
@@ -144,6 +193,16 @@ export type DaedalusState = {
   setSlideOptions: (patch: Partial<SlideOptions>) => void
   setDokumenOptions: (patch: Partial<DokumenOptions>) => void
   setDokumenFocus: (focus: DokumenFocus) => void
+  setSheetOptions: (patch: Partial<SheetOptions>) => void
+  setAnalysisDataset: (dataset: AnalysisDataset | null) => void
+  setAnalysisPlanning: (planning: boolean) => void
+  setAnalysisPlanError: (error: string | null) => void
+  setAnalysisPlan: (plan: StagedAnalysisPlan | null) => void
+  setAnalysisRunning: (running: boolean) => void
+  setAnalysisResult: (result: AnalysisRunResult | null) => void
+  setAnalysisRunError: (error: AnalysisRunError | null) => void
+  /** Clear a staged plan and its run outcome (the staged dataset is kept for a retry). */
+  clearAnalysis: () => void
   setOpenFile: (path: string | null) => void
   setError: (error: string | null) => void
   reset: () => void
@@ -205,6 +264,14 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   slideOptions: { generation: 'standard', slideCount: null, language: '', templateId: null, designId: 'standar', customTemplateId: null },
   dokumenOptions: { subMode: 'ekstrak', sources: [], docxPath: null },
   dokumenFocus: null,
+  sheetOptions: { mode: 'susun' },
+  analysisDataset: null,
+  analysisPlanning: false,
+  analysisPlanError: null,
+  analysisPlan: null,
+  analysisRunning: false,
+  analysisResult: null,
+  analysisRunError: null,
   openFilePath: null,
   error: null,
 
@@ -339,6 +406,16 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   setSlideOptions: (patch) => set((state) => ({ slideOptions: { ...state.slideOptions, ...patch } })),
   setDokumenOptions: (patch: Partial<DokumenOptions>) => set((state) => ({ dokumenOptions: { ...state.dokumenOptions, ...patch } })),
   setDokumenFocus: (focus: DokumenFocus) => set({ dokumenFocus: focus }),
+  setSheetOptions: (patch) => set((state) => ({ sheetOptions: { ...state.sheetOptions, ...patch } })),
+  setAnalysisDataset: (dataset) => set({ analysisDataset: dataset }),
+  setAnalysisPlanning: (planning) => set({ analysisPlanning: planning }),
+  setAnalysisPlanError: (error) => set({ analysisPlanError: error }),
+  setAnalysisPlan: (plan) => set({ analysisPlan: plan }),
+  setAnalysisRunning: (running) => set({ analysisRunning: running }),
+  setAnalysisResult: (result) => set({ analysisResult: result }),
+  setAnalysisRunError: (error) => set({ analysisRunError: error }),
+  clearAnalysis: () =>
+    set({ analysisPlanning: false, analysisPlanError: null, analysisPlan: null, analysisRunning: false, analysisResult: null, analysisRunError: null }),
   setOpenFile: (openFilePath) => set({ openFilePath }),
   setError: (error) => set({ error }),
   reset: () =>
@@ -365,6 +442,14 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
       slideOptions: { generation: 'standard', slideCount: null, language: '', templateId: null, designId: 'standar', customTemplateId: null },
   dokumenOptions: { subMode: 'ekstrak', sources: [], docxPath: null },
   dokumenFocus: null,
+  sheetOptions: { mode: 'susun' },
+  analysisDataset: null,
+  analysisPlanning: false,
+  analysisPlanError: null,
+  analysisPlan: null,
+  analysisRunning: false,
+  analysisResult: null,
+  analysisRunError: null,
       openFilePath: null,
       error: null,
     })),
