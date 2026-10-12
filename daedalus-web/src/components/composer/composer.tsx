@@ -17,9 +17,18 @@ import { SlideComposerControls } from './slide-controls'
 import { DokumenComposerControls } from './dokumen-controls'
 import { SheetComposerControls } from './sheet-controls'
 import { useAnalysis } from '../sheets/useAnalysis'
+import { isDatasetFileName, readDatasetFile } from '../../lib/analysis-dataset'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 
 type UploadKind = 'file' | 'folder' | 'image' | 'zip'
+
+/**
+ * Client-side File objects stashed at upload time, keyed by file name.
+ * The server only returns attachment metadata, so the Analis mode's
+ * "Jadikan dataset" action reads the bytes from this stash instead of
+ * needing a second upload button.
+ */
+const datasetFileStash = new Map<string, File>()
 
 /** The four thinking levels (mirrors core's THINKING_LEVELS; the web never value-imports the core barrel). */
 const THINKING_LEVELS: readonly ThinkingLevel[] = ['off', 'low', 'medium', 'high']
@@ -47,6 +56,7 @@ export function Composer() {
   const setModels = useDaedalusStore((state) => state.setModels)
   const addAttachments = useDaedalusStore((state) => state.addAttachments)
   const removeAttachment = useDaedalusStore((state) => state.removeAttachment)
+  const setAnalysisDataset = useDaedalusStore((state) => state.setAnalysisDataset)
   const setSettingsOpen = useDaedalusStore((state) => state.setSettingsOpen)
   const events = useTaskEvents()
 
@@ -330,6 +340,12 @@ export function Composer() {
     try {
       const response = await api.upload(form)
       addAttachments(response.attachments)
+      // Stash CSV/XLSX bytes client-side: the Analis mode's "Jadikan
+      // dataset" action reads from here, so no second upload button
+      // is needed in the spreadsheet composer.
+      for (const file of list) {
+        if (isDatasetFileName(file.name)) datasetFileStash.set(file.name, file)
+      }
       return {
         text: `Uploaded ${response.files.length} file(s) to ${response.destination}. ${response.attachments.length} attachment(s) staged for the next task.`,
         action: 'upload',
@@ -547,6 +563,26 @@ export function Composer() {
     void submitGoal()
   }
 
+  /** Analis mode: turn a stashed CSV/XLSX upload into the analysis dataset. */
+  const makeDataset = async (attachment: Attachment): Promise<void> => {
+    const file = datasetFileStash.get(attachment.name)
+    if (!file) {
+      setComposer({ error: `File ${attachment.name} tidak tersedia lagi di browser — upload ulang lalu jadikan dataset.` })
+      return
+    }
+    try {
+      setAnalysisDataset(await readDatasetFile(file))
+      setComposer({ error: null })
+    } catch (error) {
+      setComposer({ error: error instanceof Error ? error.message : String(error) })
+    }
+  }
+
+  const handleRemoveAttachment = (attachment: Attachment): void => {
+    datasetFileStash.delete(attachment.name)
+    removeAttachment(attachment.id)
+  }
+
   const submitGoal = async (): Promise<void> => {
     const goal = composer.goal.trim()
     // `/skill <name> <task…>`: an explicit invocation with its task text
@@ -596,7 +632,7 @@ export function Composer() {
     if (domain === 'spreadsheet' && sheetOptions.mode === 'analis') {
       const stagedDataset = useDaedalusStore.getState().analysisDataset
       if (!stagedDataset) {
-        setComposer({ error: 'Pilih dataset dulu di atas — upload CSV/XLSX atau "Pakai workbook saat ini" — sebelum membuat rencana analisis.' })
+        setComposer({ error: 'Pilih dataset dulu — upload file CSV/XLSX lewat tombol upload lalu tekan "Jadikan dataset" pada file-nya, atau "Pakai workbook saat ini" — sebelum membuat rencana analisis.' })
         setTouched(true)
         return
       }
@@ -1125,7 +1161,18 @@ export function Composer() {
             >
               <span>{attachment.kind}: {attachment.name}</span>
               <span className="text-muted">{formatBytes(attachment.size)}</span>
-              <button type="button" aria-label={`remove attachment ${attachment.name}`} onClick={() => removeAttachment(attachment.id)}>
+              {domain === 'spreadsheet' && sheetOptions.mode === 'analis' && isDatasetFileName(attachment.name) && datasetFileStash.has(attachment.name) ? (
+                <button
+                  type="button"
+                  data-testid="attachment-make-dataset"
+                  onClick={() => void makeDataset(attachment)}
+                  className="rounded border border-primary/50 bg-primary/10 px-1 text-primary hover:bg-primary/20"
+                  title="Jadikan dataset analisis"
+                >
+                  Jadikan dataset
+                </button>
+              ) : null}
+              <button type="button" aria-label={`remove attachment ${attachment.name}`} onClick={() => handleRemoveAttachment(attachment)}>
                 <X className="size-3" />
               </button>
             </li>
