@@ -28,6 +28,11 @@ import { SheetDataPanel } from './components/sheets/data-panel'
 import { SheetReportPanel } from './components/sheets/report-panel'
 import { SheetStage } from './components/sheets/sheet-stage'
 import { SheetWorkspacePanel } from './components/sheets/sheet-workspace'
+import { ResearchPlanPanel } from './components/research/plan-panel'
+import { ResearchReportView } from './components/research/report-view'
+import { ResearchSourcesPanel } from './components/research/sources-panel'
+import { ResearchVerifyPanel } from './components/research/verify-panel'
+import { ResearchSummaryPanel } from './components/research/summary-panel'
 import { useEventStream } from './api/useEventStream'
 import { api } from './api/client'
 import { readStoredTheme, applyPaletteVars } from './theme/theme'
@@ -348,12 +353,14 @@ export function App() {
               {domain === 'dokumen' ? <DokumenPanel /> : null}
               {domain === 'spreadsheet' ? <BlueprintPanel /> : null}
               {domain === 'spreadsheet' ? <SheetDataPanel /> : null}
+              {domain === 'research' ? <ResearchPlanPanel /> : null}
               {domain === 'coding' ? <ExtensionsPanel /> : null}
               {/* PlanPanel/ValidationPanel are dead in Dokumen: DokumenEngine
                   never emits PLAN_CREATED or VALIDATION_* (only SlideEngine
-                  does), so both would render "No plan yet" forever. */}
-              {domain === 'dokumen' ? null : <PlanPanel />}
-              {domain === 'dokumen' ? null : <ValidationPanel />}
+                  does), so both would render "No plan yet" forever.
+                  ResearchEngine likewise never emits them. */}
+              {domain === 'dokumen' || domain === 'research' ? null : <PlanPanel />}
+              {domain === 'dokumen' || domain === 'research' ? null : <ValidationPanel />}
               <FailurePanel />
             </div>
           </ScrollArea>
@@ -367,6 +374,8 @@ export function App() {
             <DokumenStage />
           ) : domain === 'spreadsheet' ? (
             <SheetStage />
+          ) : domain === 'research' ? (
+            <ResearchReportView />
           ) : (
             <>
               <EditorPane
@@ -396,10 +405,13 @@ export function App() {
             <div className="flex flex-col gap-2 pr-1">
               {domain === 'dokumen' ? <DokumenReportPanel /> : null}
               {domain === 'spreadsheet' ? <SheetReportPanel /> : null}
-              {domain === 'dokumen' || domain === 'spreadsheet' ? null : <DiffViewer />}
-              {domain === 'dokumen' || domain === 'spreadsheet' ? null : <AttachmentsPanel />}
-              {domain === 'dokumen' || domain === 'spreadsheet' || domain === 'slide' ? null : <ChildTasksPanel />}
-              {domain === 'dokumen' || domain === 'spreadsheet' ? null : <FinalReportView report={report} />}
+              {domain === 'research' ? <ResearchSourcesPanel /> : null}
+              {domain === 'research' ? <ResearchVerifyPanel /> : null}
+              {domain === 'research' ? <ResearchSummaryPanel /> : null}
+              {domain === 'dokumen' || domain === 'spreadsheet' || domain === 'research' ? null : <DiffViewer />}
+              {domain === 'dokumen' || domain === 'spreadsheet' || domain === 'research' ? null : <AttachmentsPanel />}
+              {domain === 'dokumen' || domain === 'spreadsheet' || domain === 'research' || domain === 'slide' ? null : <ChildTasksPanel />}
+              {domain === 'dokumen' || domain === 'spreadsheet' || domain === 'research' ? null : <FinalReportView report={report} />}
               <p className="pb-2 text-center text-[9px] uppercase tracking-wider text-muted">daedalus core {VERSION}</p>
             </div>
           </ScrollArea>

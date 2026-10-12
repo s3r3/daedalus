@@ -3,6 +3,7 @@ import type { AgentMode, Attachment, Event, FinalReport, ToolRules } from '@daed
 import type { StreamStatus, TerminalWireMessage } from '../api/eventStream'
 import type { Conversation, ProviderModel, ProviderPreset, ProviderPublic, SessionState, TaskSummary, TerminalSession } from '../api/types'
 import type { AnalysisDataset, AnalysisPlan, AnalysisRunResult } from '../api/client'
+import type { ResearchPlanSpec, ResearchProgressEvent, ResearchReportView } from '../api/client'
 import { composerPrefsOf, domainFromPathname, saveComposerPrefs, type WebDomain } from './prefs'
 
 export type { WebDomain }
@@ -161,6 +162,24 @@ export type DaedalusState = {
   analysisResult: AnalysisRunResult | null
   /** Analis mode: why the last run produced no report (422/410/other). */
   analysisRunError: AnalysisRunError | null
+  /** Research: the staged plan under review in the left panel (single confirmation gate). */
+  researchPlan: ResearchPlanSpec | null
+  /** Research: planId of the staged plan (for the run gate + progress polling). */
+  researchPlanId: string | null
+  /** Research: true while POST /research/plan is in flight. */
+  researchPlanning: boolean
+  /** Research: the last plan failure, cleared on the next attempt. */
+  researchPlanError: string | null
+  /** Research: true while POST /research/run is in flight. */
+  researchRunning: boolean
+  /** Research: live progress events polled from the server while running. */
+  researchProgress: ResearchProgressEvent[]
+  /** Research: the last completed report (center panel). */
+  researchReport: ResearchReportView | null
+  /** Research: why the last run produced no report (422/410/other). */
+  researchRunError: string | null
+  /** Research: source ids lit up by claim-trace (click a claim → sources glow). */
+  researchTraceSourceIds: string[]
   openFilePath: string | null
   error: string | null
 
@@ -203,6 +222,16 @@ export type DaedalusState = {
   setAnalysisRunError: (error: AnalysisRunError | null) => void
   /** Clear a staged plan and its run outcome (the staged dataset is kept for a retry). */
   clearAnalysis: () => void
+  setResearchPlan: (planId: string | null, plan: ResearchPlanSpec | null) => void
+  setResearchPlanning: (planning: boolean) => void
+  setResearchPlanError: (error: string | null) => void
+  setResearchRunning: (running: boolean) => void
+  setResearchProgress: (events: ResearchProgressEvent[]) => void
+  setResearchReport: (report: ResearchReportView | null) => void
+  setResearchRunError: (error: string | null) => void
+  setResearchTraceSourceIds: (ids: string[]) => void
+  /** Clear the staged research plan and its run outcome. */
+  clearResearch: () => void
   setOpenFile: (path: string | null) => void
   setError: (error: string | null) => void
   reset: () => void
@@ -272,6 +301,15 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   analysisRunning: false,
   analysisResult: null,
   analysisRunError: null,
+  researchPlan: null,
+  researchPlanId: null,
+  researchPlanning: false,
+  researchPlanError: null,
+  researchRunning: false,
+  researchProgress: [],
+  researchReport: null,
+  researchRunError: null,
+  researchTraceSourceIds: [],
   openFilePath: null,
   error: null,
 
@@ -416,6 +454,20 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   setAnalysisRunError: (error) => set({ analysisRunError: error }),
   clearAnalysis: () =>
     set({ analysisPlanning: false, analysisPlanError: null, analysisPlan: null, analysisRunning: false, analysisResult: null, analysisRunError: null }),
+  setResearchPlan: (planId, plan) => set({ researchPlanId: planId, researchPlan: plan }),
+  setResearchPlanning: (planning) => set({ researchPlanning: planning }),
+  setResearchPlanError: (error) => set({ researchPlanError: error }),
+  setResearchRunning: (running) => set({ researchRunning: running }),
+  setResearchProgress: (events) => set({ researchProgress: events }),
+  setResearchReport: (report) => set({ researchReport: report }),
+  setResearchRunError: (error) => set({ researchRunError: error }),
+  setResearchTraceSourceIds: (ids) => set({ researchTraceSourceIds: ids }),
+  clearResearch: () =>
+    set({
+      researchPlan: null, researchPlanId: null, researchPlanning: false, researchPlanError: null,
+      researchRunning: false, researchProgress: [], researchReport: null, researchRunError: null,
+      researchTraceSourceIds: [],
+    }),
   setOpenFile: (openFilePath) => set({ openFilePath }),
   setError: (error) => set({ error }),
   reset: () =>
@@ -450,6 +502,15 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   analysisRunning: false,
   analysisResult: null,
   analysisRunError: null,
+  researchPlan: null,
+  researchPlanId: null,
+  researchPlanning: false,
+  researchPlanError: null,
+  researchRunning: false,
+  researchProgress: [],
+  researchReport: null,
+  researchRunError: null,
+  researchTraceSourceIds: [],
       openFilePath: null,
       error: null,
     })),

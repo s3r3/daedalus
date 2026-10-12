@@ -86,6 +86,19 @@ research-only — no build from their code). Licence notes describe the
 | TaskWeaver (archived reference) | MIT | Typed function catalog bounding the action space; pre-execution verification | `FORMULA_CATALOG` in `core/src/sheets/analysis-plan.ts` (re-exported from `analysis-pipeline.ts`): plan formula templates may only call catalogued functions; `validateAnalysisPlan` rejects anything outside the catalog before any cell is written |
 | reginald-francis/ai-autonomous-data-analyst | **No licence** | Deterministic dataset-agnostic profiler before the planner; two-call cheap planner; "LLM emits spec JSON only" | `core/src/sheets/analysis-profile.ts` (zero-LLM profiler) and the two-call `classifyAnalysisIntent` + `generateAnalysisPlan` in `core/src/sheets/analysis-plan.ts`. Ideas only — no code from this repository was read for reuse or copied. |
 
+## Agentic Research — architectural pattern references (2026-10-12)
+
+No source code from these repositories was copied, translated, or vendored.
+`core/src/research/*.ts` is Daedalus's own TypeScript; only
+architectural patterns were adapted (per Farid's directive "riset dulu",
+research-only — no build from their code). Licence notes describe the
+*source projects*, not shipped code.
+
+| Source | Licence | Pattern adapted | Daedalus's own implementation |
+|---|---|---|---|
+| dzhng/deep-research (https://github.com/dzhng/deep-research) | MIT (licence text read directly 2026-10-12) | Minimal TypeScript breadth/depth research loop; parallel sub-query fan-out | `core/src/research/pipeline.ts`: frozen 8-stage order brief → plan → execute → evidence → verify → synthesize → gate → compile; bounded parallel fetch per sub-question within a hard budget. Pola arsitektur diadaptasi dari dzhng/deep-research (MIT) — diimplementasi ulang, bukan disalin. |
+| assafelovic/gpt-researcher (https://github.com/assafelovic/gpt-researcher) | Apache-2.0 (licence text read directly 2026-10-12) | Stage decomposition planner → executors → publisher; reviewer/fact-checker gate before publication | `core/src/research/plan.ts` (two-call planner) + `core/src/research/verify.ts` (independent claim extraction in fresh context + deterministic 7-rule verify gate that is the ONLY path for claims into the report). Pola diadaptasi dari gpt-researcher (Apache-2.0) — diimplementasi ulang, bukan disalin. |
+
 ## Rules applied
 
 - Reference clones remain the pinned origins listed in `PLAN.md` §2.0.

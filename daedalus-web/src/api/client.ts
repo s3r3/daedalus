@@ -85,8 +85,8 @@ function query(params: Record<string, string | number | undefined>): string {
 export type CreateTaskInput = {
   goal: string
   repo_path: string
-  /** Domain produk aktif saat submit ('coding'|'slide'|'dokumen'|'spreadsheet'); server meneruskannya ke core agar task berjalan dengan engine domain tersebut. */
-  domain?: 'coding' | 'slide' | 'dokumen' | 'spreadsheet'
+  /** Domain produk aktif saat submit ('coding'|'slide'|'dokumen'|'spreadsheet'|'research'); server meneruskannya ke core agar task berjalan dengan engine domain tersebut. */
+  domain?: 'coding' | 'slide' | 'dokumen' | 'spreadsheet' | 'research'
   auto_approve?: boolean
   constraints?: string[]
   done_criteria?: string[]
@@ -300,6 +300,70 @@ export type AnalysisPlanResult = {
   /** Deterministic profiler output that grounded the planner (opaque to the web). */
   profiles: unknown
   complexity: string | null
+}
+
+/** Agentic Research: a staged research plan (the single confirmation gate's state). */
+export type ResearchPlanResult = {
+  planId: string
+  plan: ResearchPlanSpec
+  question: string
+}
+
+export type ResearchPlanSpec = {
+  planId: string
+  question: string
+  language: 'id' | 'en'
+  subQuestions: Array<{ id: string; text: string; rationale?: string }>
+  sourceStrategy: string
+  budget: { maxQueries: number; maxSources: number }
+  createdAt: string
+}
+
+export type ResearchCredibility = {
+  tier: string
+  verified: boolean
+  detail?: string
+}
+
+export type ResearchSourceView = {
+  id: string
+  url: string
+  title: string
+  authors?: string[]
+  year?: number
+  doi?: string
+  fetchedAt: string
+  credibility: ResearchCredibility
+}
+
+export type ResearchClaimView = {
+  id: string
+  text: string
+  sourceIds: string[]
+  excerpts: string[]
+  confidence: 'high' | 'moderate' | 'low'
+  status: string
+}
+
+export type ResearchReportView = {
+  reportId: string
+  question: string
+  language: 'id' | 'en'
+  sections: Array<{ id: string; title: string; claimIds: string[] }>
+  claims: ResearchClaimView[]
+  sources: ResearchSourceView[]
+  conflicts: Array<{ topic: string; positions: Array<{ sourceId: string; stance: string }> }>
+  limitations: string[]
+  summary: string
+  bibliography: { apa: string[]; ieee: string[] }
+  budget: { queriesUsed: number; sourcesFetched: number }
+  verification: { claimsVerified: number; claimsDropped: number; gatePassed: boolean }
+}
+
+export type ResearchProgressEvent = {
+  stage: string
+  detail: string
+  at: number
 }
 
 /** One verified finding: prose plus the cell refs backing every number in it. */
@@ -794,6 +858,41 @@ export const api = {
   /** Mode Analis: re-read a staged plan (e.g. after a reload). 404 when it is gone. */
   sheetsAnalyzeGetPlan: (planId: string) =>
     request<{ plan: AnalysisPlan; profiles: unknown; question: string }>(`/sheets/analyze/plan/${encodeURIComponent(planId)}`),
+
+  /**
+   * Agentic Research: stage a research plan (the single confirmation
+   * gate). The server answers with the plan staged for review in the
+   * left panel; nothing runs until researchRun releases it.
+   */
+  researchPlan: (question: string) =>
+    request<ResearchPlanResult>('/research/plan', {
+      method: 'POST',
+      body: JSON.stringify({ question }),
+    }),
+
+  /**
+   * Agentic Research: run a staged plan ("Jalankan riset"). The server
+   * answers 410 plan_expired when the plan is gone and 422 verify_failed
+   * (with issues) when the verify gate refuses the claims — in both
+   * cases no report is produced.
+   */
+  researchRun: (planId: string) =>
+    request<{ report: ResearchReportView }>('/research/run', {
+      method: 'POST',
+      body: JSON.stringify({ planId }),
+    }),
+
+  /** Agentic Research: re-read a staged plan (e.g. after a reload). 404 when it is gone. */
+  researchGetPlan: (planId: string) =>
+    request<{ planId: string; plan: ResearchPlanSpec; question: string }>(`/research/plan/${encodeURIComponent(planId)}`),
+
+  /** Agentic Research: fetch a completed report by id. 404 when unknown/expired. */
+  researchGetReport: (reportId: string) =>
+    request<{ report: ResearchReportView }>(`/research/report/${encodeURIComponent(reportId)}`),
+
+  /** Agentic Research: live progress events for a run (polled while running). */
+  researchProgress: (planId: string) =>
+    request<{ events: ResearchProgressEvent[] }>(`/research/progress/${encodeURIComponent(planId)}`),
 
   /**
    * Export the open deck to .pptx through core's native exporter. A

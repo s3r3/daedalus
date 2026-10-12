@@ -22,7 +22,14 @@
     "./sheets/analysis-plan.ts": "./src/sheets/analysis-plan.ts",
     "./sheets/analysis-pipeline.ts": "./src/sheets/analysis-pipeline.ts",
     "./sheets/pipeline.ts": "./src/sheets/pipeline.ts",
-    "./sheets/insight-report.ts": "./src/sheets/insight-report.ts"
+    "./sheets/insight-report.ts": "./src/sheets/insight-report.ts",
+    "./research/engine.ts": "./src/research/engine.ts",
+    "./research/types.ts": "./src/research/types.ts",
+    "./research/pipeline.ts": "./src/research/pipeline.ts",
+    "./research/plan.ts": "./src/research/plan.ts",
+    "./research/verify.ts": "./src/research/verify.ts",
+    "./research/credibility.ts": "./src/research/credibility.ts",
+    "./research/bibliography.ts": "./src/research/bibliography.ts"
   },
   "engines": {
     "node": ">=22"

@@ -409,7 +409,7 @@ export async function fetchDaemonWorkspace(url: string, fetchImpl: typeof fetch 
   }
 }
 
-export type MenuAction = 'coding' | 'slide' | 'dokumen' | 'spreadsheet' | 'tray' | 'exit' | 'invalid';
+export type MenuAction = 'coding' | 'slide' | 'dokumen' | 'spreadsheet' | 'research' | 'tray' | 'exit' | 'invalid';
 export type LauncherAction = Exclude<MenuAction, 'invalid'>;
 
 export type LauncherMenuItem = {
@@ -420,21 +420,22 @@ export type LauncherMenuItem = {
 };
 
 /**
- * The six launcher choices, in display order (keys 1–6). The launcher
+ * The launcher choices, in display order (keys 1–7). The launcher
  * starts the harness and opens its Web workspace — one entry per
  * domain: Coding at `/`, Slide at `/slide`, Dokumen at `/dokumen`,
- * Spreadsheet at `/spreadsheet`; the interactive terminal UI was
- * removed (2026-10-08, Farid's decision) because the harness loses
- * nothing without it — every capability lives in core and the Web
- * carries the surfaces a terminal cannot.
+ * Spreadsheet at `/spreadsheet`, Research at `/research`; the
+ * interactive terminal UI was removed (2026-10-08, Farid's decision)
+ * because the harness loses nothing without it — every capability
+ * lives in core and the Web carries the surfaces a terminal cannot.
  */
 export const LAUNCHER_MENU_ITEMS: LauncherMenuItem[] = [
   { key: '1', action: 'coding', label: 'Daedalus Coding', description: 'Web UI' },
   { key: '2', action: 'slide', label: 'Daedalus Slide', description: 'Web UI' },
   { key: '3', action: 'dokumen', label: 'Daedalus Dokumen', description: 'Web UI' },
   { key: '4', action: 'spreadsheet', label: 'Daedalus Spreadsheet', description: 'Web UI' },
-  { key: '5', action: 'tray', label: 'Hide to Tray', description: 'Background' },
-  { key: '6', action: 'exit', label: 'Exit', description: '' },
+  { key: '5', action: 'research', label: 'Daedalus Research', description: 'Web UI' },
+  { key: '6', action: 'tray', label: 'Hide to Tray', description: 'Background' },
+  { key: '7', action: 'exit', label: 'Exit', description: '' },
 ];
 
 export function parseMenuChoice(input: string | null | undefined): MenuAction {
@@ -443,8 +444,9 @@ export function parseMenuChoice(input: string | null | undefined): MenuAction {
   if (normalized === '2') return 'slide';
   if (normalized === '3') return 'dokumen';
   if (normalized === '4') return 'spreadsheet';
-  if (normalized === '5') return 'tray';
-  if (normalized === '6' || normalized === '0' || normalized === 'q' || normalized === 'quit' || normalized === 'exit') return 'exit';
+  if (normalized === '5') return 'research';
+  if (normalized === '6') return 'tray';
+  if (normalized === '7' || normalized === '0' || normalized === 'q' || normalized === 'quit' || normalized === 'exit') return 'exit';
   return 'invalid';
 }
 
@@ -485,7 +487,7 @@ export function launcherMenuFrame(selection: number, status: DaemonStatus): stri
       const label = `${item.key}  ${item.label}${item.description ? ` (${item.description})` : ''}`;
       return `│  ${index === clamped ? '❯' : ' '} ${label}`;
     }),
-    '╰─ ↑/↓ select · Enter confirm · 1–6 jump · q quit',
+    '╰─ ↑/↓ select · Enter confirm · 1–7 jump · q quit',
   ];
   return lines.join('\n');
 }
@@ -596,6 +598,10 @@ export async function runLauncherChoice(action: LauncherAction, deps: LauncherCh
       await deps.openWeb('/spreadsheet');
       deps.print(`Spreadsheet UI: ${joinServerUrl(url, '/spreadsheet')} (server keeps running in the background; \`daedalus stop\` stops it).\n`);
       return 'spreadsheet';
+    case 'research':
+      await deps.openWeb('/research');
+      deps.print(`Research UI: ${joinServerUrl(url, '/research')} (server keeps running in the background; \`daedalus stop\` stops it).\n`);
+      return 'research';
     case 'tray':
       await deps.hideToTray?.();
       deps.print(`Background mode: only the server keeps running at ${url}. Tray: ${deps.status.tray.reason}\n`);

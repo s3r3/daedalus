@@ -16,7 +16,9 @@ import { ModelPicker } from './model-picker'
 import { SlideComposerControls } from './slide-controls'
 import { DokumenComposerControls } from './dokumen-controls'
 import { SheetComposerControls } from './sheet-controls'
+import { ResearchComposerControls } from './research-controls'
 import { useAnalysis } from '../sheets/useAnalysis'
+import { useResearch } from '../research/useResearch'
 import { isDatasetFileName, readDatasetFile } from '../../lib/analysis-dataset'
 import { MODE_LABELS, modeCssVar } from '../../theme/theme'
 
@@ -45,6 +47,7 @@ export function Composer() {
   const dokumenOptions = useDaedalusStore((state) => state.dokumenOptions)
   const sheetOptions = useDaedalusStore((state) => state.sheetOptions)
   const { planAnalysis } = useAnalysis()
+  const { planResearch } = useResearch()
   const workspaceRoot = useDaedalusStore((state) => state.workspace.root)
   const activeTaskId = useDaedalusStore((state) => state.taskId)
   const models = useDaedalusStore((state) => state.models)
@@ -625,12 +628,21 @@ export function Composer() {
       }
       return
     }
+    // Agentic Research: the question never becomes a coding task — it
+    // stages a research plan for review in the left panel, where
+    // "Jalankan riset" runs it. The same call as the composer row's
+    // "Buat rencana riset" button.
+    if (domain === 'research') {
+      setComposer({ submitting: true, error: null })
+      await planResearch(goal)
+      setComposer({ submitting: false })
+      return
+    }
     // Mode Analis: the question never becomes a coding task — it stages
     // an analysis plan (question + the dataset picked above) for review
     // in the Blueprint panel, where "Jalankan analisis" runs it. The same
     // call as the composer row's "Buat rencana analisis" button.
-    if (domain === 'spreadsheet' && sheetOptions.mode === 'analis') {
-      const stagedDataset = useDaedalusStore.getState().analysisDataset
+    if (domain === 'spreadsheet' && sheetOptions.mode === 'analis') {      const stagedDataset = useDaedalusStore.getState().analysisDataset
       if (!stagedDataset) {
         setComposer({ error: 'Pilih dataset dulu — upload file CSV/XLSX lewat tombol upload lalu tekan "Jadikan dataset" pada file-nya, atau "Pakai workbook saat ini" — sebelum membuat rencana analisis.' })
         setTouched(true)
@@ -887,6 +899,8 @@ export function Composer() {
           <DokumenComposerControls />
         ) : domain === 'spreadsheet' ? (
           <SheetComposerControls />
+        ) : domain === 'research' ? (
+          <ResearchComposerControls />
         ) : (
           <>
             <span

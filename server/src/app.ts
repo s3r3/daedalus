@@ -139,6 +139,19 @@ import {
   type AnalysisCoreHooks,
   type AnalysisDataset,
 } from "./sheets-analyze.ts";
+import {
+  appendResearchProgress,
+  getResearchProgress,
+  getResearchReport,
+  peekStagedResearchPlan,
+  researchProviderFromRequest,
+  researchVerifyIssues,
+  resolveResearchHooks,
+  stageResearchPlan,
+  storeResearchReport,
+  takeStagedResearchPlan,
+  type ResearchCoreHooks,
+} from "./research.ts";
 /**
  * REST + WebSocket gateway (PLAN.md §3.0, §3.6). Commands and reads only —
  * no agent, tool, or LLM logic lives here; the core owns execution.
@@ -221,6 +234,12 @@ export type AppContext = {
    * tests inject fakes here.
    */
   analysisHooks?: AnalysisCoreHooks;
+  /**
+   * Agentic Research: seam to the core research contract
+   * (planResearch / ResearchEngine.runResearch / searchWeb / fetchPage).
+   * Production resolves lazy core imports; tests inject fakes here.
+   */
+  researchHooks?: ResearchCoreHooks;
 };
 
 export function createContext(overrides: Partial<AppContext> = {}): AppContext {
@@ -258,6 +277,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     sheetPreview: overrides.sheetPreview,
     dokumenPreview: overrides.dokumenPreview,
     analysisHooks: overrides.analysisHooks,
+    researchHooks: overrides.researchHooks,
   };
 }
 
@@ -4352,6 +4372,141 @@ export function createApp(ctx: AppContext) {
         question: staged.question,
         request_id: requestId,
       });
+      return;
+    }
+
+    // Agentic Research: stage a research plan (the single confirmation
+    // gate). Body: { question, model?, provider_id? }. The plan is
+    // staged for review in the left panel; the user pressing "Jalankan
+    // riset" calls POST /research/run. Staged plans expire after 30
+    // minutes (swept every 5).
+    if (method === "POST" && url.pathname === "/research/plan") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const question = typeof parsed.question === "string" ? parsed.question.trim() : "";
+          if (!question) {
+            sendJson(res, 400, { error: "question_required", request_id: requestId });
+            return;
+          }
+          const root = resolveAllowedRoot(ctx, parsed.root ?? undefined);
+          const hooks = await resolveResearchHooks(ctx);
+          await ensureProvidersLoaded(ctx);
+          const provider = researchProviderFromRequest(ctx, parsed);
+          if (!provider) {
+            sendJson(res, 400, { error: "no_provider_configured", request_id: requestId });
+            return;
+          }
+          const plan = await hooks.planResearch({ question, provider });
+          const staged = stageResearchPlan({ question, workspaceRoot: root, plan });
+          sendJson(res, 200, {
+            planId: staged.planId,
+            plan,
+            request_id: requestId,
+          });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Agentic Research: run a staged plan (the "Jalankan riset" gate).
+    // Body: { planId, model?, provider_id? }. The staged plan is
+    // single-use: consumed whether the run succeeds or fails the
+    // Verify gate. A verify failure inside the engine throws → 422
+    // with the issues; a report is NEVER returned with unverified
+    // claims. Progress events stream to GET /research/progress/:planId.
+    if (method === "POST" && url.pathname === "/research/run") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const planId = typeof parsed.planId === "string" ? parsed.planId : "";
+          const staged = planId ? takeStagedResearchPlan(planId) : undefined;
+          if (!staged) {
+            sendJson(res, 410, { error: "plan_expired", message: "rencana kedaluwarsa, buat ulang", request_id: requestId });
+            return;
+          }
+          const hooks = await resolveResearchHooks(ctx);
+          await ensureProvidersLoaded(ctx);
+          const provider = researchProviderFromRequest(ctx, parsed);
+          if (!provider) {
+            sendJson(res, 400, { error: "no_provider_configured", request_id: requestId });
+            return;
+          }
+          const engine = await hooks.createEngine({
+            provider,
+            fetch: { searchWeb: hooks.searchWeb, fetchPage: hooks.fetchPage },
+            onProgress: (stage, detail) => appendResearchProgress(planId, stage, detail),
+          });
+          let result;
+          try {
+            result = await engine.runResearch(staged.plan);
+          } catch (error) {
+            const issues = researchVerifyIssues(error);
+            if (issues) {
+              sendJson(res, 422, { error: "verify_failed", issues, request_id: requestId });
+              return;
+            }
+            throw error;
+          }
+          storeResearchReport(result.report);
+          sendJson(res, 200, {
+            report: result.report,
+            request_id: requestId,
+          });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Agentic Research: read back a staged plan (review surface for the
+    // single confirmation gate). 404 when unknown or expired.
+    const researchPlanMatch = /^\/research\/plan\/([^/]+)$/.exec(url.pathname);
+    if (method === "GET" && researchPlanMatch) {
+      const staged = peekStagedResearchPlan(researchPlanMatch[1] ?? "");
+      if (!staged) {
+        sendJson(res, 404, { error: "plan_not_found", request_id: requestId });
+        return;
+      }
+      sendJson(res, 200, {
+        planId: staged.planId,
+        plan: staged.plan,
+        question: staged.question,
+        request_id: requestId,
+      });
+      return;
+    }
+
+    // Agentic Research: fetch a completed report by id. 404 when unknown
+    // or expired (reports live 24h).
+    const researchReportMatch = /^\/research\/report\/([^/]+)$/.exec(url.pathname);
+    if (method === "GET" && researchReportMatch) {
+      const report = getResearchReport(researchReportMatch[1] ?? "");
+      if (!report) {
+        sendJson(res, 404, { error: "report_not_found", request_id: requestId });
+        return;
+      }
+      sendJson(res, 200, { report, request_id: requestId });
+      return;
+    }
+
+    // Agentic Research: live progress events for a run (polled by the
+    // left panel while "Jalankan riset" is running). Keyed by planId.
+    const researchProgressMatch = /^\/research\/progress\/([^/]+)$/.exec(url.pathname);
+    if (method === "GET" && researchProgressMatch) {
+      const key = researchProgressMatch[1] ?? "";
+      sendJson(res, 200, { events: getResearchProgress(key), request_id: requestId });
       return;
     }
 

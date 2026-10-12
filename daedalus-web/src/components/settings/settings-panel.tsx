@@ -44,8 +44,8 @@ const EMPTY_FORM: ProviderForm = {
 }
 
 const THINKING_LEVELS: ThinkingLevel[] = ['off', 'low', 'medium', 'high']
-const DOMAIN_TABS: TaskDomain[] = ['coding', 'slide', 'spreadsheet', 'dokumen']
-const DOMAIN_LABELS: Record<TaskDomain, string> = { coding: 'Coding', slide: 'Slide', spreadsheet: 'Spreadsheet', dokumen: 'Dokumen' }
+const DOMAIN_TABS: TaskDomain[] = ['coding', 'slide', 'spreadsheet', 'dokumen', 'research']
+const DOMAIN_LABELS: Record<TaskDomain, string> = { coding: 'Coding', slide: 'Slide', spreadsheet: 'Spreadsheet', dokumen: 'Dokumen', research: 'Research' }
 
 type SettingsTab = 'global' | TaskDomain
 
@@ -101,6 +101,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
     slide: { ...EMPTY_DOMAIN_DRAFT },
     spreadsheet: { ...EMPTY_DOMAIN_DRAFT },
     dokumen: { ...EMPTY_DOMAIN_DRAFT },
+    research: { ...EMPTY_DOMAIN_DRAFT },
   })
   const [domainBusy, setDomainBusy] = useState<TaskDomain | null>(null)
 
@@ -146,6 +147,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
         slide: draftOf(loadedDomains.slide),
         spreadsheet: draftOf(loadedDomains.spreadsheet),
         dokumen: draftOf(loadedDomains.dokumen),
+        research: draftOf(loadedDomains.research),
       })
     }
     if (providersResult.status === 'fulfilled') setProviders(providersResult.value.providers, providersResult.value.presets)

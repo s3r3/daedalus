@@ -161,7 +161,7 @@ describe('llm settings: temperature, prompt caching, domains', () => {
     const defaults = loadSettings({ DAEDALUS_HOME: temp('s3l-home-') });
     expect(defaults.llm.temperature).toBe(0.7);
     expect(defaults.llm.promptCaching).toBe(false);
-    expect(defaults.domains).toEqual({ coding: {}, slide: {}, spreadsheet: {}, dokumen: {} });
+    expect(defaults.domains).toEqual({ coding: {}, slide: {}, spreadsheet: {}, dokumen: {}, research: {} });
     const custom = loadSettings({
       DAEDALUS_HOME: temp('s3l-home-'),
       LLM_TEMPERATURE: '0.2',
