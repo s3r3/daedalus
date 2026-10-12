@@ -6,12 +6,11 @@ import type { ResearchSourceContent } from '../../api/client'
 import { cn } from '../../lib/utils'
 
 /**
- * ResearchSourcePreview: preview inline satu sumber di panel tengah.
- * Dibuka dengan mengklik [sN] di laporan ("kek agentic dokumen": dokumen
- * dibaca di tempat, bukan tab baru).
- * - PDF → di-embed langsung (PDF viewer bawaan browser).
- * - Halaman web → mode baca dari konten yang di-cache server saat run
- *   (atau di-fetch sekali bila cache miss).
+ * ResearchSourcePreview: preview inline satu sumber di panel tengah —
+ * "kek buka di browser": halaman asli di-embed langsung (PDF tampil dengan
+ * PDF viewer bawaan browser). Dibuka dengan mengklik [sN] di laporan atau
+ * judul sumber di panel kanan. Bila situs memblokir embed (X-Frame-Options /
+ * CSP), fallback jujur ke mode baca dari konten yang di-cache saat run.
  */
 export function ResearchSourcePreview() {
   const report = useDaedalusStore((state) => state.researchReport)
@@ -23,10 +22,8 @@ export function ResearchSourcePreview() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const isPdf = source ? /\.pdf(?:[?#]|$)/i.test(source.url) : false
-
   useEffect(() => {
-    if (!report || !source || isPdf) return
+    if (!report || !source) return
     let cancelled = false
     setLoading(true)
     setError(null)
@@ -44,7 +41,7 @@ export function ResearchSourcePreview() {
     return () => {
       cancelled = true
     }
-  }, [report, source, isPdf])
+  }, [report, source])
 
   if (!source) {
     return (
@@ -55,6 +52,9 @@ export function ResearchSourcePreview() {
   }
 
   const paragraphs = (content?.text ?? '').split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
+  // Embed langsung "kek buka di browser" bila situs mengizinkan; PDF selalu
+  // di-embed (viewer bawaan browser) selama frameable.
+  const embed = content?.frameable === true
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="research-source-preview">
@@ -96,14 +96,7 @@ export function ResearchSourcePreview() {
         </a>
       </div>
 
-      {isPdf ? (
-        <iframe
-          src={source.url}
-          title={source.title}
-          data-testid="research-preview-pdf"
-          className="min-h-0 flex-1 border-0 bg-white"
-        />
-      ) : loading ? (
+      {loading ? (
         <div className="flex flex-1 items-center justify-center text-xs text-muted" data-testid="research-preview-loading">
           Memuat sumber…
         </div>
@@ -114,11 +107,19 @@ export function ResearchSourcePreview() {
             {source.url}
           </a>
         </div>
+      ) : embed ? (
+        <iframe
+          src={source.url}
+          title={source.title}
+          data-testid="research-preview-embed"
+          className="min-h-0 flex-1 border-0 bg-white"
+          sandbox="allow-same-origin allow-scripts allow-popups"
+        />
       ) : paragraphs.length > 0 ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3" data-testid="research-preview-reader">
           <p className="mb-3 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
             <FileText className="size-3" aria-hidden />
-            Mode baca
+            Mode baca — situs memblokir embed langsung
             {content?.cached ? ' · dari cache run' : ''}
           </p>
           {paragraphs.slice(0, 60).map((p, i) => (

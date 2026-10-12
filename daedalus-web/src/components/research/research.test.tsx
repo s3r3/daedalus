@@ -191,9 +191,9 @@ describe('ResearchSourcePreview (center)', () => {
     researchSourceContentMock.mockReset()
   })
 
-  test('clicking [sN] in the report opens the inline preview (reader mode)', async () => {
+  test('clicking [sN] in the report opens the inline preview (reader mode when not frameable)', async () => {
     researchSourceContentMock.mockResolvedValue({
-      content: { url: 'https://sinta.kemdikbud.go.id/tentang', title: 'Tentang Sinta', text: 'Paragraf satu.\n\nParagraf dua.', cached: true, isPdf: false },
+      content: { url: 'https://sinta.kemdikbud.go.id/tentang', title: 'Tentang Sinta', text: 'Paragraf satu.\n\nParagraf dua.', cached: true, isPdf: false, frameable: false },
     })
     useDaedalusStore.getState().setResearchReport(fixtureReport)
     render(<ResearchReportView />)
@@ -206,9 +206,20 @@ describe('ResearchSourcePreview (center)', () => {
     expect(researchSourceContentMock).toHaveBeenCalledWith('r1', 's1')
   })
 
+  test('frameable source embeds the real page like a browser tab', async () => {
+    researchSourceContentMock.mockResolvedValue({
+      content: { url: 'https://sinta.kemdikbud.go.id/tentang', title: 'Tentang Sinta', text: 'Isi.', cached: true, isPdf: false, frameable: true },
+    })
+    useDaedalusStore.getState().setResearchReport(fixtureReport)
+    useDaedalusStore.getState().setResearchPreviewSourceId('s1')
+    render(<ResearchSourcePreview />)
+    await waitFor(() => expect(screen.getByTestId('research-preview-embed')).toBeTruthy())
+    expect((screen.getByTestId('research-preview-embed') as HTMLIFrameElement).src).toContain('sinta.kemdikbud.go.id')
+  })
+
   test('back button returns to the report', async () => {
     researchSourceContentMock.mockResolvedValue({
-      content: { url: 'https://sinta.kemdikbud.go.id/tentang', title: 'Tentang Sinta', text: 'Isi.', cached: true, isPdf: false },
+      content: { url: 'https://sinta.kemdikbud.go.id/tentang', title: 'Tentang Sinta', text: 'Isi.', cached: true, isPdf: false, frameable: false },
     })
     useDaedalusStore.getState().setResearchReport(fixtureReport)
     useDaedalusStore.getState().setResearchPreviewSourceId('s1')
@@ -223,12 +234,14 @@ describe('ResearchSourcePreview (center)', () => {
       ...fixtureReport,
       sources: [{ ...fixtureReport.sources[0]!, url: 'https://contoh.id/paper.pdf', title: 'Paper PDF' }],
     }
+    researchSourceContentMock.mockResolvedValue({
+      content: { url: 'https://contoh.id/paper.pdf', title: 'Paper PDF', text: '', cached: false, isPdf: true, frameable: true },
+    })
     useDaedalusStore.getState().setResearchReport(pdfReport)
     useDaedalusStore.getState().setResearchPreviewSourceId('s1')
     render(<ResearchSourcePreview />)
-    await waitFor(() => expect(screen.getByTestId('research-preview-pdf')).toBeTruthy())
-    expect(researchSourceContentMock).not.toHaveBeenCalled()
-    expect((screen.getByTestId('research-preview-pdf') as HTMLIFrameElement).src).toContain('paper.pdf')
+    await waitFor(() => expect(screen.getByTestId('research-preview-embed')).toBeTruthy())
+    expect((screen.getByTestId('research-preview-embed') as HTMLIFrameElement).src).toContain('paper.pdf')
   })
 
   test('fetch failure shows an honest error with the raw url', async () => {

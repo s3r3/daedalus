@@ -366,13 +366,14 @@ export type ResearchProgressEvent = {
   at: number
 }
 
-/** Konten satu sumber riset untuk preview inline (mode baca / PDF embed). */
+/** Konten satu sumber riset untuk preview inline (embed browser / mode baca). */
 export type ResearchSourceContent = {
   url: string
   title: string
   text: string
   cached: boolean
   isPdf: boolean
+  frameable: boolean
 }
 
 /** One verified finding: prose plus the cell refs backing every number in it. */

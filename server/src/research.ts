@@ -92,6 +92,41 @@ async function fetchWithTimeout(url: string, accept: string): Promise<Response |
 }
 
 /**
+ * Probe apakah URL boleh di-embed dalam iframe (preview "kek buka di browser").
+ * Cek header X-Frame-Options dan CSP frame-ancestors via HEAD. Konservatif:
+ * ragu → false (klien fallback ke mode baca).
+ */
+export async function probeFrameable(url: string): Promise<boolean> {
+  if (!/^https?:\/\//i.test(url)) return false;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 10_000);
+    let res: Response | null = null;
+    try {
+      res = await fetch(url, {
+        method: "HEAD",
+        signal: ctrl.signal,
+        headers: { "User-Agent": "Daedalus-Research/1.0" },
+        redirect: "follow",
+      });
+    } catch {
+      res = null;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (!res) return false;
+    const xfo = (res.headers.get("x-frame-options") ?? "").toUpperCase();
+    if (xfo.includes("DENY") || xfo.includes("SAMEORIGIN")) return false;
+    const csp = res.headers.get("content-security-policy") ?? "";
+    const fa = /frame-ancestors\s+([^;]+)/i.exec(csp);
+    if (fa && !/\*/.test(fa[1] ?? "")) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Default searchWeb: DuckDuckGo lite (tanpa API key, best-effort).
  * Gagal/berubah markup → [] (engine me-retry dalam budget, bukan crash).
  * Halaman JS-heavy = limitasi MVP yang diketahui.
@@ -368,19 +403,22 @@ export function getResearchReport(reportId: string): ResearchReport | undefined 
   return entry.report;
 }
 
-/** Konten sumber untuk preview inline di panel tengah (mode baca / PDF embed). */
+/** Konten sumber untuk preview inline di panel tengah (embed browser / mode baca). */
 export interface ResearchSourceContent {
   url: string;
   title: string;
   text: string;
   cached: boolean;
   isPdf: boolean;
+  /** true bila halaman boleh di-embed iframe (preview "kek buka di browser"). */
+  frameable: boolean;
 }
 
 /**
  * Ambil konten satu sumber untuk preview: dari cache fetch pipeline bila ada,
- * else fetch live sekali via hooks lalu cache. PDF tidak di-fetch — klien
- * me-embed URL-nya langsung.
+ * else fetch live sekali via hooks lalu cache. Selalu sertakan hasil probe
+ * frameable (boleh di-iframe "kek buka di browser" atau tidak). PDF tidak
+ * di-fetch teksnya — klien me-embed URL-nya langsung.
  * Return "report_not_found" | "source_not_found" | null (tak bisa diambil).
  */
 export async function getResearchSourceContent(
@@ -394,17 +432,18 @@ export async function getResearchSourceContent(
   if (!source) return "source_not_found";
   const url = source.url;
   const isPdf = /\.pdf(?:[?#]|$)/i.test(url);
+  const frameable = await probeFrameable(url);
   if (isPdf) {
-    return { url, title: source.title || url, text: "", cached: false, isPdf: true };
+    return { url, title: source.title || url, text: "", cached: false, isPdf: true, frameable };
   }
   const cached = getCachedFetchedPage(url);
   if (cached) {
-    return { url, title: source.title || cached.title, text: cached.text, cached: true, isPdf: false };
+    return { url, title: source.title || cached.title, text: cached.text, cached: true, isPdf: false, frameable };
   }
   const page = await hooks.fetchPage(url).catch(() => null);
   if (page && page.text) {
     cacheFetchedPage(url, page.title, page.text);
-    return { url, title: source.title || page.title, text: page.text, cached: false, isPdf: false };
+    return { url, title: source.title || page.title, text: page.text, cached: false, isPdf: false, frameable };
   }
   return null;
 }

@@ -9,6 +9,7 @@ import {
   cacheFetchedPage,
   clearFetchedPageCacheForTest,
   expireStagedResearchPlanForTest,
+  probeFrameable,
   storeResearchReport,
   type ResearchCoreHooks,
   type ResearchPlan,
@@ -226,6 +227,30 @@ describe('POST /research/run', () => {
     expect(first.status).toBe(200)
     const second = await req(base, 'POST', '/research/run', { planId })
     expect(second.status).toBe(410)
+  })
+})
+
+describe('probeFrameable', () => {
+  test('DENY / SAMEORIGIN / frame-ancestors block embedding; open pages allow it', async () => {
+    const { createServer } = await import('node:http')
+    const srv = createServer((req, res) => {
+      if (req.url === '/deny') res.setHeader('X-Frame-Options', 'DENY')
+      if (req.url === '/same') res.setHeader('X-Frame-Options', 'SAMEORIGIN')
+      if (req.url === '/csp') res.setHeader('Content-Security-Policy', "frame-ancestors 'self'")
+      res.end('ok')
+    })
+    await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve))
+    const port = (srv.address() as AddressInfo).port
+    const base = `http://127.0.0.1:${port}`
+    try {
+      expect(await probeFrameable(`${base}/deny`)).toBe(false)
+      expect(await probeFrameable(`${base}/same`)).toBe(false)
+      expect(await probeFrameable(`${base}/csp`)).toBe(false)
+      expect(await probeFrameable(`${base}/open`)).toBe(true)
+      expect(await probeFrameable('bukan-url')).toBe(false)
+    } finally {
+      srv.close()
+    }
   })
 })
 
