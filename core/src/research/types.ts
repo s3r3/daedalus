@@ -10,7 +10,7 @@
 export type ResearchLanguage = 'id' | 'en';
 
 export type CredibilityTier =
-  | 'scopus'
+  | 'scopus' | 'scopus-q1' | 'scopus-q2' | 'scopus-q3' | 'scopus-q4'
   | 'sinta1' | 'sinta2' | 'sinta3' | 'sinta4' | 'sinta5' | 'sinta6'
   | 'doaj' | 'garuda' | 'scholar' | 'web' | 'unknown';
 
@@ -110,7 +110,8 @@ function isNonEmptyString(v: unknown): v is string {
 }
 
 const TIERS: readonly string[] = [
-  'scopus', 'sinta1', 'sinta2', 'sinta3', 'sinta4', 'sinta5', 'sinta6',
+  'scopus', 'scopus-q1', 'scopus-q2', 'scopus-q3', 'scopus-q4',
+  'sinta1', 'sinta2', 'sinta3', 'sinta4', 'sinta5', 'sinta6',
   'doaj', 'garuda', 'scholar', 'web', 'unknown',
 ];
 const CONFIDENCES = ['high', 'moderate', 'low'] as const;

@@ -48,6 +48,8 @@ export type ResearchCoreHooks = {
   createEngine(args: {
     provider: LLMProvider;
     fetch: ResearchFetchHooks;
+    /** API key Elsevier (env ELSEVIER_API_KEY) — kuartil Scopus penuh. */
+    elsevierApiKey?: string;
     onProgress?: (stage: ResearchStageId, detail: string) => void;
   }): Promise<ResearchEngineSurface>;
   searchWeb(query: string): Promise<ResearchSearchHit[]>;
@@ -431,9 +433,9 @@ export function defaultResearchHooks(): ResearchCoreHooks {
       });
       return engine.planResearch(question);
     },
-    createEngine: async ({ provider, fetch, onProgress }) => {
+    createEngine: async ({ provider, fetch, elsevierApiKey, onProgress }) => {
       const mod = await import("@daedalus/core/research/engine.ts");
-      const engine = new mod.ResearchEngine({ provider, fetch, onProgress });
+      const engine = new mod.ResearchEngine({ provider, fetch, elsevierApiKey, onProgress });
       return engine as unknown as ResearchEngineSurface;
     },
     searchWeb: defaultSearchWeb,

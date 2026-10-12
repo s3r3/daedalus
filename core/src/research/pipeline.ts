@@ -60,6 +60,8 @@ export interface ResearchPipelineInput {
   provider: LLMProvider;
   fetch: ResearchFetchHooks;
   credibilityFetch?: CredibilityFetcher;
+  /** API key Elsevier (env ELSEVIER_API_KEY) — untuk kuartil Scopus penuh. */
+  elsevierApiKey?: string;
   signal?: AbortSignal;
   onProgress?: (stage: ResearchStageId, detail: string) => void;
 }
@@ -222,7 +224,10 @@ export async function evidenceStage(
       const ex = queue.shift() as ExecutedSource;
       let credibility;
       try {
-        credibility = await assessCredibility({ url: ex.url, title: ex.title }, fetchFn);
+        credibility = await assessCredibility(
+          { url: ex.url, title: ex.title, elsevierApiKey: input.elsevierApiKey },
+          fetchFn,
+        );
       } catch {
         credibility = { tier: 'web' as const, verified: false, detail: 'penilaian kredibilitas gagal — diperlakukan sebagai web umum' };
       }

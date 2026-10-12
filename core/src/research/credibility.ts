@@ -3,17 +3,22 @@ import type { CredibilityTier, SourceCredibility } from './types.ts';
 /**
  * Deteksi kredibilitas sumber — mekanisme JUJUR (Desain-Agentic-Research-v1).
  *
- * - Sinta 1–6: best-effort terhadap sinta.kemdikbud.go.id (halaman
- *   pencarian jurnal, bukan JSON API resmi — markup bisa berubah).
- *   `verified: true` HANYA bila peringkat berhasil diekstrak dari
- *   halaman; selain itu heuristic.
- * - Scopus: real-time butuh Elsevier API key (milik user, Settings —
- *   fase 2). MVP tidak pernah mengklaim tier 'scopus' tanpa itu.
- * - DOI: Crossref API publik (https://api.crossref.org) untuk
- *   validasi metadata jurnal/ISSN.
+ * Peringkat INTERNASIONAL (permintaan Farid 2026-10-12: "jangan sinta aja"):
+ * - Scopus Q1–Q4 via Elsevier Serial Title API — butuh API key milik user
+ *   (env ELSEVIER_API_KEY). `verified: true` hanya bila API menjawab.
+ * - Scopus Q1–Q4 via SCImago SJR (scimagojr.com, situs resmi SJR, gratis)
+ *   — best-effort seperti Sinta; graceful null bila diblokir (Cloudflare)
+ *   atau markup berubah. SJR dihitung dari data Scopus, jadi kuartilnya
+ *   setara kuartil Scopus.
+ * - Sinta 1–6: best-effort terhadap sinta.kemdikbud.go.id (nasional ID).
+ * - DOI: Crossref API publik untuk validasi metadata jurnal/ISSN.
  * - DOAJ: API publik DOAJ (best-effort, graceful bila berubah).
  * - Garuda: heuristic domain garuda.kemdikbud.go.id.
  * - Default: 'web' — tidak pernah mengklaim lebih dari yang dicek.
+ *
+ * Urutan: DOI→Crossref (metadata) → Scopus API (key) → SJR (kuartil) →
+ * Sinta (peringkat nasional) → DOAJ (ISSN) → heuristic domain → web/unknown.
+ * Tidak pernah mengembalikan verified:true tanpa konfirmasi resmi.
  *
  * Semua HTTP lewat CredibilityFetcher yang bisa di-inject (test
  * memakai fake; produksi memakai global fetch + timeout).
@@ -25,6 +30,8 @@ export interface CredibilityInput {
   doi?: string;
   /** ISSN bila diketahui (dari Crossref atau metadata). */
   issn?: string;
+  /** API key Elsevier (env ELSEVIER_API_KEY) — bila ada, Scopus API dipakai. */
+  elsevierApiKey?: string;
 }
 
 export type CredibilityFetcher = (url: string) => Promise<{ status: number; text: string } | null>;
@@ -100,6 +107,123 @@ async function sintaRank(journalName: string, issn: string | undefined, fetchFn:
   return rank >= 1 && rank <= 6 ? rank : null;
 }
 
+/**
+ * Best-effort: kuartil Scopus via SCImago SJR (situs resmi, gratis).
+ * Cari jurnal by ISSN (paling presisi) lalu by nama; ekstrak kuartil
+ * terbaik (Q1 paling tinggi) dari teks halaman. Kembalikan 1–4 atau
+ * null bila tidak ketemu / diblokir Cloudflare / markup berubah.
+ */
+async function sjrQuartile(
+  journalName: string,
+  issn: string | undefined,
+  fetchFn: CredibilityFetcher,
+): Promise<number | null> {
+  const queries: string[] = [];
+  if (issn) {
+    const clean = issn.replace(/[^0-9xX]/g, '');
+    if (clean.length >= 8) queries.push(clean.slice(0, 4) + '-' + clean.slice(4, 8));
+  }
+  if (journalName.trim()) queries.push(journalName.trim());
+  for (const q of queries) {
+    let res: { status: number; text: string } | null;
+    try {
+      res = await fetchFn(`https://www.scimagojr.com/journalsearch.php?q=${encodeURIComponent(q)}&tip=jou`);
+    } catch {
+      continue;
+    }
+    if (!res || res.status !== 200) continue;
+    const text = stripTags(res.text);
+    // Sanity: halaman hasil harus menyebut query (ISSN/nama jurnal),
+    // bukan halaman challenge/block.
+    const qLower = q.toLowerCase();
+    const firstWord = qLower.split(/[^a-z0-9]+/)[0] ?? '';
+    if (!text.toLowerCase().includes(qLower) && !(firstWord.length > 3 && text.toLowerCase().includes(firstWord))) {
+      continue;
+    }
+    // Pola kuartil SJR: "Q1".."Q4" di dekat kata "quartile"/"quartil",
+    // atau badge kategori. Ambil yang terbaik (angka terkecil).
+    let best: number | null = null;
+    const nearQuartile = /quartile|quartil/gi;
+    let m: RegExpExecArray | null;
+    while ((m = nearQuartile.exec(text)) !== null) {
+      const window = text.slice(Math.max(0, m.index - 120), m.index + 120);
+      const allQ = window.match(/\bQ([1-4])\b/g) ?? [];
+      for (const qstr of allQ) {
+        const n = Number(qstr.slice(1));
+        if (best === null || n < best) best = n;
+      }
+    }
+    // Fallback: badge "Quartile: Q2" / "Q2 (2023)" eksplisit.
+    if (best === null) {
+      const fm = text.match(/quartiles?\s*:?\s*\bQ([1-4])\b/i) ?? text.match(/\bQ([1-4])\b\s*\(20\d{2}\)/);
+      if (fm) best = Number(fm[1]);
+    }
+    if (best !== null) return best;
+  }
+  return null;
+}
+
+/**
+ * Kuartil Scopus via Elsevier Serial Title API (butuh API key user).
+ * Cari by ISSN; bila jurnal terindeks, ekstrak kuartil terbaik dari
+ * subject areas bila tersedia, sonst tier 'scopus' polos (terindeks).
+ * Kembalikan { quartile } atau { indexed: true } atau null.
+ */
+async function scopusViaApi(
+  issn: string | undefined,
+  apiKey: string,
+  fetchFn: CredibilityFetcher,
+): Promise<{ quartile: number | null; indexed: boolean } | null> {
+  const clean = (issn ?? '').replace(/[^0-9xX]/g, '');
+  if (clean.length < 8 || !apiKey) return null;
+  const issnFmt = clean.slice(0, 4) + '-' + clean.slice(4, 8);
+  let res: { status: number; text: string } | null;
+  try {
+    res = await fetchFn(
+      `https://api.elsevier.com/content/serial/title/issn/${issnFmt}?apiKey=${encodeURIComponent(apiKey)}&httpAccept=application/json`,
+    );
+  } catch {
+    return null;
+  }
+  if (!res || res.status !== 200) return null;
+  try {
+    const data = JSON.parse(res.text) as {
+      'serial-metadata-response'?: { entry?: Array<Record<string, unknown>> };
+    };
+    const entries = data['serial-metadata-response']?.entry ?? [];
+    if (entries.length === 0) return null;
+    // Kuartil: hanya dari field yang eksplisit berlabel quartile
+    // (jangan asal match "Q1" di judul/deskripsi — false positive).
+    let best: number | null = null;
+    const scan = (node: unknown): void => {
+      if (typeof node === 'string') return;
+      if (Array.isArray(node)) {
+        for (const v of node) scan(v);
+        return;
+      }
+      if (node && typeof node === 'object') {
+        for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+          if (/quartile/i.test(k)) {
+            // Nilai bisa string ("Q1") atau objek ({ $: "Q1" }) —
+            // stringify subtree lalu ekstrak, aman dari false positive
+            // karena hanya di dalam field berlabel quartile.
+            const qm = JSON.stringify(v).match(/\bQ([1-4])\b/i);
+            if (qm) {
+              const n = Number(qm[1]);
+              if (best === null || n < best) best = n;
+            }
+          }
+          scan(v);
+        }
+      }
+    };
+    scan(entries);
+    return { quartile: best, indexed: true };
+  } catch {
+    return null;
+  }
+}
+
 async function doajByIssn(issn: string, fetchFn: CredibilityFetcher): Promise<boolean> {
   const clean = issn.replace(/[^0-9xX]/g, '');
   if (clean.length < 8) return false;
@@ -128,8 +252,10 @@ function domainOf(url: string): string {
 
 /**
  * Nilai kredibilitas satu sumber. Urutan: DOI→Crossref (metadata) →
- * Sinta (peringkat) → DOAJ (ISSN) → heuristic domain → web/unknown.
- * Tidak pernah mengembalikan verified:true tanpa konfirmasi resmi.
+ * Scopus API (key user) → SJR/Scopus kuartil (best-effort) →
+ * Sinta (peringkat nasional) → DOAJ (ISSN) → heuristic domain →
+ * web/unknown. Tidak pernah mengembalikan verified:true tanpa
+ * konfirmasi resmi.
  */
 export async function assessCredibility(
   input: CredibilityInput,
@@ -152,7 +278,26 @@ export async function assessCredibility(
     }
   }
 
-  // Sinta: peringkat resmi bila halaman masih terbaca.
+  // Internasional dulu (permintaan Farid): Scopus kuartil via API key user.
+  if (input.elsevierApiKey && issn) {
+    const scopus = await scopusViaApi(issn, input.elsevierApiKey, fetchFn);
+    if (scopus) {
+      if (scopus.quartile !== null) {
+        const tier = `scopus-q${scopus.quartile}` as CredibilityTier;
+        return { tier, verified: true, detail: `Scopus Q${scopus.quartile} — api.elsevier.com` };
+      }
+      return { tier: 'scopus', verified: true, detail: 'terindeks Scopus — api.elsevier.com (kuartil tak tersedia di respons)' };
+    }
+  }
+
+  // Scopus kuartil via SCImago SJR (gratis, best-effort).
+  const sjr = await sjrQuartile(journalTitle || input.title, issn, fetchFn);
+  if (sjr !== null) {
+    const tier = `scopus-q${sjr}` as CredibilityTier;
+    return { tier, verified: true, detail: `Scopus Q${sjr} — scimagojr.com (SJR, data Scopus)` };
+  }
+
+  // Sinta: peringkat nasional bila halaman masih terbaca.
   const rank = await sintaRank(journalTitle || input.title, issn, fetchFn);
   if (rank !== null) {
     const tier = `sinta${rank}` as CredibilityTier;
@@ -170,13 +315,13 @@ export async function assessCredibility(
     }
   }
 
-  // Scopus tanpa API key: TIDAK PERNAH diklaim. Jelaskan di detail.
+  // Tanpa API key Elsevier dan SJR tak terjangkau: jujur di detail.
   if (!input.title.trim() && !domain) {
     return { tier: 'unknown', verified: false, detail: 'tidak cukup metadata untuk menilai' };
   }
   return {
     tier: 'web',
     verified: false,
-    detail: 'sumber web umum — peringkat Sinta/Scopus tidak terkonfirmasi (Scopus butuh API key Elsevier di Settings)',
+    detail: 'sumber web umum — peringkat Sinta/Scopus tidak terkonfirmasi (Scopus penuh butuh API key Elsevier via ELSEVIER_API_KEY)',
   };
 }

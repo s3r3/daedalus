@@ -4456,6 +4456,7 @@ export function createApp(ctx: AppContext) {
           const engine = await hooks.createEngine({
             provider,
             fetch: { searchWeb: hooks.searchWeb, fetchPage: hooks.fetchPage },
+            elsevierApiKey: process.env.ELSEVIER_API_KEY || undefined,
             onProgress: (stage, detail) => appendResearchProgress(planId, stage, detail),
           });
           let result;

@@ -15,6 +15,8 @@ import type { ResearchPlan } from './types.ts';
 export interface ResearchEngineOptions {
   provider: LLMProvider;
   fetch: ResearchFetchHooks;
+  /** API key Elsevier — diteruskan ke evidence stage untuk kuartil Scopus. */
+  elsevierApiKey?: string;
   signal?: AbortSignal;
   onProgress?: (stage: ResearchStageId, detail: string) => void;
 }
@@ -22,12 +24,14 @@ export interface ResearchEngineOptions {
 export class ResearchEngine {
   private readonly provider: LLMProvider;
   private readonly fetchHooks: ResearchFetchHooks;
+  private readonly elsevierApiKey?: string;
   private readonly signal?: AbortSignal;
   private readonly onProgress?: (stage: ResearchStageId, detail: string) => void;
 
   constructor(options: ResearchEngineOptions) {
     this.provider = options.provider;
     this.fetchHooks = options.fetch;
+    this.elsevierApiKey = options.elsevierApiKey;
     this.signal = options.signal;
     this.onProgress = options.onProgress;
   }
@@ -58,6 +62,7 @@ export class ResearchEngine {
       plan,
       provider: this.provider,
       fetch: this.fetchHooks,
+      elsevierApiKey: this.elsevierApiKey,
       signal: this.signal,
       onProgress: this.onProgress,
     });

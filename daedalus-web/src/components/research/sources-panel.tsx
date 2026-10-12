@@ -5,6 +5,8 @@ import { cn } from '../../lib/utils'
 
 const TIER_LABEL: Record<string, string> = {
   scopus: 'Scopus',
+  'scopus-q1': 'Scopus Q1', 'scopus-q2': 'Scopus Q2',
+  'scopus-q3': 'Scopus Q3', 'scopus-q4': 'Scopus Q4',
   sinta1: 'Sinta 1', sinta2: 'Sinta 2', sinta3: 'Sinta 3',
   sinta4: 'Sinta 4', sinta5: 'Sinta 5', sinta6: 'Sinta 6',
   doaj: 'DOAJ', garuda: 'Garuda', scholar: 'Scholar', web: 'Web', unknown: '?',
@@ -12,6 +14,10 @@ const TIER_LABEL: Record<string, string> = {
 
 function tierClass(tier: string): string {
   if (tier === 'scopus') return 'border-purple-500/60 text-purple-300'
+  if (tier.startsWith('scopus-q')) {
+    const q = Number(tier.slice('scopus-q'.length))
+    return q <= 2 ? 'border-purple-500/60 text-purple-300' : 'border-violet-500/50 text-violet-300'
+  }
   if (tier.startsWith('sinta')) {
     const n = Number(tier.slice(5))
     return n <= 2 ? 'border-blue-500/60 text-blue-300' : 'border-sky-500/50 text-sky-300'

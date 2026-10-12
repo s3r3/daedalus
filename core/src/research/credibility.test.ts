@@ -69,4 +69,101 @@ describe('assessCredibility', () => {
     );
     expect(c.tier).toBe('web');
   });
+
+  test('SJR: kuartil Scopus dari scimagojr.com -> scopus-qN verified true', async () => {
+    const fetch = fakeFetch({
+      'https://www.scimagojr.com': {
+        status: 200,
+        text: '<html><body>Journal of Testing ISSN 1234-5678 SJR Quartiles: Q3 (2022), Q2 (2023)</body></html>',
+      },
+    });
+    const c = await assessCredibility(
+      { url: 'https://jurnal.example.id/c', title: 'Journal of Testing', issn: '1234-5678' },
+      fetch,
+    );
+    expect(c.tier).toBe('scopus-q2');
+    expect(c.verified).toBe(true);
+    expect(c.detail).toContain('scimagojr.com');
+  });
+
+  test('SJR diblokir (Cloudflare) -> jatuh ke Sinta, bukan klaim palsu', async () => {
+    const fetch = fakeFetch({
+      'https://www.scimagojr.com': { status: 403, text: '<html><title>Just a moment...</title></html>' },
+      'https://sinta.kemdikbud.go.id': { status: 200, text: '<html><body>Jurnal Contoh Sinta 3</body></html>' },
+    });
+    const c = await assessCredibility(
+      { url: 'https://jurnal.example.id/d', title: 'Jurnal Contoh', issn: '1234-5678' },
+      fetch,
+    );
+    expect(c.tier).toBe('sinta3');
+    expect(c.verified).toBe(true);
+  });
+
+  test('SJR: halaman tak menyebut jurnal -> null, tidak false positive', async () => {
+    const fetch = fakeFetch({
+      'https://www.scimagojr.com': { status: 200, text: '<html><body>Random page Q1 quartile stuff</body></html>' },
+      'https://sinta.kemdikbud.go.id': { status: 200, text: '<html>tidak ada peringkat</html>' },
+    });
+    const c = await assessCredibility(
+      { url: 'https://jurnal.example.id/e', title: 'Zebra Quantum Review', issn: '9999-0000' },
+      fetch,
+    );
+    expect(c.tier).toBe('web');
+    expect(c.verified).toBe(false);
+  });
+
+  test('Elsevier API + key -> Scopus Q1 verified true (prioritas tertinggi)', async () => {
+    const fetch = fakeFetch({
+      'https://api.elsevier.com': {
+        status: 200,
+        text: JSON.stringify({
+          'serial-metadata-response': {
+            entry: [{
+              'dc:title': 'Journal of Testing',
+              'prism:issn': '1234-5678',
+              subjectAreaList: { subjectArea: [{ quartile: 'Q1', $: 'Medicine' }] },
+            }],
+          },
+        }),
+      },
+    });
+    const c = await assessCredibility(
+      { url: 'https://jurnal.example.id/f', title: 'Journal of Testing', issn: '1234-5678', elsevierApiKey: 'KEY' },
+      fetch,
+    );
+    expect(c.tier).toBe('scopus-q1');
+    expect(c.verified).toBe(true);
+    expect(c.detail).toContain('api.elsevier.com');
+  });
+
+  test('Elsevier API: terindeks tapi kuartil tak ada -> tier scopus polos', async () => {
+    const fetch = fakeFetch({
+      'https://api.elsevier.com': {
+        status: 200,
+        text: JSON.stringify({
+          'serial-metadata-response': { entry: [{ 'dc:title': 'Journal of Testing', 'prism:issn': '1234-5678' }] },
+        }),
+      },
+    });
+    const c = await assessCredibility(
+      { url: 'https://jurnal.example.id/g', title: 'Journal of Testing', issn: '1234-5678', elsevierApiKey: 'KEY' },
+      fetch,
+    );
+    expect(c.tier).toBe('scopus');
+    expect(c.verified).toBe(true);
+  });
+
+  test('tanpa API key -> Elsevier tidak pernah dipanggil', async () => {
+    let elsevierHit = false;
+    const fetch: CredibilityFetcher = async (url: string) => {
+      if (url.includes('api.elsevier.com')) elsevierHit = true;
+      return null;
+    };
+    const c = await assessCredibility(
+      { url: 'https://jurnal.example.id/h', title: 'Journal of Testing', issn: '1234-5678' },
+      fetch,
+    );
+    expect(elsevierHit).toBe(false);
+    expect(c.tier).toBe('web');
+  });
 });

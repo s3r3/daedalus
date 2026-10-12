@@ -88,7 +88,9 @@ export function ResearchSourcePreview() {
         <span
           className={cn(
             'rounded border px-1 text-[10px]',
-            source.credibility.tier === 'scopus' ? 'border-purple-500/60 text-purple-300' : 'border-line text-muted',
+            source.credibility.tier === 'scopus' || source.credibility.tier.startsWith('scopus-q')
+              ? 'border-purple-500/60 text-purple-300'
+              : 'border-line text-muted',
           )}
           title={source.credibility.detail ?? ''}
         >
