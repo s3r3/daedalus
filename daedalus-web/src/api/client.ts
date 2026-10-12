@@ -905,6 +905,14 @@ export const api = {
     request<{ events: ResearchProgressEvent[] }>(`/research/progress/${encodeURIComponent(planId)}`),
 
   /**
+   * Agentic Research: status run per planId — recovery bila request
+   * researchRun putus di tengah jalan. 'running' | 'done'+reportId | 'idle'.
+   */
+  researchRunStatus: (planId: string) =>
+    request<{ status: 'running' | 'done' | 'idle'; reportId?: string }>(
+      `/research/run-status/${encodeURIComponent(planId)}`,
+    ),
+  /**
    * Agentic Research: konten satu sumber untuk preview inline di panel
    * tengah. PDF tidak di-fetch (klien me-embed URL langsung).
    */

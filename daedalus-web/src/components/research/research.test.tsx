@@ -16,6 +16,7 @@ const researchGetPlanMock = vi.fn()
 const researchGetReportMock = vi.fn()
 const researchProgressMock = vi.fn()
 const researchSourceContentMock = vi.fn()
+const researchRunStatusMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
   ApiError: class ApiError extends Error {
@@ -35,6 +36,7 @@ vi.mock('../../api/client', () => ({
     researchGetReport: (...args: unknown[]) => researchGetReportMock(...args),
     researchProgress: (...args: unknown[]) => researchProgressMock(...args),
     researchSourceContent: (...args: unknown[]) => researchSourceContentMock(...args),
+    researchRunStatus: (...args: unknown[]) => researchRunStatusMock(...args),
   },
 }))
 
@@ -129,6 +131,37 @@ describe('ResearchPlanPanel (left)', () => {
     await waitFor(() => expect(researchRunMock).toHaveBeenCalledWith('plan-1'))
     await waitFor(() => expect(useDaedalusStore.getState().researchReport?.reportId).toBe('r1'))
   })
+
+  test('double-click "Jalankan riset" only fires one run (in-flight lock)', async () => {
+    let release!: () => void
+    const gate = new Promise<{ report: ReportView }>((r) => { release = () => r({ report: fixtureReport }) })
+    researchRunMock.mockReturnValue(gate)
+    useDaedalusStore.getState().setResearchPlan('plan-1', fixturePlan)
+    render(<ResearchPlanPanel />)
+    const btn = screen.getByTestId('research-run')
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+    fireEvent.click(btn)
+    await new Promise((r) => setTimeout(r, 50))
+    expect(researchRunMock).toHaveBeenCalledTimes(1)
+    release()
+    await waitFor(() => expect(useDaedalusStore.getState().researchReport?.reportId).toBe('r1'))
+  })
+
+  test('409 already_running recovers via run-status instead of "kedaluwarsa"', async () => {
+    const { ApiError } = await import('../../api/client')
+    researchRunMock.mockRejectedValue(new ApiError(409, 'already_running'))
+    researchRunStatusMock
+      .mockResolvedValueOnce({ status: 'running' })
+      .mockResolvedValueOnce({ status: 'done', reportId: 'r1' })
+    researchGetReportMock.mockResolvedValue({ report: fixtureReport })
+    useDaedalusStore.getState().setResearchPlan('plan-1', fixturePlan)
+    render(<ResearchPlanPanel />)
+    fireEvent.click(screen.getByTestId('research-run'))
+    await waitFor(() => expect(researchRunStatusMock).toHaveBeenCalledWith('plan-1'), { timeout: 10000 })
+    await waitFor(() => expect(useDaedalusStore.getState().researchReport?.reportId).toBe('r1'), { timeout: 10000 })
+    expect(useDaedalusStore.getState().researchRunError).toBeNull()
+  }, 20000)
 })
 
 describe('ResearchReportView (center)', () => {
