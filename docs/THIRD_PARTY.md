@@ -72,6 +72,20 @@ never load a skill registry.
 | Excelize (github.com/xuri/excelize/v2, v2.9.1) | BSD-3-Clause | Go library used by the `sheet-sidecar` binary to open an exceljs-produced `.xlsx` and inject native chart/pivot/slicer parts that exceljs cannot write | `Daedalus/sheet-sidecar/main.go` is Daedalus's own code: a stdin-JSON export-stage injector. It never reads `workbook.json` (the TypeScript core stays the sole source of truth), is detected like the Pratinjau Asli engines (env override, then PATH), and a missing/failing sidecar degrades the export honestly (no natives + formula-summary fallback), never silently. Spike record: `Daedalus/sheet-sidecar/README.md`. |
 | exceljs 4.4.0 | MIT | Ordinary npm dependency of `@daedalus/core`: writes XLSX values/formats/frozen panes/validations and reads XLSX on import | Listed here only because it is load-bearing for the Spreadsheet domain; governed by its package licence like every other npm dependency. |
 
+## Agentic Spreadsheet "Analis" mode — architectural pattern references (2026-10-12)
+
+No source code from these repositories was copied, translated, or vendored.
+`core/src/sheets/analysis-*.ts` is Daedalus's own TypeScript; only
+architectural patterns were adapted (per Farid's directive "riset dulu",
+research-only — no build from their code). Licence notes describe the
+*source projects*, not shipped code.
+
+| Source | Licence | Pattern adapted | Daedalus's own implementation |
+|---|---|---|---|
+| MetaGPT DataInterpreter (https://github.com/FoundationAgents/MetaGPT) | MIT | Hierarchical plan graph (action = spreadsheet operation); plan → compute → verify → revise-spec loop | `core/src/sheets/analysis-pipeline.ts`: frozen stage order ingest → profile → plan → compute → verify → synthesize → export; a failed Verify gate triggers at most 2 re-materializations with a revised plan spec. Pola arsitektur diadaptasi dari MetaGPT DataInterpreter (MIT, https://github.com/FoundationAgents/MetaGPT) — diimplementasi ulang, bukan disalin. |
+| TaskWeaver (archived reference) | MIT | Typed function catalog bounding the action space; pre-execution verification | `FORMULA_CATALOG` in `core/src/sheets/analysis-plan.ts` (re-exported from `analysis-pipeline.ts`): plan formula templates may only call catalogued functions; `validateAnalysisPlan` rejects anything outside the catalog before any cell is written |
+| reginald-francis/ai-autonomous-data-analyst | **No licence** | Deterministic dataset-agnostic profiler before the planner; two-call cheap planner; "LLM emits spec JSON only" | `core/src/sheets/analysis-profile.ts` (zero-LLM profiler) and the two-call `classifyAnalysisIntent` + `generateAnalysisPlan` in `core/src/sheets/analysis-plan.ts`. Ideas only — no code from this repository was read for reuse or copied. |
+
 ## Rules applied
 
 - Reference clones remain the pinned origins listed in `PLAN.md` §2.0.
