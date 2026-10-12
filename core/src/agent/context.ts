@@ -15,6 +15,7 @@ export type ContextManagerOptions = {
   /** Product domain of this task. Slide tasks never reach the coding prompt builder (the SlideEngine owns them); kept for callers that tag a run's domain. Absent = coding. */
   domain?: TaskDomain;
   workspaceRoot?: string;
+  /** Accepted for back-compat; ignored — vision is assumed for every model. */
   visionEnabled?: boolean;
   maxImageBytes?: number;
   maxImages?: number;
@@ -151,7 +152,6 @@ export const DIRECT_URL_SAVE_CONTRACT = [
 export class DefaultContextManager implements ContextManager {
   readonly #budget: number;
   readonly #workspaceRoot?: string;
-  readonly #visionEnabled: boolean;
   readonly #maxImageBytes: number;
   readonly #maxImages: number;
   readonly #skills: SkillInfo[];
@@ -168,7 +168,8 @@ export class DefaultContextManager implements ContextManager {
     const resolved = typeof options === 'number' ? { budget: options } : options;
     this.#budget = resolved.budget ?? 16_000;
     this.#workspaceRoot = resolved.workspaceRoot;
-    this.#visionEnabled = resolved.visionEnabled === true;
+    // NOTE: resolved.visionEnabled is accepted for back-compat but ignored:
+    // vision is assumed for every model (Farid's decision).
     this.#maxImageBytes = resolved.maxImageBytes ?? DEFAULT_MAX_IMAGE_BYTES;
     this.#maxImages = resolved.maxImages ?? DEFAULT_MAX_IMAGES;
     // Deduped by name at the door: whatever list a caller hands in, the
