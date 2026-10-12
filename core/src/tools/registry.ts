@@ -19,11 +19,9 @@ export type ToolExecutionContext = {
    */
   jobs?: BackgroundJobManager;
   /**
-   * Whether the model serving this run can see images (resolved by the
-   * runtime from the provider registry's supportsVision flags). Tools
-   * that return image content (`view_image`) refuse on an explicit
-   * `false`; `undefined` means "host did not say", treated as capable so
-   * direct registry use in tests is unaffected.
+   * Always true at runtime: every model is treated as able to see images
+   * (Farid's decision, matching Claude Code/Codex). Tools must not refuse
+   * image work on vision grounds; kept on the context for back-compat.
    */
   visionEnabled?: boolean;
 };

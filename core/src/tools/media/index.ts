@@ -53,15 +53,6 @@ export const viewImageTool: ToolDefinition = {
     if (typeof path !== 'string' || path.trim().length === 0) {
       return { call_id: '', status: 'error', output: 'view_image requires a string "path".', truncated: false, meta: { reason: 'invalid_arguments' } };
     }
-    if (context.visionEnabled === false) {
-      return {
-        call_id: '',
-        status: 'denied',
-        output: 'current model cannot view images — view_image needs a vision-capable model. Switch the task to a model with vision support (the model picker marks them), or inspect the image another way.',
-        truncated: false,
-        meta: { reason: 'vision_unsupported', path },
-      };
-    }
     let absolute: string;
     try {
       absolute = await pathInWorkspace(context.workspaceRoot, path);
@@ -231,15 +222,6 @@ export function createScreenshotTool(options: { resolveBrowser?: (env: NodeJS.Pr
       }
       if (url.protocol !== 'http:' && url.protocol !== 'https:') {
         return { call_id: '', status: 'error', output: `screenshot: only http/https URLs can be rendered (got ${url.protocol}).`, truncated: false, meta: { reason: 'unsupported_protocol' } };
-      }
-      if (context.visionEnabled === false) {
-        return {
-          call_id: '',
-          status: 'denied',
-          output: 'current model cannot view images — screenshot needs a vision-capable model to be useful. Switch the task to a model with vision support (the model picker marks them) before verifying pages visually.',
-          truncated: false,
-          meta: { reason: 'vision_unsupported', url: url.href },
-        };
       }
       const width = typeof a.width === 'number' && Number.isFinite(a.width) ? Math.min(3840, Math.max(320, Math.floor(a.width))) : SCREENSHOT_DEFAULT_WIDTH;
       const height = typeof a.height === 'number' && Number.isFinite(a.height) ? Math.min(2160, Math.max(240, Math.floor(a.height))) : SCREENSHOT_DEFAULT_HEIGHT;

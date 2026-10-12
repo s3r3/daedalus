@@ -219,7 +219,7 @@ describe('Composer Phase 8.5', () => {
     expect(textOf(await screen.findByTestId('slash-output'))).toContain('Try /help')
   })
 
-  test('image attachments warn and are stripped when the selected model is not vision-capable', async () => {
+  test('image attachments are always sent — vision is assumed for every model', async () => {
     useDaedalusStore.getState().setModels(modelOptions)
     useDaedalusStore.getState().setComposer({
       goal: 'describe this image',
@@ -228,9 +228,11 @@ describe('Composer Phase 8.5', () => {
       attachments: [{ id: 'img-1', workspacePath: '.daedalus/attachments/uploads/pic.png', name: 'pic.png', kind: 'image', size: 12, createdAt: new Date().toISOString() }],
     })
     render(<Composer />)
-    expect(textOf(screen.getByTestId('vision-warning'))).toContain('does not support vision')
+    expect(screen.queryByTestId('vision-warning')).toBeNull()
     await userEvent.click(screen.getByTestId('composer-submit'))
-    expect(mocks.createTask).toHaveBeenCalledWith(expect.objectContaining({ attachments: [] }))
+    expect(mocks.createTask).toHaveBeenCalledWith(expect.objectContaining({
+      attachments: [expect.objectContaining({ id: 'img-1', kind: 'image' })],
+    }))
   })
 
   test('upload stages the attachment returned by the gateway', async () => {

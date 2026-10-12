@@ -2475,14 +2475,12 @@ export class TaskRunner {
     return { config, model };
   }
 
-  #visionEnabledFor(options: RunOptions): boolean {
-    const selection = this.#providerSelection(options);
-    if (!selection || !this.providerRegistry) return false;
-    const modelConfig = this.#modelConfig(options);
-    if (modelConfig.models.length > 0) {
-      return modelConfig.models.some((model) => this.providerRegistry!.modelSupportsVision(selection.config, model));
-    }
-    return this.providerRegistry.modelSupportsVision(selection.config, selection.model);
+  #visionEnabledFor(_options: RunOptions): boolean {
+    // Vision is assumed for every model (Farid's decision): all models are
+    // treated as vision-capable, matching Claude Code/Codex behavior. Image
+    // bytes are always sent; whether the model can actually see them is the
+    // model's business.
+    return true;
   }
 
   /**

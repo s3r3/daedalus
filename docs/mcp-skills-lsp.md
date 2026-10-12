@@ -124,10 +124,8 @@ Two read-only tools work in every mode, Ask included:
   bytes, up to 5 MB). The picture is attached to the next model request as
   an `image_url` content block — the same carriage user uploads take —
   while the tool result itself stays a one-line placeholder, so event
-  logs and CLI/Web transcripts never carry base64. When the selected
-  model does not support vision (provider registry flags), the tool
-  refuses with `current model cannot view images` instead of silently
-  dropping the picture.
+  logs and CLI/Web transcripts never carry base64. Vision is assumed for
+  every model, so the tool never refuses on vision grounds.
 - **`search_images`** — search Openverse and Wikimedia Commons for
   openly-licensed images (both anonymous, **no API key**) and return
   structured metadata only — title, source page, image/thumbnail URLs,

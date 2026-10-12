@@ -78,8 +78,6 @@ export function seedProviderFromSettings(settings: Settings): ProviderConfig {
   });
 }
 
-const VISION_HINTS = /(?:vision|gpt-4o|gpt-4\.1|claude|gemini|llava|qwen.*vl|vl\b|multimodal)/i;
-
 export class ProviderRegistry {
   #providers = new Map<string, ProviderConfig>();
   #fetch: typeof fetch;
@@ -153,10 +151,12 @@ export class ProviderRegistry {
     }
   }
 
-  modelSupportsVision(provider: ProviderConfig, model: string): boolean {
-    if (provider.visionModels?.includes(model)) return true;
-    if (provider.supportsVision === false) return false;
-    return provider.supportsVision === true && VISION_HINTS.test(model);
+  modelSupportsVision(_provider: ProviderConfig, _model: string): boolean {
+    // Vision is assumed for every model (Farid's decision): all models are
+    // treated as vision-capable, matching Claude Code/Codex behavior. The
+    // `supportsVision` / `visionModels` config fields are still accepted for
+    // back-compat but no longer gate anything.
+    return true;
   }
 
   async #discoverModels(provider: ProviderConfig): Promise<string[]> {
