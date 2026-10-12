@@ -150,9 +150,15 @@ describe('verify failure: no report without a passing gate', () => {
 
   test('unfixable-after-retries → throws SheetPipelineError, synthesize never runs', async () => {
     const seen: string[] = [];
-    const provider = scriptedProvider({ seen }); // repair returns '{}' → invalid 3x
-    await expect(runAnalysisPipeline({ question: 'q', dataset: dataset(), plan: brokenPlan(), provider, workspaceRoot: tempWorkspace() }))
-      .rejects.toThrow(SheetPipelineError);
+    // Repair keeps returning a *valid* plan whose ref stays broken, so the
+    // verify gate — not plan validation — is what finally gives up.
+    const provider = scriptedProvider({ repair: JSON.stringify(brokenPlan()), seen });
+    const err = await runAnalysisPipeline({ question: 'q', dataset: dataset(), plan: brokenPlan(), provider, workspaceRoot: tempWorkspace() })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(SheetPipelineError);
+    // Server contract: verify failures carry code "verify_failed" → mapped to HTTP 422.
+    expect((err as { code?: string }).code).toBe('verify_failed');
+    expect(err.name).toBe('AnalysisVerifyError');
     expect(seen.some((s) => s.includes('repair an analysis plan'))).toBe(true);
     expect(seen.some((s) => s.includes('insight section'))).toBe(false);
     expect(MAX_RECOMPUTE_ATTEMPTS).toBe(2);

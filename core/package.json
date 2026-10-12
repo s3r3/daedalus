@@ -21,6 +21,7 @@
     "./sheets/analysis-profile.ts": "./src/sheets/analysis-profile.ts",
     "./sheets/analysis-plan.ts": "./src/sheets/analysis-plan.ts",
     "./sheets/analysis-pipeline.ts": "./src/sheets/analysis-pipeline.ts",
+    "./sheets/pipeline.ts": "./src/sheets/pipeline.ts",
     "./sheets/insight-report.ts": "./src/sheets/insight-report.ts"
   },
   "engines": {

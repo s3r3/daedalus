@@ -35,6 +35,22 @@ export const SUMMARY_SHEET_NAME = 'Ringkasan';
 /** Re-materializations with a revised spec after a failed verify (initial compute + these). */
 export const MAX_RECOMPUTE_ATTEMPTS = 2;
 
+/**
+ * Verify-gate failure: the ONLY error shape the server maps to 422.
+ * Extends SheetPipelineError so core callers keep catching the base;
+ * carries code "verify_failed" + issues for the server's
+ * analysisVerifyIssues() convention. Thrown only when the Verify gate
+ * itself fails — never for input/plan validation (those stay plain
+ * SheetPipelineError → 4xx/5xx).
+ */
+export class AnalysisVerifyError extends SheetPipelineError {
+  readonly code = 'verify_failed';
+  constructor(message: string, issues: string[] = []) {
+    super(message, issues);
+    this.name = 'AnalysisVerifyError';
+  }
+}
+
 /** Verify error codes a revised plan spec can plausibly fix. */
 const FIXABLE_VERIFY_CODES = new Set(['formula-error', 'broken-reference', 'circular-reference', 'recalc-error']);
 
@@ -281,7 +297,7 @@ export async function runAnalysisPipeline(input: AnalysisPipelineInput): Promise
   for (let attempt = 0; !verify.ok && attempt < MAX_RECOMPUTE_ATTEMPTS; attempt += 1) {
     const issues = verifyIssues(verify);
     if (!verify.errors.every((e) => FIXABLE_VERIFY_CODES.has(e.code))) {
-      throw new SheetPipelineError(`verify gagal (${verify.summary}): ${issues.join('; ')}`, issues);
+      throw new AnalysisVerifyError(`verify gagal (${verify.summary}): ${issues.join('; ')}`, issues);
     }
     plan = await repairAnalysisPlan(input.provider, plan, profiles, issues, signal);
     materialized = materializeSummary(input.dataset, plan, profiles);
@@ -289,7 +305,7 @@ export async function runAnalysisPipeline(input: AnalysisPipelineInput): Promise
   }
   if (!verify.ok) {
     const issues = verifyIssues(verify);
-    throw new SheetPipelineError(
+    throw new AnalysisVerifyError(
       `verify gagal setelah ${MAX_RECOMPUTE_ATTEMPTS + 1}x compute — tanpa laporan: ${issues.join('; ')}`,
       issues,
     );

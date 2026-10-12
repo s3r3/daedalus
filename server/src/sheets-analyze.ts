@@ -57,14 +57,15 @@ export type AnalysisRunResult = {
   workbook: WorkbookSpec;
   verify: { ok: boolean; summary: string; errors: unknown[]; warnings: unknown[] };
   report: InsightReport;
-  exported?: { path: string; downloadUrl: string };
+  exported?: { path: string; bytes: number };
 };
 
 /** Engine surface the server needs (provided by core's SpreadsheetEngine.runAnalysis). */
 export type AnalysisEngine = {
   runAnalysis(args: {
     question: string;
-    dataset: { kind: "workbook"; workbook: WorkbookSpec };
+    /** Already-ingested workbook — the engine analyzes this directly. */
+    dataset: WorkbookSpec;
     plan: AnalysisPlan;
     provider: LLMProvider;
   }): Promise<AnalysisRunResult>;
@@ -78,15 +79,15 @@ export type AnalysisEngine = {
 export type AnalysisCoreHooks = {
   importCsv(title: string, text: string, opts: { createdBy: string }): WorkbookSpec | Promise<WorkbookSpec>;
   importXlsx(title: string, buffer: Buffer, opts: { createdBy: string }): Promise<WorkbookSpec> | WorkbookSpec;
-  profileWorkbook(workbook: WorkbookSpec): Promise<DatasetProfile> | DatasetProfile;
+  profileWorkbook(workbook: WorkbookSpec): Promise<DatasetProfile[]>;
   classifyIntent(args: {
     question: string;
-    profiles: DatasetProfile;
+    profiles: DatasetProfile[];
     provider: LLMProvider;
   }): Promise<AnalysisIntent>;
   generatePlan(args: {
     question: string;
-    profiles: DatasetProfile;
+    profiles: DatasetProfile[];
     intent: AnalysisIntent;
     provider: LLMProvider;
   }): Promise<AnalysisPlan>;
@@ -118,12 +119,18 @@ export function defaultAnalysisHooks(): AnalysisCoreHooks {
       return mod.profileWorkbook(workbook);
     },
     classifyIntent: async ({ question, profiles, provider }) => {
-      const mod = await import("@daedalus/core/sheets/analysis-plan.ts");
-      return mod.classifyAnalysisIntent({ question, profiles, provider });
+      const [mod, pipeline] = await Promise.all([
+        import("@daedalus/core/sheets/analysis-plan.ts"),
+        import("@daedalus/core/sheets/pipeline.ts"),
+      ]);
+      // Core signature is positional (provider, question, profiles);
+      // retry budget = MAX_STAGE_ATTEMPTS per the final decision.
+      const { complexity } = await mod.classifyAnalysisIntent(provider, question, profiles);
+      return { kind: "analysis", complexity, retryBudget: pipeline.MAX_STAGE_ATTEMPTS };
     },
-    generatePlan: async ({ question, profiles, intent, provider }) => {
+    generatePlan: async ({ question, profiles, provider }) => {
       const mod = await import("@daedalus/core/sheets/analysis-plan.ts");
-      return mod.generateAnalysisPlan({ question, profiles, intent, provider });
+      return mod.generateAnalysisPlan(provider, question, profiles);
     },
     createEngine: async ({ provider, bus, store, workspaceRoot }) => {
       const [{ SpreadsheetEngine }, core] = await Promise.all([
@@ -195,7 +202,7 @@ export type StagedAnalysisPlan = {
   /** Ingested workbook: ground truth the engine analyzes. */
   workbook: WorkbookSpec;
   plan: AnalysisPlan;
-  profiles: DatasetProfile;
+  profiles: DatasetProfile[];
   complexity: AnalysisIntent["complexity"];
   createdAt: number;
 };

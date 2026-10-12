@@ -4311,7 +4311,7 @@ export function createApp(ctx: AppContext) {
           try {
             result = await engine.runAnalysis({
               question: staged.question,
-              dataset: { kind: "workbook", workbook: staged.workbook },
+              dataset: staged.workbook,
               plan: staged.plan,
               provider,
             });

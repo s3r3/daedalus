@@ -33,7 +33,7 @@ function fakeHooks(overrides: Partial<AnalysisCoreHooks> = {}): AnalysisCoreHook
   return {
     importCsv: (title) => stubWorkbook(title),
     importXlsx: (title) => stubWorkbook(title),
-    profileWorkbook: () => ({ rowCount: 3, columns: ['region', 'produk', 'pendapatan'] }) as never,
+    profileWorkbook: () => [{ rowCount: 3, columns: ['region', 'produk', 'pendapatan'] }] as never,
     classifyIntent: ({ question }) => ({ kind: 'sales-summary', complexity: 'simple', retryBudget: 2, question }),
     generatePlan: ({ question, intent }) => ({
       question,
@@ -147,7 +147,7 @@ describe('POST /sheets/analyze/plan', () => {
     expect(typeof res.body.planId).toBe('string')
     expect((res.body.plan as Record<string, unknown>).question).toBe('berapa total pendapatan per region?')
     expect((res.body.plan as Record<string, unknown>).metrics).toEqual(['total_pendapatan'])
-    expect(res.body.profiles).toMatchObject({ rowCount: 3 })
+    expect(res.body.profiles[0]).toMatchObject({ rowCount: 3 })
     expect(res.body.complexity).toBe('simple')
   })
 
@@ -202,7 +202,7 @@ describe('GET /sheets/analyze/plan/:planId', () => {
     expect(res.status).toBe(200)
     expect(res.body.planId).toBe(planId)
     expect(res.body.question).toBe('berapa total pendapatan per region?')
-    expect(res.body.profiles).toMatchObject({ rowCount: 3 })
+    expect(res.body.profiles[0]).toMatchObject({ rowCount: 3 })
     expect((res.body.plan as Record<string, unknown>).groupBys).toEqual(['region'])
   })
 

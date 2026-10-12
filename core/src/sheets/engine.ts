@@ -15,7 +15,6 @@ import {
   type BlueprintColumn,
   type SheetExportRecord,
   type SheetSpec,
-  type VerifyReport,
   type WorkbookSpec,
 } from './workbook.ts';
 import { newSheet, newWorkbook, readWorkbook, summarizeWorkbook, validateWorkbook, workbookPaths, writeWorkbook } from './store.ts';
@@ -27,7 +26,6 @@ import { composeDashboard } from './dashboard.ts';
 import { fillSheetRowsStage, generateBlueprintStage, SheetPipelineError, structuredCall, type BlueprintStageInput } from './pipeline.ts';
 import { runAnalysisPipeline, type AnalysisPipelineResult } from './analysis-pipeline.ts';
 import type { AnalysisPlan } from './analysis-plan.ts';
-import type { InsightReport } from './insight-report.ts';
 
 /**
  * SpreadsheetEngine: the Spreadsheet domain's own task executor,
