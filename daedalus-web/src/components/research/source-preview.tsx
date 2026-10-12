@@ -21,6 +21,7 @@ export function ResearchSourcePreview() {
   const [content, setContent] = useState<ResearchSourceContent | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [view, setView] = useState<'embed' | 'reader'>('embed')
 
   useEffect(() => {
     if (!report || !source) return
@@ -43,6 +44,10 @@ export function ResearchSourcePreview() {
     }
   }, [report, source])
 
+  useEffect(() => {
+    setView('embed')
+  }, [sourceId])
+
   if (!source) {
     return (
       <div className="flex flex-1 items-center justify-center text-xs text-muted" data-testid="research-source-preview-empty">
@@ -54,7 +59,10 @@ export function ResearchSourcePreview() {
   const paragraphs = (content?.text ?? '').split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
   // Embed langsung "kek buka di browser" bila situs mengizinkan; PDF selalu
   // di-embed (viewer bawaan browser) selama frameable.
-  const embed = content?.frameable === true
+  const canEmbed = content?.frameable === true
+  const hasText = paragraphs.length > 0
+  const showEmbed = canEmbed && view === 'embed'
+  const showReader = hasText && (!canEmbed || view === 'reader')
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="research-source-preview">
@@ -94,6 +102,26 @@ export function ResearchSourcePreview() {
           <ExternalLink className="size-3" aria-hidden />
           Tab baru
         </a>
+        {canEmbed && hasText ? (
+          <div className="inline-flex overflow-hidden rounded border border-line text-[10px]">
+            <button
+              type="button"
+              data-testid="research-preview-view-embed"
+              onClick={() => setView('embed')}
+              className={cn('px-1.5 py-0.5', view === 'embed' ? 'bg-primary/15 text-primary' : 'text-muted hover:text-foreground')}
+            >
+              Browser
+            </button>
+            <button
+              type="button"
+              data-testid="research-preview-view-reader"
+              onClick={() => setView('reader')}
+              className={cn('px-1.5 py-0.5', view === 'reader' ? 'bg-primary/15 text-primary' : 'text-muted hover:text-foreground')}
+            >
+              Mode baca
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {loading ? (
@@ -107,7 +135,7 @@ export function ResearchSourcePreview() {
             {source.url}
           </a>
         </div>
-      ) : embed ? (
+      ) : showEmbed ? (
         <iframe
           src={source.url}
           title={source.title}
@@ -115,11 +143,11 @@ export function ResearchSourcePreview() {
           className="min-h-0 flex-1 border-0 bg-white"
           sandbox="allow-same-origin allow-scripts allow-popups"
         />
-      ) : paragraphs.length > 0 ? (
+      ) : showReader ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3" data-testid="research-preview-reader">
           <p className="mb-3 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
             <FileText className="size-3" aria-hidden />
-            Mode baca — situs memblokir embed langsung
+            Mode baca{!canEmbed ? ' — situs memblokir embed langsung' : ''}
             {content?.cached ? ' · dari cache run' : ''}
           </p>
           {paragraphs.slice(0, 60).map((p, i) => (

@@ -215,6 +215,11 @@ describe('ResearchSourcePreview (center)', () => {
     render(<ResearchSourcePreview />)
     await waitFor(() => expect(screen.getByTestId('research-preview-embed')).toBeTruthy())
     expect((screen.getByTestId('research-preview-embed') as HTMLIFrameElement).src).toContain('sinta.kemdikbud.go.id')
+    // toggle to reader mode and back
+    fireEvent.click(screen.getByTestId('research-preview-view-reader'))
+    await waitFor(() => expect(screen.getByTestId('research-preview-reader')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('research-preview-view-embed'))
+    await waitFor(() => expect(screen.getByTestId('research-preview-embed')).toBeTruthy())
   })
 
   test('back button returns to the report', async () => {
