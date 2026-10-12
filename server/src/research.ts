@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createProviderForConfig } from "@daedalus/core";
 import type { EventBus, LLMProvider, TaskStore } from "@daedalus/core";
 // Contract types from the parallel core worker (core/src/research/*).
@@ -89,6 +93,203 @@ async function fetchWithTimeout(url: string, accept: string): Promise<Response |
   } catch {
     return null;
   }
+}
+
+/**
+ * Preview sumber "kek pembaca pdf": semua tipe dokumen (PDF, DOCX/DOC/ODT,
+ * halaman web, dll) disajikan sebagai PDF ke klien, yang me-render-nya
+ * dengan PDF viewer bawaan browser. Tanpa thumbnail sidebar — untuk dibaca.
+ */
+
+export type ResearchDocKind = "pdf" | "office" | "html" | "unknown";
+
+const OFFICE_EXTS = new Set([
+  "doc", "docx", "odt", "rtf", "txt",
+  "ppt", "pptx", "odp", "pps", "ppsx",
+  "xls", "xlsx", "ods", "csv",
+]);
+
+const MAX_DOC_BYTES = 50 * 1024 * 1024;
+const DOC_CONVERT_TIMEOUT_MS = 90_000;
+
+/** Klasifikasi jenis dokumen dari ekstensi URL / content-type. */
+export function detectResearchDocKind(url: string, contentType = ""): ResearchDocKind {
+  const ct = contentType.toLowerCase();
+  if (ct.includes("application/pdf")) return "pdf";
+  if (ct.includes("text/html") || ct.includes("application/xhtml")) return "html";
+  if (/officedocument|msword|ms-excel|ms-powerpoint|opendocument|\brtf\b|text\/plain|text\/csv/.test(ct)) {
+    return "office";
+  }
+  const clean = url.split("?")[0]!.split("#")[0]!;
+  const last = clean.split("/").pop() ?? "";
+  const dotIdx = last.lastIndexOf(".");
+  const ext = dotIdx > 0 ? last.slice(dotIdx + 1).toLowerCase() : "";
+  if (ext === "pdf") return "pdf";
+  if (OFFICE_EXTS.has(ext)) return "office";
+  if (ext === "html" || ext === "htm" || ext === "") return "html";
+  return "unknown";
+}
+
+/** Seam konversi dokumen → PDF (test menginject fake; produksi pakai tool asli). */
+export type ResearchDocHooks = {
+  fetchBytes(url: string): Promise<{ bytes: Buffer; contentType: string } | null>;
+  officeToPdf(bytes: Buffer, ext: string): Promise<Buffer | null>;
+  htmlToPdf(url: string): Promise<Buffer | null>;
+};
+
+async function defaultFetchBytes(url: string): Promise<{ bytes: Buffer; contentType: string } | null> {
+  if (!/^https?:\/\//i.test(url)) return null;
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 60_000);
+    const res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        "User-Agent": "Daedalus-Research/1.0 (research agent; contact: research)",
+        "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
+      },
+      redirect: "follow",
+    });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length === 0 || buf.length > MAX_DOC_BYTES) return null;
+    return { bytes: buf, contentType: res.headers.get("content-type") ?? "" };
+  } catch {
+    return null;
+  }
+}
+
+function execFileAsync(file: string, args: string[], timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { timeout: timeoutMs }, (error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+/** DOCX/DOC/ODT/dll → PDF via LibreOffice headless. */
+async function defaultOfficeToPdf(bytes: Buffer, ext: string): Promise<Buffer | null> {
+  const dir = await mkdtemp(join(tmpdir(), "daedalus-doc-"));
+  try {
+    const input = join(dir, `input.${ext || "docx"}`);
+    await writeFile(input, bytes);
+    await execFileAsync("soffice", [
+      "--headless", "--nologo", "--nolockcheck",
+      "--convert-to", "pdf", "--outdir", dir, input,
+    ], DOC_CONVERT_TIMEOUT_MS);
+    const pdf = await readFile(join(dir, "input.pdf"));
+    return pdf.length > 0 ? pdf : null;
+  } catch {
+    return null;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/** Halaman web → PDF via headless Chromium (print-to-PDF). */
+async function defaultHtmlToPdf(url: string): Promise<Buffer | null> {
+  let browser: { close(): Promise<void> } | null = null;
+  try {
+    const { chromium } = await import("playwright");
+    browser = await chromium.launch({ headless: true });
+    const page = await (browser as import("playwright").Browser).newPage();
+    const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => null);
+    if (!res || !res.ok()) {
+      await page.close().catch(() => undefined);
+      return null;
+    }
+    await page.waitForTimeout(1500);
+    const pdf = await page.pdf({ format: "A4", printBackground: true });
+    await page.close().catch(() => undefined);
+    return pdf.length > 0 ? Buffer.from(pdf) : null;
+  } catch {
+    return null;
+  } finally {
+    if (browser) await browser.close().catch(() => undefined);
+  }
+}
+
+export function defaultResearchDocHooks(): ResearchDocHooks {
+  return {
+    fetchBytes: defaultFetchBytes,
+    officeToPdf: defaultOfficeToPdf,
+    htmlToPdf: defaultHtmlToPdf,
+  };
+}
+
+/** Cache PDF hasil konversi (per URL, TTL 1 jam, cap 20 — PDF bisa besar). */
+const DOC_PDF_CACHE_TTL_MS = 60 * 60 * 1000;
+const DOC_PDF_CACHE_MAX = 20;
+const docPdfCache = new Map<string, { pdf: Buffer; fetchedAt: number }>();
+
+export function clearResearchDocCacheForTest(): void {
+  docPdfCache.clear();
+}
+
+function getCachedDocPdf(url: string): Buffer | undefined {
+  const entry = docPdfCache.get(url);
+  if (!entry) return undefined;
+  if (Date.now() - entry.fetchedAt >= DOC_PDF_CACHE_TTL_MS) {
+    docPdfCache.delete(url);
+    return undefined;
+  }
+  return entry.pdf;
+}
+
+function cacheDocPdf(url: string, pdf: Buffer): void {
+  if (docPdfCache.size >= DOC_PDF_CACHE_MAX) {
+    const oldest = docPdfCache.keys().next();
+    if (!oldest.done) docPdfCache.delete(oldest.value);
+  }
+  docPdfCache.set(url, { pdf, fetchedAt: Date.now() });
+}
+
+export type ResearchSourceDocument =
+  | { pdf: Buffer; title: string; kind: ResearchDocKind }
+  | "report_not_found"
+  | "source_not_found"
+  | "unsupported"
+  | null;
+
+/**
+ * Ambil satu sumber sebagai PDF untuk preview ala pembaca PDF:
+ * PDF langsung, Office via LibreOffice, HTML via Chromium print-to-PDF.
+ * Return "unsupported" bila tipe tak dikenal, null bila gagal diambil/dikonversi.
+ */
+export async function getResearchSourceDocument(
+  reportId: string,
+  sourceId: string,
+  docHooks: ResearchDocHooks,
+): Promise<ResearchSourceDocument> {
+  const report = getResearchReport(reportId);
+  if (!report) return "report_not_found";
+  const source = report.sources.find((s) => s.id === sourceId);
+  if (!source) return "source_not_found";
+  const url = source.url;
+
+  const cached = getCachedDocPdf(url);
+  if (cached) return { pdf: cached, title: source.title || url, kind: "pdf" };
+
+  const fetched = await docHooks.fetchBytes(url).catch(() => null);
+  if (!fetched) return null;
+  const kind = detectResearchDocKind(url, fetched.contentType);
+  let pdf: Buffer | null = null;
+  if (kind === "pdf") {
+    pdf = fetched.bytes;
+  } else if (kind === "office") {
+    const clean = url.split("?")[0]!.split("#")[0]!;
+    const ext = (clean.split("/").pop() ?? "").split(".").pop()?.toLowerCase() ?? "docx";
+    pdf = await docHooks.officeToPdf(fetched.bytes, ext).catch(() => null);
+  } else if (kind === "html") {
+    pdf = await docHooks.htmlToPdf(url).catch(() => null);
+  } else {
+    return "unsupported";
+  }
+  if (!pdf || pdf.length === 0) return null;
+  cacheDocPdf(url, pdf);
+  return { pdf, title: source.title || url, kind };
 }
 
 /**

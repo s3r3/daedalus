@@ -141,9 +141,11 @@ import {
 } from "./sheets-analyze.ts";
 import {
   appendResearchProgress,
+  defaultResearchDocHooks,
   getResearchProgress,
   getResearchReport,
   getResearchSourceContent,
+  getResearchSourceDocument,
   peekStagedResearchPlan,
   researchProviderFromRequest,
   researchVerifyIssues,
@@ -152,6 +154,7 @@ import {
   storeResearchReport,
   takeStagedResearchPlan,
   type ResearchCoreHooks,
+  type ResearchDocHooks,
 } from "./research.ts";
 /**
  * REST + WebSocket gateway (PLAN.md §3.0, §3.6). Commands and reads only —
@@ -241,6 +244,12 @@ export type AppContext = {
    * Production resolves lazy core imports; tests inject fakes here.
    */
   researchHooks?: ResearchCoreHooks;
+  /**
+   * Agentic Research: seam dokumen → PDF untuk preview ala pembaca PDF
+   * (fetchBytes / officeToPdf / htmlToPdf). Production pakai tool asli
+   * (fetch, LibreOffice, Chromium); tests inject fakes here.
+   */
+  researchDocHooks?: ResearchDocHooks;
 };
 
 export function createContext(overrides: Partial<AppContext> = {}): AppContext {
@@ -279,6 +288,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     dokumenPreview: overrides.dokumenPreview,
     analysisHooks: overrides.analysisHooks,
     researchHooks: overrides.researchHooks,
+    researchDocHooks: overrides.researchDocHooks,
   };
 }
 
@@ -4528,6 +4538,50 @@ export function createApp(ctx: AppContext) {
             return;
           }
           sendJson(res, 200, { content, request_id: requestId });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Agentic Research: satu sumber sebagai PDF untuk preview ala pembaca PDF
+    // (PDF langsung, Office via LibreOffice, HTML via Chromium print-to-PDF).
+    // 404 laporan/sumber tak dikenal, 415 tipe tak didukung, 502 gagal konversi.
+    const researchDocMatch = /^\/research\/report\/([^/]+)\/source\/([^/]+)\/document$/.exec(url.pathname);
+    if (method === "GET" && researchDocMatch) {
+      void (async () => {
+        try {
+          const doc = await getResearchSourceDocument(
+            researchDocMatch[1] ?? "",
+            researchDocMatch[2] ?? "",
+            ctx.researchDocHooks ?? defaultResearchDocHooks(),
+          );
+          if (doc === "report_not_found") {
+            sendJson(res, 404, { error: "report_not_found", request_id: requestId });
+            return;
+          }
+          if (doc === "source_not_found") {
+            sendJson(res, 404, { error: "source_not_found", request_id: requestId });
+            return;
+          }
+          if (doc === "unsupported") {
+            sendJson(res, 415, { error: "unsupported_document", request_id: requestId });
+            return;
+          }
+          if (!doc) {
+            sendJson(res, 502, { error: "document_unavailable", request_id: requestId });
+            return;
+          }
+          const safeName = (doc.title || "sumber").replace(/[^\w\-. ]+/g, "").trim().slice(0, 60) || "sumber";
+          res.writeHead(200, {
+            "content-type": "application/pdf",
+            "content-length": doc.pdf.length,
+            "content-disposition": `inline; filename="${safeName}.pdf"`,
+            "cache-control": "private, max-age=3600",
+            ...CORS_HEADERS,
+          });
+          res.end(doc.pdf);
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }

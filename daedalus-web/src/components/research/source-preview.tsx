@@ -2,15 +2,14 @@ import { useEffect, useState } from 'react'
 import { ArrowLeft, ExternalLink, FileText } from 'lucide-react'
 import { useDaedalusStore } from '../../state/taskStore'
 import { api } from '../../api/client'
-import type { ResearchSourceContent } from '../../api/client'
 import { cn } from '../../lib/utils'
 
 /**
- * ResearchSourcePreview: preview inline satu sumber di panel tengah —
- * "kek buka di browser": halaman asli di-embed langsung (PDF tampil dengan
- * PDF viewer bawaan browser). Dibuka dengan mengklik [sN] di laporan atau
- * judul sumber di panel kanan. Bila situs memblokir embed (X-Frame-Options /
- * CSP), fallback jujur ke mode baca dari konten yang di-cache saat run.
+ * ResearchSourcePreview: preview inline satu sumber di panel tengah,
+ * "kek pembaca pdf kek biasa" — semua tipe sumber (PDF, DOCX, halaman web,
+ * dll) disajikan server sebagai PDF dan di-render PDF viewer bawaan browser.
+ * Tanpa thumbnail sidebar — untuk dibaca. Bila konversi gagal, fallback
+ * jujur ke mode baca dari konten yang di-cache saat run.
  */
 export function ResearchSourcePreview() {
   const report = useDaedalusStore((state) => state.researchReport)
@@ -18,37 +17,48 @@ export function ResearchSourcePreview() {
   const setPreviewSourceId = useDaedalusStore((state) => state.setResearchPreviewSourceId)
 
   const source = report?.sources.find((s) => s.id === sourceId)
-  const [content, setContent] = useState<ResearchSourceContent | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [view, setView] = useState<'embed' | 'reader'>('embed')
+  const [docState, setDocState] = useState<'loading' | 'ready' | 'fallback'>('loading')
+  const [readerText, setReaderText] = useState<string | null>(null)
+
+  const docUrl = report && source
+    ? `/research/report/${encodeURIComponent(report.reportId)}/source/${encodeURIComponent(source.id)}/document`
+    : null
 
   useEffect(() => {
-    if (!report || !source) return
+    if (!report || !source || !docUrl) return
     let cancelled = false
-    setLoading(true)
-    setError(null)
-    setContent(null)
-    api.researchSourceContent(report.reportId, source.id)
+    setDocState('loading')
+    setReaderText(null)
+    // HEAD request: cek dokumen tersedia tanpa download penuh dulu
+    fetch(docUrl, { method: 'HEAD' })
       .then((res) => {
-        if (!cancelled) setContent(res.content)
+        if (cancelled) return
+        if (res.ok && (res.headers.get('content-type') ?? '').includes('application/pdf')) {
+          setDocState('ready')
+        } else {
+          // 415/502/dll → fallback ke mode baca
+          return api.researchSourceContent(report.reportId, source.id).then(
+            (r) => {
+              if (!cancelled) {
+                setReaderText(r.content.text || null)
+                setDocState('fallback')
+              }
+            },
+            () => {
+              if (!cancelled) setDocState('fallback')
+            },
+          )
+        }
       })
       .catch(() => {
-        if (!cancelled) setError('Sumber tidak bisa dimuat — buka di tab baru.')
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (!cancelled) setDocState('fallback')
       })
     return () => {
       cancelled = true
     }
-  }, [report, source])
+  }, [report, source, docUrl])
 
-  useEffect(() => {
-    setView('embed')
-  }, [sourceId])
-
-  if (!source) {
+  if (!source || !report) {
     return (
       <div className="flex flex-1 items-center justify-center text-xs text-muted" data-testid="research-source-preview-empty">
         Sumber tidak ditemukan.
@@ -56,13 +66,7 @@ export function ResearchSourcePreview() {
     )
   }
 
-  const paragraphs = (content?.text ?? '').split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
-  // Embed langsung "kek buka di browser" bila situs mengizinkan; PDF selalu
-  // di-embed (viewer bawaan browser) selama frameable.
-  const canEmbed = content?.frameable === true
-  const hasText = paragraphs.length > 0
-  const showEmbed = canEmbed && view === 'embed'
-  const showReader = hasText && (!canEmbed || view === 'reader')
+  const paragraphs = (readerText ?? '').split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="research-source-preview">
@@ -102,53 +106,24 @@ export function ResearchSourcePreview() {
           <ExternalLink className="size-3" aria-hidden />
           Tab baru
         </a>
-        {canEmbed && hasText ? (
-          <div className="inline-flex overflow-hidden rounded border border-line text-[10px]">
-            <button
-              type="button"
-              data-testid="research-preview-view-embed"
-              onClick={() => setView('embed')}
-              className={cn('px-1.5 py-0.5', view === 'embed' ? 'bg-primary/15 text-primary' : 'text-muted hover:text-foreground')}
-            >
-              Browser
-            </button>
-            <button
-              type="button"
-              data-testid="research-preview-view-reader"
-              onClick={() => setView('reader')}
-              className={cn('px-1.5 py-0.5', view === 'reader' ? 'bg-primary/15 text-primary' : 'text-muted hover:text-foreground')}
-            >
-              Mode baca
-            </button>
-          </div>
-        ) : null}
       </div>
 
-      {loading ? (
+      {docState === 'loading' ? (
         <div className="flex flex-1 items-center justify-center text-xs text-muted" data-testid="research-preview-loading">
-          Memuat sumber…
+          Menyiapkan dokumen…
         </div>
-      ) : error ? (
-        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center" data-testid="research-preview-error">
-          <p className="text-xs text-error">{error}</p>
-          <a href={source.url} target="_blank" rel="noreferrer" className="text-[11px] text-primary underline">
-            {source.url}
-          </a>
-        </div>
-      ) : showEmbed ? (
+      ) : docState === 'ready' && docUrl ? (
         <iframe
-          src={source.url}
+          src={docUrl}
           title={source.title}
-          data-testid="research-preview-embed"
-          className="min-h-0 flex-1 border-0 bg-white"
-          sandbox="allow-same-origin allow-scripts allow-popups"
+          data-testid="research-preview-pdf"
+          className="min-h-0 flex-1 border-0 bg-[#1a1a1a]"
         />
-      ) : showReader ? (
+      ) : paragraphs.length > 0 ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3" data-testid="research-preview-reader">
           <p className="mb-3 flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
             <FileText className="size-3" aria-hidden />
-            Mode baca{!canEmbed ? ' — situs memblokir embed langsung' : ''}
-            {content?.cached ? ' · dari cache run' : ''}
+            Mode baca — dokumen tidak bisa disiapkan sebagai PDF
           </p>
           {paragraphs.slice(0, 60).map((p, i) => (
             <p key={i} className="mb-2.5 text-[12.5px] leading-relaxed text-foreground/90">
@@ -157,8 +132,17 @@ export function ResearchSourcePreview() {
           ))}
         </div>
       ) : (
-        <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-muted" data-testid="research-preview-empty-content">
-          Konten teks sumber kosong.
+        <div className="flex flex-1 flex-col items-center justify-center gap-2 px-4 text-center" data-testid="research-preview-error">
+          <p className="text-xs text-muted">Dokumen sumber tidak bisa ditampilkan.</p>
+          <a
+            href={source.url}
+            target="_blank"
+            rel="noreferrer"
+            data-testid="research-preview-external-fallback"
+            className="text-[11px] text-primary underline"
+          >
+            Buka di tab baru
+          </a>
         </div>
       )}
     </div>

@@ -8,10 +8,13 @@ import { createApp, createContext } from '../src/app.ts'
 import {
   cacheFetchedPage,
   clearFetchedPageCacheForTest,
+  clearResearchDocCacheForTest,
+  detectResearchDocKind,
   expireStagedResearchPlanForTest,
   probeFrameable,
   storeResearchReport,
   type ResearchCoreHooks,
+  type ResearchDocHooks,
   type ResearchPlan,
   type ResearchReport,
 } from '../src/research.ts'
@@ -227,6 +230,114 @@ describe('POST /research/run', () => {
     expect(first.status).toBe(200)
     const second = await req(base, 'POST', '/research/run', { planId })
     expect(second.status).toBe(410)
+  })
+})
+
+describe('GET /research/report/:reportId/source/:sourceId/document', () => {
+  const fakePdf = Buffer.from('%PDF-1.4 fake')
+
+  function fakeDocHooks(overrides: Partial<ResearchDocHooks> = {}) {
+    return {
+      fetchBytes: async (url: string) => ({
+        bytes: Buffer.from(`bytes:${url}`),
+        contentType: url.endsWith('.pdf') ? 'application/pdf' : 'text/html',
+      }),
+      officeToPdf: async () => fakePdf,
+      htmlToPdf: async () => fakePdf,
+      ...overrides,
+    }
+  }
+
+  async function listenWithDocHooks(docHooks: ResearchDocHooks) {
+    tmp = mkdtempSync(join(tmpdir(), 'daedalus-research-doc-'))
+    workspace = mkdtempSync(join(tmpdir(), 'daedalus-research-docws-'))
+    const settings = loadSettings()
+    const ctx = createContext({
+      store: new TaskStore(join(tmp, 'state')),
+      bus: new EventBus(),
+      cwd: workspace,
+      researchHooks: fakeHooks(),
+      researchDocHooks: docHooks,
+      settings: {
+        ...settings,
+        llm: { ...settings.llm, baseUrl: 'http://127.0.0.1:1', apiKey: 'test-key', model: 'test-model' },
+      },
+    })
+    server = createApp(ctx)
+    await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+    return `http://127.0.0.1:${port}`
+  }
+
+  test('serves a PDF source as application/pdf', async () => {
+    clearResearchDocCacheForTest()
+    const base = await listenWithDocHooks(fakeDocHooks())
+    const pdfReport: ResearchReport = {
+      ...stubReport(),
+      reportId: 'rdoc',
+      sources: [{ ...stubReport().sources[0]!, id: 'spdf', url: 'https://contoh.id/paper.pdf' }],
+    }
+    storeResearchReport(pdfReport)
+    const res = await fetch(`${base}/research/report/rdoc/source/spdf/document`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/pdf')
+    const buf = Buffer.from(await res.arrayBuffer())
+    expect(buf.toString()).toContain('bytes:https://contoh.id/paper.pdf')
+  })
+
+  test('converts an office source via the doc hooks', async () => {
+    clearResearchDocCacheForTest()
+    const converted = Buffer.from('%PDF-1.4 converted')
+    const base = await listenWithDocHooks(fakeDocHooks({
+      fetchBytes: async () => ({ bytes: Buffer.from('docx-bytes'), contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' }),
+      officeToPdf: async () => converted,
+    }))
+    const docReport: ResearchReport = {
+      ...stubReport(),
+      reportId: 'rdoc2',
+      sources: [{ ...stubReport().sources[0]!, id: 'sdoc', url: 'https://contoh.id/paper.docx' }],
+    }
+    storeResearchReport(docReport)
+    const res = await fetch(`${base}/research/report/rdoc2/source/sdoc/document`)
+    expect(res.status).toBe(200)
+    const buf = Buffer.from(await res.arrayBuffer())
+    expect(buf.equals(converted)).toBe(true)
+  })
+
+  test('404/415/502 are honest', async () => {
+    clearResearchDocCacheForTest()
+    const base = await listenWithDocHooks(fakeDocHooks())
+    expect((await fetch(`${base}/research/report/nope/source/s1/document`)).status).toBe(404)
+    storeResearchReport(stubReport())
+    expect((await fetch(`${base}/research/report/r1/source/nope/document`)).status).toBe(404)
+    // unknown type
+    const weirdHooks = fakeDocHooks({
+      fetchBytes: async () => ({ bytes: Buffer.from('weird'), contentType: 'application/x-unknown' }),
+    })
+    const weirdBase = await listenWithDocHooks(weirdHooks)
+    const weird: ResearchReport = {
+      ...stubReport(),
+      reportId: 'rweird',
+      sources: [{ ...stubReport().sources[0]!, id: 'sw', url: 'https://contoh.id/file.xyz' }],
+    }
+    storeResearchReport(weird)
+    const unsup = await fetch(`${weirdBase}/research/report/rweird/source/sw/document`)
+    expect(unsup.status).toBe(415)
+    // fetch failure
+    const failBase = await listenWithDocHooks(fakeDocHooks({ fetchBytes: async () => null }))
+    storeResearchReport(stubReport())
+    const fail = await fetch(`${failBase}/research/report/r1/source/s1/document`)
+    expect(fail.status).toBe(502)
+  })
+
+  test('detectResearchDocKind classifies by content-type and extension', async () => {
+    expect(detectResearchDocKind('https://a.id/x.pdf')).toBe('pdf')
+    expect(detectResearchDocKind('https://a.id/x', 'application/pdf')).toBe('pdf')
+    expect(detectResearchDocKind('https://a.id/x.docx')).toBe('office')
+    expect(detectResearchDocKind('https://a.id/x', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')).toBe('office')
+    expect(detectResearchDocKind('https://a.id/artikel')).toBe('html')
+    expect(detectResearchDocKind('https://a.id/x', 'text/html')).toBe('html')
+    expect(detectResearchDocKind('https://a.id/file.xyz')).toBe('unknown')
   })
 })
 
