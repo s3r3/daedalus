@@ -117,7 +117,7 @@ export function ResearchSourcePreview() {
           src={docUrl}
           title={source.title}
           data-testid="research-preview-pdf"
-          className="min-h-0 flex-1 border-0 bg-[#1a1a1a]"
+          className="min-h-0 flex-1 border-0 bg-surface-base"
         />
       ) : paragraphs.length > 0 ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3" data-testid="research-preview-reader">
