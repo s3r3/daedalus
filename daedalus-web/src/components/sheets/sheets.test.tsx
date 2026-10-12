@@ -527,7 +527,9 @@ describe('SheetComposerControls (Susun/Analis toggle)', () => {
     fireEvent.click(screen.getByTestId('sheet-mode-analis'))
     expect(useDaedalusStore.getState().sheetOptions.mode).toBe('analis')
     expect(screen.getByTestId('sheet-mode-analis').getAttribute('aria-pressed')).toBe('true')
-    expect(screen.getByTestId('sheet-dataset-upload')).toBeTruthy()
+    // No dedicated upload button: the dataset comes from the chat's own
+    // upload control ("Jadikan dataset" on the attachment chip).
+    expect(screen.queryByTestId('sheet-dataset-upload')).toBeNull()
     expect(screen.getByTestId('sheet-dataset-workbook')).toBeTruthy()
     expect(screen.queryByTestId('sheet-composer-note')).toBeNull()
 
@@ -536,12 +538,17 @@ describe('SheetComposerControls (Susun/Analis toggle)', () => {
     expect(screen.getByTestId('sheet-composer-note')).toBeTruthy()
   })
 
-  test('uploading a CSV stages the dataset; Buat rencana calls /sheets/analyze/plan with the text inline', async () => {
+  test('readDatasetFile parses a CSV for the dataset; Buat rencana calls /sheets/analyze/plan with the text inline', async () => {
+    const { readDatasetFile } = await import('../../lib/analysis-dataset')
+    const file = new File(['a,b'], 'jualan.csv', { type: 'text/csv' })
+    const dataset = await readDatasetFile(file)
+    expect(dataset).toEqual({ kind: 'csv', text: 'a,b', name: 'jualan.csv' })
+
     render(<SheetComposerControls />)
     fireEvent.click(screen.getByTestId('sheet-mode-analis'))
-    const input = screen.getByTestId('sheet-dataset-input') as HTMLInputElement
-    const file = new File(['Kanal,Pendapatan\nOnline,100'], 'jualan.csv', { type: 'text/csv' })
-    fireEvent.change(input, { target: { files: [file] } })
+    // The dataset now arrives via the chat upload's "Jadikan dataset"
+    // action; the store is seeded here the same way that action does.
+    useDaedalusStore.getState().setAnalysisDataset(dataset)
     await waitFor(() => expect(screen.getByTestId('sheet-dataset-chip')).toBeTruthy())
     expect(screen.getByTestId('sheet-dataset-chip').textContent).toContain('jualan.csv')
 
@@ -553,7 +560,7 @@ describe('SheetComposerControls (Susun/Analis toggle)', () => {
     await waitFor(() =>
       expect(sheetsAnalyzePlanMock).toHaveBeenCalledWith('kanal mana yang paling menguntungkan?', {
         kind: 'csv',
-        text: 'Kanal,Pendapatan\nOnline,100',
+        text: 'a,b',
         name: 'jualan.csv',
       }),
     )
