@@ -9,8 +9,10 @@ import {
   cacheFetchedPage,
   clearFetchedPageCacheForTest,
   clearResearchDocCacheForTest,
+  defaultResearchHooks,
   detectResearchDocKind,
   expireStagedResearchPlanForTest,
+  parseDdgHits,
   probeFrameable,
   storeResearchReport,
   type ResearchCoreHooks,
@@ -376,6 +378,131 @@ describe('GET /research/report/:reportId/source/:sourceId/document', () => {
     expect(detectResearchDocKind('https://a.id/artikel')).toBe('html')
     expect(detectResearchDocKind('https://a.id/x', 'text/html')).toBe('html')
     expect(detectResearchDocKind('https://a.id/file.xyz')).toBe('unknown')
+  })
+})
+
+describe('defaultSearchWeb (DuckDuckGo)', () => {
+  test('parseDdgHits mengekstrak url dari pola uddg', () => {
+    const html = `<html><body>
+      <a href="/l/?uddg=https%3A%2F%2Fcontoh.id%2Fartikel&rut=abc">Judul Artikel</a>
+      <a href="https://langsung.id/x">Langsung</a>
+      <a href="/l/?uddg=https%3A%2F%2Fduckduckgo.com%2Fy">skip ddg</a>
+    </body></html>`
+    const hits = parseDdgHits(html)
+    expect(hits.map((h) => h.url)).toEqual(['https://contoh.id/artikel', 'https://langsung.id/x'])
+    expect(hits[0]!.title).toBe('Judul Artikel')
+  })
+
+  test('parseDdgHits: HTML challenge/kosong -> []', () => {
+    expect(parseDdgHits('<html><title>Just a moment...</title></html>')).toEqual([])
+    expect(parseDdgHits('')).toEqual([])
+  })
+
+  test('retry + fallback: lite gagal -> coba html endpoint', async () => {
+    const goodHtml = '<html><body>' + 'x'.repeat(1200) +
+      '<a href="/l/?uddg=https%3A%2F%2Fcontoh.id%2Fok">OK</a></body></html>'
+    const calls: string[] = []
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async (url: unknown) => {
+      calls.push(String(url))
+      if (String(url).includes('lite.duckduckgo.com')) throw new Error('timeout')
+      return new Response(goodHtml, { status: 200, headers: { 'content-type': 'text/html' } })
+    }) as typeof fetch
+    try {
+      const hooks = defaultResearchHooks()
+      const hits = await hooks.searchWeb('uji coba')
+      expect(hits.length).toBe(1)
+      expect(hits[0]!.url).toBe('https://contoh.id/ok')
+      expect(calls.some((u) => u.includes('lite.duckduckgo.com'))).toBe(true)
+      expect(calls.some((u) => u.includes('html.duckduckgo.com'))).toBe(true)
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+
+  test('semua endpoint gagal -> [] (tidak throw)', async () => {
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async () => { throw new Error('down'); }) as typeof fetch
+    try {
+      const hits = await defaultResearchHooks().searchWeb('uji coba')
+      expect(hits).toEqual([])
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+})
+
+describe('defaultSearchWeb: rantai backend gratis', () => {
+  const OLD_ENV = { ...process.env }
+
+  function setKeys(keys: Record<string, string | undefined>) {
+    for (const k of ['BRAVE_SEARCH_API_KEY', 'TAVILY_API_KEY', 'GOOGLE_CSE_API_KEY', 'GOOGLE_CSE_CX']) {
+      if (keys[k] === undefined) delete process.env[k]
+      else process.env[k] = keys[k]
+    }
+  }
+
+  function mockFetch(handler: (url: string, init?: unknown) => Promise<Response>) {
+    const orig = globalThis.fetch
+    globalThis.fetch = handler as typeof fetch
+    return () => { globalThis.fetch = orig }
+  }
+
+  function restoreEnv() {
+    for (const k of ['BRAVE_SEARCH_API_KEY', 'TAVILY_API_KEY', 'GOOGLE_CSE_API_KEY', 'GOOGLE_CSE_CX']) {
+      delete process.env[k]
+      if (OLD_ENV[k] !== undefined) process.env[k] = OLD_ENV[k]!
+    }
+  }
+
+  test('Brave dipakai dulu bila ada key', async () => {
+    setKeys({ BRAVE_SEARCH_API_KEY: 'bkey' })
+    const restore = mockFetch(async (url) => {
+      if (String(url).includes('api.search.brave.com')) {
+        return new Response(JSON.stringify({ web: { results: [{ url: 'https://brave.id/a', title: 'A' }] } }), { status: 200 })
+      }
+      throw new Error('tidak boleh dipanggil: ' + url)
+    })
+    try {
+      const hits = await defaultResearchHooks().searchWeb('uji')
+      expect(hits.map((h) => h.url)).toEqual(['https://brave.id/a'])
+    } finally { restore(); restoreEnv() }
+  })
+
+  test('Brave gagal -> Tavily -> Google CSE -> DDG', async () => {
+    setKeys({ BRAVE_SEARCH_API_KEY: 'bkey', TAVILY_API_KEY: 'tkey', GOOGLE_CSE_API_KEY: 'gkey', GOOGLE_CSE_CX: 'cx1' })
+    const seen: string[] = []
+    const restore = mockFetch(async (url) => {
+      const u = String(url)
+      seen.push(u)
+      if (u.includes('api.search.brave.com')) return new Response('{}', { status: 500 })
+      if (u.includes('api.tavily.com')) return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      if (u.includes('googleapis.com')) {
+        return new Response(JSON.stringify({ items: [{ link: 'https://g.id/x', title: 'GX' }] }), { status: 200 })
+      }
+      throw new Error('tidak boleh sampai DDG: ' + u)
+    })
+    try {
+      const hits = await defaultResearchHooks().searchWeb('uji')
+      expect(hits.map((h) => h.url)).toEqual(['https://g.id/x'])
+      expect(seen.some((u) => u.includes('brave'))).toBe(true)
+      expect(seen.some((u) => u.includes('tavily'))).toBe(true)
+    } finally { restore(); restoreEnv() }
+  })
+
+  test('tanpa key -> langsung DDG (perilaku lama)', async () => {
+    setKeys({})
+    const seen: string[] = []
+    const goodHtml = '<html><body>' + 'x'.repeat(1200) + '<a href="https://ddg.id/a">A</a></body></html>'
+    const restore = mockFetch(async (url) => {
+      seen.push(String(url))
+      return new Response(goodHtml, { status: 200, headers: { 'content-type': 'text/html' } })
+    })
+    try {
+      const hits = await defaultResearchHooks().searchWeb('uji')
+      expect(hits.map((h) => h.url)).toEqual(['https://ddg.id/a'])
+      expect(seen.some((u) => u.includes('brave') || u.includes('tavily') || u.includes('google'))).toBe(false)
+    } finally { restore(); restoreEnv() }
   })
 })
 

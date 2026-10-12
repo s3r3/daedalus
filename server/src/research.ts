@@ -330,14 +330,19 @@ export async function probeFrameable(url: string): Promise<boolean> {
 }
 
 /**
- * Default searchWeb: DuckDuckGo lite (tanpa API key, best-effort).
- * Gagal/berubah markup → [] (engine me-retry dalam budget, bukan crash).
- * Halaman JS-heavy = limitasi MVP yang diketahui.
+ * Backend pencarian gratis (permintaan Farid 2026-10-12: "semuanya aja").
+ * Urutan: Brave (2rb/bln gratis) -> Tavily (1rb/bln gratis) -> Google CSE
+ * (100/hari gratis) -> DuckDuckGo (tanpa key, best-effort). Backend yang
+ * tidak punya key di-skip diam-diam; yang gagal dilempar ke berikutnya.
+ * Tanpa key sama sekali = perilaku DDG lama (tidak berubah).
  */
-async function defaultSearchWeb(query: string): Promise<ResearchSearchHit[]> {
-  const res = await fetchWithTimeout(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, "text/html");
-  if (!res || !res.ok) return [];
-  const html = await res.text();
+
+/**
+ * Parse hasil DuckDuckGo (dipakai lite + html endpoint — keduanya
+ * memakai pola /l/?uddg=<url> atau link http langsung).
+ * Exported untuk test.
+ */
+export function parseDdgHits(html: string): ResearchSearchHit[] {
   const hits: ResearchSearchHit[] = [];
   const seen = new Set<string>();
   // DDG lite: <a href="/l/?uddg=<url>&rut=...">title</a>
@@ -360,6 +365,119 @@ async function defaultSearchWeb(query: string): Promise<ResearchSearchHit[]> {
     if (hits.length >= 10) break;
   }
   return hits;
+}
+
+interface SearchBackendHit { url: string; title: string }
+
+async function braveSearchWeb(query: string, apiKey: string): Promise<SearchBackendHit[]> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=10`, {
+      signal: ctrl.signal,
+      headers: { 'X-Subscription-Token': apiKey, Accept: 'application/json' },
+    });
+    if (!res.ok) return [];
+    const data = await res.json() as { web?: { results?: Array<{ url?: string; title?: string }> } };
+    const out: SearchBackendHit[] = [];
+    for (const r of data.web?.results ?? []) {
+      if (r.url && /^https?:\/\//i.test(r.url)) out.push({ url: r.url, title: r.title ?? r.url });
+    }
+    return out;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function tavilySearchWeb(query: string, apiKey: string): Promise<SearchBackendHit[]> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      signal: ctrl.signal,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: apiKey, query, max_results: 10, search_depth: 'basic' }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json() as { results?: Array<{ url?: string; title?: string }> };
+    const out: SearchBackendHit[] = [];
+    for (const r of data.results ?? []) {
+      if (r.url && /^https?:\/\//i.test(r.url)) out.push({ url: r.url, title: r.title ?? r.url });
+    }
+    return out;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function googleCseSearchWeb(query: string, apiKey: string, cx: string): Promise<SearchBackendHit[]> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(
+      `https://www.googleapis.com/customsearch/v1?key=${encodeURIComponent(apiKey)}&cx=${encodeURIComponent(cx)}&q=${encodeURIComponent(query)}&num=10`,
+      { signal: ctrl.signal, headers: { Accept: 'application/json' } },
+    );
+    if (!res.ok) return [];
+    const data = await res.json() as { items?: Array<{ link?: string; title?: string }> };
+    const out: SearchBackendHit[] = [];
+    for (const r of data.items ?? []) {
+      if (r.link && /^https?:\/\//i.test(r.link)) out.push({ url: r.link, title: r.title ?? r.link });
+    }
+    return out;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Default searchWeb: rantai backend gratis.
+ * Brave -> Tavily -> Google CSE -> DuckDuckGo (tanpa key, best-effort).
+ * Backend tanpa key di-skip; yang gagal dilempar ke berikutnya.
+ * Env: BRAVE_SEARCH_API_KEY, TAVILY_API_KEY, GOOGLE_CSE_API_KEY +
+ * GOOGLE_CSE_CX. Tetap [] bila semua gagal (bukan crash).
+ */
+async function defaultSearchWeb(query: string): Promise<ResearchSearchHit[]> {
+  const braveKey = process.env.BRAVE_SEARCH_API_KEY || "";
+  if (braveKey) {
+    const hits = await braveSearchWeb(query, braveKey);
+    if (hits.length > 0) return hits;
+  }
+  const tavilyKey = process.env.TAVILY_API_KEY || "";
+  if (tavilyKey) {
+    const hits = await tavilySearchWeb(query, tavilyKey);
+    if (hits.length > 0) return hits;
+  }
+  const cseKey = process.env.GOOGLE_CSE_API_KEY || "";
+  const cseCx = process.env.GOOGLE_CSE_CX || "";
+  if (cseKey && cseCx) {
+    const hits = await googleCseSearchWeb(query, cseKey, cseCx);
+    if (hits.length > 0) return hits;
+  }
+  // DuckDuckGo tanpa key: retry sekali, fallback html endpoint.
+  const urls = [
+    `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
+    `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+  ];
+  for (const url of urls) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await fetchWithTimeout(url, "text/html");
+      if (!res || !res.ok) continue;
+      const html = await res.text();
+      if (!html || html.length < 1000) continue; // challenge/block page
+      const hits = parseDdgHits(html);
+      if (hits.length > 0) return hits;
+      break; // HTML valid tapi 0 hits — coba endpoint lain, bukan retry sia-sia
+    }
+  }
+  return [];
 }
 
 /** Default fetchPage: fetch server-side + ekstraksi teks. */
