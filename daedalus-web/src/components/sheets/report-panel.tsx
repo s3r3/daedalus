@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from 'react'
 import { ClipboardCheck, Download, History } from 'lucide-react'
 import type { WorkbookCheckpoint } from '@daedalus/core'
 import { Panel } from '../common/panel'
-import { api } from '../../api/client'
-import { useDaedalusStore } from '../../state/taskStore'
+import { api, type AnalysisRunResult } from '../../api/client'
+import { useDaedalusStore, type AnalysisRunError } from '../../state/taskStore'
 import { useWorkbook } from './useWorkbook'
+import { useAnalysis } from './useAnalysis'
 import { cn } from '../../lib/utils'
 
 /**
@@ -121,10 +122,155 @@ function WorkbookHistory() {
  * (exceljs / exceljs+sidecar / fallback notes) — the report never
  * claims more than ran.
  */
+/**
+ * Mode Analis: the insight report — findings (each with its cell refs
+ * as small badges), recommendations, and the verify gate's summary row
+ * in the same badge style as Susun's Verify verdict. A 422
+ * verify_failed lists the issues and shows NO report; a 410
+ * plan_expired asks for a fresh plan.
+ */
+function AnalysisInsightView({
+  result,
+  runError,
+  running,
+}: {
+  result: AnalysisRunResult | null
+  runError: AnalysisRunError | null
+  running: boolean
+}) {
+  if (runError?.code === 'verify_failed') {
+    return (
+      <div className="flex flex-col gap-1.5 px-1 py-1" data-testid="sheet-report-analisis-verify-failed">
+        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground">
+          <ClipboardCheck className="size-3.5 text-muted" aria-hidden />
+          Verify gate
+          <span className="rounded border border-red-500/40 px-1 py-0.5 text-[9px] uppercase tracking-wide text-red-300">
+            gagal
+          </span>
+        </p>
+        <p className="text-[10px] text-muted">
+          Gerbang Verify menolak angka-angka analisis — laporan tidak ditulis agar tidak ada angka tak terverifikasi
+          yang dinarasikan. Perbaiki datanya, lalu jalankan ulang dari Panel Blueprint.
+        </p>
+        {runError.issues && runError.issues.length > 0 ? (
+          <ul className="flex flex-col gap-0.5" data-testid="sheet-report-analisis-issues">
+            {runError.issues.map((issue, index) => (
+              <li key={index} className="rounded border border-red-500/30 bg-red-500/5 px-1.5 py-1 font-mono text-[10px] text-red-200">
+                {issue.message}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-[10px] text-red-200">{runError.message}</p>
+        )}
+      </div>
+    )
+  }
+
+  if (runError?.code === 'plan_expired') {
+    return (
+      <div className="flex flex-col gap-1.5 px-1 py-1" data-testid="sheet-report-analisis-expired">
+        <p className="text-[11px] font-semibold text-foreground">Rencana kedaluwarsa</p>
+        <p className="text-[11px] text-muted">
+          Rencana analisis ini sudah tidak ada di server — buat ulang dari composer (pilih dataset, tulis pertanyaan,
+          Buat rencana).
+        </p>
+      </div>
+    )
+  }
+
+  if (runError) {
+    return (
+      <div className="flex flex-col gap-1.5 px-1 py-1" data-testid="sheet-report-analisis-error">
+        <p className="text-[11px] font-semibold text-foreground">Analisis gagal</p>
+        <p className="text-[10px] text-red-300">{runError.message}</p>
+      </div>
+    )
+  }
+
+  if (!result) {
+    return (
+      <p className="px-1 py-1 text-[11px] text-muted" data-testid="sheet-report-analisis-empty">
+        {running
+          ? 'Menjalankan analisis — compute → verify → laporan…'
+          : 'Belum ada hasil analisis. Buat rencana di Panel Blueprint, review, lalu tekan Jalankan analisis.'}
+      </p>
+    )
+  }
+
+  const { report, verify } = result
+  return (
+    <div className="flex flex-col gap-2 px-1 py-1" data-testid="sheet-report-analisis">
+      <p className="text-[11px] font-semibold text-foreground" data-testid="sheet-report-analisis-question">
+        {report.question}
+      </p>
+      <div data-testid="sheet-report-analisis-verify">
+        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-foreground">
+          <ClipboardCheck className="size-3.5 text-muted" aria-hidden />
+          Verify gate
+          <span
+            className={cn(
+              'rounded border px-1 py-0.5 text-[9px] uppercase tracking-wide',
+              verify.ok ? 'border-emerald-500/40 text-emerald-300' : 'border-red-500/40 text-red-300',
+            )}
+          >
+            {verify.ok ? 'lulus' : `${verify.errors.length} error`}
+          </span>
+        </p>
+        <p className="mt-1 text-[10px] text-muted">{verify.summary}</p>
+      </div>
+      {report.findings.length > 0 ? (
+        <div data-testid="sheet-report-analisis-findings">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Temuan</p>
+          <ul className="mt-0.5 flex flex-col gap-1.5">
+            {report.findings.map((finding, index) => (
+              <li key={index} className="rounded border border-line bg-surface px-2 py-1.5">
+                <p className="text-[11px] text-foreground">{finding.text}</p>
+                {finding.refs.length > 0 ? (
+                  <p className="mt-1 flex flex-wrap gap-1" data-testid="sheet-report-analisis-refs">
+                    {finding.refs.map((ref, refIndex) => (
+                      <span key={refIndex} className="rounded border border-line bg-surface-base px-1 py-0.5 font-mono text-[9px] text-muted">
+                        {ref}
+                      </span>
+                    ))}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {report.recommendations.length > 0 ? (
+        <div data-testid="sheet-report-analisis-recommendations">
+          <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Rekomendasi</p>
+          <ul className="mt-0.5 flex list-disc flex-col gap-0.5 pl-4">
+            {report.recommendations.map((recommendation, index) => (
+              <li key={index} className="text-[11px] text-foreground">{recommendation}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {report.verifiedAt ? (
+        <p className="text-[9px] text-muted">Terverifikasi: {new Date(report.verifiedAt).toLocaleString()}</p>
+      ) : null}
+    </div>
+  )
+}
+
 export function SheetReportPanel() {
+  const mode = useDaedalusStore((state) => state.sheetOptions.mode)
   const { workbook, root } = useWorkbook()
+  const { result, runError, running } = useAnalysis()
   const verify = workbook?.verify
   const exportsList = workbook?.exports ?? []
+
+  if (mode === 'analis') {
+    return (
+      <Panel title="Laporan" data-testid="sheet-report">
+        <AnalysisInsightView result={result} runError={runError} running={running} />
+      </Panel>
+    )
+  }
 
   return (
     <Panel title="Laporan" data-testid="sheet-report">

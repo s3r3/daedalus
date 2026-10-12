@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type { WorkbookSpec } from '@daedalus/core'
+import { ApiError } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
 import { DomainSwitch } from '../layout/domain-switch'
+import { SheetComposerControls } from '../composer/sheet-controls'
 import { BlueprintPanel } from './blueprint-panel'
 import { SheetStage } from './sheet-stage'
 import { SheetReportPanel } from './report-panel'
@@ -21,25 +23,46 @@ const workbookVerifyMock = vi.fn()
 const workbookCheckpointsMock = vi.fn()
 const workbookRestoreMock = vi.fn()
 const listMock = vi.fn()
+const sheetsAnalyzePlanMock = vi.fn()
+const sheetsAnalyzeRunMock = vi.fn()
+const sheetsAnalyzeGetPlanMock = vi.fn()
 
-vi.mock('../../api/client', () => ({
-  api: {
-    workbook: (...args: unknown[]) => workbookMock(...args),
-    workbookGenerate: (...args: unknown[]) => workbookGenerateMock(...args),
-    workbookSave: (...args: unknown[]) => workbookSaveMock(...args),
-    workbookExport: (...args: unknown[]) => workbookExportMock(...args),
-    workbookOpen: (...args: unknown[]) => workbookOpenMock(...args),
-    workbookSidecar: (...args: unknown[]) => workbookSidecarMock(...args),
-    workbookVerify: (...args: unknown[]) => workbookVerifyMock(...args),
-    workbookCheckpoints: (...args: unknown[]) => workbookCheckpointsMock(...args),
-    workbookRestore: (...args: unknown[]) => workbookRestoreMock(...args),
-    workbookDownloadUrl: (root: string, path: string) => `/sheets/workbook/download?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
-    workbookPreview: (...args: unknown[]) => workbookPreviewMock(...args),
-    workbookPreviewRender: (...args: unknown[]) => workbookPreviewRenderMock(...args),
-    workbookPreviewPageUrl: (root: string, key: string, page: number) => `/sheets/workbook/preview/page?root=${encodeURIComponent(root)}&key=${key}&page=${page}`,
-    list: (...args: unknown[]) => listMock(...args),
-  },
-}))
+vi.mock('../../api/client', () => {
+  // The analyze hook branches on ApiError status (422/410), so the mock
+  // ships a faithful stand-in for the real class.
+  class MockApiError extends Error {
+    status: number
+    data: unknown
+    constructor(status: number, message: string, data?: unknown) {
+      super(message)
+      this.name = 'ApiError'
+      this.status = status
+      this.data = data
+    }
+  }
+  return {
+    ApiError: MockApiError,
+    api: {
+      workbook: (...args: unknown[]) => workbookMock(...args),
+      workbookGenerate: (...args: unknown[]) => workbookGenerateMock(...args),
+      workbookSave: (...args: unknown[]) => workbookSaveMock(...args),
+      workbookExport: (...args: unknown[]) => workbookExportMock(...args),
+      workbookOpen: (...args: unknown[]) => workbookOpenMock(...args),
+      workbookSidecar: (...args: unknown[]) => workbookSidecarMock(...args),
+      workbookVerify: (...args: unknown[]) => workbookVerifyMock(...args),
+      workbookCheckpoints: (...args: unknown[]) => workbookCheckpointsMock(...args),
+      workbookRestore: (...args: unknown[]) => workbookRestoreMock(...args),
+      workbookDownloadUrl: (root: string, path: string) => `/sheets/workbook/download?root=${encodeURIComponent(root)}&path=${encodeURIComponent(path)}`,
+      workbookPreview: (...args: unknown[]) => workbookPreviewMock(...args),
+      workbookPreviewRender: (...args: unknown[]) => workbookPreviewRenderMock(...args),
+      workbookPreviewPageUrl: (root: string, key: string, page: number) => `/sheets/workbook/preview/page?root=${encodeURIComponent(root)}&key=${key}&page=${page}`,
+      list: (...args: unknown[]) => listMock(...args),
+      sheetsAnalyzePlan: (...args: unknown[]) => sheetsAnalyzePlanMock(...args),
+      sheetsAnalyzeRun: (...args: unknown[]) => sheetsAnalyzeRunMock(...args),
+      sheetsAnalyzeGetPlan: (...args: unknown[]) => sheetsAnalyzeGetPlanMock(...args),
+    },
+  }
+})
 
 const fixtureWorkbook: WorkbookSpec = {
   version: 1,
@@ -87,6 +110,38 @@ const fixtureWorkbook: WorkbookSpec = {
   meta: { createdBy: 'test' },
 }
 
+const fixtureAnalysisPlan = {
+  planId: 'plan-1',
+  plan: {
+    question: 'Kanal mana yang paling menguntungkan?',
+    metrics: [
+      { id: 'm-laba', label: 'Total laba', formulaTemplate: '=SUM({r})', format: '#,##0' },
+      { id: 'm-margin', label: 'Margin laba', formulaTemplate: '=D{r}/B{r}', format: '0.0%' },
+    ],
+    groupBys: ['Kanal', 'Bulan'],
+    comparisons: ['Online vs Offline'],
+    charts: [{ type: 'column', title: 'Laba per kanal' }],
+    assumptions: ['Data penjualan sudah bersih'],
+    steps: ['Profiling dataset', 'Hitung metrik per kanal'],
+  },
+  profiles: { rows: 120, columns: 4 },
+  complexity: 'sedang',
+}
+
+const fixtureAnalysisRun = {
+  verify: { ok: true, summary: 'Verify (core): 4 formula dievaluasi di core · 0 error', errors: [], warnings: [] },
+  report: {
+    question: 'Kanal mana yang paling menguntungkan?',
+    findings: [
+      { text: 'Kanal Online menyumbang laba terbesar.', refs: ['Data!D5'] },
+      { text: 'Margin naik pada bulan Februari.', refs: ['Data!E6', 'Data!E7'] },
+    ],
+    recommendations: ['Fokuskan budget pemasaran ke kanal Online.'],
+    verifiedAt: '2026-10-12T00:00:00Z',
+    verifySummary: 'Verify (core): 4 formula lolos',
+  },
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   workbookMock.mockResolvedValue({ root: '/ws', workbook: fixtureWorkbook })
@@ -104,9 +159,15 @@ beforeEach(() => {
   workbookPreviewMock.mockResolvedValue({ root: '/ws', available: true, status: 'idle', engine: 'libreoffice', engineLabel: 'LibreOffice', key: null, pages: 0 })
   workbookPreviewRenderMock.mockResolvedValue({ root: '/ws', available: true, status: 'rendering', engine: 'libreoffice', engineLabel: 'LibreOffice', key: 'abc', pages: 0 })
   listMock.mockResolvedValue({ path: '.', items: [] })
+  sheetsAnalyzePlanMock.mockResolvedValue(fixtureAnalysisPlan)
+  sheetsAnalyzeRunMock.mockResolvedValue(fixtureAnalysisRun)
+  sheetsAnalyzeGetPlanMock.mockResolvedValue({ plan: fixtureAnalysisPlan.plan, profiles: fixtureAnalysisPlan.profiles, question: fixtureAnalysisPlan.plan.question })
   useDaedalusStore.getState().setWorkspace({ root: '/ws' })
   useDaedalusStore.getState().setDomain('spreadsheet')
   useDaedalusStore.setState({ events: [], workspaceRevision: 0 })
+  useDaedalusStore.getState().setSheetOptions({ mode: 'susun' })
+  useDaedalusStore.getState().setAnalysisDataset(null)
+  useDaedalusStore.getState().clearAnalysis()
 })
 
 afterEach(() => cleanup())
@@ -454,4 +515,165 @@ describe('SheetStage Pratinjau (engine-named workbook preview)', () => {
     await waitFor(() => expect(workbookPreviewRenderMock).toHaveBeenCalledWith('/ws'))
     await waitFor(() => expect(screen.getByTestId('sheet-preview-image')).toBeTruthy(), { timeout: 4000 })
   }, 15000)
+})
+
+describe('SheetComposerControls (Susun/Analis toggle)', () => {
+  test('defaults to Susun with the existing note; Analis reveals the dataset picker', () => {
+    render(<SheetComposerControls />)
+    expect(screen.getByTestId('sheet-mode-susun').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('sheet-composer-note')).toBeTruthy()
+    expect(screen.queryByTestId('sheet-dataset-upload')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('sheet-mode-analis'))
+    expect(useDaedalusStore.getState().sheetOptions.mode).toBe('analis')
+    expect(screen.getByTestId('sheet-mode-analis').getAttribute('aria-pressed')).toBe('true')
+    expect(screen.getByTestId('sheet-dataset-upload')).toBeTruthy()
+    expect(screen.getByTestId('sheet-dataset-workbook')).toBeTruthy()
+    expect(screen.queryByTestId('sheet-composer-note')).toBeNull()
+
+    fireEvent.click(screen.getByTestId('sheet-mode-susun'))
+    expect(useDaedalusStore.getState().sheetOptions.mode).toBe('susun')
+    expect(screen.getByTestId('sheet-composer-note')).toBeTruthy()
+  })
+
+  test('uploading a CSV stages the dataset; Buat rencana calls /sheets/analyze/plan with the text inline', async () => {
+    render(<SheetComposerControls />)
+    fireEvent.click(screen.getByTestId('sheet-mode-analis'))
+    const input = screen.getByTestId('sheet-dataset-input') as HTMLInputElement
+    const file = new File(['Kanal,Pendapatan\nOnline,100'], 'jualan.csv', { type: 'text/csv' })
+    fireEvent.change(input, { target: { files: [file] } })
+    await waitFor(() => expect(screen.getByTestId('sheet-dataset-chip')).toBeTruthy())
+    expect(screen.getByTestId('sheet-dataset-chip').textContent).toContain('jualan.csv')
+
+    useDaedalusStore.getState().setComposer({ goal: 'kanal mana yang paling menguntungkan?' })
+    // The store write lands outside React's event batching; wait for the
+    // re-render that enables the button before clicking.
+    await waitFor(() => expect((screen.getByTestId('sheet-plan-create') as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByTestId('sheet-plan-create'))
+    await waitFor(() =>
+      expect(sheetsAnalyzePlanMock).toHaveBeenCalledWith('kanal mana yang paling menguntungkan?', {
+        kind: 'csv',
+        text: 'Kanal,Pendapatan\nOnline,100',
+        name: 'jualan.csv',
+      }),
+    )
+    // The staged plan lands in the store for the Blueprint panel.
+    await waitFor(() => expect(useDaedalusStore.getState().analysisPlan?.planId).toBe('plan-1'))
+  })
+
+  test('"Pakai workbook saat ini" stages the current workbook by key', async () => {
+    render(<SheetComposerControls />)
+    fireEvent.click(screen.getByTestId('sheet-mode-analis'))
+    fireEvent.click(screen.getByTestId('sheet-dataset-workbook'))
+    await waitFor(() => expect(screen.getByTestId('sheet-dataset-chip')).toBeTruthy())
+    expect(screen.getByTestId('sheet-dataset-chip').textContent).toContain('workbook saat ini')
+    expect(useDaedalusStore.getState().analysisDataset).toEqual({ kind: 'workbook', key: '/ws' })
+
+    useDaedalusStore.getState().setComposer({ goal: 'ringkas penjualan' })
+    await waitFor(() => expect((screen.getByTestId('sheet-plan-create') as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByTestId('sheet-plan-create'))
+    await waitFor(() =>
+      expect(sheetsAnalyzePlanMock).toHaveBeenCalledWith('ringkas penjualan', { kind: 'workbook', key: '/ws' }),
+    )
+  })
+})
+
+describe('BlueprintPanel (Analis mode)', () => {
+  test('empty state explains the dataset + question flow; Susun UI is untouched by the mode', async () => {
+    useDaedalusStore.getState().setSheetOptions({ mode: 'analis' })
+    render(<BlueprintPanel />)
+    await waitFor(() => expect(screen.getByTestId('sheet-blueprint-analisis-empty')).toBeTruthy())
+    expect(screen.getByTestId('sheet-blueprint-analisis-empty').textContent).toContain('Buat rencana')
+    expect(screen.queryByTestId('sheet-blueprint-sheets')).toBeNull()
+
+    cleanup()
+    useDaedalusStore.getState().setSheetOptions({ mode: 'susun' })
+    render(<BlueprintPanel />)
+    await waitFor(() => expect(screen.getByTestId('sheet-blueprint-sheets')).toBeTruthy())
+    expect(screen.queryByTestId('sheet-blueprint-analisis-empty')).toBeNull()
+  })
+
+  test('staged plan renders question, metrics, groupings, charts, assumptions, steps, and the run button', async () => {
+    useDaedalusStore.getState().setSheetOptions({ mode: 'analis' })
+    useDaedalusStore.getState().setAnalysisPlan({
+      planId: fixtureAnalysisPlan.planId,
+      plan: fixtureAnalysisPlan.plan,
+      profiles: fixtureAnalysisPlan.profiles,
+      complexity: fixtureAnalysisPlan.complexity,
+    })
+    render(<BlueprintPanel />)
+    await waitFor(() => expect(screen.getByTestId('sheet-blueprint-analisis')).toBeTruthy())
+    expect(screen.getByTestId('sheet-blueprint-analisis-question').textContent).toContain('Kanal mana yang paling menguntungkan?')
+    expect(screen.getByTestId('sheet-blueprint-analisis-question').textContent).toContain('sedang')
+    expect(screen.getByTestId('sheet-blueprint-analisis-metrics').textContent).toContain('Total laba')
+    expect(screen.getByTestId('sheet-blueprint-analisis-metrics').textContent).toContain('=SUM({r})')
+    expect(screen.getByTestId('sheet-blueprint-analisis-groupbys').textContent).toContain('Kanal')
+    expect(screen.getByTestId('sheet-blueprint-analisis-comparisons').textContent).toContain('Online vs Offline')
+    expect(screen.getByTestId('sheet-blueprint-analisis-charts').textContent).toContain('Laba per kanal')
+    expect(screen.getByTestId('sheet-blueprint-analisis-assumptions').textContent).toContain('Data penjualan sudah bersih')
+    expect(screen.getByTestId('sheet-blueprint-analisis-steps').textContent).toContain('Profiling dataset')
+
+    fireEvent.click(screen.getByTestId('sheet-blueprint-analisis-run'))
+    await waitFor(() => expect(sheetsAnalyzeRunMock).toHaveBeenCalledWith('plan-1'))
+    // A successful run stores the verify verdict + insight report for the Laporan panel.
+    await waitFor(() => expect(useDaedalusStore.getState().analysisResult?.report.question).toContain('Kanal mana'))
+  })
+})
+
+describe('SheetReportPanel (Analis mode)', () => {
+  test('insight report renders findings with ref badges, recommendations, and the verify row', async () => {
+    useDaedalusStore.getState().setSheetOptions({ mode: 'analis' })
+    useDaedalusStore.getState().setAnalysisResult(fixtureAnalysisRun)
+    render(<SheetReportPanel />)
+    await waitFor(() => expect(screen.getByTestId('sheet-report-analisis')).toBeTruthy())
+    expect(screen.getByTestId('sheet-report-analisis-question').textContent).toContain('Kanal mana yang paling menguntungkan?')
+    expect(screen.getByTestId('sheet-report-analisis-findings').textContent).toContain('Kanal Online menyumbang laba terbesar.')
+    const refs = screen.getAllByTestId('sheet-report-analisis-refs')
+    expect(refs).toHaveLength(2)
+    expect(refs[0]?.textContent).toContain('Data!D5')
+    expect(refs[1]?.textContent).toContain('Data!E6')
+    expect(screen.getByTestId('sheet-report-analisis-recommendations').textContent).toContain('Fokuskan budget pemasaran')
+    expect(screen.getByTestId('sheet-report-analisis-verify').textContent).toContain('lulus')
+    expect(screen.getByTestId('sheet-report-analisis-verify').textContent).toContain('4 formula dievaluasi')
+    // The Susun report sections stay out of the way in Analis mode.
+    expect(screen.queryByTestId('sheet-report-verify')).toBeNull()
+    expect(screen.queryByTestId('sheet-report-history')).toBeNull()
+  })
+
+  test('422 verify_failed lists the issues and shows no report', async () => {
+    useDaedalusStore.getState().setSheetOptions({ mode: 'analis' })
+    useDaedalusStore.getState().setAnalysisPlan({
+      planId: fixtureAnalysisPlan.planId,
+      plan: fixtureAnalysisPlan.plan,
+      profiles: fixtureAnalysisPlan.profiles,
+      complexity: fixtureAnalysisPlan.complexity,
+    })
+    sheetsAnalyzeRunMock.mockRejectedValueOnce(
+      new ApiError(422, 'verify_failed', { issues: [{ message: 'Data!D5 — formula menghasilkan #REF!' }, { message: 'kolom Biaya bertipe teks' }] }),
+    )
+    render(<BlueprintPanel />)
+    render(<SheetReportPanel />)
+    fireEvent.click(await screen.findByTestId('sheet-blueprint-analisis-run'))
+    await waitFor(() => expect(screen.getByTestId('sheet-report-analisis-verify-failed')).toBeTruthy())
+    expect(screen.getByTestId('sheet-report-analisis-issues').textContent).toContain('Data!D5')
+    expect(screen.getByTestId('sheet-report-analisis-issues').textContent).toContain('kolom Biaya bertipe teks')
+    expect(screen.queryByTestId('sheet-report-analisis')).toBeNull()
+    expect(useDaedalusStore.getState().analysisResult).toBeNull()
+  })
+
+  test('410 plan_expired asks for a fresh plan', async () => {
+    useDaedalusStore.getState().setSheetOptions({ mode: 'analis' })
+    useDaedalusStore.getState().setAnalysisRunError({ code: 'plan_expired', message: 'plan kedaluwarsa' })
+    render(<SheetReportPanel />)
+    await waitFor(() => expect(screen.getByTestId('sheet-report-analisis-expired')).toBeTruthy())
+    expect(screen.getByTestId('sheet-report-analisis-expired').textContent).toContain('buat ulang')
+    expect(screen.queryByTestId('sheet-report-analisis')).toBeNull()
+  })
+
+  test('empty state points at the Blueprint panel flow', async () => {
+    useDaedalusStore.getState().setSheetOptions({ mode: 'analis' })
+    render(<SheetReportPanel />)
+    await waitFor(() => expect(screen.getByTestId('sheet-report-analisis-empty')).toBeTruthy())
+    expect(screen.getByTestId('sheet-report-analisis-empty').textContent).toContain('Jalankan analisis')
+  })
 })
