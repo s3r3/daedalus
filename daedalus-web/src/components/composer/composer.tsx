@@ -956,6 +956,8 @@ export function Composer() {
               ? sheetOptions.mode === 'analis'
                 ? 'Tulis pertanyaan bisnisnya… mis. "kanal mana yang paling menguntungkan bulan ini?"'
                 : 'Jelaskan spreadsheet-nya… sebut nama file .csv/.xlsx di workspace bila datanya dari file, atau minta "audit workbook ini"'
+              : domain === 'research'
+                ? 'Tulis pertanyaan riset… mis. "bandingkan framework AI agent terpopuler 2026"'
               : 'Describe the coding task… type @ to reference a file or folder, /help for slash commands'
         }
         value={composer.goal}

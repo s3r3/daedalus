@@ -81,6 +81,14 @@ describe('Composer placeholder follows the domain', () => {
       'Describe the coding task… type @ to reference a file or folder, /help for slash commands',
     )
   })
+
+  test('research domain shows the research-question placeholder', () => {
+    useDaedalusStore.setState({ domain: 'research' })
+    render(<Composer />)
+    expect(screen.getByTestId('composer-input').getAttribute('placeholder')).toBe(
+      'Tulis pertanyaan riset… mis. "bandingkan framework AI agent terpopuler 2026"',
+    )
+  })
 })
 
 describe('Composer submit carries the store domain to the server', () => {
