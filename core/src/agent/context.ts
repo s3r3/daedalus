@@ -387,10 +387,10 @@ export class DefaultContextManager implements ContextManager {
       lines.push(`- ${attachment.kind} ${attachment.name} (${attachment.workspacePath}, ${mime}, ${attachment.size} bytes)`);
 
       if (attachment.kind !== 'image') continue;
-      if (!this.#visionEnabled) {
-        lines.push('  Image bytes were not sent because the selected model does not support vision.');
-        continue;
-      }
+      // Vision is assumed for every model (Farid's decision): image bytes are
+      // always sent when readable. Whether the model can actually see them is
+      // the model's business; a provider that rejects image_url blocks fails
+      // loudly instead of the bytes being silently withheld here.
       if (imagesIncluded >= this.#maxImages) {
         lines.push(`  Image bytes were not sent because the per-request image limit (${this.#maxImages}) was reached.`);
         continue;

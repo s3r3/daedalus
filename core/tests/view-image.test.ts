@@ -19,7 +19,7 @@ import {
 } from '../src/index.ts';
 
 /**
- * view_image: unit behaviour (vision gate, MIME sniff, size cap) plus the
+ * view_image: unit behaviour (vision assumed for every model, MIME sniff, size cap) plus the
  * loop-level carriage — the image bytes must reach the NEXT model request
  * as an image_url block while every emitted/persisted result stays the
  * one-line placeholder (no base64 in events, state, or transcripts).
@@ -103,14 +103,13 @@ describe('view_image tool', () => {
     expect(escape.meta.reason).toBe('path_escape');
   });
 
-  test('refuses with the typed vision_unsupported reason when the model cannot see images', async () => {
+  test('view_image proceeds even when the host reports no vision — vision is assumed', async () => {
     const root = temp('daedalus-view-novision-');
     writeFileSync(join(root, 'shot.png'), PNG_BYTES);
     const result = await viewImageTool.execute({ path: 'shot.png' }, ctx(root, { visionEnabled: false }));
-    expect(result.status).toBe('denied');
-    expect(result.meta.reason).toBe('vision_unsupported');
-    expect(result.output).toContain('current model cannot view images');
-    expect(result.meta.image_data_url).toBeUndefined();
+    expect(result.status).toBe('ok');
+    expect(result.meta.image_data_url).toContain('data:image/png;base64,');
+    expect(result.meta.reason).not.toBe('vision_unsupported');
   });
 
   test('classified read and visible in every mode (Ask included)', () => {
@@ -151,7 +150,7 @@ function viewThenDoneProvider(seen: Message[][]): LLMProvider {
 
 function visionRunner(root: string, home: string, seen: Message[][], events: Event[]): TaskRunner {
   const registry = new ProviderRegistry();
-  registry.upsert({ id: 'fake', name: 'Fake', baseUrl: 'https://example.test/v1', apiKey: 'k', models: ['gpt-4o', 'text-only'], supportsVision: true });
+  registry.upsert({ id: 'fake', name: 'Fake', baseUrl: 'https://example.test/v1', apiKey: 'k', models: ['gpt-4o', 'text-only'] });
   return new TaskRunner({
     workspaceRoot: root,
     store: new TaskStore(home),
@@ -205,7 +204,7 @@ describe('view_image through the agent loop', () => {
     expect(JSON.stringify(result.state)).not.toContain('data:image/png;base64');
   });
 
-  test('a text-only model gets the refusal and no image bytes in its request', async () => {
+  test('a model with no vision flags still receives the image part - vision is assumed', async () => {
     const root = temp('daedalus-view-loop-novision-ws-');
     const home = temp('daedalus-view-loop-novision-home-');
     writeFileSync(join(root, 'pic.png'), PNG_BYTES);
@@ -225,10 +224,9 @@ describe('view_image through the agent loop', () => {
     const finished = events.find((event) => event.type === 'TOOL_CALL_FINISHED'
       && (event.payload as { call?: { tool?: string } }).call?.tool === 'view_image');
     const payload = finished!.payload as { result: { status: string; output: string; meta: Record<string, unknown> } };
-    expect(payload.result.status).toBe('denied');
-    expect(payload.result.output).toContain('current model cannot view images');
-    expect(payload.result.meta.reason).toBe('vision_unsupported');
-    expect(JSON.stringify(seen[1] ?? [])).not.toContain('data:image');
+    expect(payload.result.status).toBe('ok');
+    expect(payload.result.meta.image_attached).toBe(true);
+    expect(JSON.stringify(seen[1] ?? [])).toContain('data:image/png;base64,');
   });
 });
 

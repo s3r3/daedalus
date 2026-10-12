@@ -308,15 +308,13 @@ describe('search_images', () => {
     expect(result.output).toContain('full resolution was asked for');
   });
 
-  test('a text-only model gets no view_image order in the closing guidance', async () => {
+  test('every model gets the view_image order in the closing guidance — vision is assumed', async () => {
     const { impl } = stubSearch(bothSourcesHandler);
     const tool = createSearchImagesTool({ fetchImpl: impl });
     const result = await tool.execute({ query: 'cat' }, ctx('/tmp/daedalus-img-ws', { visionEnabled: false }));
     expect(result.status).toBe('ok');
-    expect(result.output).toContain('cannot view images');
-    expect(result.output).toContain('do NOT call view_image');
-    expect(result.output).not.toMatch(/2\. view_image/);
-    expect(result.output).not.toContain('view_image { path:');
+    expect(result.output).not.toContain('cannot view images');
+    expect(result.output).toContain('view_image { path:');
   });
 
   test('a vision-capable model still gets the view_image confirmation step', async () => {
@@ -391,15 +389,14 @@ describe('download_file', () => {
     expect(existsSync(join(root, 'public/images/cat.png.attribution.txt'))).toBe(false);
   });
 
-  test('a text-only model is told the file is verified by bytes, never ordered to view_image', async () => {
+  test('every model gets the view_image confirmation order — vision is assumed', async () => {
     const root = temp('daedalus-dl-ws-');
     const { impl } = stubDownload(() => bodyResponse(200, chunked(PNG_BYTES), { 'content-type': 'image/png' }));
     const tool = createDownloadFileTool({ fetchImpl: impl });
     const result = await tool.execute({ url: 'https://images.example.org/cat.png', path: 'public/images/cat.png' }, ctx(root, { visionEnabled: false }));
     expect(result.status).toBe('ok');
-    expect(result.output).toContain('verified by its bytes');
-    expect(result.output).toContain('Do not call view_image');
-    expect(result.output).not.toContain('view_image public/images/cat.png now');
+    expect(result.output).not.toContain('Do not call view_image');
+    expect(result.output).toContain('view_image public/images/cat.png now');
   });
 
   test('a vision-capable model still gets the view_image confirmation order', async () => {

@@ -124,7 +124,7 @@ Mode changes happen only at turn boundaries and are emitted as `MODE_CHANGED`. E
 
 The provider registry stores display name, OpenAI-compatible base URL, optional API key, models/default model, enabled flag, and vision hints. It discovers models and implements test-connection with `GET /models`. Public representations omit the raw API key and expose only a mask plus `hasApiKey`.
 
-Attachments are workspace-confined metadata. The server enforces upload limits (20 files, 10 MiB/file, 25 MiB total; ZIP max 200 entries and 50 MiB uncompressed). Task-scoped uploads live under `.daedalus/attachments/<taskId>` by default. Image bytes are converted to OpenAI-compatible data URLs only when the selected provider/model resolves as vision-capable and size/count limits allow; otherwise the model receives attachment metadata and an explicit statement that image bytes were not sent.
+Attachments are workspace-confined metadata. The server enforces upload limits (20 files, 10 MiB/file, 25 MiB total; ZIP max 200 entries and 50 MiB uncompressed). Task-scoped uploads live under `.daedalus/attachments/<taskId>` by default. Image bytes are converted to OpenAI-compatible data URLs whenever size/count limits allow; vision is assumed for every model, so the model always receives the image bytes (a provider that truly cannot handle `image_url` blocks fails loudly at the provider instead).
 
 ## 8. Launcher and tray
 

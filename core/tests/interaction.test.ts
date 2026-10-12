@@ -267,7 +267,8 @@ describe('provider registry', () => {
     await expect(registry.testConnection('example')).resolves.toMatchObject({ ok: true, providerId: 'example' });
     await expect(registry.listModels('example')).resolves.toEqual([
       { providerId: 'example', model: 'gpt-4o', supportsVision: true },
-      { providerId: 'example', model: 'text-only', supportsVision: false },
+      // Vision is assumed for every model, even one named 'text-only'.
+      { providerId: 'example', model: 'text-only', supportsVision: true },
     ]);
   });
 
@@ -346,7 +347,7 @@ describe('slash commands', () => {
 });
 
 describe('attachment context', () => {
-  test('image bytes are included only when the selected model supports vision', async () => {
+  test('image bytes are always included — vision is assumed for every model', async () => {
     const root = temp('daedalus-vision-ws-');
     const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     writeFileSync(join(root, 'pic.png'), imageBytes);
@@ -376,18 +377,68 @@ describe('attachment context', () => {
     const visionMessages = await new DefaultContextManager({ workspaceRoot: root, visionEnabled: true }).buildMessages(state, []);
     expect(JSON.stringify(visionMessages)).toContain('data:image/png;base64,');
 
-    const textMessages = await new DefaultContextManager({ workspaceRoot: root, visionEnabled: false }).buildMessages(state, []);
-    expect(JSON.stringify(textMessages)).not.toContain('data:image/png;base64,');
-    expect(JSON.stringify(textMessages)).toContain('Image bytes were not sent');
+    // No vision flags at all (provider entry without supportsVision, the old
+    // gating case): the bytes are still sent — vision is assumed.
+    const noFlagsMessages = await new DefaultContextManager({ workspaceRoot: root, visionEnabled: false }).buildMessages(state, []);
+    expect(JSON.stringify(noFlagsMessages)).toContain('data:image/png;base64,');
+    expect(JSON.stringify(noFlagsMessages)).not.toContain('Image bytes were not sent');
   });
 
-  test('TaskRunner resolves vision support from the provider registry and selected model', async () => {
+  test('per-request image cap and oversize skips still apply', async () => {
+    const root = temp('daedalus-vision-cap-ws-');
+    const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    writeFileSync(join(root, 'a.png'), imageBytes);
+    writeFileSync(join(root, 'b.png'), imageBytes);
+    writeFileSync(join(root, 'big.png'), Buffer.alloc(64, 0x41));
+    const attachment = (name: string, size: number, id: string) => ({
+      id,
+      workspacePath: name,
+      name,
+      kind: 'image' as const,
+      mimeType: 'image/png',
+      size,
+      createdAt: new Date().toISOString(),
+      path: join(root, name),
+    });
+    const state = {
+      id: 'task-vision-cap',
+      goal: 'Inspect the images',
+      repo_path: root,
+      constraints: [],
+      done_criteria: ['images inspected'],
+      created_at: new Date().toISOString(),
+      plan: { id: 'p1', task_id: 'task-vision-cap', steps: [], version: 1, status: 'active' as const },
+      steps: [],
+      status: 'active' as const,
+      attachments: [attachment('a.png', imageBytes.length, 'img-a'), attachment('b.png', imageBytes.length, 'img-b')],
+    } satisfies TaskState;
+
+    // Cap of 1: first image sent, second skipped with the cap message.
+    const capped = await new DefaultContextManager({ workspaceRoot: root, maxImages: 1 }).buildMessages(state, []);
+    const cappedJson = JSON.stringify(capped);
+    expect(cappedJson).toContain('data:image/png;base64,');
+    expect(cappedJson).toContain('per-request image limit (1) was reached');
+
+    // Oversize file: bytes withheld with the size message, readable one sent.
+    const oversizedState = {
+      ...state,
+      attachments: [attachment('big.png', 64, 'img-big'), attachment('a.png', imageBytes.length, 'img-a')],
+    } satisfies TaskState;
+    const sized = await new DefaultContextManager({ workspaceRoot: root, maxImageBytes: 32 }).buildMessages(oversizedState, []);
+    const sizedJson = JSON.stringify(sized);
+    expect(sizedJson).toContain('data:image/png;base64,');
+    expect(sizedJson).toContain('could not be read inside the workspace or exceeds the image size limit');
+  });
+
+  test('TaskRunner sends image bytes for every model — vision is assumed', async () => {
     const root = temp('daedalus-vision-runner-ws-');
     const home = temp('daedalus-vision-runner-home-');
     const imageBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
     writeFileSync(join(root, 'pic.png'), imageBytes);
     const registry = new ProviderRegistry();
-    registry.upsert({ id: 'fake', name: 'Fake', baseUrl: 'https://example.test/v1', apiKey: 'k', models: ['gpt-4o', 'text-only'], supportsVision: true });
+    // No supportsVision flag and no visionModels list on the provider entry:
+    // vision is assumed anyway.
+    registry.upsert({ id: 'fake', name: 'Fake', baseUrl: 'https://example.test/v1', apiKey: 'k', models: ['gpt-4o', 'text-only'] });
 
     const seen: Message[][] = [];
     let calls = 0;
@@ -436,9 +487,11 @@ describe('attachment context', () => {
 
     seen.length = 0;
     calls = 0;
+    // A model name with no vision hints and a provider entry without vision
+    // flags: bytes are still sent - vision is assumed for every model.
     await runner.run({ goal: 'Inspect image\ndone: image inspected', providerId: 'fake', model: 'text-only', attachments: [attachment] });
-    expect(JSON.stringify(seen[0])).not.toContain('data:image/png;base64,');
-    expect(JSON.stringify(seen[0])).toContain('Image bytes were not sent');
+    expect(JSON.stringify(seen[0])).toContain('data:image/png;base64,');
+    expect(JSON.stringify(seen[0])).not.toContain('Image bytes were not sent');
   });
 });
 

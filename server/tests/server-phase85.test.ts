@@ -215,7 +215,7 @@ describe('settings, session, providers', () => {
     expect(await traversal.text()).not.toContain('outside-secret');
   });
 
-  test('provider CRUD masks keys, tests a real /models endpoint, and lists vision models', async () => {
+  test('provider CRUD masks keys, tests a real /models endpoint, and lists all models as vision-capable', async () => {
     const { base } = await listen();
     const modelBase = await startModelServer();
 
@@ -239,8 +239,10 @@ describe('settings, session, providers', () => {
 
     const models = await fetch(new URL('/models?provider_id=fake', base));
     const modelBody = await json<{ models: Array<{ model: string; supportsVision: boolean }> }>(models);
+    // Vision is assumed for every model: even 'plain-text-model' (no vision
+    // hints, no flags) is reported as vision-capable.
     expect(modelBody.models).toContainEqual({ providerId: 'fake', model: 'gpt-4o', supportsVision: true });
-    expect(modelBody.models).toContainEqual({ providerId: 'fake', model: 'plain-text-model', supportsVision: false });
+    expect(modelBody.models).toContainEqual({ providerId: 'fake', model: 'plain-text-model', supportsVision: true });
     expect(modelBody.models.map((model) => model.model)).toContain('local-model');
 
     await fetch(new URL('/providers/nine-router/enabled', base), {

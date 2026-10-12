@@ -208,15 +208,6 @@ export function Composer() {
     setComposer({ goal: nextGoal })
   }
 
-  const selectedModel = useMemo(
-    () => models.find((entry) => entry.providerId === composer.providerId && entry.model === composer.model),
-    [composer.model, composer.providerId, models],
-  )
-  const hasImageAttachment = composer.attachments.some((attachment) => attachment.kind === 'image')
-  const visionWarning = hasImageAttachment && selectedModel && !selectedModel.supportsVision
-    ? `The selected model ${selectedModel.providerId}/${selectedModel.model} does not support vision. Image attachments will not be sent to the model.`
-    : null
-
   const applySession = (session: Parameters<typeof setSession>[0]): void => {
     setSession(session)
   }
@@ -601,7 +592,10 @@ export function Composer() {
     const goal = taskGoal
     setComposer({ submitting: true, error: null })
     try {
-      const attachmentsForTask = visionWarning ? composer.attachments.filter((attachment) => attachment.kind !== 'image') : composer.attachments
+      // Vision is assumed for every model (Farid's decision): all staged
+      // attachments — images included — are always sent to the task, like
+      // Claude Code/Codex. Whether the model can actually see them is the
+      // model's business.
       // One-shot model override for this task: taskModel (`providerId::model`)
       // wins, else the session model. The token budget and the per-task tool
       // rules ride the payload; thinking, max iterations, and the model pool
@@ -642,7 +636,7 @@ export function Composer() {
         model: (taskModelName || composer.model) || undefined,
         ...(composer.tokenBudget !== undefined ? { token_budget: composer.tokenBudget } : {}),
         tool_rules: { ...composer.toolRules },
-        attachments: attachmentsForTask,
+        attachments: composer.attachments,
         ...(skillNames.length ? { skills: skillNames } : {}),
         ...(domain === 'dokumen'
           ? {
@@ -690,7 +684,6 @@ export function Composer() {
       }
       setComposer({ submitting: false, goal, attachments: [] })
       setInvokedSkills([])
-      if (visionWarning) setSlashOutput(visionWarning)
     } catch (error) {
       setComposer({ submitting: false, error: error instanceof Error ? error.message : String(error) })
     }
@@ -1158,11 +1151,6 @@ export function Composer() {
             <X className="size-3" />
           </button>
         </div>
-      ) : null}
-      {visionWarning ? (
-        <p className="text-[11px] text-warning" data-testid="vision-warning">
-          {visionWarning}
-        </p>
       ) : null}
       {touched && composer.goal.trim().length === 0 ? (
         <p role="alert" className="text-[11px] text-error">

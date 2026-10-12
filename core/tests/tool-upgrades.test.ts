@@ -233,13 +233,14 @@ describe('screenshot tool', () => {
     expect(result.output).toContain('do not claim it renders correctly');
   });
 
-  test('refuses non-http URLs and vision-less models', async () => {
+  test('refuses non-http URLs; vision-less hosts are no longer denied (vision is assumed)', async () => {
     const { createScreenshotTool } = await import('../src/index.ts');
     const tool = createScreenshotTool({ resolveBrowser: async () => 'fake-chrome', runner: async () => ({ code: 0, stderr: '' }) });
     const fileResult = await tool.execute({ url: 'file:///etc/passwd' }, ctx(workspace()));
     expect(fileResult.status).toBe('error');
     const blind = await tool.execute({ url: 'http://localhost:5173/' }, { workspaceRoot: workspace(), visionEnabled: false });
-    expect(blind.status).toBe('denied');
+    expect(blind.status).not.toBe('denied');
+    expect(blind.meta?.reason).not.toBe('vision_unsupported');
   });
 
   test('chrome args carry the window size and screenshot target', async () => {
