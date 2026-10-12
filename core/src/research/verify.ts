@@ -152,12 +152,12 @@ export function runVerifyGate(input: VerifyGateInput): VerifyGateResult {
     }
     if (excerptBad) continue;
     // Aturan 4 — angka/tanggal/kutipan di teks harus muncul verbatim di excerpt.
+    // Klaim yang gagal di sini DICORET (aturan 7), bukan menggagalkan run —
+    // satu angka nakal tidak boleh membunuh laporan 27 sumber. Yang dicoret
+    // tercatat di verification.claimsDropped.
     const uncovered = tokensIn(claim.text).filter((t) => !excerptCovers(claim.excerpts, t));
     if (uncovered.length > 0) {
-      issues.push({
-        rule: 4, claimId: claim.id,
-        message: `${where}: token tanpa sitasi verbatim di excerpt: ${uncovered.slice(0, 3).join(', ')}${uncovered.length > 3 ? '…' : ''}`,
-      });
+      droppedIds.add(claim.id);
       continue;
     }
     claimsVerified += 1;

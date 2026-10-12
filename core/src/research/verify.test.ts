@@ -77,14 +77,16 @@ describe('runVerifyGate', () => {
     expect(r.issues.some((i) => i.rule === 3)).toBe(true);
   });
 
-  test('aturan 4: angka di teks tanpa verbatim di excerpt gagal', () => {
+  test('aturan 4: angka di teks tanpa verbatim di excerpt -> klaim di-drop, bukan gate gagal', () => {
     const report = baseReport();
     report.claims[0]!.text = 'Sinta memeringkat jurnal dan 99% jurnal lolos.';
     report.claims[0]!.excerpts = ['Sinta memeringkat jurnal dari 1 sampai 6'];
     const r = runVerifyGate(input(report, evidenceFor('Sinta memeringkat jurnal dari 1 sampai 6. Dan 99% jurnal lolos seleksi.')));
-    // 99% ada di konten tapi TIDAK di excerpt -> aturan 4 gagal
-    expect(r.ok).toBe(false);
-    expect(r.issues.some((i) => i.rule === 4)).toBe(true);
+    // 99% ada di konten tapi TIDAK di excerpt -> klaim dicoret (aturan 7),
+    // laporan tetap lolos tanpa klaim tersebut.
+    expect(r.ok).toBe(true);
+    expect(r.claimsDropped).toBe(1);
+    expect(r.report.claims).toHaveLength(0);
   });
 
   test('aturan 5: placeholder [CITATION NEEDED] gagal', () => {
@@ -112,5 +114,16 @@ describe('runVerifyGate', () => {
     expect(r.claimsDropped).toBe(1);
     expect(r.report.claims).toHaveLength(0);
     expect(r.report.sections[0]!.claimIds).toHaveLength(0);
+  });
+
+  test('aturan 4: klaim dengan angka tak tercakup excerpt di-drop, gate tetap lolos (live-test 2026-10-12)', () => {
+    const report = baseReport();
+    // Model menulis "2026" padahal excerpt tidak memuatnya — klaim dicoret,
+    // run tidak ikut gagal.
+    report.claims[0]!.text = 'Sinta memeringkat jurnal dari 1 sampai 6 pada tahun 2026.';
+    const r = runVerifyGate(input(report, evidenceFor('Sinta memeringkat jurnal dari 1 sampai 6.')));
+    expect(r.ok).toBe(true);
+    expect(r.claimsDropped).toBe(1);
+    expect(r.report.claims).toHaveLength(0);
   });
 });

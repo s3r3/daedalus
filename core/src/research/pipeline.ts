@@ -165,8 +165,13 @@ export async function executeStage(input: ResearchPipelineInput, plan: ResearchP
     const queue = fresh.slice();
     const workers: Promise<void>[] = [];
     const take = async (): Promise<void> => {
-      while (queue.length > 0 && sourceCount < plan.budget.maxSources) {
+      // Reservasi slot budget secara atomik: cek + increment berjalan
+      // sinkron tanpa await di antaranya, jadi worker paralel tidak bisa
+      // race dan melebihi maxSources (bug live-test: 27 > 24).
+      while (queue.length > 0) {
+        if (sourceCount >= plan.budget.maxSources) break;
         const hit = queue.shift() as ResearchSearchHit;
+        sourceCount += 1;
         n += 1;
         const id = `s${n}`;
         let page: FetchedPage | null = null;
@@ -176,7 +181,6 @@ export async function executeStage(input: ResearchPipelineInput, plan: ResearchP
           page = null;
         }
         if (page && page.status === 200 && page.text.trim().length > 0) {
-          sourceCount += 1;
           collected.push({
             id,
             url: hit.url,
@@ -185,7 +189,9 @@ export async function executeStage(input: ResearchPipelineInput, plan: ResearchP
             status: page.status,
             fetchedAt: new Date().toISOString(),
           });
-          progress(input, 'execute', `ter-fetch ${sourceCount}/${plan.budget.maxSources} sumber`);
+          progress(input, 'execute', `ter-fetch ${collected.length}/${plan.budget.maxSources} sumber`);
+        } else {
+          sourceCount -= 1; // fetch gagal — kembalikan slot budget
         }
       }
     };
@@ -244,6 +250,8 @@ const EXTRACT_SYSTEM = [
   '- sourceIds: the source(s) the claim comes from — 1 source minimum, 2+ when independent sources agree.',
   '- excerpts: VERBATIM quotes from the source content (exact substrings). Every number, date, or direct quote',
   '  in text MUST appear verbatim in at least one excerpt of the same claim. No excerpt may be invented or paraphrased.',
+  '- Copy numbers and dates CHARACTER-FOR-CHARACTER from the excerpt into text. If the source does not state',
+  '  a year/number explicitly, write the claim WITHOUT it — never fill it in from the question or your knowledge.',
   '- Only claims fully supported by the sources. If a source is thin, extract fewer claims — never pad.',
   '- Aim for 8-25 claims covering the sub-questions. Skip boilerplate, nav text, and ads.',
 ].join('\n');

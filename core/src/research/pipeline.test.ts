@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import {
   runResearchPipeline,
+  executeStage,
   ResearchPipelineError,
-  ResearchVerifyError,
   type ResearchFetchHooks,
+  type ResearchPipelineInput,
 } from './pipeline.ts';
 import type { LLMProvider, Message } from '../providers/llm/types.ts';
 import type { ResearchPlan } from './types.ts';
@@ -95,8 +96,9 @@ describe('runResearchPipeline', () => {
     await expect(runResearchPipeline({ plan: plan(), provider, fetch })).rejects.toThrow(ResearchPipelineError);
   });
 
-  test('gate gagal -> ResearchVerifyError (peta ke 422), tanpa laporan', async () => {
-    // Ekstraksi mengeluarkan angka yang tidak ada di excerpt -> aturan 4.
+  test('klaim dengan angka tak terverifikasi di-drop, pipeline tetap mengembalikan laporan (tanpa 422)', async () => {
+    // Ekstraksi mengeluarkan angka yang tidak ada di excerpt -> aturan 4:
+    // klaim dicoret (aturan 7), laporan dikembalikan dengan claimsDropped.
     const provider = scriptedProvider({
       'extract atomic factual claims': JSON.stringify({
         claims: [{
@@ -107,9 +109,10 @@ describe('runResearchPipeline', () => {
       }),
       'write a research report from VERIFIED claims': SYNTH_OK,
     });
-    await expect(
-      runResearchPipeline({ plan: plan(), provider, fetch: fetchHooks(), credibilityFetch: async () => null }),
-    ).rejects.toThrow(ResearchVerifyError);
+    const { report } = await runResearchPipeline({ plan: plan(), provider, fetch: fetchHooks(), credibilityFetch: async () => null });
+    expect(report.claims).toHaveLength(0);
+    expect(report.verification.claimsDropped).toBe(1);
+    expect(report.verification.gatePassed).toBe(true);
   });
 
   test('plan tak valid ditolak sebelum execute', async () => {
@@ -118,5 +121,28 @@ describe('runResearchPipeline', () => {
     await expect(
       runResearchPipeline({ plan: bad, provider, fetch: fetchHooks() }),
     ).rejects.toThrow(ResearchPipelineError);
+  });
+
+  test('executeStage tidak pernah melebihi maxSources walau worker paralel race (live-test 2026-10-12)', async () => {
+    const p = plan();
+    p.budget = { maxQueries: 4, maxSources: 3 };
+    p.subQuestions = [
+      { id: 'sq1', text: 'q1' },
+      { id: 'sq2', text: 'q2' },
+    ];
+    // 10 hit per query + fetch lambat agar worker benar-benar interleave di await.
+    const fetch: ResearchFetchHooks = {
+      async searchWeb() {
+        return Array.from({ length: 10 }, (_, i) => ({ url: `https://example.com/${i}`, title: `T${i}` }));
+      },
+      async fetchPage(url) {
+        await new Promise((r) => setTimeout(r, 5));
+        return { url, status: 200, title: 'T', text: PAGE_TEXT };
+      },
+    };
+    const input: ResearchPipelineInput = { plan: p, provider: scriptedProvider({}), fetch };
+    const sources = await executeStage(input, p);
+    expect(sources.length).toBeLessThanOrEqual(3);
+    expect(sources.length).toBeGreaterThan(0);
   });
 });
