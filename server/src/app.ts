@@ -129,6 +129,16 @@ import { UPLOAD_LIMITS, extractZipEntries, guessMimeType, parseMultipart, saniti
 import { SlidePreviewService, convertPptxToPdf, SofficeMissingError } from "./slide-preview.ts";
 import { SheetPreviewService } from "./sheet-preview.ts";
 import { DokumenPreviewService, type DocPreviewKind } from "./dokumen-preview.ts";
+import {
+  analysisProviderFromRequest,
+  analysisVerifyIssues,
+  peekStagedAnalysisPlan,
+  resolveAnalysisHooks,
+  stageAnalysisPlan,
+  takeStagedAnalysisPlan,
+  type AnalysisCoreHooks,
+  type AnalysisDataset,
+} from "./sheets-analyze.ts";
 /**
  * REST + WebSocket gateway (PLAN.md §3.0, §3.6). Commands and reads only —
  * no agent, tool, or LLM logic lives here; the core owns execution.
@@ -203,7 +213,15 @@ export type AppContext = {
   /** Pratinjau renderer (raster preview of the exported workbook; Excel on Windows, or LibreOffice); tests inject a fake-backed service. */
   sheetPreview?: SheetPreviewService;
   /** Dokumen Pratinjau renderer (raster preview of the composed/re-laid-out DOCX; Word on Windows, else LibreOffice); tests inject a fake-backed service. */
-  dokumenPreview?: DokumenPreviewService;};
+  dokumenPreview?: DokumenPreviewService;
+  /**
+   * Mode Analis (Agentic Spreadsheet): seam to the core analysis contract
+   * (profileWorkbook / classifyAnalysisIntent / generateAnalysisPlan /
+   * SpreadsheetEngine.runAnalysis). Production resolves lazy core imports;
+   * tests inject fakes here.
+   */
+  analysisHooks?: AnalysisCoreHooks;
+};
 
 export function createContext(overrides: Partial<AppContext> = {}): AppContext {
   const settings = overrides.settings ?? loadSettings();
@@ -238,7 +256,9 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     extensionStatusCache: overrides.extensionStatusCache ?? new Map(),
     slidePreview: overrides.slidePreview,
     sheetPreview: overrides.sheetPreview,
-    dokumenPreview: overrides.dokumenPreview,  };
+    dokumenPreview: overrides.dokumenPreview,
+    analysisHooks: overrides.analysisHooks,
+  };
 }
 
 export async function ensureProvidersLoaded(ctx: AppContext): Promise<void> {
@@ -4155,6 +4175,183 @@ export function createApp(ctx: AppContext) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
       })();
+      return;
+    }
+
+    // Mode Analis (Agentic Spreadsheet): stage an analysis plan.
+    // Body: { question, dataset: { kind: 'csv', text, name? } |
+    // { kind: 'xlsx', base64, name? } | { kind: 'workbook', key },
+    // root?, model?, provider_id? }. The dataset is ingested to a
+    // WorkbookSpec, profiled deterministically by the core, then the
+    // two-call planner (intent routing + plan) runs against the LLM
+    // provider — the same provider resolution as /diff/review. The
+    // returned planId is the SINGLE confirmation gate: the client shows
+    // the staged plan for review and the user pressing "Jalankan
+    // analisis" calls POST /sheets/analyze/run. Staged plans expire
+    // after 30 minutes (swept every 5).
+    if (method === "POST" && url.pathname === "/sheets/analyze/plan") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const question = typeof parsed.question === "string" ? parsed.question.trim() : "";
+          if (!question) {
+            sendJson(res, 400, { error: "question_required", request_id: requestId });
+            return;
+          }
+          const rawDataset = (parsed.dataset ?? {}) as Record<string, unknown>;
+          const kind = rawDataset.kind;
+          if (kind !== "csv" && kind !== "xlsx" && kind !== "workbook") {
+            sendJson(res, 400, { error: "invalid_dataset", message: "dataset.kind harus 'csv', 'xlsx', atau 'workbook'", request_id: requestId });
+            return;
+          }
+          const root = resolveAllowedRoot(
+            ctx,
+            parsed.root ?? (kind === "workbook" && typeof rawDataset.key === "string" ? rawDataset.key : undefined),
+          );
+          const hooks = await resolveAnalysisHooks(ctx);
+          let workbook: WorkbookSpec;
+          let dataset: AnalysisDataset;
+          if (kind === "csv") {
+            const text = typeof rawDataset.text === "string" ? rawDataset.text : "";
+            if (!text) {
+              sendJson(res, 400, { error: "dataset_text_required", request_id: requestId });
+              return;
+            }
+            const name = typeof rawDataset.name === "string" && rawDataset.name ? rawDataset.name : "dataset";
+            workbook = await hooks.importCsv(name, text, { createdBy: "sheets-analyze" });
+            dataset = { kind: "csv", text, name };
+          } else if (kind === "xlsx") {
+            const base64 = typeof rawDataset.base64 === "string" ? rawDataset.base64 : "";
+            if (!base64) {
+              sendJson(res, 400, { error: "dataset_base64_required", request_id: requestId });
+              return;
+            }
+            const name = typeof rawDataset.name === "string" && rawDataset.name ? rawDataset.name : "dataset";
+            workbook = await hooks.importXlsx(name, Buffer.from(base64, "base64"), { createdBy: "sheets-analyze" });
+            dataset = { kind: "xlsx", base64, name };
+          } else {
+            const existing = await readWorkbook(root);
+            if (!existing) {
+              sendJson(res, 404, { error: "workbook_not_found", request_id: requestId });
+              return;
+            }
+            workbook = existing;
+            dataset = { kind: "workbook", key: root };
+          }
+          const profiles = await hooks.profileWorkbook(workbook);
+          await ensureProvidersLoaded(ctx);
+          const provider = analysisProviderFromRequest(ctx, parsed);
+          if (!provider) {
+            sendJson(res, 400, { error: "no_provider_configured", request_id: requestId });
+            return;
+          }
+          const intent = await hooks.classifyIntent({ question, profiles, provider });
+          const plan = await hooks.generatePlan({ question, profiles, intent, provider });
+          const staged = stageAnalysisPlan({
+            question,
+            workspaceRoot: root,
+            dataset,
+            workbook,
+            plan,
+            profiles,
+            complexity: intent.complexity,
+          });
+          sendJson(res, 200, {
+            planId: staged.planId,
+            plan,
+            profiles,
+            complexity: staged.complexity,
+            request_id: requestId,
+          });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Mode Analis: run a staged plan (the "Jalankan analisis" gate).
+    // Body: { planId, model?, provider_id? }. The staged plan is
+    // single-use: it is consumed by the run whether the run succeeds
+    // or fails the Verify gate. A verify failure inside the engine
+    // throws → 422 with the issues; a report is NEVER returned with
+    // unverified numbers.
+    if (method === "POST" && url.pathname === "/sheets/analyze/run") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const planId = typeof parsed.planId === "string" ? parsed.planId : "";
+          const staged = planId ? takeStagedAnalysisPlan(planId) : undefined;
+          if (!staged) {
+            sendJson(res, 410, { error: "plan_expired", message: "rencana kedaluwarsa, buat ulang", request_id: requestId });
+            return;
+          }
+          const hooks = await resolveAnalysisHooks(ctx);
+          await ensureProvidersLoaded(ctx);
+          const provider = analysisProviderFromRequest(ctx, parsed);
+          if (!provider) {
+            sendJson(res, 400, { error: "no_provider_configured", request_id: requestId });
+            return;
+          }
+          const engine = await hooks.createEngine({
+            provider,
+            bus: ctx.bus,
+            store: ctx.store,
+            workspaceRoot: staged.workspaceRoot,
+          });
+          let result;
+          try {
+            result = await engine.runAnalysis({
+              question: staged.question,
+              dataset: { kind: "workbook", workbook: staged.workbook },
+              plan: staged.plan,
+              provider,
+            });
+          } catch (error) {
+            const issues = analysisVerifyIssues(error);
+            if (issues) {
+              sendJson(res, 422, { error: "verify_failed", issues, request_id: requestId });
+              return;
+            }
+            throw error;
+          }
+          sendJson(res, 200, {
+            verify: result.verify,
+            report: result.report,
+            ...(result.exported ? { exported: result.exported } : {}),
+            request_id: requestId,
+          });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Mode Analis: read back a staged plan (review surface for the
+    // single confirmation gate). 404 when unknown or expired.
+    const analyzePlanMatch = /^\/sheets\/analyze\/plan\/([^/]+)$/.exec(url.pathname);
+    if (method === "GET" && analyzePlanMatch) {
+      const staged = peekStagedAnalysisPlan(analyzePlanMatch[1] ?? "");
+      if (!staged) {
+        sendJson(res, 404, { error: "plan_not_found", request_id: requestId });
+        return;
+      }
+      sendJson(res, 200, {
+        planId: staged.planId,
+        plan: staged.plan,
+        profiles: staged.profiles,
+        question: staged.question,
+        request_id: requestId,
+      });
       return;
     }
 
