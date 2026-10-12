@@ -9,8 +9,10 @@ import {
   cacheFetchedPage,
   clearFetchedPageCacheForTest,
   clearResearchDocCacheForTest,
+  defaultResearchHooks,
   detectResearchDocKind,
   expireStagedResearchPlanForTest,
+  parseDdgHits,
   probeFrameable,
   storeResearchReport,
   type ResearchCoreHooks,
@@ -376,6 +378,57 @@ describe('GET /research/report/:reportId/source/:sourceId/document', () => {
     expect(detectResearchDocKind('https://a.id/artikel')).toBe('html')
     expect(detectResearchDocKind('https://a.id/x', 'text/html')).toBe('html')
     expect(detectResearchDocKind('https://a.id/file.xyz')).toBe('unknown')
+  })
+})
+
+describe('defaultSearchWeb (DuckDuckGo)', () => {
+  test('parseDdgHits mengekstrak url dari pola uddg', () => {
+    const html = `<html><body>
+      <a href="/l/?uddg=https%3A%2F%2Fcontoh.id%2Fartikel&rut=abc">Judul Artikel</a>
+      <a href="https://langsung.id/x">Langsung</a>
+      <a href="/l/?uddg=https%3A%2F%2Fduckduckgo.com%2Fy">skip ddg</a>
+    </body></html>`
+    const hits = parseDdgHits(html)
+    expect(hits.map((h) => h.url)).toEqual(['https://contoh.id/artikel', 'https://langsung.id/x'])
+    expect(hits[0]!.title).toBe('Judul Artikel')
+  })
+
+  test('parseDdgHits: HTML challenge/kosong -> []', () => {
+    expect(parseDdgHits('<html><title>Just a moment...</title></html>')).toEqual([])
+    expect(parseDdgHits('')).toEqual([])
+  })
+
+  test('retry + fallback: lite gagal -> coba html endpoint', async () => {
+    const goodHtml = '<html><body>' + 'x'.repeat(1200) +
+      '<a href="/l/?uddg=https%3A%2F%2Fcontoh.id%2Fok">OK</a></body></html>'
+    const calls: string[] = []
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async (url: unknown) => {
+      calls.push(String(url))
+      if (String(url).includes('lite.duckduckgo.com')) throw new Error('timeout')
+      return new Response(goodHtml, { status: 200, headers: { 'content-type': 'text/html' } })
+    }) as typeof fetch
+    try {
+      const hooks = defaultResearchHooks()
+      const hits = await hooks.searchWeb('uji coba')
+      expect(hits.length).toBe(1)
+      expect(hits[0]!.url).toBe('https://contoh.id/ok')
+      expect(calls.some((u) => u.includes('lite.duckduckgo.com'))).toBe(true)
+      expect(calls.some((u) => u.includes('html.duckduckgo.com'))).toBe(true)
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+
+  test('semua endpoint gagal -> [] (tidak throw)', async () => {
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async () => { throw new Error('down'); }) as typeof fetch
+    try {
+      const hits = await defaultResearchHooks().searchWeb('uji coba')
+      expect(hits).toEqual([])
+    } finally {
+      globalThis.fetch = origFetch
+    }
   })
 })
 

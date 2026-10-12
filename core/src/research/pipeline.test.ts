@@ -90,10 +90,19 @@ describe('runResearchPipeline', () => {
   test('gagal total bila tidak ada sumber ter-fetch', async () => {
     const provider = scriptedProvider({});
     const fetch: ResearchFetchHooks = {
+      async searchWeb() { return [{ url: 'https://contoh.id/a', title: 'A' }]; },
+      async fetchPage() { return null; },
+    };
+    await expect(runResearchPipeline({ plan: plan(), provider, fetch })).rejects.toThrow('tidak ada sumber yang berhasil di-fetch');
+  });
+
+  test('search 0 hasil di semua sub-pertanyaan -> pesan pencarian, bukan fetch', async () => {
+    const provider = scriptedProvider({});
+    const fetch: ResearchFetchHooks = {
       async searchWeb() { return []; },
       async fetchPage() { return null; },
     };
-    await expect(runResearchPipeline({ plan: plan(), provider, fetch })).rejects.toThrow(ResearchPipelineError);
+    await expect(runResearchPipeline({ plan: plan(), provider, fetch })).rejects.toThrow('pencarian tidak mengembalikan hasil');
   });
 
   test('klaim dengan angka tak terverifikasi di-drop, pipeline tetap mengembalikan laporan (tanpa 422)', async () => {

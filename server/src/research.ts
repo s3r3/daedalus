@@ -330,14 +330,11 @@ export async function probeFrameable(url: string): Promise<boolean> {
 }
 
 /**
- * Default searchWeb: DuckDuckGo lite (tanpa API key, best-effort).
- * Gagal/berubah markup → [] (engine me-retry dalam budget, bukan crash).
- * Halaman JS-heavy = limitasi MVP yang diketahui.
+ * Parse hasil DuckDuckGo (dipakai lite + html endpoint — keduanya
+ * memakai pola /l/?uddg=<url> atau link http langsung).
+ * Exported untuk test.
  */
-async function defaultSearchWeb(query: string): Promise<ResearchSearchHit[]> {
-  const res = await fetchWithTimeout(`https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`, "text/html");
-  if (!res || !res.ok) return [];
-  const html = await res.text();
+export function parseDdgHits(html: string): ResearchSearchHit[] {
   const hits: ResearchSearchHit[] = [];
   const seen = new Set<string>();
   // DDG lite: <a href="/l/?uddg=<url>&rut=...">title</a>
@@ -360,6 +357,32 @@ async function defaultSearchWeb(query: string): Promise<ResearchSearchHit[]> {
     if (hits.length >= 10) break;
   }
   return hits;
+}
+
+/**
+ * Default searchWeb: DuckDuckGo (tanpa API key, best-effort).
+ * lite.duckduckgo.com kadang timeout/diblokir (diam-diam me-return
+ * [] sebelumnya) — sekarang: retry sekali, fallback ke html endpoint.
+ * Tetap [] bila semua gagal (engine me-retry dalam budget, bukan crash).
+ * Halaman JS-heavy = limitasi MVP yang diketahui.
+ */
+async function defaultSearchWeb(query: string): Promise<ResearchSearchHit[]> {
+  const urls = [
+    `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`,
+    `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+  ];
+  for (const url of urls) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await fetchWithTimeout(url, "text/html");
+      if (!res || !res.ok) continue;
+      const html = await res.text();
+      if (!html || html.length < 1000) continue; // challenge/block page
+      const hits = parseDdgHits(html);
+      if (hits.length > 0) return hits;
+      break; // HTML valid tapi 0 hits — coba endpoint lain, bukan retry sia-sia
+    }
+  }
+  return [];
 }
 
 /** Default fetchPage: fetch server-side + ekstraksi teks. */

@@ -149,6 +149,7 @@ export async function executeStage(input: ResearchPipelineInput, plan: ResearchP
   let n = 0;
 
   progress(input, 'execute', `mencari ${subQuestions.length} sub-pertanyaan…`);
+  let totalHits = 0;
   for (const sq of subQuestions) {
     if (sourceCount >= plan.budget.maxSources) break;
     let hits: ResearchSearchHit[];
@@ -157,6 +158,8 @@ export async function executeStage(input: ResearchPipelineInput, plan: ResearchP
     } catch (err) {
       throw new Error(`pencarian gagal untuk "${sq.text}": ${err instanceof Error ? err.message : String(err)}`);
     }
+    totalHits += hits.length;
+    progress(input, 'execute', `sub-pertanyaan "${sq.id}": ${hits.length} hasil`);
     // Fetch paralel terbatas per sub-pertanyaan.
     const fresh = hits.filter((h) => {
       const key = normalizeUrl(h.url);
@@ -202,6 +205,12 @@ export async function executeStage(input: ResearchPipelineInput, plan: ResearchP
     progress(input, 'execute', `sub-pertanyaan "${sq.id}" selesai`);
   }
   if (collected.length === 0) {
+    if (totalHits === 0) {
+      throw new ResearchPipelineError(
+        'pencarian tidak mengembalikan hasil untuk semua sub-pertanyaan — ' +
+        'kemungkinan DuckDuckGo diblokir/timeout dari jaringan ini; coba lagi nanti atau sederhanakan kata kunci',
+      );
+    }
     throw new ResearchPipelineError('tidak ada sumber yang berhasil di-fetch — riset dibatalkan');
   }
   return collected;
