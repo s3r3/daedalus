@@ -432,6 +432,80 @@ describe('defaultSearchWeb (DuckDuckGo)', () => {
   })
 })
 
+describe('defaultSearchWeb: rantai backend gratis', () => {
+  const OLD_ENV = { ...process.env }
+
+  function setKeys(keys: Record<string, string | undefined>) {
+    for (const k of ['BRAVE_SEARCH_API_KEY', 'TAVILY_API_KEY', 'GOOGLE_CSE_API_KEY', 'GOOGLE_CSE_CX']) {
+      if (keys[k] === undefined) delete process.env[k]
+      else process.env[k] = keys[k]
+    }
+  }
+
+  function mockFetch(handler: (url: string, init?: unknown) => Promise<Response>) {
+    const orig = globalThis.fetch
+    globalThis.fetch = handler as typeof fetch
+    return () => { globalThis.fetch = orig }
+  }
+
+  function restoreEnv() {
+    for (const k of ['BRAVE_SEARCH_API_KEY', 'TAVILY_API_KEY', 'GOOGLE_CSE_API_KEY', 'GOOGLE_CSE_CX']) {
+      delete process.env[k]
+      if (OLD_ENV[k] !== undefined) process.env[k] = OLD_ENV[k]!
+    }
+  }
+
+  test('Brave dipakai dulu bila ada key', async () => {
+    setKeys({ BRAVE_SEARCH_API_KEY: 'bkey' })
+    const restore = mockFetch(async (url) => {
+      if (String(url).includes('api.search.brave.com')) {
+        return new Response(JSON.stringify({ web: { results: [{ url: 'https://brave.id/a', title: 'A' }] } }), { status: 200 })
+      }
+      throw new Error('tidak boleh dipanggil: ' + url)
+    })
+    try {
+      const hits = await defaultResearchHooks().searchWeb('uji')
+      expect(hits.map((h) => h.url)).toEqual(['https://brave.id/a'])
+    } finally { restore(); restoreEnv() }
+  })
+
+  test('Brave gagal -> Tavily -> Google CSE -> DDG', async () => {
+    setKeys({ BRAVE_SEARCH_API_KEY: 'bkey', TAVILY_API_KEY: 'tkey', GOOGLE_CSE_API_KEY: 'gkey', GOOGLE_CSE_CX: 'cx1' })
+    const seen: string[] = []
+    const restore = mockFetch(async (url) => {
+      const u = String(url)
+      seen.push(u)
+      if (u.includes('api.search.brave.com')) return new Response('{}', { status: 500 })
+      if (u.includes('api.tavily.com')) return new Response(JSON.stringify({ results: [] }), { status: 200 })
+      if (u.includes('googleapis.com')) {
+        return new Response(JSON.stringify({ items: [{ link: 'https://g.id/x', title: 'GX' }] }), { status: 200 })
+      }
+      throw new Error('tidak boleh sampai DDG: ' + u)
+    })
+    try {
+      const hits = await defaultResearchHooks().searchWeb('uji')
+      expect(hits.map((h) => h.url)).toEqual(['https://g.id/x'])
+      expect(seen.some((u) => u.includes('brave'))).toBe(true)
+      expect(seen.some((u) => u.includes('tavily'))).toBe(true)
+    } finally { restore(); restoreEnv() }
+  })
+
+  test('tanpa key -> langsung DDG (perilaku lama)', async () => {
+    setKeys({})
+    const seen: string[] = []
+    const goodHtml = '<html><body>' + 'x'.repeat(1200) + '<a href="https://ddg.id/a">A</a></body></html>'
+    const restore = mockFetch(async (url) => {
+      seen.push(String(url))
+      return new Response(goodHtml, { status: 200, headers: { 'content-type': 'text/html' } })
+    })
+    try {
+      const hits = await defaultResearchHooks().searchWeb('uji')
+      expect(hits.map((h) => h.url)).toEqual(['https://ddg.id/a'])
+      expect(seen.some((u) => u.includes('brave') || u.includes('tavily') || u.includes('google'))).toBe(false)
+    } finally { restore(); restoreEnv() }
+  })
+})
+
 describe('probeFrameable', () => {
   test('DENY / SAMEORIGIN / frame-ancestors block embedding; open pages allow it', async () => {
     const { createServer } = await import('node:http')
