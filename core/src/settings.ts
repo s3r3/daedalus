@@ -181,6 +181,7 @@ const DOMAIN_ENV_PREFIX: Record<TaskDomain, string> = {
   slide: "DAEDALUS_DOMAIN_SLIDE",
   spreadsheet: "DAEDALUS_DOMAIN_SPREADSHEET",
   dokumen: "DAEDALUS_DOMAIN_DOKUMEN",
+  research: "DAEDALUS_DOMAIN_RESEARCH",
 };
 
 /**

@@ -81,7 +81,7 @@ describe('launcher arrow-key menu', () => {
     tray: detectTray({}, 'linux'),
   };
 
-  test('frame shows the six choices, the selection marker, URL, and workspace', () => {
+  test('frame shows the seven choices, the selection marker, URL, and workspace', () => {
     const frame = launcherMenuFrame(0, frameStatus);
     expect(frame).toContain('Daedalus');
     expect(frame).toContain('http://127.0.0.1:3080');
@@ -90,32 +90,36 @@ describe('launcher arrow-key menu', () => {
     expect(frame).toContain('2  Daedalus Slide (Web UI)');
     expect(frame).toContain('3  Daedalus Dokumen (Web UI)');
     expect(frame).toContain('4  Daedalus Spreadsheet (Web UI)');
-    expect(frame).toContain('5  Hide to Tray (Background)');
-    expect(frame).toContain('6  Exit');
-    expect(frame).toContain('1–6 jump');
+    expect(frame).toContain('5  Daedalus Research (Web UI)');
+    expect(frame).toContain('6  Hide to Tray (Background)');
+    expect(frame).toContain('7  Exit');
+    expect(frame).toContain('1–7 jump');
     expect(launcherMenuFrame(1, frameStatus)).toContain('❯ 2  Daedalus Slide (Web UI)');
     expect(launcherMenuFrame(2, frameStatus)).toContain('❯ 3  Daedalus Dokumen (Web UI)');
     expect(launcherMenuFrame(3, frameStatus)).toContain('❯ 4  Daedalus Spreadsheet (Web UI)');
-    expect(launcherMenuFrame(4, frameStatus)).toContain('❯ 5  Hide to Tray (Background)');
+    expect(launcherMenuFrame(4, frameStatus)).toContain('❯ 5  Daedalus Research (Web UI)');
+    expect(launcherMenuFrame(5, frameStatus)).toContain('❯ 6  Hide to Tray (Background)');
   });
 
   test('selection wraps and keys map to actions', () => {
-    expect(nextLauncherSelection(0, 'up')).toBe(5);
-    expect(nextLauncherSelection(5, 'down')).toBe(0);
+    expect(nextLauncherSelection(0, 'up')).toBe(6);
+    expect(nextLauncherSelection(6, 'down')).toBe(0);
     expect(nextLauncherSelection(1, 'down')).toBe(2);
     expect(nextLauncherSelection(2, 'up')).toBe(1);
     expect(launcherKeyAction('enter', 0)).toBe('coding');
     expect(launcherKeyAction('enter', 1)).toBe('slide');
     expect(launcherKeyAction('enter', 2)).toBe('dokumen');
     expect(launcherKeyAction('enter', 3)).toBe('spreadsheet');
-    expect(launcherKeyAction('enter', 4)).toBe('tray');
-    expect(launcherKeyAction('enter', 5)).toBe('exit');
+    expect(launcherKeyAction('enter', 4)).toBe('research');
+    expect(launcherKeyAction('enter', 5)).toBe('tray');
+    expect(launcherKeyAction('enter', 6)).toBe('exit');
     expect(launcherKeyAction('1', 0)).toBe('coding');
     expect(launcherKeyAction('2', 0)).toBe('slide');
     expect(launcherKeyAction('3', 0)).toBe('dokumen');
     expect(launcherKeyAction('4', 0)).toBe('spreadsheet');
-    expect(launcherKeyAction('5', 0)).toBe('tray');
-    expect(launcherKeyAction('6', 0)).toBe('exit');
+    expect(launcherKeyAction('5', 0)).toBe('research');
+    expect(launcherKeyAction('6', 0)).toBe('tray');
+    expect(launcherKeyAction('7', 0)).toBe('exit');
     expect(launcherKeyAction('q', 2)).toBe('exit');
     expect(launcherKeyAction('escape', 0)).toBe('exit');
     expect(launcherKeyAction('z', 0)).toBeUndefined();
@@ -200,7 +204,7 @@ describe('launcher arrow-key menu', () => {
     expect(printed.join('\n')).toContain('server keeps running in the background');
   });
 
-  test('number key 5 hides to tray and reports the honest backend note', async () => {
+  test('number key 6 hides to tray and reports the honest backend note', async () => {
     const hideToTray = vi.fn(async () => undefined);
     const printed: string[] = [];
     const result = await runLauncherMenu({
@@ -210,7 +214,7 @@ describe('launcher arrow-key menu', () => {
       hideToTray,
       stopServer,
       render: () => undefined,
-      readKey: async () => '5',
+      readKey: async () => '6',
     });
     expect(result).toBe('tray');
     expect(hideToTray).toHaveBeenCalledTimes(1);
@@ -259,7 +263,7 @@ describe('launcher Exit shuts the server down', () => {
       openWeb: async () => undefined,
       stopServer,
       render: () => undefined,
-      readKey: async () => '6',
+      readKey: async () => '7',
     });
     expect(result).toBe('exit');
     expect(printed.join('\n')).toContain('No server running. Bye.');
@@ -291,7 +295,7 @@ describe('launcher Exit shuts the server down', () => {
       openWeb: async () => undefined,
       stopServer,
       render: () => undefined,
-      readKey: async () => '6',
+      readKey: async () => '7',
     });
     expect(result).toBe('exit');
     expect(printed.join('\n')).toContain('Could not stop the Daedalus server: daemon did not exit before the stop timeout. Bye.');
@@ -595,9 +599,10 @@ describe('startup menu', () => {
     expect(parseMenuChoice('2')).toBe('slide');
     expect(parseMenuChoice('3')).toBe('dokumen');
     expect(parseMenuChoice('4')).toBe('spreadsheet');
-    expect(parseMenuChoice('5')).toBe('tray');
-    expect(parseMenuChoice('6')).toBe('exit');
-    expect(parseMenuChoice('7')).toBe('invalid');
+    expect(parseMenuChoice('5')).toBe('research');
+    expect(parseMenuChoice('6')).toBe('tray');
+    expect(parseMenuChoice('7')).toBe('exit');
+    expect(parseMenuChoice('8')).toBe('invalid');
     expect(parseMenuChoice('0')).toBe('exit');
     expect(parseMenuChoice('q')).toBe('exit');
     expect(parseMenuChoice('quit')).toBe('exit');
@@ -605,15 +610,16 @@ describe('startup menu', () => {
     expect(parseMenuChoice('x')).toBe('invalid');
   });
 
-  test('startupMenuText lists the six choices', () => {
+  test('startupMenuText lists the seven choices', () => {
     const text = startupMenuText(menuStatus as never);
     expect(text).toContain('Choose an interface:');
     expect(text).toContain('1  Daedalus Coding (Web UI)');
     expect(text).toContain('2  Daedalus Slide (Web UI)');
     expect(text).toContain('3  Daedalus Dokumen (Web UI)');
     expect(text).toContain('4  Daedalus Spreadsheet (Web UI)');
-    expect(text).toContain('5  Hide to Tray (Background)');
-    expect(text).toContain('6  Exit');
+    expect(text).toContain('5  Daedalus Research (Web UI)');
+    expect(text).toContain('6  Hide to Tray (Background)');
+    expect(text).toContain('7  Exit');
   });
 
   test('choice 1 opens Coding at / and exits the menu while the server keeps running', async () => {
@@ -696,12 +702,12 @@ describe('startup menu', () => {
     expect(printed.join('\n')).toContain('server keeps running in the background');
   });
 
-  test('choice 5 hides to tray', async () => {
+  test('choice 6 hides to tray', async () => {
     const hideToTray = vi.fn(async () => undefined);
     const stopServer = vi.fn(async () => ({ stopped: true, pid: 123, reason: 'daemon stopped' }));
     const result = await runStartupMenu({
       status: menuStatus as never,
-      readChoice: async () => '5',
+      readChoice: async () => '6',
       print: () => undefined,
       hideToTray,
       openWeb: async () => undefined,
@@ -712,12 +718,12 @@ describe('startup menu', () => {
     expect(stopServer).not.toHaveBeenCalled();
   });
 
-  test('choice 6 exits and shuts the server down', async () => {
+  test('choice 7 exits and shuts the server down', async () => {
     const printed: string[] = [];
     const stopServer = vi.fn(async () => ({ stopped: true, pid: 123, reason: 'daemon stopped' }));
     const result = await runStartupMenu({
       status: menuStatus as never,
-      readChoice: async () => '6',
+      readChoice: async () => '7',
       print: (text) => printed.push(text),
       openWeb: async () => undefined,
       stopServer,

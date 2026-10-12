@@ -1107,4 +1107,34 @@ export {
   type SpreadsheetEngineRunResult,
 } from "./sheets/engine.ts";
 
+export {
+  ResearchEngine,
+  type ResearchEngineOptions,
+} from "./research/engine.ts";
+export {
+  type ResearchReport,
+  type ResearchPlan,
+  type ResearchSource,
+  type ResearchClaim,
+  type ResearchSection,
+  type SourceConflict,
+  type SourceCredibility,
+  type CredibilityTier,
+  type ResearchLanguage,
+  validateResearchReport,
+  validateResearchPlan,
+} from "./research/types.ts";
+export {
+  runResearchPipeline,
+  ResearchPipelineError,
+  ResearchVerifyError,
+  type ResearchFetchHooks,
+  type ResearchStageId,
+  type ResearchSearchHit,
+  type FetchedPage,
+} from "./research/pipeline.ts";
+export { runVerifyGate } from "./research/verify.ts";
+export { assessCredibility } from "./research/credibility.ts";
+export { buildBibliography, exportBibtex, exportRis } from "./research/bibliography.ts";
+
 export { VERSION } from "./version.ts";
