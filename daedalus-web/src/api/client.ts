@@ -288,7 +288,8 @@ export type AnalysisPlan = {
   groupBys: string[]
   comparisons: string[]
   charts: AnalysisChart[]
-  assumptions: string[]
+  /** Mirrors the core contract: the server sends {name, value} objects, never bare strings. */
+  assumptions: Array<{ name: string; value: string | number | boolean }>
   steps: string[]
 }
 

@@ -112,7 +112,11 @@ function AnalysisPlanView({ analysis }: { analysis: ReturnType<typeof useAnalysi
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted">Asumsi</p>
           <ul className="mt-0.5 flex flex-col gap-0.5">
             {staged.assumptions.map((assumption, index) => (
-              <li key={index} className="text-[10px] text-muted">• {assumption}</li>
+              <li key={index} className="text-[10px] text-muted">
+                • <span className="text-foreground">{assumption.name}</span>
+                {': '}
+                <span className="font-mono">{String(assumption.value)}</span>
+              </li>
             ))}
           </ul>
         </div>

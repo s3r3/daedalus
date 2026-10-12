@@ -44,12 +44,11 @@ export type AnalysisDataset =
 
 /**
  * Intent routing verdict (call 1 of the two-call planner). Shape mirrors
- * the core contract: routing + complexity estimate → retry budget.
+ * the core contract: routing + complexity estimate.
  */
 export type AnalysisIntent = {
   kind: string;
   complexity: "simple" | "moderate" | "complex";
-  retryBudget: number;
 };
 
 /** Result of engine.runAnalysis per the core contract. */
@@ -119,14 +118,13 @@ export function defaultAnalysisHooks(): AnalysisCoreHooks {
       return mod.profileWorkbook(workbook);
     },
     classifyIntent: async ({ question, profiles, provider }) => {
-      const [mod, pipeline] = await Promise.all([
-        import("@daedalus/core/sheets/analysis-plan.ts"),
-        import("@daedalus/core/sheets/pipeline.ts"),
-      ]);
-      // Core signature is positional (provider, question, profiles);
-      // retry budget = MAX_STAGE_ATTEMPTS per the final decision.
+      const mod = await import("@daedalus/core/sheets/analysis-plan.ts");
+      // Core signature is positional (provider, question, profiles).
+      // The retry budget lives in the core's structuredCall (shared
+      // MAX_STAGE_ATTEMPTS, final decision 2026-10-12) — nothing on the
+      // server side needs to carry or read it.
       const { complexity } = await mod.classifyAnalysisIntent(provider, question, profiles);
-      return { kind: "analysis", complexity, retryBudget: pipeline.MAX_STAGE_ATTEMPTS };
+      return { kind: "analysis", complexity };
     },
     generatePlan: async ({ question, profiles, provider }) => {
       const mod = await import("@daedalus/core/sheets/analysis-plan.ts");

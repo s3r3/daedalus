@@ -121,7 +121,7 @@ const fixtureAnalysisPlan = {
     groupBys: ['Kanal', 'Bulan'],
     comparisons: ['Online vs Offline'],
     charts: [{ type: 'column', title: 'Laba per kanal' }],
-    assumptions: ['Data penjualan sudah bersih'],
+    assumptions: [{ name: 'Kebersihan data', value: 'Data penjualan sudah bersih' }],
     steps: ['Profiling dataset', 'Hitung metrik per kanal'],
   },
   profiles: { rows: 120, columns: 4 },

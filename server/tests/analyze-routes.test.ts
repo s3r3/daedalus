@@ -34,7 +34,7 @@ function fakeHooks(overrides: Partial<AnalysisCoreHooks> = {}): AnalysisCoreHook
     importCsv: (title) => stubWorkbook(title),
     importXlsx: (title) => stubWorkbook(title),
     profileWorkbook: () => [{ rowCount: 3, columns: ['region', 'produk', 'pendapatan'] }] as never,
-    classifyIntent: ({ question }) => ({ kind: 'sales-summary', complexity: 'simple', retryBudget: 2, question }),
+    classifyIntent: ({ question }) => ({ kind: 'sales-summary', complexity: 'simple', question }),
     generatePlan: ({ question, intent }) => ({
       question,
       metrics: ['total_pendapatan'],
