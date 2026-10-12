@@ -69,12 +69,13 @@ describe('runVerifyGate', () => {
     expect(r.issues.some((i) => i.rule === 2)).toBe(true);
   });
 
-  test('aturan 3: excerpt bukan substring gagal', () => {
+  test('aturan 3: excerpt bukan substring -> klaim di-drop, bukan gate gagal', () => {
     const report = baseReport();
     report.claims[0]!.excerpts = ['kalimat yang tidak ada di sumber sama sekali xyz'];
     const r = runVerifyGate(input(report, evidenceFor('Sinta memeringkat jurnal dari 1 sampai 6.')));
-    expect(r.ok).toBe(false);
-    expect(r.issues.some((i) => i.rule === 3)).toBe(true);
+    expect(r.ok).toBe(true);
+    expect(r.claimsDropped).toBe(1);
+    expect(r.report.claims).toHaveLength(0);
   });
 
   test('aturan 4: angka di teks tanpa verbatim di excerpt -> klaim di-drop, bukan gate gagal', () => {

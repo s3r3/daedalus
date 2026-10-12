@@ -49,9 +49,22 @@ export interface VerifyGateResult {
   claimsDropped: number;
 }
 
-/** Normalisasi untuk perbandingan substring: collapse whitespace, lowercase. */
+/** Normalisasi untuk perbandingan substring: collapse whitespace, lowercase,
+ *  decode HTML entities umum, dan samakan varian kutip/strip — kedua sisi
+ *  dinormalisasi sama, jadi pencocokan tetap ketat terhadap isi. */
 function norm(s: string): string {
-  return s.replace(/\s+/g, ' ').trim().toLowerCase();
+  return s
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/[‘’“”«»„‟]/g, '"')
+    .replace(/[–—]/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 }
 
 const NUMBER_TOKEN_RE = /(?<![A-Za-z0-9])-?\d[\d.,]*(?:\s?%)?(?![A-Za-z0-9])/g;
@@ -136,14 +149,17 @@ export function runVerifyGate(input: VerifyGateInput): VerifyGateResult {
       issues.push({ rule: 2, claimId: claim.id, message: `${where}: sumber belum ter-fetch HTTP 200 dalam run ini: ${unfetched.join(', ')}` });
       continue;
     }
-    // Aturan 3 — tiap excerpt substring dari konten sumbernya.
+    // Aturan 3 — tiap excerpt substring dari konten sumbernya. Excerpt yang
+    // tidak ketemu DICORET (aturan 7), bukan menggagalkan run: kutipan yang
+    // tidak bisa diverifikasi tidak boleh masuk laporan, tapi satu kutipan
+    // nakal tidak boleh membunuh seluruh riset.
     let excerptBad = false;
     for (const sid of claim.sourceIds) {
       const entry = evidence.get(sid.toLowerCase()) as EvidenceEntry;
       const content = norm(entry.content);
       for (const ex of claim.excerpts) {
         if (!content.includes(norm(ex))) {
-          issues.push({ rule: 3, claimId: claim.id, message: `${where}: excerpt bukan substring konten ${sid} — "${ex.slice(0, 60)}…"` });
+          droppedIds.add(claim.id);
           excerptBad = true;
           break;
         }
