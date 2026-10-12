@@ -231,6 +231,44 @@ describe('POST /research/run', () => {
     const second = await req(base, 'POST', '/research/run', { planId })
     expect(second.status).toBe(410)
   })
+
+  test('double-submit while running -> 409 already_running (not 410)', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const slowHooks = fakeHooks({
+      createEngine: () => ({
+        planResearch: async (question: string) => ({ ...stubPlan(), question }),
+        runResearch: async () => { await gate; return { report: stubReport(), gate: { ok: true } } as never },
+      }),
+    })
+    const { base, root } = await listen(slowHooks)
+    const planId = await stagePlan(base, root)
+    const first = req(base, 'POST', '/research/run', { planId })
+    // beri waktu agar run pertama masuk in-progress
+    await new Promise((r) => setTimeout(r, 150))
+    const statusRunning = await req(base, 'GET', `/research/run-status/${planId}`)
+    expect(statusRunning.status).toBe(200)
+    expect(statusRunning.body.status).toBe('running')
+    const second = await req(base, 'POST', '/research/run', { planId })
+    expect(second.status).toBe(409)
+    expect(second.body.error).toBe('already_running')
+    release()
+    const firstRes = await first
+    expect(firstRes.status).toBe(200)
+    // setelah selesai: plan dikonsumsi, run-status -> done + reportId
+    const statusDone = await req(base, 'GET', `/research/run-status/${planId}`)
+    expect(statusDone.body.status).toBe('done')
+    expect(statusDone.body.reportId).toBe('r1')
+    const third = await req(base, 'POST', '/research/run', { planId })
+    expect(third.status).toBe(410)
+  })
+
+  test('run-status unknown plan -> idle', async () => {
+    const { base } = await listen(fakeHooks())
+    const res = await req(base, 'GET', '/research/run-status/tidak-ada')
+    expect(res.status).toBe(200)
+    expect(res.body.status).toBe('idle')
+  })
 })
 
 describe('GET /research/report/:reportId/source/:sourceId/document', () => {

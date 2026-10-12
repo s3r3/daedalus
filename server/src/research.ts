@@ -540,11 +540,63 @@ export function peekStagedResearchPlan(planId: string): StagedResearchPlan | und
 /**
  * Consume staged plan untuk run (single-use gate). Undefined bila
  * hilang/kedaluwarsa — caller menjawab 410.
+ *
+ * Dipakai hanya saat run selesai (sukses/gagal); selama run berjalan
+ * plan tetap di-peek agar retry/timeout tidak dibilang "kedaluwarsa".
  */
 export function takeStagedResearchPlan(planId: string): StagedResearchPlan | undefined {
   const staged = peekStagedResearchPlan(planId);
   if (staged) stagedPlans.delete(planId);
   return staged;
+}
+
+/**
+ * Run riset yang sedang berjalan, per planId. Mencegah double-submit:
+ * request kedua untuk plan yang sama dijawab 409 already_running,
+ * bukan 410 yang menyesatkan. Dibersihkan di finally setiap run.
+ */
+const researchRunsInProgress = new Set<string>();
+
+/** true bila run untuk planId ini sudah berjalan (panggil sebelum run). */
+export function isResearchRunInProgress(planId: string): boolean {
+  return researchRunsInProgress.has(planId);
+}
+
+/** Tandai run dimulai; kembalikan false bila sudah ada yang berjalan. */
+export function tryStartResearchRun(planId: string): boolean {
+  if (researchRunsInProgress.has(planId)) return false;
+  researchRunsInProgress.add(planId);
+  return true;
+}
+
+/** Tandai run selesai (finally) — plan tetap dihapus via takeStagedResearchPlan. */
+export function finishResearchRun(planId: string): void {
+  researchRunsInProgress.delete(planId);
+}
+
+/**
+ * reportId per planId yang run-nya selesai — untuk recovery client
+ * yang request-nya putus di tengah jalan (timeout/proxy). TTL 1 jam.
+ */
+const researchRunReports = new Map<string, { reportId: string; at: number }>();
+const RESEARCH_RUN_REPORT_TTL_MS = 60 * 60 * 1000;
+
+export function rememberResearchRunReport(planId: string, reportId: string): void {
+  researchRunReports.set(planId, { reportId, at: Date.now() });
+  if (researchRunReports.size > 100) {
+    const oldest = [...researchRunReports.entries()].sort((a, b) => a[1].at - b[1].at)[0];
+    if (oldest) researchRunReports.delete(oldest[0]);
+  }
+}
+
+export function getResearchRunReportId(planId: string): string | undefined {
+  const entry = researchRunReports.get(planId);
+  if (!entry) return undefined;
+  if (Date.now() - entry.at >= RESEARCH_RUN_REPORT_TTL_MS) {
+    researchRunReports.delete(planId);
+    return undefined;
+  }
+  return entry.reportId;
 }
 
 /**

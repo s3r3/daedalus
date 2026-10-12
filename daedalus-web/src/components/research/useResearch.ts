@@ -26,6 +26,8 @@ export function useResearch() {
   const report = useDaedalusStore((state) => state.researchReport)
   const runError = useDaedalusStore((state) => state.researchRunError)
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  /** Kunci in-flight: cegah double-submit sebelum re-render menonaktifkan tombol. */
+  const runRef = useRef(false)
 
   const stopPolling = useCallback(() => {
     if (pollRef.current) {
@@ -57,11 +59,19 @@ export function useResearch() {
     }
   }, [])
 
-  /** Run the staged plan (the "Jalankan riset" gate). Polls progress while running. */
+  /**
+   * Run the staged plan (the "Jalankan riset" gate). Polls progress while
+   * running. Double-submit aman: kunci ref + server menjawab 409
+   * already_running bila run untuk plan ini sudah berjalan (bukan 410
+   * "kedaluwarsa" yang menyesatkan). Bila request putus di tengah jalan
+   * (timeout/proxy), client memulihkan via /research/run-status/:planId
+   * lalu mengambil laporan yang sudah selesai.
+   */
   const runResearch = useCallback(async (): Promise<boolean> => {
     const store = useDaedalusStore.getState()
     const stagedId = store.researchPlanId
-    if (!stagedId || store.researchRunning) return false
+    if (!stagedId || store.researchRunning || runRef.current) return false
+    runRef.current = true
     store.setResearchRunning(true)
     store.setResearchRunError(null)
     store.setResearchProgress([])
@@ -75,12 +85,41 @@ export function useResearch() {
       }
     }
     pollRef.current = setInterval(() => void poll(), 2000)
+    /** Tunggu run yang sudah berjalan di server, lalu ambil laporannya. */
+    const recoverRunning = async (): Promise<boolean> => {
+      for (let i = 0; i < 150; i++) {
+        await new Promise((r) => setTimeout(r, 2000))
+        try {
+          const st = await api.researchRunStatus(stagedId)
+          await poll()
+          if (st.status === 'done' && st.reportId) {
+            const rep = await api.researchGetReport(st.reportId)
+            const s = useDaedalusStore.getState()
+            s.setResearchReport(rep.report)
+            s.setResearchPlan(null, null)
+            return true
+          }
+          if (st.status === 'idle') return false
+        } catch {
+          /* coba lagi */
+        }
+      }
+      return false
+    }
     try {
       const response = await api.researchRun(stagedId)
       store.setResearchReport(response.report)
       store.setResearchPlan(null, null)
       return true
     } catch (error: unknown) {
+      if (error instanceof ApiError && error.status === 409) {
+        // Run sudah berjalan (double-submit / tab lain): pulihkan, jangan error.
+        store.setResearchRunError('Riset untuk rencana ini sudah berjalan — menunggu selesai…')
+        const ok = await recoverRunning()
+        if (ok) store.setResearchRunError(null)
+        else store.setResearchRunError('Riset selesai/tidak ditemukan — buat ulang rencana bila perlu.')
+        return ok
+      }
       if (error instanceof ApiError && error.status === 410) {
         store.setResearchRunError('Rencana kedaluwarsa — buat ulang rencana riset.')
         store.setResearchPlan(null, null)
@@ -91,11 +130,17 @@ export function useResearch() {
           : 'verify gate menolak klaim'
         store.setResearchRunError(`Verify gate gagal — tanpa laporan: ${first}`)
       } else {
-        store.setResearchRunError(messageOf(error))
+        // Kemungkinan request putus saat server masih jalan: coba pulihkan.
+        store.setResearchRunError('Koneksi terputus saat riset berjalan — mencoba memulihkan…')
+        const ok = await recoverRunning()
+        if (ok) store.setResearchRunError(null)
+        else store.setResearchRunError(`${messageOf(error)} — coba buat ulang rencana riset.`)
+        return ok
       }
       return false
     } finally {
       stopPolling()
+      runRef.current = false
       useDaedalusStore.getState().setResearchRunning(false)
       void poll()
     }

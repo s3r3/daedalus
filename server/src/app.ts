@@ -142,17 +142,22 @@ import {
 import {
   appendResearchProgress,
   defaultResearchDocHooks,
+  finishResearchRun,
   getResearchProgress,
   getResearchReport,
+  getResearchRunReportId,
   getResearchSourceContent,
   getResearchSourceDocument,
+  isResearchRunInProgress,
   peekStagedResearchPlan,
+  rememberResearchRunReport,
   researchProviderFromRequest,
   researchVerifyIssues,
   resolveResearchHooks,
   stageResearchPlan,
   storeResearchReport,
   takeStagedResearchPlan,
+  tryStartResearchRun,
   type ResearchCoreHooks,
   type ResearchDocHooks,
 } from "./research.ts";
@@ -4441,15 +4446,22 @@ export function createApp(ctx: AppContext) {
         }
         try {
           const planId = typeof parsed.planId === "string" ? parsed.planId : "";
-          const staged = planId ? takeStagedResearchPlan(planId) : undefined;
+          // Peek dulu (jangan consume): plan baru dihapus saat run selesai.
+          // Request kedua untuk plan yang masih berjalan -> 409, bukan 410.
+          const staged = planId ? peekStagedResearchPlan(planId) : undefined;
           if (!staged) {
             sendJson(res, 410, { error: "plan_expired", message: "rencana kedaluwarsa, buat ulang", request_id: requestId });
+            return;
+          }
+          if (!tryStartResearchRun(planId)) {
+            sendJson(res, 409, { error: "already_running", message: "riset untuk rencana ini sudah berjalan", request_id: requestId });
             return;
           }
           const hooks = await resolveResearchHooks(ctx);
           await ensureProvidersLoaded(ctx);
           const provider = researchProviderFromRequest(ctx, parsed);
           if (!provider) {
+            finishResearchRun(planId);
             sendJson(res, 400, { error: "no_provider_configured", request_id: requestId });
             return;
           }
@@ -4469,8 +4481,13 @@ export function createApp(ctx: AppContext) {
               return;
             }
             throw error;
+          } finally {
+            // Single-use gate: plan dikonsumsi saat run selesai (sukses/gagal).
+            takeStagedResearchPlan(planId);
+            finishResearchRun(planId);
           }
           storeResearchReport(result.report);
+          rememberResearchRunReport(planId, result.report.reportId);
           sendJson(res, 200, {
             report: result.report,
             request_id: requestId,
@@ -4479,6 +4496,25 @@ export function createApp(ctx: AppContext) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
       })();
+      return;
+    }
+
+    // Agentic Research: status run per planId — untuk recovery client yang
+    // request-nya putus (timeout/proxy) saat run masih/sudah berjalan.
+    // 200 { status: 'running' } | { status: 'done', reportId } | { status: 'idle' }.
+    const researchRunStatusMatch = /^\/research\/run-status\/([^/]+)$/.exec(url.pathname);
+    if (method === "GET" && researchRunStatusMatch) {
+      const statusPlanId = researchRunStatusMatch[1] ?? "";
+      if (isResearchRunInProgress(statusPlanId)) {
+        sendJson(res, 200, { status: "running", request_id: requestId });
+        return;
+      }
+      const reportId = getResearchRunReportId(statusPlanId);
+      if (reportId) {
+        sendJson(res, 200, { status: "done", reportId, request_id: requestId });
+        return;
+      }
+      sendJson(res, 200, { status: "idle", request_id: requestId });
       return;
     }
 
