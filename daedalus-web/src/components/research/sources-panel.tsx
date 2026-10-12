@@ -69,6 +69,7 @@ function download(filename: string, content: string, mime: string): void {
 export function ResearchSourcesPanel() {
   const report = useDaedalusStore((state) => state.researchReport)
   const traceIds = useDaedalusStore((state) => state.researchTraceSourceIds)
+  const setPreviewSourceId = useDaedalusStore((state) => state.setResearchPreviewSourceId)
 
   if (!report) return null
   const base = (report.reportId || 'riset').replace(/[^a-zA-Z0-9-]/g, '').slice(0, 24) || 'riset'
@@ -128,15 +129,15 @@ export function ResearchSourcesPanel() {
                   {s.credibility.verified ? '' : ' (terdeteksi)'}
                 </span>
               </div>
-              <a
-                href={s.url}
-                target="_blank"
-                rel="noreferrer"
-                className="mt-0.5 block truncate text-primary underline-offset-2 hover:underline"
-                title={s.url}
+              <button
+                type="button"
+                onClick={() => setPreviewSourceId(s.id)}
+                data-testid="research-source-open"
+                className="mt-0.5 block w-full truncate text-left text-primary underline-offset-2 hover:underline"
+                title={`${s.url} — klik untuk preview di panel tengah`}
               >
                 {s.title}
-              </a>
+              </button>
               {s.credibility.detail ? (
                 <p className="text-[10px] text-muted">{s.credibility.detail}</p>
               ) : null}

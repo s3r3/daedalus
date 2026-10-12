@@ -30,6 +30,7 @@ import { SheetStage } from './components/sheets/sheet-stage'
 import { SheetWorkspacePanel } from './components/sheets/sheet-workspace'
 import { ResearchPlanPanel } from './components/research/plan-panel'
 import { ResearchReportView } from './components/research/report-view'
+import { ResearchSourcePreview } from './components/research/source-preview'
 import { ResearchSourcesPanel } from './components/research/sources-panel'
 import { ResearchVerifyPanel } from './components/research/verify-panel'
 import { ResearchSummaryPanel } from './components/research/summary-panel'
@@ -78,6 +79,7 @@ export function App() {
   const setConversation = useDaedalusStore((state) => state.setConversation)
   const domain = useDaedalusStore((state) => state.domain)
   const setDomain = useDaedalusStore((state) => state.setDomain)
+  const researchPreviewSourceId = useDaedalusStore((state) => state.researchPreviewSourceId)
   const workspaceRoot = workspace.root
 
   // Side-column widths are user layout, persisted across visits. They only
@@ -375,7 +377,7 @@ export function App() {
           ) : domain === 'spreadsheet' ? (
             <SheetStage />
           ) : domain === 'research' ? (
-            <ResearchReportView />
+            researchPreviewSourceId ? <ResearchSourcePreview /> : <ResearchReportView />
           ) : (
             <>
               <EditorPane

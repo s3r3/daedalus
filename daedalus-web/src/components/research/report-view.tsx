@@ -14,6 +14,7 @@ function ClaimBlock({ claim, sources }: { claim: ResearchClaimView; sources: Res
   const [open, setOpen] = useState(false)
   const traceIds = useDaedalusStore((state) => state.researchTraceSourceIds)
   const setTrace = useDaedalusStore((state) => state.setResearchTraceSourceIds)
+  const setPreviewSourceId = useDaedalusStore((state) => state.setResearchPreviewSourceId)
   const traced = claim.sourceIds.some((id) => traceIds.includes(id))
 
   const toggleTrace = (): void => {
@@ -53,17 +54,16 @@ function ClaimBlock({ claim, sources }: { claim: ResearchClaimView; sources: Res
         {claim.sourceIds.map((sid) => {
           const src = sources.find((s) => s.id === sid)
           return (
-            <a
+            <button
               key={sid}
-              href={src?.url}
-              target="_blank"
-              rel="noreferrer"
+              type="button"
+              onClick={() => setPreviewSourceId(sid)}
               data-testid="research-claim-source-link"
               className="text-[10px] text-primary underline underline-offset-2 hover:opacity-80"
-              title={src?.title ?? sid}
+              title={`${src?.title ?? sid} — klik untuk preview di panel tengah`}
             >
               [{sid}]
-            </a>
+            </button>
           )
         })}
         <button

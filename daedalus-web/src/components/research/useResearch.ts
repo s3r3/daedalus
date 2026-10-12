@@ -65,6 +65,7 @@ export function useResearch() {
     store.setResearchRunning(true)
     store.setResearchRunError(null)
     store.setResearchProgress([])
+    store.setResearchPreviewSourceId(null)
     const poll = async (): Promise<void> => {
       try {
         const res = await api.researchProgress(stagedId)

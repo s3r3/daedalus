@@ -180,6 +180,8 @@ export type DaedalusState = {
   researchRunError: string | null
   /** Research: source ids lit up by claim-trace (click a claim → sources glow). */
   researchTraceSourceIds: string[]
+  /** Research: sumber yang sedang di-preview inline di panel tengah (null = laporan). */
+  researchPreviewSourceId: string | null
   openFilePath: string | null
   error: string | null
 
@@ -230,6 +232,7 @@ export type DaedalusState = {
   setResearchReport: (report: ResearchReportView | null) => void
   setResearchRunError: (error: string | null) => void
   setResearchTraceSourceIds: (ids: string[]) => void
+  setResearchPreviewSourceId: (sourceId: string | null) => void
   /** Clear the staged research plan and its run outcome. */
   clearResearch: () => void
   setOpenFile: (path: string | null) => void
@@ -310,6 +313,7 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   researchReport: null,
   researchRunError: null,
   researchTraceSourceIds: [],
+  researchPreviewSourceId: null,
   openFilePath: null,
   error: null,
 
@@ -462,11 +466,12 @@ export const useDaedalusStore = create<DaedalusState>((set) => ({
   setResearchReport: (report) => set({ researchReport: report }),
   setResearchRunError: (error) => set({ researchRunError: error }),
   setResearchTraceSourceIds: (ids) => set({ researchTraceSourceIds: ids }),
+  setResearchPreviewSourceId: (sourceId) => set({ researchPreviewSourceId: sourceId }),
   clearResearch: () =>
     set({
       researchPlan: null, researchPlanId: null, researchPlanning: false, researchPlanError: null,
       researchRunning: false, researchProgress: [], researchReport: null, researchRunError: null,
-      researchTraceSourceIds: [],
+      researchTraceSourceIds: [], researchPreviewSourceId: null,
     }),
   setOpenFile: (openFilePath) => set({ openFilePath }),
   setError: (error) => set({ error }),

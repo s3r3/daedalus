@@ -143,6 +143,7 @@ import {
   appendResearchProgress,
   getResearchProgress,
   getResearchReport,
+  getResearchSourceContent,
   peekStagedResearchPlan,
   researchProviderFromRequest,
   researchVerifyIssues,
@@ -4498,6 +4499,39 @@ export function createApp(ctx: AppContext) {
         return;
       }
       sendJson(res, 200, { report, request_id: requestId });
+      return;
+    }
+
+    // Agentic Research: konten satu sumber untuk preview inline di panel
+    // tengah (klik [sN] di laporan). 404 bila laporan/sumber tak dikenal,
+    // 502 bila halaman tak bisa diambil.
+    const researchSourceMatch = /^\/research\/report\/([^/]+)\/source\/([^/]+)\/content$/.exec(url.pathname);
+    if (method === "GET" && researchSourceMatch) {
+      void (async () => {
+        try {
+          const hooks = await resolveResearchHooks(ctx);
+          const content = await getResearchSourceContent(
+            researchSourceMatch[1] ?? "",
+            researchSourceMatch[2] ?? "",
+            hooks,
+          );
+          if (content === "report_not_found") {
+            sendJson(res, 404, { error: "report_not_found", request_id: requestId });
+            return;
+          }
+          if (content === "source_not_found") {
+            sendJson(res, 404, { error: "source_not_found", request_id: requestId });
+            return;
+          }
+          if (!content) {
+            sendJson(res, 502, { error: "source_unavailable", request_id: requestId });
+            return;
+          }
+          sendJson(res, 200, { content, request_id: requestId });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
       return;
     }
 

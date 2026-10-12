@@ -62,6 +62,9 @@ function stripToText(html: string): { title: string; text: string } {
     .replace(/<[^>]+>/g, " ")
     .replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ")
+    .replace(/&mdash;/g, "—").replace(/&ndash;/g, "–").replace(/&larr;/g, "←").replace(/&rarr;/g, "→")
+    .replace(/&hellip;/g, "…").replace(/&rsquo;/g, "'").replace(/&lsquo;/g, "'")
+    .replace(/&rdquo;/g, '"').replace(/&ldquo;/g, '"').replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
     .replace(/[ \t]+/g, " ")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -136,6 +139,48 @@ async function defaultFetchPage(url: string): Promise<FetchedPage | null> {
 }
 
 /**
+ * Cache halaman ter-fetch (per URL, TTL 1 jam, cap 300): dipakai dua kali —
+ * pipeline runResearch mengisinya saat executeStage, dan endpoint preview
+ * sumber (`GET /research/report/:reportId/source/:sourceId/content`)
+ * membacanya agar preview inline tidak me-refetch.
+ */
+const PAGE_CACHE_TTL_MS = 60 * 60 * 1000;
+const PAGE_CACHE_MAX = 300;
+const fetchedPageCache = new Map<string, { title: string; text: string; fetchedAt: number }>();
+
+export function cacheFetchedPage(url: string, title: string, text: string): void {
+  if (fetchedPageCache.size >= PAGE_CACHE_MAX) {
+    const oldest = fetchedPageCache.keys().next();
+    if (!oldest.done) fetchedPageCache.delete(oldest.value);
+  }
+  fetchedPageCache.set(url, { title, text, fetchedAt: Date.now() });
+}
+
+export function getCachedFetchedPage(url: string): { title: string; text: string } | undefined {
+  const entry = fetchedPageCache.get(url);
+  if (!entry) return undefined;
+  if (Date.now() - entry.fetchedAt >= PAGE_CACHE_TTL_MS) {
+    fetchedPageCache.delete(url);
+    return undefined;
+  }
+  return { title: entry.title, text: entry.text };
+}
+
+/** Test seam: kosongkan cache halaman. */
+export function clearFetchedPageCacheForTest(): void {
+  fetchedPageCache.clear();
+}
+
+/** fetchPage default yang mengisi cache — dipakai production hooks. */
+async function cachedFetchPage(url: string): Promise<FetchedPage | null> {
+  const cached = getCachedFetchedPage(url);
+  if (cached) return { url, status: 200, title: cached.title, text: cached.text };
+  const page = await defaultFetchPage(url);
+  if (page && page.text) cacheFetchedPage(url, page.title, page.text);
+  return page;
+}
+
+/**
  * Production hooks: setiap value import lazy agar require modul ini
  * tidak menyentuh modul kontrak core — hanya di-load saat request
  * nyata mengalir tanpa fake yang di-inject.
@@ -146,7 +191,7 @@ export function defaultResearchHooks(): ResearchCoreHooks {
       const mod = await import("@daedalus/core/research/engine.ts");
       const engine = new mod.ResearchEngine({
         provider,
-        fetch: { searchWeb: defaultSearchWeb, fetchPage: defaultFetchPage },
+        fetch: { searchWeb: defaultSearchWeb, fetchPage: cachedFetchPage },
       });
       return engine.planResearch(question);
     },
@@ -156,7 +201,7 @@ export function defaultResearchHooks(): ResearchCoreHooks {
       return engine as unknown as ResearchEngineSurface;
     },
     searchWeb: defaultSearchWeb,
-    fetchPage: defaultFetchPage,
+    fetchPage: cachedFetchPage,
   };
 }
 
@@ -323,6 +368,46 @@ export function getResearchReport(reportId: string): ResearchReport | undefined 
   return entry.report;
 }
 
+/** Konten sumber untuk preview inline di panel tengah (mode baca / PDF embed). */
+export interface ResearchSourceContent {
+  url: string;
+  title: string;
+  text: string;
+  cached: boolean;
+  isPdf: boolean;
+}
+
+/**
+ * Ambil konten satu sumber untuk preview: dari cache fetch pipeline bila ada,
+ * else fetch live sekali via hooks lalu cache. PDF tidak di-fetch — klien
+ * me-embed URL-nya langsung.
+ * Return "report_not_found" | "source_not_found" | null (tak bisa diambil).
+ */
+export async function getResearchSourceContent(
+  reportId: string,
+  sourceId: string,
+  hooks: Pick<ResearchCoreHooks, "fetchPage">,
+): Promise<ResearchSourceContent | "report_not_found" | "source_not_found" | null> {
+  const report = getResearchReport(reportId);
+  if (!report) return "report_not_found";
+  const source = report.sources.find((s) => s.id === sourceId);
+  if (!source) return "source_not_found";
+  const url = source.url;
+  const isPdf = /\.pdf(?:[?#]|$)/i.test(url);
+  if (isPdf) {
+    return { url, title: source.title || url, text: "", cached: false, isPdf: true };
+  }
+  const cached = getCachedFetchedPage(url);
+  if (cached) {
+    return { url, title: source.title || cached.title, text: cached.text, cached: true, isPdf: false };
+  }
+  const page = await hooks.fetchPage(url).catch(() => null);
+  if (page && page.text) {
+    cacheFetchedPage(url, page.title, page.text);
+    return { url, title: source.title || page.title, text: page.text, cached: false, isPdf: false };
+  }
+  return null;
+}
 /** Progres live per run (panel kiri me-poll GET /research/progress/:key). */
 export function appendResearchProgress(key: string, stage: string, detail: string): void {
   const log = progressLog.get(key) ?? [];

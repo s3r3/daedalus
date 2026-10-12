@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,7 +6,10 @@ import type { AddressInfo } from 'node:net'
 import { EventBus, TaskStore, loadSettings } from '@daedalus/core'
 import { createApp, createContext } from '../src/app.ts'
 import {
+  cacheFetchedPage,
+  clearFetchedPageCacheForTest,
   expireStagedResearchPlanForTest,
+  storeResearchReport,
   type ResearchCoreHooks,
   type ResearchPlan,
   type ResearchReport,
@@ -223,6 +226,78 @@ describe('POST /research/run', () => {
     expect(first.status).toBe(200)
     const second = await req(base, 'POST', '/research/run', { planId })
     expect(second.status).toBe(410)
+  })
+})
+
+describe('GET /research/report/:reportId/source/:sourceId/content', () => {
+  beforeEach(() => {
+    clearFetchedPageCacheForTest()
+  })
+
+  test('returns cached page content for a known source', async () => {
+    const { base, root } = await listen(fakeHooks())
+    const planId = await stagePlan(base, root)
+    const run = await req(base, 'POST', '/research/run', { planId })
+    expect(run.status).toBe(200)
+    const reportId = (run.body.report as Record<string, unknown>).reportId as string
+    cacheFetchedPage('https://sinta.kemdikbud.go.id/tentang', 'Tentang Sinta', 'Sinta memeringkat jurnal.')
+    const got = await req(base, 'GET', `/research/report/${reportId}/source/s1/content`)
+    expect(got.status).toBe(200)
+    const content = got.body.content as Record<string, unknown>
+    expect(content.cached).toBe(true)
+    expect(content.isPdf).toBe(false)
+    expect(content.text).toContain('Sinta memeringkat jurnal')
+  })
+
+  test('live-fetches and caches when the cache misses', async () => {
+    const hooks = fakeHooks({
+      fetchPage: async (url: string) => ({ url, status: 200, title: 'Live', text: 'teks live halaman' }),
+    })
+    const { base, root } = await listen(hooks)
+    const planId = await stagePlan(base, root)
+    const run = await req(base, 'POST', '/research/run', { planId })
+    const reportId = (run.body.report as Record<string, unknown>).reportId as string
+    const got = await req(base, 'GET', `/research/report/${reportId}/source/s1/content`)
+    expect(got.status).toBe(200)
+    expect((got.body.content as Record<string, unknown>).cached).toBe(false)
+    expect((got.body.content as Record<string, unknown>).text).toContain('teks live halaman')
+    // second read now hits the cache
+    const again = await req(base, 'GET', `/research/report/${reportId}/source/s1/content`)
+    expect((again.body.content as Record<string, unknown>).cached).toBe(true)
+  })
+
+  test('502 when the page cannot be fetched', async () => {
+    const { base, root } = await listen(fakeHooks())
+    const planId = await stagePlan(base, root)
+    const run = await req(base, 'POST', '/research/run', { planId })
+    const reportId = (run.body.report as Record<string, unknown>).reportId as string
+    const got = await req(base, 'GET', `/research/report/${reportId}/source/s1/content`)
+    expect(got.status).toBe(502)
+    expect(got.body.error).toBe('source_unavailable')
+  })
+
+  test('404 for unknown report and unknown source', async () => {
+    const { base } = await listen(fakeHooks())
+    const missingReport = await req(base, 'GET', '/research/report/nope/source/s1/content')
+    expect(missingReport.status).toBe(404)
+    storeResearchReport(stubReport())
+    const missingSource = await req(base, 'GET', '/research/report/r1/source/nope/content')
+    expect(missingSource.status).toBe(404)
+  })
+
+  test('PDF source is flagged isPdf without fetching', async () => {
+    const { base } = await listen(fakeHooks())
+    const pdfReport: ResearchReport = {
+      ...stubReport(),
+      reportId: 'rpdf',
+      sources: [{ ...stubReport().sources[0]!, id: 'spdf', url: 'https://contoh.id/paper.pdf', title: 'Paper PDF' }],
+    }
+    storeResearchReport(pdfReport)
+    const got = await req(base, 'GET', '/research/report/rpdf/source/spdf/content')
+    expect(got.status).toBe(200)
+    const content = got.body.content as Record<string, unknown>
+    expect(content.isPdf).toBe(true)
+    expect(content.url).toBe('https://contoh.id/paper.pdf')
   })
 })
 

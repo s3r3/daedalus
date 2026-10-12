@@ -7,6 +7,7 @@ import { ResearchReportView } from './report-view'
 import { ResearchSourcesPanel } from './sources-panel'
 import { ResearchVerifyPanel } from './verify-panel'
 import { ResearchSummaryPanel } from './summary-panel'
+import { ResearchSourcePreview } from './source-preview'
 import type { ResearchPlanSpec, ResearchReportView as ReportView } from '../../api/client'
 
 const researchPlanMock = vi.fn()
@@ -14,6 +15,7 @@ const researchRunMock = vi.fn()
 const researchGetPlanMock = vi.fn()
 const researchGetReportMock = vi.fn()
 const researchProgressMock = vi.fn()
+const researchSourceContentMock = vi.fn()
 
 vi.mock('../../api/client', () => ({
   ApiError: class ApiError extends Error {
@@ -32,6 +34,7 @@ vi.mock('../../api/client', () => ({
     researchGetPlan: (...args: unknown[]) => researchGetPlanMock(...args),
     researchGetReport: (...args: unknown[]) => researchGetReportMock(...args),
     researchProgress: (...args: unknown[]) => researchProgressMock(...args),
+    researchSourceContent: (...args: unknown[]) => researchSourceContentMock(...args),
   },
 }))
 
@@ -179,5 +182,68 @@ describe('ResearchVerifyPanel + ResearchSummaryPanel (right)', () => {
     render(<ResearchSummaryPanel />)
     await waitFor(() => expect(screen.getByTestId('research-summary-panel')).toBeTruthy())
     expect(screen.getByTestId('research-summary-text').textContent).toContain('indeks jurnal Indonesia')
+  })
+})
+
+describe('ResearchSourcePreview (center)', () => {
+  beforeEach(() => {
+    useDaedalusStore.getState().clearResearch()
+    researchSourceContentMock.mockReset()
+  })
+
+  test('clicking [sN] in the report opens the inline preview (reader mode)', async () => {
+    researchSourceContentMock.mockResolvedValue({
+      content: { url: 'https://sinta.kemdikbud.go.id/tentang', title: 'Tentang Sinta', text: 'Paragraf satu.\n\nParagraf dua.', cached: true, isPdf: false },
+    })
+    useDaedalusStore.getState().setResearchReport(fixtureReport)
+    render(<ResearchReportView />)
+    fireEvent.click(screen.getByTestId('research-claim-source-link'))
+    expect(useDaedalusStore.getState().researchPreviewSourceId).toBe('s1')
+
+    render(<ResearchSourcePreview />)
+    await waitFor(() => expect(screen.getByTestId('research-preview-reader')).toBeTruthy())
+    expect(screen.getByTestId('research-preview-reader').textContent).toContain('Paragraf satu')
+    expect(researchSourceContentMock).toHaveBeenCalledWith('r1', 's1')
+  })
+
+  test('back button returns to the report', async () => {
+    researchSourceContentMock.mockResolvedValue({
+      content: { url: 'https://sinta.kemdikbud.go.id/tentang', title: 'Tentang Sinta', text: 'Isi.', cached: true, isPdf: false },
+    })
+    useDaedalusStore.getState().setResearchReport(fixtureReport)
+    useDaedalusStore.getState().setResearchPreviewSourceId('s1')
+    render(<ResearchSourcePreview />)
+    await waitFor(() => expect(screen.getByTestId('research-source-preview')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('research-preview-back'))
+    expect(useDaedalusStore.getState().researchPreviewSourceId).toBeNull()
+  })
+
+  test('PDF source embeds an iframe without fetching content', async () => {
+    const pdfReport: ReportView = {
+      ...fixtureReport,
+      sources: [{ ...fixtureReport.sources[0]!, url: 'https://contoh.id/paper.pdf', title: 'Paper PDF' }],
+    }
+    useDaedalusStore.getState().setResearchReport(pdfReport)
+    useDaedalusStore.getState().setResearchPreviewSourceId('s1')
+    render(<ResearchSourcePreview />)
+    await waitFor(() => expect(screen.getByTestId('research-preview-pdf')).toBeTruthy())
+    expect(researchSourceContentMock).not.toHaveBeenCalled()
+    expect((screen.getByTestId('research-preview-pdf') as HTMLIFrameElement).src).toContain('paper.pdf')
+  })
+
+  test('fetch failure shows an honest error with the raw url', async () => {
+    researchSourceContentMock.mockRejectedValue(new Error('nope'))
+    useDaedalusStore.getState().setResearchReport(fixtureReport)
+    useDaedalusStore.getState().setResearchPreviewSourceId('s1')
+    render(<ResearchSourcePreview />)
+    await waitFor(() => expect(screen.getByTestId('research-preview-error')).toBeTruthy())
+  })
+
+  test('clicking a source title in the right panel opens the preview too', async () => {
+    useDaedalusStore.getState().setResearchReport(fixtureReport)
+    render(<ResearchSourcesPanel />)
+    await waitFor(() => expect(screen.getByTestId('research-source-open')).toBeTruthy())
+    fireEvent.click(screen.getByTestId('research-source-open'))
+    expect(useDaedalusStore.getState().researchPreviewSourceId).toBe('s1')
   })
 })

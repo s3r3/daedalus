@@ -366,6 +366,15 @@ export type ResearchProgressEvent = {
   at: number
 }
 
+/** Konten satu sumber riset untuk preview inline (mode baca / PDF embed). */
+export type ResearchSourceContent = {
+  url: string
+  title: string
+  text: string
+  cached: boolean
+  isPdf: boolean
+}
+
 /** One verified finding: prose plus the cell refs backing every number in it. */
 export type InsightFinding = {
   text: string
@@ -893,6 +902,15 @@ export const api = {
   /** Agentic Research: live progress events for a run (polled while running). */
   researchProgress: (planId: string) =>
     request<{ events: ResearchProgressEvent[] }>(`/research/progress/${encodeURIComponent(planId)}`),
+
+  /**
+   * Agentic Research: konten satu sumber untuk preview inline di panel
+   * tengah. PDF tidak di-fetch (klien me-embed URL langsung).
+   */
+  researchSourceContent: (reportId: string, sourceId: string) =>
+    request<{ content: ResearchSourceContent }>(
+      `/research/report/${encodeURIComponent(reportId)}/source/${encodeURIComponent(sourceId)}/content`,
+    ),
 
   /**
    * Export the open deck to .pptx through core's native exporter. A
