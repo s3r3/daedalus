@@ -506,6 +506,64 @@ describe('defaultSearchWeb: rantai backend gratis', () => {
   })
 })
 
+describe('curlFetchPage fallback', () => {
+  test('curlFetchPage mengambil halaman via subprocess curl', async () => {
+    const { createServer } = await import('node:http')
+    const html = '<html><head><title>Halo Curl</title></head><body><p>'.concat('isi konten. '.repeat(100), '</p></body></html>')
+    const srv = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' })
+      res.end(html)
+    })
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r))
+    const port = (srv.address() as { port: number }).port
+    try {
+      const { curlFetchPage } = await import('../src/research.ts')
+      const page = await curlFetchPage(`http://127.0.0.1:${port}/artikel`)
+      expect(page).not.toBeNull()
+      expect(page!.title).toContain('Halo Curl')
+      expect(page!.text.length).toBeGreaterThan(500)
+    } finally {
+      srv.close()
+    }
+  })
+
+  test('defaultFetchPage fallback ke curl saat Node fetch gagal', async () => {
+    const { createServer } = await import('node:http')
+    const html = '<html><head><title>Via Curl</title></head><body><p>'.concat('konten fallback. '.repeat(100), '</p></body></html>')
+    const srv = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html' })
+      res.end(html)
+    })
+    await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r))
+    const port = (srv.address() as { port: number }).port
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async () => { throw new Error('node fetch diblokir'); }) as typeof fetch
+    try {
+      clearFetchedPageCacheForTest()
+      const page = await defaultResearchHooks().fetchPage(`http://127.0.0.1:${port}/fallback`)
+      expect(page).not.toBeNull()
+      expect(page!.title).toContain('Via Curl')
+    } finally {
+      globalThis.fetch = origFetch
+      srv.close()
+    }
+  })
+
+  test('DAEDALUS_RESEARCH_CURL=0 menonaktifkan fallback', async () => {
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async () => { throw new Error('down'); }) as typeof fetch
+    process.env.DAEDALUS_RESEARCH_CURL = '0'
+    try {
+      clearFetchedPageCacheForTest()
+      const page = await defaultResearchHooks().fetchPage('http://127.0.0.1:9/tidak-ada')
+      expect(page).toBeNull()
+    } finally {
+      globalThis.fetch = origFetch
+      delete process.env.DAEDALUS_RESEARCH_CURL
+    }
+  })
+})
+
 describe('probeFrameable', () => {
   test('DENY / SAMEORIGIN / frame-ancestors block embedding; open pages allow it', async () => {
     const { createServer } = await import('node:http')
