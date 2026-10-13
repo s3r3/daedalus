@@ -77,14 +77,14 @@ function stripToText(html: string): { title: string; text: string } {
   return { title, text: text.slice(0, 60_000) };
 }
 
-async function fetchWithTimeout(url: string, accept: string): Promise<Response | null> {
+async function fetchWithTimeout(url: string, accept: string, userAgent?: string): Promise<Response | null> {
   try {
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
     const res = await fetch(url, {
       signal: ctrl.signal,
       headers: {
-        "User-Agent": "Daedalus-Research/1.0 (research agent; contact: research)",
+        "User-Agent": userAgent ?? "Daedalus-Research/1.0 (research agent; contact: research)",
         Accept: accept,
         "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
       },
@@ -369,6 +369,131 @@ export function parseDdgHits(html: string): ResearchSearchHit[] {
 
 interface SearchBackendHit { url: string; title: string }
 
+/** Decode entitas HTML/XML umum (dipakai parser RSS/Atom). */
+function decodeEntities(s: string): string {
+  return s
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, "$1")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+/**
+ * Bing RSS (tanpa key, tanpa daftar): pengganti DuckDuckGo untuk web umum.
+ * Exported untuk test.
+ */
+export async function bingRssSearchWeb(query: string): Promise<ResearchSearchHit[]> {
+  // Bing mengembalikan RSS kosong untuk UA non-browser — pakai UA browser.
+  const res = await fetchWithTimeout(
+    `https://www.bing.com/search?q=${encodeURIComponent(query)}&format=rss`,
+    "application/rss+xml",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+  );
+  if (!res || !res.ok) return [];
+  const xml = await res.text();
+  if (!xml || !xml.includes("<item")) return [];
+  const hits: ResearchSearchHit[] = [];
+  const seen = new Set<string>();
+  for (const m of xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)) {
+    const item = m[1] ?? "";
+    const link = (/<link>([\s\S]*?)<\/link>/i.exec(item)?.[1] ?? "").trim();
+    if (!link || !/^https?:\/\//i.test(link)) continue;
+    const key = link.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const title = decodeEntities((/<title>([\s\S]*?)<\/title>/i.exec(item)?.[1] ?? "").trim()).slice(0, 200);
+    const snippet = decodeEntities((/<description>([\s\S]*?)<\/description>/i.exec(item)?.[1] ?? "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()).slice(0, 300);
+    hits.push({ url: link, title: title || link, snippet: snippet || undefined });
+    if (hits.length >= 10) break;
+  }
+  return hits;
+}
+
+/**
+ * OpenAlex (tanpa key, tanpa daftar): karya ilmiah — cocok untuk riset akademik.
+ * Exported untuk test.
+ */
+export async function openAlexSearchWeb(query: string): Promise<ResearchSearchHit[]> {
+  const res = await fetchWithTimeout(
+    `https://api.openalex.org/works?search=${encodeURIComponent(query)}&per-page=10&select=id,doi,title,publication_year,cited_by_count`,
+    "application/json",
+  );
+  if (!res || !res.ok) return [];
+  try {
+    const data = (await res.json()) as {
+      results?: Array<{ doi?: string | null; title?: string | null; publication_year?: number; cited_by_count?: number }>;
+    };
+    const hits: ResearchSearchHit[] = [];
+    for (const w of data.results ?? []) {
+      if (!w?.doi || !w.title) continue;
+      const doi = w.doi.replace(/^https?:\/\/doi\.org\//i, "");
+      const meta = [
+        w.publication_year ? String(w.publication_year) : "",
+        typeof w.cited_by_count === "number" ? `disitasi ${w.cited_by_count}x` : "",
+      ].filter(Boolean).join(" · ");
+      hits.push({ url: `https://doi.org/${doi}`, title: w.title, snippet: meta || undefined });
+    }
+    return hits;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Crossref (tanpa key, tanpa daftar): karya ilmiah berbasis DOI.
+ * Exported untuk test.
+ */
+export async function crossrefSearchWeb(query: string): Promise<ResearchSearchHit[]> {
+  const res = await fetchWithTimeout(
+    `https://api.crossref.org/works?query=${encodeURIComponent(query)}&rows=10&select=DOI,title,URL`,
+    "application/json",
+  );
+  if (!res || !res.ok) return [];
+  try {
+    const data = (await res.json()) as {
+      message?: { items?: Array<{ DOI?: string; title?: string[]; URL?: string }> };
+    };
+    const hits: ResearchSearchHit[] = [];
+    for (const it of data.message?.items ?? []) {
+      const title = it.title?.[0]?.trim();
+      if (!it.DOI || !title) continue;
+      hits.push({ url: it.URL || `https://doi.org/${it.DOI}`, title });
+    }
+    return hits;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * arXiv (tanpa key, tanpa daftar): preprint — relevan untuk topik ML/AI terkini.
+ * Exported untuk test.
+ */
+export async function arxivSearchWeb(query: string): Promise<ResearchSearchHit[]> {
+  const res = await fetchWithTimeout(
+    `https://export.arxiv.org/api/query?search_query=all:${encodeURIComponent(query)}&max_results=10&sortBy=relevance&sortOrder=descending`,
+    "application/atom+xml",
+  );
+  if (!res || !res.ok) return [];
+  const xml = await res.text();
+  if (!xml || !xml.includes("<entry")) return [];
+  const hits: ResearchSearchHit[] = [];
+  const seen = new Set<string>();
+  for (const m of xml.matchAll(/<entry>([\s\S]*?)<\/entry>/gi)) {
+    const entry = m[1] ?? "";
+    const id = (/<id>([\s\S]*?)<\/id>/i.exec(entry)?.[1] ?? "").trim();
+    if (!id || !/^https?:\/\//i.test(id)) continue;
+    const key = id.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const title = decodeEntities((/<title>([\s\S]*?)<\/title>/i.exec(entry)?.[1] ?? "").replace(/\s+/g, " ").trim()).slice(0, 200);
+    const published = (/<published>([\s\S]*?)<\/published>/i.exec(entry)?.[1] ?? "").slice(0, 10);
+    hits.push({ url: id, title: title || id, snippet: published ? `arXiv · ${published}` : "arXiv" });
+    if (hits.length >= 10) break;
+  }
+  return hits;
+}
+
 async function braveSearchWeb(query: string, apiKey: string): Promise<SearchBackendHit[]> {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
@@ -439,8 +564,10 @@ async function googleCseSearchWeb(query: string, apiKey: string, cx: string): Pr
 
 /**
  * Default searchWeb: rantai backend gratis.
- * Brave -> Tavily -> Google CSE -> DuckDuckGo (tanpa key, best-effort).
- * Backend tanpa key di-skip; yang gagal dilempar ke berikutnya.
+ * Brave -> Tavily -> Google CSE -> DuckDuckGo (tanpa key, best-effort) ->
+ * rantai keyless tanpa daftar: Bing RSS (web umum) -> OpenAlex ->
+ * Crossref -> arXiv (ilmiah). Backend tanpa key di-skip; yang gagal
+ * dilempar ke berikutnya.
  * Env: BRAVE_SEARCH_API_KEY, TAVILY_API_KEY, GOOGLE_CSE_API_KEY +
  * GOOGLE_CSE_CX. Tetap [] bila semua gagal (bukan crash).
  */
@@ -477,6 +604,15 @@ async function defaultSearchWeb(query: string): Promise<ResearchSearchHit[]> {
       break; // HTML valid tapi 0 hits — coba endpoint lain, bukan retry sia-sia
     }
   }
+  // Rantai keyless tanpa daftar — untuk kasus DDG diblokir jaringan.
+  const bingHits = await bingRssSearchWeb(query);
+  if (bingHits.length > 0) return bingHits;
+  const openAlexHits = await openAlexSearchWeb(query);
+  if (openAlexHits.length > 0) return openAlexHits;
+  const crossrefHits = await crossrefSearchWeb(query);
+  if (crossrefHits.length > 0) return crossrefHits;
+  const arxivHits = await arxivSearchWeb(query);
+  if (arxivHits.length > 0) return arxivHits;
   return [];
 }
 
