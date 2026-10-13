@@ -564,6 +564,37 @@ describe('curlFetchPage fallback', () => {
   })
 })
 
+describe('keyless search backends', () => {
+  test('bingRssSearchWeb mengembalikan hits web umum', async () => {
+    const { bingRssSearchWeb } = await import('../src/research.ts')
+    const hits = await bingRssSearchWeb('machine learning journal')
+    expect(hits.length).toBeGreaterThan(0)
+    expect(hits[0]!.url).toMatch(/^https?:\/\//)
+    expect(hits[0]!.title.length).toBeGreaterThan(0)
+  }, 30000)
+
+  test('openAlexSearchWeb mengembalikan karya ilmiah via DOI', async () => {
+    const { openAlexSearchWeb } = await import('../src/research.ts')
+    const hits = await openAlexSearchWeb('deep learning image classification')
+    expect(hits.length).toBeGreaterThan(0)
+    expect(hits[0]!.url).toContain('doi.org')
+  }, 30000)
+
+  test('crossrefSearchWeb mengembalikan karya ilmiah', async () => {
+    const { crossrefSearchWeb } = await import('../src/research.ts')
+    const hits = await crossrefSearchWeb('neural network optimization')
+    expect(hits.length).toBeGreaterThan(0)
+    expect(hits[0]!.title.length).toBeGreaterThan(0)
+  }, 30000)
+
+  test('arxivSearchWeb mengembalikan preprint', async () => {
+    const { arxivSearchWeb } = await import('../src/research.ts')
+    const hits = await arxivSearchWeb('transformer')
+    expect(hits.length).toBeGreaterThan(0)
+    expect(hits[0]!.url).toContain('arxiv.org')
+  }, 30000)
+})
+
 describe('probeFrameable', () => {
   test('DENY / SAMEORIGIN / frame-ancestors block embedding; open pages allow it', async () => {
     const { createServer } = await import('node:http')
