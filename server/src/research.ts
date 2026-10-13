@@ -480,18 +480,60 @@ async function defaultSearchWeb(query: string): Promise<ResearchSearchHit[]> {
   return [];
 }
 
-/** Default fetchPage: fetch server-side + ekstraksi teks. */
+/**
+ * Fetch via curl (subprocess) dengan header browser. Beberapa situs/WAF
+ * memblokir fingerprint TLS Node tapi meloloskan curl — jalur fallback
+ * saat Node fetch gagal. Exported untuk test. Nonaktif via env
+ * DAEDALUS_RESEARCH_CURL=0.
+ */
+export async function curlFetchPage(url: string): Promise<FetchedPage | null> {
+  if (!/^https?:\/\//i.test(url)) return null;
+  try {
+    const html = await new Promise<string>((resolve, reject) => {
+      execFile(
+        "curl",
+        [
+          "-sL", "--max-time", "25",
+          "-A", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+          "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "-H", "Accept-Language: id-ID,id;q=0.9,en;q=0.8",
+          "--compressed",
+          url,
+        ],
+        { maxBuffer: 8 * 1024 * 1024 },
+        (err, stdout) => (err ? reject(err) : resolve(stdout)),
+      );
+    });
+    if (!html || html.length < 500) return null;
+    const { title, text } = stripToText(html);
+    if (!text) return null;
+    return { url, status: 200, title, text };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Default fetchPage: fetch server-side + ekstraksi teks.
+ * Jalur 1: Node fetch. Jalur 2 (fallback): curl — untuk situs yang
+ * memblokir Node tapi meloloskan curl. Bisa dimatikan via env
+ * DAEDALUS_RESEARCH_CURL=0.
+ */
 async function defaultFetchPage(url: string): Promise<FetchedPage | null> {
   if (!/^https?:\/\//i.test(url)) return null;
   const res = await fetchWithTimeout(url, "text/html,application/xhtml+xml");
-  if (!res || res.status !== 200) return null;
-  const contentType = res.headers.get("content-type") ?? "";
-  if (!/text\/html|application\/xhtml/i.test(contentType) && contentType) return null;
-  const html = await res.text();
-  if (!html) return null;
-  const { title, text } = stripToText(html);
-  if (!text) return null;
-  return { url, status: res.status, title, text };
+  if (res && res.status === 200) {
+    const contentType = res.headers.get("content-type") ?? "";
+    if (!contentType || /text\/html|application\/xhtml/i.test(contentType)) {
+      const html = await res.text();
+      if (html) {
+        const { title, text } = stripToText(html);
+        if (text) return { url, status: res.status, title, text };
+      }
+    }
+  }
+  if (process.env.DAEDALUS_RESEARCH_CURL === "0") return null;
+  return curlFetchPage(url);
 }
 
 /**
