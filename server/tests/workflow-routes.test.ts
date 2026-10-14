@@ -199,3 +199,33 @@ describe('GET /workflow/runs', () => {
     expect(body.error).toBe('run_not_found')
   })
 })
+
+describe('GET /workflow/runs/:id failed-turn note', () => {
+  test('failed task error surfaces on the turn note', async () => {
+    const { base, home } = await listen()
+    const runs = new WorkflowRunStore(home)
+    const run = createWorkflowRun(workspace!)
+    appendTurn(run, {
+      engine: 'coding',
+      task_id: 'task-gagal',
+      goal: 'tugas gagal',
+      status: 'running',
+    })
+    runs.saveRun(run)
+    // Seed a failed task state with the runner's error.
+    const store = new TaskStore(home)
+    store.saveState('task-gagal', {
+      status: 'failed',
+      last_error: 'provider_timeout: model did not respond',
+    })
+
+    const res = await fetch(new URL(`/workflow/runs/${run.run_id}`, base))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      run: { turns: Array<{ status: string; note?: string }> }
+    }
+    expect(body.run.turns).toHaveLength(1)
+    expect(body.run.turns[0]!.status).toBe('failed')
+    expect(body.run.turns[0]!.note).toContain('provider_timeout')
+  })
+})

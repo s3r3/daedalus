@@ -1907,7 +1907,16 @@ function reconcileWorkflowRun(ctx: AppContext, run: RunContext): boolean {
       });
       changed = true;
     } else if (state?.status === "failed") {
-      updateTurn(run, turn.turn_id, { status: "failed" });
+      // Surface the task's own error on the turn so the companion can
+      // show WHY it failed instead of a bare "Failed" badge.
+      const err =
+        typeof state.last_error === "string" && state.last_error.trim()
+          ? state.last_error.trim().slice(0, 300)
+          : undefined;
+      updateTurn(run, turn.turn_id, {
+        status: "failed",
+        ...(err ? { note: err } : {}),
+      });
       changed = true;
     } else if (!state) {
       // No runner and no persisted state: the task is gone (e.g. the
