@@ -1,1 +1,31 @@
-{"$schema": "../gen/schemas/desktop-schema.json", "description": "Dae Captain main window: may call the app's Tauri commands and resize the island window.", "identifier": "default", "permissions": ["core:default", "core:window:allow-set-size", "allow-compositor-info", "allow-get-prefs", "allow-node-available", "allow-open-web", "allow-quit-app", "allow-server-health", "allow-server-managed", "allow-set-prefs", "allow-spawn-server", "allow-stop-server", "allow-validate-repo-root", "allow-validate-workspace", "allow-list-dir", "allow-create-dir", "allow-daemon-token"], "windows": ["main"]}
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "description": "Dae Captain main window: may call the app's Tauri commands and resize the island window.",
+  "identifier": "default",
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-size",
+    "allow-compositor-info",
+    "allow-get-prefs",
+    "allow-node-available",
+    "allow-open-web",
+    "allow-quit-app",
+    "allow-server-health",
+    "allow-server-managed",
+    "allow-set-prefs",
+    "allow-spawn-server",
+    "allow-stop-server",
+    "allow-validate-repo-root",
+    "allow-validate-workspace",
+    "allow-list-dir",
+    "allow-create-dir",
+    "allow-daemon-token",
+    "allow-pick-folder",
+    "dialog:allow-open",
+    "allow-open-file",
+    "allow-reveal-in-folder"
+  ],
+  "windows": [
+    "main"
+  ]
+}

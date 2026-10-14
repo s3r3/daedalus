@@ -93,6 +93,19 @@ fn get_prefs(app: AppHandle) -> Result<Prefs, String> {    let path = prefs_path
 /// Read the local daemon token from ~/.daedalus/daemon.json.
 /// The server generates this on first start; sensitive endpoints (approve,
 /// cancel) require it as `Authorization: Bearer <token>`.
+/// Open a native folder picker dialog. Returns the selected path, or None
+/// if the user cancelled.
+#[tauri::command]
+fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let path = app
+        .dialog()
+        .file()
+        .set_title("Pilih folder workspace")
+        .blocking_pick_folder();
+    Ok(path.map(|p| p.to_string()))
+}
+
 #[tauri::command]
 fn daemon_token() -> Result<String, String> {
     let home = dirs::home_dir().ok_or("tidak bisa menemukan home directory")?;
@@ -519,6 +532,53 @@ fn open_web(url: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Open a file with the OS default application.
+/// Only allows files inside the current workspace root (validated by caller).
+#[tauri::command]
+fn open_file(path: String) -> Result<(), String> {
+    // Basic safety: must be an absolute path, no null bytes
+    if !path.starts_with('/') || path.contains('\0') {
+        return Err("open_file requires an absolute path".to_string());
+    }
+    Command::new("xdg-open")
+        .arg(&path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("xdg-open failed: {e}"))?;
+    Ok(())
+}
+
+/// Reveal a file in the system file manager (select it).
+#[tauri::command]
+fn reveal_in_folder(path: String) -> Result<(), String> {
+    if !path.starts_with('/') || path.contains('\0') {
+        return Err("reveal_in_folder requires an absolute path".to_string());
+    }
+    // Try file manager with --select, fall back to opening parent dir
+    let parent = std::path::Path::new(&path).parent()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    // xdg-open doesn't support --select; try common file managers
+    for fm in ["nautilus", "dolphin", "thunar", "pcmanfm"] {
+        if Command::new(fm).arg("--select").arg(&path)
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
+            .spawn().is_ok() {
+            return Ok(());
+        }
+    }
+    // Fallback: open parent directory
+    Command::new("xdg-open")
+        .arg(&parent)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|e| format!("xdg-open failed: {e}"))?;
+    Ok(())
+}
+
 #[tauri::command]
 fn quit_app(app: AppHandle) {
     app.exit(0);
@@ -530,6 +590,7 @@ fn quit_app(app: AppHandle) {
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             server_child: Mutex::new(None),
             server_managed: Mutex::new(false),
@@ -539,6 +600,7 @@ fn main() {
             get_prefs,
             set_prefs,
             daemon_token,
+            pick_folder,
             server_health,
             server_managed,
             node_available,
@@ -550,6 +612,8 @@ fn main() {
             stop_server,
             compositor_info,
             open_web,
+            open_file,
+            reveal_in_folder,
             quit_app,
         ])
         .setup(|app| {

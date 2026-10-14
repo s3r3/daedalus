@@ -64,8 +64,15 @@ export function formatResolvedArtifacts(resolved) {
   if (!Array.isArray(resolved) || resolved.length === 0) return [];
   return resolved.map((a) => {
     const label = a.label ?? a.kind ?? "artifact";
-    const where = a.path ?? a.export_path ?? (a.report_id ? `report ${a.report_id}` : a.url ?? "");
-    return where ? `${label} — ${where}` : label;
+    const path = a.path ?? a.export_path ?? null;
+    const url = a.url ?? null;
+    const where = path ?? (a.report_id ? `report ${a.report_id}` : url ?? "");
+    return {
+      label,
+      path, // absolute path for open_file/reveal_in_folder
+      url,
+      display: where ? `${label} — ${where}` : label,
+    };
   });
 }
 
@@ -261,4 +268,117 @@ function summarizeArgs(tool, args) {
   const pick = a.path ?? a.file ?? a.dir ?? a.command ?? a.cmd ?? "";
   if (typeof pick === "string" && pick) return pick.length > 40 ? "…" + pick.slice(-39) : pick;
   return "";
+}
+
+/**
+ * Minimal Markdown renderer (no dependencies).
+ * Supports: code blocks (```), inline code, bold, italic, headers,
+ * unordered/ordered lists, links, paragraphs. Returns HTML string.
+ * Code blocks get a copy button (wired up by the caller).
+ */
+export function renderMarkdown(text) {
+  if (!text) return "";
+  const lines = String(text).split("\n");
+  let html = "";
+  let inCode = false;
+  let codeLang = "";
+  let codeBuf = [];
+  let inList = false;
+  let listType = "";
+
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  const inline = (s) => {
+    // Inline code first (protect from other replacements)
+    const codes = [];
+    s = s.replace(/`([^`]+)`/g, (_, c) => {
+      codes.push(`<code class="inline-code">${esc(c)}</code>`);
+      return `\u0000${codes.length - 1}\u0000`;
+    });
+    s = esc(s);
+    // Restore inline code
+    s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => codes[Number(i)]);
+    // Bold, italic, links
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    return s;
+  };
+
+  const closeList = () => {
+    if (inList) {
+      html += listType === "ol" ? "</ol>" : "</ul>";
+      inList = false;
+      listType = "";
+    }
+  };
+
+  for (const line of lines) {
+    // Code block fence
+    const fence = line.match(/^```(\w*)\s*$/);
+    if (fence) {
+      if (!inCode) {
+        inCode = true;
+        codeLang = fence[1] || "";
+        codeBuf = [];
+        closeList();
+      } else {
+        inCode = false;
+        const code = esc(codeBuf.join("\n"));
+        html += `<div class="code-block"><div class="code-head"><span>${esc(codeLang)}</span><button class="copy-btn" data-code="${encodeURIComponent(codeBuf.join("\n"))}">Salin</button></div><pre><code>${code}</code></pre></div>`;
+      }
+      continue;
+    }
+    if (inCode) {
+      codeBuf.push(line);
+      continue;
+    }
+    // Headers
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    if (h) {
+      closeList();
+      const level = h[1].length;
+      html += `<h${level + 2} class="md-h">${inline(h[2])}</h${level + 2}>`;
+      continue;
+    }
+    // Unordered list
+    const ul = line.match(/^\s*[-*]\s+(.*)$/);
+    if (ul) {
+      if (!inList || listType !== "ul") {
+        closeList();
+        html += "<ul class=\"md-list\">";
+        inList = true;
+        listType = "ul";
+      }
+      html += `<li>${inline(ul[1])}</li>`;
+      continue;
+    }
+    // Ordered list
+    const ol = line.match(/^\s*\d+\.\s+(.*)$/);
+    if (ol) {
+      if (!inList || listType !== "ol") {
+        closeList();
+        html += "<ol class=\"md-list\">";
+        inList = true;
+        listType = "ol";
+      }
+      html += `<li>${inline(ol[1])}</li>`;
+      continue;
+    }
+    // Blank line
+    if (!line.trim()) {
+      closeList();
+      continue;
+    }
+    // Paragraph
+    closeList();
+    html += `<p class="md-p">${inline(line)}</p>`;
+  }
+  closeList();
+  // Unclosed code block
+  if (inCode) {
+    const code = esc(codeBuf.join("\n"));
+    html += `<div class="code-block"><div class="code-head"><span>${esc(codeLang)}</span><button class="copy-btn" data-code="${encodeURIComponent(codeBuf.join("\n"))}">Salin</button></div><pre><code>${code}</code></pre></div>`;
+  }
+  return html;
 }

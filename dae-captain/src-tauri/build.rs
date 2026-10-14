@@ -6,6 +6,9 @@ fn main() {
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
             "compositor_info",
             "daemon_token",
+            "pick_folder",
+            "open_file",
+            "reveal_in_folder",
             "get_prefs",
             "node_available",
             "open_web",
