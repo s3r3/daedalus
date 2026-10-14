@@ -2,6 +2,7 @@
 // All server communication goes through api.js; all decisions through logic.js.
 
 import { createApiClient } from "./api.js";
+import { createInvoker, WINDOW_SET_SIZE_CMD, setSizePayload } from "./bridge.js";
 import {
   ENGINES,
   aggregateStatus,
@@ -21,24 +22,16 @@ const COMPACT = { w: 480, h: 76 };
 const EXPANDED = { w: 480, h: 640 };
 
 // ---------------------------------------------------------------------------
-// Tauri bridge (works in Tauri; degrades with a clear message elsewhere)
+// Tauri bridge (Tauri v2: window.__TAURI_INTERNALS__.invoke; see bridge.js)
 // ---------------------------------------------------------------------------
 
-const tauriCore = globalThis.window?.__TAURI__?.core ?? null;
-const tauriWindow = globalThis.window?.__TAURI__?.window ?? null;
-
-async function invoke(cmd, args = {}) {
-  if (!tauriCore) throw new Error(`Tauri bridge unavailable (command ${cmd}) — jalankan di aplikasi Dae Captain`);
-  return tauriCore.invoke(cmd, args);
-}
+const invoke = createInvoker(globalThis.window);
 
 async function setWindowSize(w, h) {
   try {
-    const win = tauriWindow?.getCurrentWindow?.();
-    const LogicalSize = tauriWindow?.LogicalSize;
-    if (win && LogicalSize) await win.setSize(new LogicalSize(w, h));
+    await invoke(WINDOW_SET_SIZE_CMD, setSizePayload(w, h));
   } catch {
-    /* non-Tauri context: ignore */
+    /* non-Tauri context or missing capability: ignore */
   }
 }
 
