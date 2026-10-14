@@ -15,6 +15,7 @@ import {
   chatRequestBody,
   isClarifyResponse,
   sameWorkspace,
+  errText,
   engineLabel,
 } from "./logic.js";
 
@@ -151,7 +152,7 @@ async function decideApproval(taskId, approval, decision, card) {
     card.querySelector(".title").textContent += decision === "grant" ? " — diizinkan ✓" : " — ditolak ✕";
     await refreshRuns();
   } catch (e) {
-    card.querySelector(".title").textContent = "Gagal: " + e.message;
+    card.querySelector(".title").textContent = "Gagal: " + errText(e);
   }
 }
 
@@ -246,7 +247,7 @@ async function sendChat(message, override) {
       });
     }
   } catch (e) {
-    state.transcript.push({ kind: "error", text: e.message });
+    state.transcript.push({ kind: "error", text: errText(e) });
   }
   renderTranscript();
   await refreshRuns();
@@ -302,7 +303,7 @@ async function loadSettingsView() {
     }
   } catch (e) {
     status.className = "status-line error";
-    status.textContent = "Gagal memuat pengaturan: " + e.message;
+    status.textContent = "Gagal memuat pengaturan: " + errText(e);
   }
 }
 
@@ -376,7 +377,7 @@ async function setWorkspace(path) {
     await refreshRuns();
   } catch (e) {
     status.className = "status-line error";
-    status.textContent = "Gagal: " + e.message;
+    status.textContent = "Gagal: " + errText(e);
   }
 }
 
@@ -428,7 +429,7 @@ async function ensureServer(statusFn) {
       state.serverUrl = info.url;
       statusFn(info.started ? `Server jalan (pid ${info.pid}).` : "Server sudah jalan.");
     } catch (e) {
-      statusFn("Gagal menjalankan server: " + e.message, true);
+      statusFn("Gagal menjalankan server: " + errText(e), true);
       return false;
     }
   }
@@ -444,7 +445,7 @@ async function boot() {
   try {
     prefs = await invoke("get_prefs");
   } catch (e) {
-    bootStatus("Gagal membaca preferensi: " + e.message + " — pastikan berjalan di aplikasi Tauri.", true);
+    bootStatus("Gagal membaca preferensi: " + errText(e) + " — pastikan berjalan di aplikasi Tauri.", true);
     return;
   }
   state.prefs = prefs;
@@ -486,7 +487,7 @@ async function boot() {
   try {
     await state.api.health();
   } catch (e) {
-    bootStatus("Server tidak menjawab di " + state.serverUrl + ": " + e.message, true);
+    bootStatus("Server tidak menjawab di " + state.serverUrl + ": " + errText(e), true);
     return;
   }
 
@@ -524,7 +525,7 @@ function bindEvents() {
       status.textContent = "Tersimpan — berlaku untuk semua engine.";
     } catch (e) {
       status.className = "status-line error";
-      status.textContent = "Gagal: " + e.message;
+      status.textContent = "Gagal: " + errText(e);
     }
   };
   $("prov-test").onclick = async () => {
@@ -545,7 +546,7 @@ function bindEvents() {
       if (res.ok) { $("prov-key").value = ""; loadSettingsView(); }
     } catch (e) {
       status.className = "status-line error";
-      status.textContent = "Gagal: " + e.message;
+      status.textContent = "Gagal: " + errText(e);
     }
   };
   $("prov-save").onclick = async () => {
@@ -563,7 +564,7 @@ function bindEvents() {
       loadSettingsView();
     } catch (e) {
       status.className = "status-line error";
-      status.textContent = "Gagal: " + e.message;
+      status.textContent = "Gagal: " + errText(e);
     }
   };
 
