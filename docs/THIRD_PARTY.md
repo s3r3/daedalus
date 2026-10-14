@@ -99,6 +99,16 @@ research-only — no build from their code). Licence notes describe the
 | dzhng/deep-research (https://github.com/dzhng/deep-research) | MIT (licence text read directly 2026-10-12) | Minimal TypeScript breadth/depth research loop; parallel sub-query fan-out | `core/src/research/pipeline.ts`: frozen 8-stage order brief → plan → execute → evidence → verify → synthesize → gate → compile; bounded parallel fetch per sub-question within a hard budget. Pola arsitektur diadaptasi dari dzhng/deep-research (MIT) — diimplementasi ulang, bukan disalin. |
 | assafelovic/gpt-researcher (https://github.com/assafelovic/gpt-researcher) | Apache-2.0 (licence text read directly 2026-10-12) | Stage decomposition planner → executors → publisher; reviewer/fact-checker gate before publication | `core/src/research/plan.ts` (two-call planner) + `core/src/research/verify.ts` (independent claim extraction in fresh context + deterministic 7-rule verify gate that is the ONLY path for claims into the report). Pola diadaptasi dari gpt-researcher (Apache-2.0) — diimplementasi ulang, bukan disalin. |
 
+## Dae Captain — interaction pattern reference (2026-10-14)
+
+Ideas only — no code from this repository was read for reuse, copied,
+translated, or vendored. `core/src/workflow/*.ts` and the `/workflow/*`
+server routes are Daedalus's own TypeScript.
+
+| Source | Licence | Pattern adapted | Daedalus's own implementation |
+|---|---|---|---|
+| Louis-CFM/coucou (https://github.com/Louis-CFM/coucou), pinned at commit `b6d2d00ac6c3934187a0656e287039f4cbad71e5` | MIT | Companion-style floating UI: compact pill ("Dynamic Island") that expands into a full panel; Tauri layer-shell on Linux | PR1 (this change) is backend only — no UI code. The planned Tauri companion (PR2) takes only the interaction idea (compact pill → expandable panel, island layer-shell on Hyprland); all UI code will be written fresh. |
+
 ## Rules applied
 
 - Reference clones remain the pinned origins listed in `PLAN.md` §2.0.

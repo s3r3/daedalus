@@ -112,9 +112,28 @@ import {
   type TaskDomain,
   type ThinkingLevel,
   type ToolRules,
+  type ArtifactRef,
+  type LayerBResult,
+  type RunContext,
+  type RunTurn,
+  type WorkflowEngine,
+  WORKFLOW_ENGINES,
+  RULE_CONFIDENCE_THRESHOLD,
+  WorkflowRunStore,
+  appendTurn,
+  buildLayerBPrompt,
+  createWorkflowRun,
+  formatResolvedForGoal,
+  isWorkflowEngine,
+  lastTurn,
+  parseLayerBResponse,
+  resolveReferences,
+  routeByRules,
+  translateArtifacts,
+  updateTurn,
 } from "@daedalus/core";
 import { collectRoots, listDirectory, listFilesFlat, listPlanDocuments, buildTree, resolveInside, MAX_FILE_BYTES, IMAGE_MEDIA_TYPES, MAX_IMAGE_FILE_BYTES } from "./workspace.ts";
-import { classifyWebIntent, executeFastPath } from "./fast-path.ts";
+import { classifyWebIntent, executeFastPath, resolveFastPathProvider } from "./fast-path.ts";
 import { gitStatus, revertFileToHead } from "./git-status.ts";
 import {
   ConversationStore,
@@ -316,7 +335,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.end(data);
 }
 
-const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workspace", "/slides", "/dokumen", "/sheets", "/uploads", "/upload", "/attachments", "/extensions", "/review", "/terminals"];
+const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workflow", "/workspace", "/slides", "/dokumen", "/sheets", "/uploads", "/upload", "/attachments", "/extensions", "/review", "/terminals"];
 
 function webContentType(path: string): string {
   switch (extname(path).toLowerCase()) {
@@ -1340,6 +1359,618 @@ export function reconcileInterruptedTasks(ctx: AppContext): string[] {
   return reconciled;
 }
 
+/**
+ * Shared task-creation core behind POST /tasks and POST /workflow/chat
+ * (Dae Captain). Behavior-identical to the original inline route body:
+ * validates the payload, saves state, and starts the runner or fast
+ * path, then reports { status, body } so each route sends the HTTP
+ * response itself. taskId is returned on 201 for dispatch bookkeeping.
+ */
+async function createTaskCore(
+  ctx: AppContext,
+  parsed: Record<string, unknown>,
+  requestId: string,
+): Promise<{ taskId?: string; status: number; body: unknown }> {
+  try {
+    const goal = typeof parsed.goal === "string" ? parsed.goal.trim() : "";
+    if (goal === "") {
+      return { status: 400, body: { error: "goal_required", request_id: requestId } };
+    }
+    if (parsed.mode !== undefined && !parseMode(parsed.mode)) {
+      return { status: 400, body: { error: "invalid_mode", modes: AGENT_MODES, request_id: requestId } };
+    }
+    if (parsed.isolation !== undefined && parsed.isolation !== "worktree") {
+      return { status: 400, body: { error: "invalid_isolation", request_id: requestId } };
+    }
+    const isolation = parsed.isolation === "worktree" ? ("worktree" as const) : undefined;
+    if (parsed.domain !== undefined && parsed.domain !== "coding" && parsed.domain !== "slide" && parsed.domain !== "dokumen" && parsed.domain !== "spreadsheet") {
+      return { status: 400, body: { error: "invalid_domain", request_id: requestId } };
+    }
+    const domain = parsed.domain === "slide" || parsed.domain === "coding" || parsed.domain === "dokumen" || parsed.domain === "spreadsheet" ? parsed.domain : undefined;
+
+    // Dokumen composer parameters: Ekstrak|Susun sub-mode, source
+    // files to ingest, DOCX to re-layout. Only meaningful in the
+    // dokumen domain; validated here so the composer gets a named
+    // 400 instead of a silently wrong run.
+    let dokumen: DokumenTaskParams | undefined;
+    if (domain === "dokumen") {
+      const raw = parsed.dokumen && typeof parsed.dokumen === "object" ? (parsed.dokumen as Record<string, unknown>) : {};
+      const subModeRaw = raw.sub_mode ?? raw.subMode;
+      if (subModeRaw !== undefined && subModeRaw !== "ekstrak" && subModeRaw !== "susun") {
+        return { status: 400, body: { error: "invalid_dokumen_submode", request_id: requestId } };
+      }
+      const sourcesRaw = raw.sources;
+      const sources = Array.isArray(sourcesRaw) ? sourcesRaw.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : [];
+      const docxRaw = raw.docx_path ?? raw.docxPath;
+      const docxPath = typeof docxRaw === "string" && docxRaw.trim() ? docxRaw.trim() : undefined;
+      dokumen = {
+        subMode: subModeRaw === "susun" ? "susun" : "ekstrak",
+        ...(sources.length > 0 ? { sources } : {}),
+        ...(docxPath ? { docxPath } : {}),
+      };
+    }
+    // Slide composer parameters (Agentic Slide v2): generation flow,
+    // target slide count, content language, pre-picked template. The
+    // Web sends snake_case; camelCase is accepted too. They only take
+    // effect in the slide domain (core renders them into the slide
+    // contract); an unknown template or out-of-range count is a 400,
+    // never a silent ignore.
+    let slide: SlideTaskParams | undefined;
+    if (domain === "slide" && parsed.slide && typeof parsed.slide === "object") {
+      const raw = parsed.slide as Record<string, unknown>;
+      const generation = raw.generation;
+      if (generation !== undefined && generation !== "smart" && generation !== "standard") {
+        return { status: 400, body: { error: "invalid_slide_generation", request_id: requestId } };
+      }
+      const countRaw = raw.slide_count ?? raw.slideCount;
+      const slideCount = typeof countRaw === "number" && Number.isFinite(countRaw) ? Math.floor(countRaw) : undefined;
+      if (countRaw !== undefined && (slideCount === undefined || slideCount < 1 || slideCount > 40)) {
+        return { status: 400, body: { error: "invalid_slide_count", request_id: requestId } };
+      }
+      const language = typeof raw.language === "string" && raw.language.trim() ? raw.language.trim().slice(0, 40) : undefined;
+      const templateRaw = raw.template_id ?? raw.templateId;
+      const templateId = typeof templateRaw === "string" && templateRaw.trim() ? templateRaw.trim() : undefined;
+      if (templateId && !getSlideTemplate(templateId)) {
+        return { status: 400, body: { error: "unknown_slide_template", request_id: requestId } };
+      }
+      const designRaw = raw.design_id ?? raw.designId;
+      const designId = typeof designRaw === "string" && designRaw.trim() ? designRaw.trim() : undefined;
+      if (designId && !getBuiltinTemplate(designId)) {
+        return { status: 400, body: { error: "unknown_slide_design", request_id: requestId } };
+      }
+      const customRaw = raw.custom_template_id ?? raw.customTemplateId;
+      const customTemplateId = typeof customRaw === "string" && customRaw.trim() ? customRaw.trim() : undefined;
+      if (templateId && customTemplateId) {
+        // One design source per deck: bundled Warna & Font skin OR
+        // an imported PPT template (whose pages carry the design).
+        return { status: 400, body: { error: "slide_template_conflict", request_id: requestId } };
+      }
+      if (designId && customTemplateId) {
+        // A built-in design template and an imported PPT template
+        // are both full design sources — never both on one deck.
+        // (A Warna & Font skin may still layer over a design.)
+        return { status: 400, body: { error: "slide_template_conflict", request_id: requestId } };
+      }
+      const parsed2: SlideTaskParams = {
+        ...(generation ? { generation } : {}),
+        ...(slideCount ? { slideCount } : {}),
+        ...(language ? { language } : {}),
+        ...(templateId ? { templateId } : {}),
+        ...(designId ? { designId } : {}),
+        ...(customTemplateId ? { customTemplateId } : {}),
+      };
+      slide = Object.keys(parsed2).length > 0 ? parsed2 : undefined;
+    }
+
+    await ensureProvidersLoaded(ctx);
+    const taskId = crypto.randomUUID();
+    const repoPath = resolveTaskRepo(ctx, parsed.repo_path ?? parsed.repoPath);
+    if (slide?.customTemplateId) {
+      // The imported-template pick must name a template stored in
+      // THIS workspace — a stale panel selection gets a named 400
+      // here, not a failed task after the model already ran.
+      const stored = await getPptxTemplate(repoPath, slide.customTemplateId).catch(() => undefined);
+      if (!stored) {
+        return { status: 400, body: { error: "unknown_ppt_template", request_id: requestId } };
+      }
+    }
+    const constraints = stringList(parsed.constraints);
+    const doneCriteria = stringList(parsed.done_criteria ?? parsed.doneCriteria);
+    const mode = parseMode(parsed.mode) ?? ctx.session.mode;
+    const autoApprove = typeof parsed.auto_approve === "boolean" ? parsed.auto_approve : typeof parsed.autoApprove === "boolean" ? parsed.autoApprove : ctx.session.autoApprove;
+    // Per-task max iterations: explicit values only. When the payload
+    // omits it, the runner resolves per-task > domain override >
+    // global settings.maxIterations > 25 (core runtime) — so a
+    // hardcoded 25 here must NOT shadow the domain/global settings.
+    const maxIterationsRaw = parsed.max_iterations !== undefined ? parsed.max_iterations : parsed.maxIterations;
+    if (maxIterationsRaw !== undefined && maxIterationsRaw !== null && (typeof maxIterationsRaw !== "number" || !Number.isInteger(maxIterationsRaw) || maxIterationsRaw < 1)) {
+      return { status: 400, body: { error: "invalid_max_iterations", request_id: requestId } };
+    }
+    const maxIterations = typeof maxIterationsRaw === "number" ? maxIterationsRaw : undefined;
+    const providerId = typeof parsed.provider_id === "string" ? parsed.provider_id : typeof parsed.providerId === "string" ? parsed.providerId : ctx.session.providerId;
+    const model = typeof parsed.model === "string" ? parsed.model : ctx.session.model;
+    const thinking = typeof parsed.thinking === "boolean" ? parsed.thinking : ctx.session.thinking;
+    // Per-run settings layer 2: hard token budget (positive int,
+    // metered on provider-reported total_tokens) and tool permission
+    // overrides. Both flow into the runner's RunOptions below;
+    // invalid values are named 400s, never silent drops.
+    const tokenBudgetRaw = parsed.token_budget ?? parsed.tokenBudget;
+    let tokenBudget: number | undefined;
+    if (tokenBudgetRaw !== undefined) {
+      if (typeof tokenBudgetRaw !== "number" || !Number.isInteger(tokenBudgetRaw) || tokenBudgetRaw <= 0) {
+        return { status: 400, body: { error: "invalid_token_budget", request_id: requestId } };
+      }
+      tokenBudget = tokenBudgetRaw;
+    }
+    const toolRulesRaw = parsed.tool_rules ?? parsed.toolRules;
+    let toolRules: ToolRules | undefined;
+    if (toolRulesRaw !== undefined) {
+      const parsedRules = parseToolRules(toolRulesRaw);
+      if (!parsedRules) {
+        return { status: 400, body: { error: "invalid_tool_rules", request_id: requestId } };
+      }
+      toolRules = parsedRules;
+    }
+    // Model pool (Web settings → task payload): core's TaskRunner already
+    // routes across models[] with a strategy; until now only the CLI/env
+    // could supply one. parseModelStrategy rejects unknown strategies.
+    const poolModels = stringList(parsed.models).map((entry) => entry.trim()).filter(Boolean);
+    const strategyInput = typeof parsed.model_strategy === "string" ? parsed.model_strategy : typeof parsed.modelStrategy === "string" ? parsed.modelStrategy : undefined;
+    const modelStrategy: ModelStrategy | undefined = poolModels.length > 1 ? parseModelStrategy(strategyInput, "model_strategy") : undefined;
+    const attachments = parseAttachments(parsed.attachments);
+    const taskStore = new TaskStore(resolveDaedalusHome(ctx.settings.daedalusHome, repoPath));
+
+    // Chat conversation: this submission is one turn of a continuing
+    // session. The turns BEFORE this prompt become the prompt's
+    // memory (fast-path history / task prior-context); this prompt is
+    // appended as a user turn now, the reply appended when it lands.
+    const conversationId =
+      typeof parsed.conversation_id === "string" && parsed.conversation_id.trim()
+        ? parsed.conversation_id.trim()
+        : typeof parsed.conversationId === "string" && parsed.conversationId.trim()
+          ? parsed.conversationId.trim()
+          : undefined;
+    const conversationStore = conversationId ? conversationStoreFor(ctx, repoPath) : undefined;
+    const priorTurns: ConversationTurn[] =
+      conversationStore && conversationId ? (conversationStore.load(conversationId)?.turns ?? []) : [];
+    if (conversationStore && conversationId) {
+      conversationStore.append(repoPath, conversationId, {
+        role: "user",
+        text: goal,
+        task_id: taskId,
+        mode,
+        ts: new Date().toISOString(),
+      });
+    }
+    const appendAssistantTurn = (text: string): void => {
+      if (!conversationStore || !conversationId) return;
+      try {
+        conversationStore.append(repoPath, conversationId, {
+          role: "assistant",
+          text,
+          task_id: taskId,
+          mode,
+          ts: new Date().toISOString(),
+        });
+      } catch (error) {
+        ctx.log.error("conversation append failed", { task_id: taskId, error: String(error) });
+      }
+    };
+
+    // Explicit skill invocations (composer `/skill <name>`): the
+    // named skills must exist and be enabled for this workspace —
+    // validated here, against the same core config the run reads,
+    // so the composer gets a named 400 instead of a silently
+    // un-skilled task. A valid invocation always takes the task
+    // path (the fast answer paths have no skill context).
+    const skillNames = stringList(parsed.skills).map((name) => name.trim()).filter(Boolean);
+    if ((domain === "slide" || domain === "dokumen") && skillNames.length > 0) {
+      // Slide mode is a locked surface (deck tools + ask_user); a
+      // /skill invocation there gets a named refusal, not a silent drop.
+      return { status: 400, body: { error: domain === "dokumen" ? "skills_not_in_dokumen_domain" : "skills_not_in_slide_domain", request_id: requestId } };
+    }
+    if (domain === "spreadsheet" && skillNames.length > 0) {
+      // Spreadsheet is likewise locked (sheet ops + ask_user).
+      return { status: 400, body: { error: "skills_not_in_spreadsheet_domain", request_id: requestId } };
+    }
+    if (skillNames.length > 0) {
+      const skillConfig = await loadSkillConfig(repoPath);
+      const inventory = await loadSkillInventory(resolveSkillSearchDirs(repoPath), { disabledNames: skillConfig.disabled });
+      const enabled = new Set(inventory.filter((skill) => !skill.shadowedBy && !skill.disabled).map((skill) => skill.name));
+      const problems: string[] = [];
+      for (const name of skillNames) {
+        if (!enabled.has(name)) {
+          problems.push(
+            skillConfig.disabled.includes(name)
+              ? `skill "${name}" is disabled for this workspace (.daedalus/skills.json) — re-enable it (Settings → Extensions, or \`daedalus skills enable ${name}\`) to invoke it`
+              : `unknown skill "${name}" — no skill with that name was found in this workspace or the global skill directories`,
+          );
+        }
+      }
+      if (problems.length > 0) {
+        return { status: 400, body: { error: problems.join("; "), request_id: requestId } };
+      }
+    }
+
+    // Direct answers (the Crush/Cline message pattern): casual
+    // conversation and pure questions go straight to the model and the
+    // reply is the result — no manufactured plan, no tool loop, no
+    // validation. Modes still govern everything classified as a task;
+    // attachments/worktrees always take the task path. Slide-domain
+    // submits also always take the full task path: the fast answer
+    // paths have no tool loop, so they could never touch the deck.
+    const intent = attachments.length || isolation || skillNames.length || domain === "slide" || domain === "dokumen" || domain === "spreadsheet" ? "task" : classifyWebIntent(goal);
+              if (intent !== "task") {
+      const task = {
+        id: taskId,
+        goal,
+        repo_path: repoPath,
+        constraints,
+        done_criteria: doneCriteria,
+        mode,
+        auto_approve: autoApprove,
+        thinking,
+        intent,
+        ...(providerId ? { provider_id: providerId } : {}),
+        ...(model ? { model } : {}),
+        ...(poolModels.length ? { models: poolModels } : {}),
+        ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
+        ...(conversationId ? { conversation_id: conversationId } : {}),
+        ...(domain ? { domain } : {}),
+        attachments,
+        created_at: new Date().toISOString(),
+      };
+      taskStore.saveState(taskId, {
+        ...task,
+        plan: { id: `${taskId}-plan`, task_id: taskId, steps: [], version: 0, status: "draft" },
+        steps: [],
+        status: "running",
+      });
+      emitEvent({ bus: ctx.bus, store: taskStore }, taskId, undefined, "TASK_STARTED", {
+        spec: { id: taskId, goal, mode, repo_path: repoPath, created_at: task.created_at },
+        intent,
+      });
+      ctx.log.info("fast path task created", { task_id: taskId, request_id: requestId, repo_path: repoPath, mode, intent });
+      executeFastPath({
+        ctx,
+        store: taskStore,
+        taskId,
+        goal,
+        mode,
+        repoPath,
+        intent,
+        thinking,
+        selection: { providerId, model, poolModels },
+        ...(priorTurns.length > 0 ? { history: historyMessages(priorTurns) } : {}),
+        onReply: (text) => appendAssistantTurn(text),
+      });
+      return { taskId, status: 201, body: task };
+    }
+
+    const runner = new TaskRunner({
+      workspaceRoot: repoPath,
+      approvalPolicy: autoApprove ? "auto" : "ask",
+      approvalMemory: ctx.approvalMemory,
+      ...(maxIterations !== undefined ? { maxIterations } : {}),
+      bus: ctx.bus,
+      store: taskStore,
+      settings: ctx.settings,
+      providerRegistry: ctx.providerStore.registry,
+      mode,
+      autoApprove,
+      thinking,
+      streamText: true,
+      ...(providerId ? { providerId } : {}),
+      ...(model ? { model } : {}),
+      ...(poolModels.length ? { models: poolModels } : {}),
+      ...(modelStrategy ? { modelStrategy } : {}),
+    });
+    ctx.activeRunners.set(taskId, runner);
+    if (domain === "slide") {
+      // A new slide prompt supersedes an outline still staged in
+      // this workspace: settle the waiting run honestly
+      // (staged_superseded) instead of leaving it parked.
+      for (const [otherId, other] of ctx.activeRunners) {
+        if (otherId !== taskId) other.abandonStagedDeck(repoPath);
+      }
+    }
+    if (domain === "dokumen") {
+      // Same doctrine: a new dokumen prompt supersedes a staged
+      // schema/outline/style gate still waiting in this workspace.
+      for (const [otherId, other] of ctx.activeRunners) {
+        if (otherId !== taskId) other.abandonDokumenGate(repoPath);
+      }
+    }
+    if (domain === "spreadsheet") {
+      // Same staging discipline for blueprints.
+      for (const [otherId, other] of ctx.activeRunners) {
+        if (otherId !== taskId) other.abandonStagedWorkbook(repoPath);
+      }
+    }
+
+    const task = {
+      id: taskId,
+      goal,
+      repo_path: repoPath,
+      constraints,
+      done_criteria: doneCriteria,
+      mode,
+      auto_approve: autoApprove,
+      thinking,
+      ...(providerId ? { provider_id: providerId } : {}),
+      ...(model ? { model } : {}),
+      ...(poolModels.length ? { models: poolModels } : {}),
+      ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
+      ...(tokenBudget !== undefined ? { token_budget: tokenBudget } : {}),
+      ...(toolRules ? { tool_rules: toolRules } : {}),
+      ...(conversationId ? { conversation_id: conversationId } : {}),
+      ...(domain ? { domain } : {}),
+      attachments,
+      ...(skillNames.length ? { skills: skillNames } : {}),
+      ...(isolation ? { isolation } : {}),
+      created_at: new Date().toISOString(),
+    };
+    taskStore.saveState(taskId, {
+      ...task,
+      plan: { id: `${taskId}-plan`, task_id: taskId, steps: [], version: 0, status: "draft" },
+      steps: [],
+      status: "created",
+    });
+    ctx.log.info("task created", { task_id: taskId, request_id: requestId, repo_path: repoPath, mode });
+
+    const goalText = [goal, ...constraints.map((constraint) => `constraint: ${constraint}`), ...doneCriteria.map((criterion) => `done: ${criterion}`)].join("\n");
+    const priorContext = priorContextSection(priorTurns);
+    runner
+      .run({
+        goal: goalText,
+        taskId,
+        mode,
+        autoApprove,
+        thinking,
+        attachments,
+        ...(skillNames.length ? { skills: skillNames } : {}),
+        ...(isolation ? { isolation } : {}),
+        ...(providerId ? { providerId } : {}),
+        ...(model ? { model } : {}),
+        ...(poolModels.length ? { models: poolModels } : {}),
+        ...(modelStrategy ? { modelStrategy } : {}),
+        ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+        ...(toolRules ? { toolRules } : {}),
+        ...(typeof parsed.plan_task_id === "string" && parsed.plan_task_id ? { planTaskId: parsed.plan_task_id } : {}),
+        ...(priorContext ? { priorContext } : {}),
+        ...(conversationId ? { conversationId } : {}),
+        ...(domain ? { domain } : {}),
+        ...(slide ? { slide } : {}),
+        ...(dokumen ? { dokumen } : {}),
+      })
+      .then((result) => {
+        ctx.log.info("task finished", { task_id: taskId, outcome: result.outcome });
+        appendAssistantTurn(taskSummaryText({ outcome: result.outcome, goal, evidence: result.report?.evidence }));
+      })
+      .catch((error: unknown) => {
+        ctx.log.error("task run error", { task_id: taskId, error: String(error) });
+        appendAssistantTurn(taskSummaryText({ outcome: "failed", goal, evidence: [String(error)] }));
+      })
+      .finally(() => ctx.activeRunners.delete(taskId));
+
+    return { taskId, status: 201, body: task };
+  } catch (error) {
+    return { status: errorStatus(error), body: { error: errorMessage(error), request_id: requestId } };
+  }
+}
+
+
+/**
+ * Shared research-plan staging behind POST /research/plan and
+ * POST /workflow/chat (Dae Captain). Behavior-identical to the original
+ * inline route body; reports { status, body } and the planId on 200 so
+ * each route can send the HTTP response itself.
+ */
+async function stageResearchPlanCore(
+  ctx: AppContext,
+  input: { question: string; root?: unknown; provider_id?: string; model?: string },
+  requestId: string,
+): Promise<{ planId?: string; status: number; body: unknown }> {
+  try {
+    const question = input.question.trim();
+    if (!question) {
+      return { status: 400, body: { error: "question_required", request_id: requestId } };
+    }
+    const root = resolveAllowedRoot(ctx, (input.root ?? undefined) as string | undefined);
+    const hooks = await resolveResearchHooks(ctx);
+    await ensureProvidersLoaded(ctx);
+    const provider = researchProviderFromRequest(ctx, {
+      ...(input.provider_id ? { provider_id: input.provider_id } : {}),
+      ...(input.model ? { model: input.model } : {}),
+    });
+    if (!provider) {
+      return { status: 400, body: { error: "no_provider_configured", request_id: requestId } };
+    }
+    const plan = await hooks.planResearch({ question, provider });
+    const staged = stageResearchPlan({ question, workspaceRoot: root, plan });
+    return {
+      planId: staged.planId,
+      status: 200,
+      body: { planId: staged.planId, plan, request_id: requestId },
+    };
+  } catch (error) {
+    return { status: errorStatus(error), body: { error: errorMessage(error), request_id: requestId } };
+  }
+}
+
+
+/**
+ * Dae Captain workflow helpers (PR1). The router never calls engine
+ * classes directly: dispatch reuses createTaskCore (same boundary as
+ * POST /tasks) and stageResearchPlanCore (same boundary as
+ * POST /research/plan), so the engine-separation rule holds.
+ */
+
+/** Layer B: one cheap model call, only for ambiguous messages. */
+async function runWorkflowLayerB(
+  ctx: AppContext,
+  message: string,
+): Promise<LayerBResult | undefined> {
+  const provider = resolveFastPathProvider(ctx, { poolModels: [] });
+  if (!provider) return undefined;
+  const prompt = buildLayerBPrompt(message);
+  try {
+    const response = await provider.chat([
+      { role: "system", content: prompt.system },
+      { role: "user", content: prompt.user },
+    ]);
+    const content = response.message.content;
+    return parseLayerBResponse(
+      typeof content === "string" ? content : "",
+    );
+  } catch (error) {
+    ctx.log.error("workflow layer-B router failed", {
+      error: String(error),
+    });
+    return undefined;
+  }
+}
+
+/**
+ * Reconcile a run's running turns against the live runners and persisted
+ * task state. Mutates the run; returns true when anything changed (caller
+ * saves). Research turns resolve via the plan→report mapping.
+ */
+function reconcileWorkflowRun(ctx: AppContext, run: RunContext): boolean {
+  const home = resolveDaedalusHome(ctx.settings.daedalusHome, run.workspace_root);
+  const tasks = new TaskStore(home);
+  let changed = false;
+  for (const turn of run.turns) {
+    if (turn.status !== "running") continue;
+    if (turn.engine === "research") {
+      const reportId = getResearchRunReportId(turn.task_id);
+      if (reportId) {
+        const report = getResearchReport(reportId) as
+          | { title?: string }
+          | undefined;
+        updateTurn(run, turn.turn_id, {
+          status: "done",
+          artifacts: translateArtifacts({
+            engine: "research",
+            goal: turn.goal,
+            workspaceRoot: run.workspace_root,
+            researchReport: {
+              reportId,
+              ...(report?.title ? { title: report.title } : {}),
+            },
+          }),
+        });
+        changed = true;
+      } else if (!peekStagedResearchPlan(turn.task_id)) {
+        updateTurn(run, turn.turn_id, {
+          status: "failed",
+          note: "rencana riset tidak ditemukan (kedaluwarsa?)",
+        });
+        changed = true;
+      }
+      continue;
+    }
+    if (ctx.activeRunners.has(turn.task_id)) continue;
+    const state = tasks.loadState<{ status?: string }>(turn.task_id);
+    if (state?.status === "done") {
+      const report = tasks.loadReport<FinalReport>(turn.task_id);
+      updateTurn(run, turn.turn_id, {
+        status: "done",
+        artifacts: translateArtifacts({
+          engine: turn.engine,
+          goal: turn.goal,
+          workspaceRoot: run.workspace_root,
+          report: report
+            ? {
+                diff: report.diff,
+                evidence: report.evidence,
+                target_dir: report.target_dir,
+                title: report.title,
+              }
+            : null,
+        }),
+      });
+      changed = true;
+    } else if (state?.status === "failed") {
+      updateTurn(run, turn.turn_id, { status: "failed" });
+      changed = true;
+    } else if (!state) {
+      // No runner and no persisted state: the task is gone (e.g. the
+      // server restarted mid-run). Fail honestly instead of spinning.
+      updateTurn(run, turn.turn_id, {
+        status: "failed",
+        note: "task tidak ditemukan (server mungkin restart)",
+      });
+      changed = true;
+    }
+    // 'created'/'pending'/'active' without a runner: left running — the
+    // runner registers before its first event; boot sweeps the rest.
+  }
+  return changed;
+}
+
+/** Live detail for one turn, for the companion. */
+function presentWorkflowTurn(
+  ctx: AppContext,
+  tasks: TaskStore,
+  turn: RunTurn,
+): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    turn_id: turn.turn_id,
+    engine: turn.engine,
+    task_id: turn.task_id,
+    goal: turn.goal,
+    status: turn.status,
+    artifacts: turn.artifacts,
+    ...(turn.note ? { note: turn.note } : {}),
+    created_at: turn.created_at,
+    updated_at: turn.updated_at,
+  };
+  if (turn.status !== "running") return base;
+  if (turn.engine === "research") {
+    return {
+      ...base,
+      live: peekStagedResearchPlan(turn.task_id)
+        ? "staged_awaiting_gate"
+        : "running",
+    };
+  }
+  const runner = ctx.activeRunners.get(turn.task_id);
+  if (!runner) return base;
+  const stats = tasks.eventStats(turn.task_id);
+  return {
+    ...base,
+    live: "running",
+    ...(stats.lastType ? { last_event: stats.lastType } : {}),
+    ...(stats.lastTs ? { last_event_ts: stats.lastTs } : {}),
+    pending_approvals: runner.approvals.pending().map((entry) => ({
+      key: entry.key,
+      tool: entry.info.tool,
+      policy: entry.policy,
+    })),
+    pending_questions: runner.questions.pending().map((entry) => ({
+      id: entry.info.id,
+      task_id: turn.task_id,
+    })),
+  };
+}
+
+function presentWorkflowRun(
+  ctx: AppContext,
+  run: RunContext,
+): Record<string, unknown> {
+  const home = resolveDaedalusHome(ctx.settings.daedalusHome, run.workspace_root);
+  const tasks = new TaskStore(home);
+  return {
+    run_id: run.run_id,
+    workspace_root: run.workspace_root,
+    created_at: run.created_at,
+    updated_at: run.updated_at,
+    turns: run.turns.map((turn) => presentWorkflowTurn(ctx, tasks, turn)),
+  };
+}
+
+
 export function createApp(ctx: AppContext) {
   reconcileInterruptedTasks(ctx);
   // Permanent bundled skills: make sure the starter set is installed in the
@@ -1602,420 +2233,249 @@ export function createApp(ctx: AppContext) {
 
     if (method === "POST" && url.pathname === "/tasks") {
       void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+
+
+        const created = await createTaskCore(ctx, parsed, requestId);
+        sendJson(res, created.status, created.body);
+      })();
+      return;
+    }
+
+    // ---- Dae Captain workflow routes (PR1) ----
+    // One chat routing to all five engines. Dispatch reuses the exact
+    // boundaries above (createTaskCore / stageResearchPlanCore); no engine
+    // class is ever touched directly here.
+    if (method === "POST" && url.pathname === "/workflow/chat") {
+      void (async () => {
         try {
           const parsed = await readJson(req);
           if (!parsed) {
             sendJson(res, 400, { error: "invalid_json", request_id: requestId });
             return;
           }
-          const goal = typeof parsed.goal === "string" ? parsed.goal.trim() : "";
-          if (goal === "") {
-            sendJson(res, 400, { error: "goal_required", request_id: requestId });
+          const message =
+            typeof parsed.message === "string" ? parsed.message.trim() : "";
+          if (!message) {
+            sendJson(res, 400, { error: "message_required", request_id: requestId });
             return;
           }
-          if (parsed.mode !== undefined && !parseMode(parsed.mode)) {
-            sendJson(res, 400, { error: "invalid_mode", modes: AGENT_MODES, request_id: requestId });
-            return;
-          }
-          if (parsed.isolation !== undefined && parsed.isolation !== "worktree") {
-            sendJson(res, 400, { error: "invalid_isolation", request_id: requestId });
-            return;
-          }
-          const isolation = parsed.isolation === "worktree" ? ("worktree" as const) : undefined;
-          if (parsed.domain !== undefined && parsed.domain !== "coding" && parsed.domain !== "slide" && parsed.domain !== "dokumen" && parsed.domain !== "spreadsheet") {
-            sendJson(res, 400, { error: "invalid_domain", request_id: requestId });
-            return;
-          }
-          const domain = parsed.domain === "slide" || parsed.domain === "coding" || parsed.domain === "dokumen" || parsed.domain === "spreadsheet" ? parsed.domain : undefined;
-
-          // Dokumen composer parameters: Ekstrak|Susun sub-mode, source
-          // files to ingest, DOCX to re-layout. Only meaningful in the
-          // dokumen domain; validated here so the composer gets a named
-          // 400 instead of a silently wrong run.
-          let dokumen: DokumenTaskParams | undefined;
-          if (domain === "dokumen") {
-            const raw = parsed.dokumen && typeof parsed.dokumen === "object" ? (parsed.dokumen as Record<string, unknown>) : {};
-            const subModeRaw = raw.sub_mode ?? raw.subMode;
-            if (subModeRaw !== undefined && subModeRaw !== "ekstrak" && subModeRaw !== "susun") {
-              sendJson(res, 400, { error: "invalid_dokumen_submode", request_id: requestId });
-              return;
-            }
-            const sourcesRaw = raw.sources;
-            const sources = Array.isArray(sourcesRaw) ? sourcesRaw.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : [];
-            const docxRaw = raw.docx_path ?? raw.docxPath;
-            const docxPath = typeof docxRaw === "string" && docxRaw.trim() ? docxRaw.trim() : undefined;
-            dokumen = {
-              subMode: subModeRaw === "susun" ? "susun" : "ekstrak",
-              ...(sources.length > 0 ? { sources } : {}),
-              ...(docxPath ? { docxPath } : {}),
-            };
-          }
-          // Slide composer parameters (Agentic Slide v2): generation flow,
-          // target slide count, content language, pre-picked template. The
-          // Web sends snake_case; camelCase is accepted too. They only take
-          // effect in the slide domain (core renders them into the slide
-          // contract); an unknown template or out-of-range count is a 400,
-          // never a silent ignore.
-          let slide: SlideTaskParams | undefined;
-          if (domain === "slide" && parsed.slide && typeof parsed.slide === "object") {
-            const raw = parsed.slide as Record<string, unknown>;
-            const generation = raw.generation;
-            if (generation !== undefined && generation !== "smart" && generation !== "standard") {
-              sendJson(res, 400, { error: "invalid_slide_generation", request_id: requestId });
-              return;
-            }
-            const countRaw = raw.slide_count ?? raw.slideCount;
-            const slideCount = typeof countRaw === "number" && Number.isFinite(countRaw) ? Math.floor(countRaw) : undefined;
-            if (countRaw !== undefined && (slideCount === undefined || slideCount < 1 || slideCount > 40)) {
-              sendJson(res, 400, { error: "invalid_slide_count", request_id: requestId });
-              return;
-            }
-            const language = typeof raw.language === "string" && raw.language.trim() ? raw.language.trim().slice(0, 40) : undefined;
-            const templateRaw = raw.template_id ?? raw.templateId;
-            const templateId = typeof templateRaw === "string" && templateRaw.trim() ? templateRaw.trim() : undefined;
-            if (templateId && !getSlideTemplate(templateId)) {
-              sendJson(res, 400, { error: "unknown_slide_template", request_id: requestId });
-              return;
-            }
-            const designRaw = raw.design_id ?? raw.designId;
-            const designId = typeof designRaw === "string" && designRaw.trim() ? designRaw.trim() : undefined;
-            if (designId && !getBuiltinTemplate(designId)) {
-              sendJson(res, 400, { error: "unknown_slide_design", request_id: requestId });
-              return;
-            }
-            const customRaw = raw.custom_template_id ?? raw.customTemplateId;
-            const customTemplateId = typeof customRaw === "string" && customRaw.trim() ? customRaw.trim() : undefined;
-            if (templateId && customTemplateId) {
-              // One design source per deck: bundled Warna & Font skin OR
-              // an imported PPT template (whose pages carry the design).
-              sendJson(res, 400, { error: "slide_template_conflict", request_id: requestId });
-              return;
-            }
-            if (designId && customTemplateId) {
-              // A built-in design template and an imported PPT template
-              // are both full design sources — never both on one deck.
-              // (A Warna & Font skin may still layer over a design.)
-              sendJson(res, 400, { error: "slide_template_conflict", request_id: requestId });
-              return;
-            }
-            const parsed2: SlideTaskParams = {
-              ...(generation ? { generation } : {}),
-              ...(slideCount ? { slideCount } : {}),
-              ...(language ? { language } : {}),
-              ...(templateId ? { templateId } : {}),
-              ...(designId ? { designId } : {}),
-              ...(customTemplateId ? { customTemplateId } : {}),
-            };
-            slide = Object.keys(parsed2).length > 0 ? parsed2 : undefined;
-          }
-
-          await ensureProvidersLoaded(ctx);
-          const taskId = crypto.randomUUID();
-          const repoPath = resolveTaskRepo(ctx, parsed.repo_path ?? parsed.repoPath);
-          if (slide?.customTemplateId) {
-            // The imported-template pick must name a template stored in
-            // THIS workspace — a stale panel selection gets a named 400
-            // here, not a failed task after the model already ran.
-            const stored = await getPptxTemplate(repoPath, slide.customTemplateId).catch(() => undefined);
-            if (!stored) {
-              sendJson(res, 400, { error: "unknown_ppt_template", request_id: requestId });
-              return;
-            }
-          }
-          const constraints = stringList(parsed.constraints);
-          const doneCriteria = stringList(parsed.done_criteria ?? parsed.doneCriteria);
-          const mode = parseMode(parsed.mode) ?? ctx.session.mode;
-          const autoApprove = typeof parsed.auto_approve === "boolean" ? parsed.auto_approve : typeof parsed.autoApprove === "boolean" ? parsed.autoApprove : ctx.session.autoApprove;
-          // Per-task max iterations: explicit values only. When the payload
-          // omits it, the runner resolves per-task > domain override >
-          // global settings.maxIterations > 25 (core runtime) — so a
-          // hardcoded 25 here must NOT shadow the domain/global settings.
-          const maxIterationsRaw = parsed.max_iterations !== undefined ? parsed.max_iterations : parsed.maxIterations;
-          if (maxIterationsRaw !== undefined && maxIterationsRaw !== null && (typeof maxIterationsRaw !== "number" || !Number.isInteger(maxIterationsRaw) || maxIterationsRaw < 1)) {
-            sendJson(res, 400, { error: "invalid_max_iterations", request_id: requestId });
-            return;
-          }
-          const maxIterations = typeof maxIterationsRaw === "number" ? maxIterationsRaw : undefined;
-          const providerId = typeof parsed.provider_id === "string" ? parsed.provider_id : typeof parsed.providerId === "string" ? parsed.providerId : ctx.session.providerId;
-          const model = typeof parsed.model === "string" ? parsed.model : ctx.session.model;
-          const thinking = typeof parsed.thinking === "boolean" ? parsed.thinking : ctx.session.thinking;
-          // Per-run settings layer 2: hard token budget (positive int,
-          // metered on provider-reported total_tokens) and tool permission
-          // overrides. Both flow into the runner's RunOptions below;
-          // invalid values are named 400s, never silent drops.
-          const tokenBudgetRaw = parsed.token_budget ?? parsed.tokenBudget;
-          let tokenBudget: number | undefined;
-          if (tokenBudgetRaw !== undefined) {
-            if (typeof tokenBudgetRaw !== "number" || !Number.isInteger(tokenBudgetRaw) || tokenBudgetRaw <= 0) {
-              sendJson(res, 400, { error: "invalid_token_budget", request_id: requestId });
-              return;
-            }
-            tokenBudget = tokenBudgetRaw;
-          }
-          const toolRulesRaw = parsed.tool_rules ?? parsed.toolRules;
-          let toolRules: ToolRules | undefined;
-          if (toolRulesRaw !== undefined) {
-            const parsedRules = parseToolRules(toolRulesRaw);
-            if (!parsedRules) {
-              sendJson(res, 400, { error: "invalid_tool_rules", request_id: requestId });
-              return;
-            }
-            toolRules = parsedRules;
-          }
-          // Model pool (Web settings → task payload): core's TaskRunner already
-          // routes across models[] with a strategy; until now only the CLI/env
-          // could supply one. parseModelStrategy rejects unknown strategies.
-          const poolModels = stringList(parsed.models).map((entry) => entry.trim()).filter(Boolean);
-          const strategyInput = typeof parsed.model_strategy === "string" ? parsed.model_strategy : typeof parsed.modelStrategy === "string" ? parsed.modelStrategy : undefined;
-          const modelStrategy: ModelStrategy | undefined = poolModels.length > 1 ? parseModelStrategy(strategyInput, "model_strategy") : undefined;
-          const attachments = parseAttachments(parsed.attachments);
-          const taskStore = new TaskStore(resolveDaedalusHome(ctx.settings.daedalusHome, repoPath));
-
-          // Chat conversation: this submission is one turn of a continuing
-          // session. The turns BEFORE this prompt become the prompt's
-          // memory (fast-path history / task prior-context); this prompt is
-          // appended as a user turn now, the reply appended when it lands.
-          const conversationId =
-            typeof parsed.conversation_id === "string" && parsed.conversation_id.trim()
-              ? parsed.conversation_id.trim()
-              : typeof parsed.conversationId === "string" && parsed.conversationId.trim()
-                ? parsed.conversationId.trim()
-                : undefined;
-          const conversationStore = conversationId ? conversationStoreFor(ctx, repoPath) : undefined;
-          const priorTurns: ConversationTurn[] =
-            conversationStore && conversationId ? (conversationStore.load(conversationId)?.turns ?? []) : [];
-          if (conversationStore && conversationId) {
-            conversationStore.append(repoPath, conversationId, {
-              role: "user",
-              text: goal,
-              task_id: taskId,
-              mode,
-              ts: new Date().toISOString(),
+          const overrideRaw = parsed.engine_override ?? parsed.engineOverride;
+          if (overrideRaw !== undefined && !isWorkflowEngine(overrideRaw)) {
+            sendJson(res, 400, {
+              error: "invalid_engine",
+              engines: WORKFLOW_ENGINES,
+              request_id: requestId,
             });
+            return;
           }
-          const appendAssistantTurn = (text: string): void => {
-            if (!conversationStore || !conversationId) return;
-            try {
-              conversationStore.append(repoPath, conversationId, {
-                role: "assistant",
-                text,
-                task_id: taskId,
-                mode,
-                ts: new Date().toISOString(),
+          const root = resolveAllowedRoot(
+            ctx,
+            parsed.workspace_root ?? parsed.workspaceRoot,
+          );
+          const runs = new WorkflowRunStore(
+            resolveDaedalusHome(ctx.settings.daedalusHome, root),
+          );
+          const runIdRaw =
+            typeof parsed.run_id === "string" && parsed.run_id
+              ? parsed.run_id
+              : undefined;
+          let run = runIdRaw ? runs.loadRun(runIdRaw) : undefined;
+          if (runIdRaw && !run) {
+            sendJson(res, 404, { error: "run_not_found", request_id: requestId });
+            return;
+          }
+          if (!run) {
+            run = createWorkflowRun(root);
+            runs.saveRun(run);
+          }
+
+          // Route: override > rules > layer B > clarify.
+          const previousEngine = lastTurn(run)?.engine;
+          let routed = routeByRules(message, {
+            ...(overrideRaw
+              ? { engineOverride: overrideRaw as WorkflowEngine }
+              : {}),
+            ...(previousEngine ? { previousEngine } : {}),
+          });
+          let routerLayer = "rules";
+          if (!overrideRaw && routed.confidence < RULE_CONFIDENCE_THRESHOLD) {
+            const lb = await runWorkflowLayerB(ctx, message);
+            if (
+              lb &&
+              !lb.needs_clarify &&
+              lb.confidence >= RULE_CONFIDENCE_THRESHOLD
+            ) {
+              routed = {
+                engine: lb.engine,
+                confidence: lb.confidence,
+                matchedRule: "llm_fallback",
+              };
+              routerLayer = "llm";
+            } else {
+              sendJson(res, 200, {
+                run_id: run.run_id,
+                needs_clarify: true,
+                options: [...WORKFLOW_ENGINES],
+                message:
+                  "Perintahnya ambigu — engine mana yang kamu maksud?",
+                request_id: requestId,
               });
-            } catch (error) {
-              ctx.log.error("conversation append failed", { task_id: taskId, error: String(error) });
+              return;
             }
+          }
+
+          const resolved = resolveReferences(message, run);
+          const goal = message + formatResolvedForGoal(resolved);
+          const providerId =
+            typeof parsed.provider_id === "string" ? parsed.provider_id : undefined;
+          const model =
+            typeof parsed.model === "string" ? parsed.model : undefined;
+          const routerInfo = {
+            layer: routerLayer,
+            confidence: routed.confidence,
+            rule: routed.matchedRule,
           };
 
-          // Explicit skill invocations (composer `/skill <name>`): the
-          // named skills must exist and be enabled for this workspace —
-          // validated here, against the same core config the run reads,
-          // so the composer gets a named 400 instead of a silently
-          // un-skilled task. A valid invocation always takes the task
-          // path (the fast answer paths have no skill context).
-          const skillNames = stringList(parsed.skills).map((name) => name.trim()).filter(Boolean);
-          if ((domain === "slide" || domain === "dokumen") && skillNames.length > 0) {
-            // Slide mode is a locked surface (deck tools + ask_user); a
-            // /skill invocation there gets a named refusal, not a silent drop.
-            sendJson(res, 400, { error: domain === "dokumen" ? "skills_not_in_dokumen_domain" : "skills_not_in_slide_domain", request_id: requestId });
-            return;
-          }
-          if (domain === "spreadsheet" && skillNames.length > 0) {
-            // Spreadsheet is likewise locked (sheet ops + ask_user).
-            sendJson(res, 400, { error: "skills_not_in_spreadsheet_domain", request_id: requestId });
-            return;
-          }
-          if (skillNames.length > 0) {
-            const skillConfig = await loadSkillConfig(repoPath);
-            const inventory = await loadSkillInventory(resolveSkillSearchDirs(repoPath), { disabledNames: skillConfig.disabled });
-            const enabled = new Set(inventory.filter((skill) => !skill.shadowedBy && !skill.disabled).map((skill) => skill.name));
-            const problems: string[] = [];
-            for (const name of skillNames) {
-              if (!enabled.has(name)) {
-                problems.push(
-                  skillConfig.disabled.includes(name)
-                    ? `skill "${name}" is disabled for this workspace (.daedalus/skills.json) — re-enable it (Settings → Extensions, or \`daedalus skills enable ${name}\`) to invoke it`
-                    : `unknown skill "${name}" — no skill with that name was found in this workspace or the global skill directories`,
-                );
-              }
-            }
-            if (problems.length > 0) {
-              sendJson(res, 400, { error: problems.join("; "), request_id: requestId });
+          if (routed.engine === "research") {
+            const staged = await stageResearchPlanCore(
+              ctx,
+              {
+                question: goal,
+                root,
+                ...(providerId ? { provider_id: providerId } : {}),
+                ...(model ? { model } : {}),
+              },
+              requestId,
+            );
+            if (staged.status !== 200 || !staged.planId) {
+              sendJson(res, staged.status, staged.body);
               return;
             }
+            const turn = appendTurn(run, {
+              engine: "research",
+              task_id: staged.planId,
+              goal: message,
+              status: "running",
+              note: "rencana riset staged — menunggu 'Jalankan riset'",
+            });
+            runs.saveRun(run);
+            sendJson(res, 200, {
+              run_id: run.run_id,
+              turn_id: turn.turn_id,
+              engine: "research",
+              plan_id: staged.planId,
+              staged: true,
+              resolved_artifacts: resolved,
+              router: routerInfo,
+              request_id: requestId,
+            });
+            return;
           }
 
-          // Direct answers (the Crush/Cline message pattern): casual
-          // conversation and pure questions go straight to the model and the
-          // reply is the result — no manufactured plan, no tool loop, no
-          // validation. Modes still govern everything classified as a task;
-          // attachments/worktrees always take the task path. Slide-domain
-          // submits also always take the full task path: the fast answer
-          // paths have no tool loop, so they could never touch the deck.
-          const intent = attachments.length || isolation || skillNames.length || domain === "slide" || domain === "dokumen" || domain === "spreadsheet" ? "task" : classifyWebIntent(goal);
-                    if (intent !== "task") {
-            const task = {
-              id: taskId,
+          const created = await createTaskCore(
+            ctx,
+            {
               goal,
-              repo_path: repoPath,
-              constraints,
-              done_criteria: doneCriteria,
-              mode,
-              auto_approve: autoApprove,
-              thinking,
-              intent,
+              repo_path: root,
+              ...(routed.engine === "coding"
+                ? {}
+                : { domain: routed.engine }),
               ...(providerId ? { provider_id: providerId } : {}),
               ...(model ? { model } : {}),
-              ...(poolModels.length ? { models: poolModels } : {}),
-              ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
-              ...(conversationId ? { conversation_id: conversationId } : {}),
-              ...(domain ? { domain } : {}),
-              attachments,
-              created_at: new Date().toISOString(),
-            };
-            taskStore.saveState(taskId, {
-              ...task,
-              plan: { id: `${taskId}-plan`, task_id: taskId, steps: [], version: 0, status: "draft" },
-              steps: [],
-              status: "running",
-            });
-            emitEvent({ bus: ctx.bus, store: taskStore }, taskId, undefined, "TASK_STARTED", {
-              spec: { id: taskId, goal, mode, repo_path: repoPath, created_at: task.created_at },
-              intent,
-            });
-            ctx.log.info("fast path task created", { task_id: taskId, request_id: requestId, repo_path: repoPath, mode, intent });
-            executeFastPath({
-              ctx,
-              store: taskStore,
-              taskId,
-              goal,
-              mode,
-              repoPath,
-              intent,
-              thinking,
-              selection: { providerId, model, poolModels },
-              ...(priorTurns.length > 0 ? { history: historyMessages(priorTurns) } : {}),
-              onReply: (text) => appendAssistantTurn(text),
-            });
-            sendJson(res, 201, task);
+            },
+            requestId,
+          );
+          if (created.status !== 201 || !created.taskId) {
+            sendJson(res, created.status, created.body);
             return;
           }
-
-          const runner = new TaskRunner({
-            workspaceRoot: repoPath,
-            approvalPolicy: autoApprove ? "auto" : "ask",
-            approvalMemory: ctx.approvalMemory,
-            ...(maxIterations !== undefined ? { maxIterations } : {}),
-            bus: ctx.bus,
-            store: taskStore,
-            settings: ctx.settings,
-            providerRegistry: ctx.providerStore.registry,
-            mode,
-            autoApprove,
-            thinking,
-            streamText: true,
-            ...(providerId ? { providerId } : {}),
-            ...(model ? { model } : {}),
-            ...(poolModels.length ? { models: poolModels } : {}),
-            ...(modelStrategy ? { modelStrategy } : {}),
+          const turn = appendTurn(run, {
+            engine: routed.engine,
+            task_id: created.taskId,
+            goal: message,
+            status: "running",
           });
-          ctx.activeRunners.set(taskId, runner);
-          if (domain === "slide") {
-            // A new slide prompt supersedes an outline still staged in
-            // this workspace: settle the waiting run honestly
-            // (staged_superseded) instead of leaving it parked.
-            for (const [otherId, other] of ctx.activeRunners) {
-              if (otherId !== taskId) other.abandonStagedDeck(repoPath);
-            }
-          }
-          if (domain === "dokumen") {
-            // Same doctrine: a new dokumen prompt supersedes a staged
-            // schema/outline/style gate still waiting in this workspace.
-            for (const [otherId, other] of ctx.activeRunners) {
-              if (otherId !== taskId) other.abandonDokumenGate(repoPath);
-            }
-          }
-          if (domain === "spreadsheet") {
-            // Same staging discipline for blueprints.
-            for (const [otherId, other] of ctx.activeRunners) {
-              if (otherId !== taskId) other.abandonStagedWorkbook(repoPath);
-            }
-          }
-
-          const task = {
-            id: taskId,
-            goal,
-            repo_path: repoPath,
-            constraints,
-            done_criteria: doneCriteria,
-            mode,
-            auto_approve: autoApprove,
-            thinking,
-            ...(providerId ? { provider_id: providerId } : {}),
-            ...(model ? { model } : {}),
-            ...(poolModels.length ? { models: poolModels } : {}),
-            ...(modelStrategy ? { model_strategy: modelStrategy } : {}),
-            ...(tokenBudget !== undefined ? { token_budget: tokenBudget } : {}),
-            ...(toolRules ? { tool_rules: toolRules } : {}),
-            ...(conversationId ? { conversation_id: conversationId } : {}),
-            ...(domain ? { domain } : {}),
-            attachments,
-            ...(skillNames.length ? { skills: skillNames } : {}),
-            ...(isolation ? { isolation } : {}),
-            created_at: new Date().toISOString(),
-          };
-          taskStore.saveState(taskId, {
-            ...task,
-            plan: { id: `${taskId}-plan`, task_id: taskId, steps: [], version: 0, status: "draft" },
-            steps: [],
-            status: "created",
+          runs.saveRun(run);
+          sendJson(res, 201, {
+            run_id: run.run_id,
+            turn_id: turn.turn_id,
+            engine: routed.engine,
+            task_id: created.taskId,
+            resolved_artifacts: resolved,
+            router: routerInfo,
+            request_id: requestId,
           });
-          ctx.log.info("task created", { task_id: taskId, request_id: requestId, repo_path: repoPath, mode });
-
-          const goalText = [goal, ...constraints.map((constraint) => `constraint: ${constraint}`), ...doneCriteria.map((criterion) => `done: ${criterion}`)].join("\n");
-          const priorContext = priorContextSection(priorTurns);
-          runner
-            .run({
-              goal: goalText,
-              taskId,
-              mode,
-              autoApprove,
-              thinking,
-              attachments,
-              ...(skillNames.length ? { skills: skillNames } : {}),
-              ...(isolation ? { isolation } : {}),
-              ...(providerId ? { providerId } : {}),
-              ...(model ? { model } : {}),
-              ...(poolModels.length ? { models: poolModels } : {}),
-              ...(modelStrategy ? { modelStrategy } : {}),
-              ...(tokenBudget !== undefined ? { tokenBudget } : {}),
-              ...(toolRules ? { toolRules } : {}),
-              ...(typeof parsed.plan_task_id === "string" && parsed.plan_task_id ? { planTaskId: parsed.plan_task_id } : {}),
-              ...(priorContext ? { priorContext } : {}),
-              ...(conversationId ? { conversationId } : {}),
-              ...(domain ? { domain } : {}),
-              ...(slide ? { slide } : {}),
-              ...(dokumen ? { dokumen } : {}),
-            })
-            .then((result) => {
-              ctx.log.info("task finished", { task_id: taskId, outcome: result.outcome });
-              appendAssistantTurn(taskSummaryText({ outcome: result.outcome, goal, evidence: result.report?.evidence }));
-            })
-            .catch((error: unknown) => {
-              ctx.log.error("task run error", { task_id: taskId, error: String(error) });
-              appendAssistantTurn(taskSummaryText({ outcome: "failed", goal, evidence: [String(error)] }));
-            })
-            .finally(() => ctx.activeRunners.delete(taskId));
-
-          sendJson(res, 201, task);
         } catch (error) {
-          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+          sendJson(res, errorStatus(error), {
+            error: errorMessage(error),
+            request_id: requestId,
+          });
         }
       })();
       return;
     }
 
+    if (method === "GET" && url.pathname === "/workflow/runs") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(
+            ctx,
+            url.searchParams.get("workspace_root") ??
+              url.searchParams.get("root") ??
+              ctx.session.workspaceRoot,
+          );
+          const runs = new WorkflowRunStore(
+            resolveDaedalusHome(ctx.settings.daedalusHome, root),
+          );
+          const list = runs.listRuns().map((run) => {
+            if (reconcileWorkflowRun(ctx, run)) runs.saveRun(run);
+            return presentWorkflowRun(ctx, run);
+          });
+          sendJson(res, 200, { runs: list, request_id: requestId });
+        } catch (error) {
+          sendJson(res, errorStatus(error), {
+            error: errorMessage(error),
+            request_id: requestId,
+          });
+        }
+      })();
+      return;
+    }
+
+    const workflowRunMatch = /^\/workflow\/runs\/([^/]+)$/.exec(url.pathname);
+    if (method === "GET" && workflowRunMatch?.[1] !== undefined) {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(
+            ctx,
+            url.searchParams.get("workspace_root") ??
+              url.searchParams.get("root") ??
+              ctx.session.workspaceRoot,
+          );
+          const runs = new WorkflowRunStore(
+            resolveDaedalusHome(ctx.settings.daedalusHome, root),
+          );
+          const run = runs.loadRun(workflowRunMatch[1] ?? "");
+          if (!run) {
+            sendJson(res, 404, { error: "run_not_found", request_id: requestId });
+            return;
+          }
+          if (reconcileWorkflowRun(ctx, run)) runs.saveRun(run);
+          sendJson(res, 200, { run: presentWorkflowRun(ctx, run), request_id: requestId });
+        } catch (error) {
+          sendJson(res, errorStatus(error), {
+            error: errorMessage(error),
+            request_id: requestId,
+          });
+        }
+      })();
+      return;
+    }
     if (method === "POST" && url.pathname === "/review") {
       void (async () => {
         try {
@@ -4403,30 +4863,17 @@ export function createApp(ctx: AppContext) {
           sendJson(res, 400, { error: "invalid_json", request_id: requestId });
           return;
         }
-        try {
-          const question = typeof parsed.question === "string" ? parsed.question.trim() : "";
-          if (!question) {
-            sendJson(res, 400, { error: "question_required", request_id: requestId });
-            return;
-          }
-          const root = resolveAllowedRoot(ctx, parsed.root ?? undefined);
-          const hooks = await resolveResearchHooks(ctx);
-          await ensureProvidersLoaded(ctx);
-          const provider = researchProviderFromRequest(ctx, parsed);
-          if (!provider) {
-            sendJson(res, 400, { error: "no_provider_configured", request_id: requestId });
-            return;
-          }
-          const plan = await hooks.planResearch({ question, provider });
-          const staged = stageResearchPlan({ question, workspaceRoot: root, plan });
-          sendJson(res, 200, {
-            planId: staged.planId,
-            plan,
-            request_id: requestId,
-          });
-        } catch (error) {
-          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
-        }
+        const staged = await stageResearchPlanCore(
+          ctx,
+          {
+            question: typeof parsed.question === "string" ? parsed.question : "",
+            ...(parsed.root !== undefined ? { root: parsed.root } : {}),
+            ...(typeof parsed.provider_id === "string" ? { provider_id: parsed.provider_id } : {}),
+            ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
+          },
+          requestId,
+        );
+        sendJson(res, staged.status, staged.body);
       })();
       return;
     }

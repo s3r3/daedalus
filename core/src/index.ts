@@ -1138,3 +1138,29 @@ export { assessCredibility } from "./research/credibility.ts";
 export { buildBibliography, exportBibtex, exportRis } from "./research/bibliography.ts";
 
 export { VERSION } from "./version.ts";
+export {
+  type ArtifactKind,
+  type ArtifactRef,
+  type RunContext,
+  type RunTurn,
+  type RunTurnStatus,
+  type WorkflowEngine,
+  WORKFLOW_ENGINES,
+  isWorkflowEngine,
+  type RuleRouteResult,
+  type RouteOptions,
+  type LayerBResult,
+  RULE_CONFIDENCE_THRESHOLD,
+  routeByRules,
+  resolveReferences,
+  formatResolvedForGoal,
+  buildLayerBPrompt,
+  parseLayerBResponse,
+  WorkflowRunStore,
+  createWorkflowRun,
+  appendTurn,
+  updateTurn,
+  lastTurn,
+  type EngineCompletionInput,
+  translateArtifacts,
+} from "./workflow/index.ts";
