@@ -47,6 +47,8 @@ export type ArtifactRef = {
   report_id?: string;
   /** Dev / preview URL. */
   url?: string;
+  /** Producing engine task id (or staged research plan id). */
+  task_id?: string;
 };
 
 export type RunTurnStatus = "running" | "done" | "failed" | "cancelled";
