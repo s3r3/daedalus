@@ -12,6 +12,8 @@ import {
   approvalTitle,
   chatRequestBody,
   isClarifyResponse,
+  sameWorkspace,
+  normalizeWorkspacePath,
   engineLabel,
 } from "../ui/logic.js";
 
@@ -136,5 +138,21 @@ describe("isClarifyResponse / engineLabel", () => {
   });
   it("engine list covers all five", () => {
     assert.deepEqual([...ENGINES].sort(), ["coding", "dokumen", "research", "slide", "spreadsheet"]);
+  });
+});
+
+describe("sameWorkspace / normalizeWorkspacePath", () => {
+  it("ignores trailing slashes (folder picker)", () => {
+    assert.equal(normalizeWorkspacePath("/home/u/Skripsi/"), "/home/u/Skripsi");
+    assert.ok(sameWorkspace("/home/u/Skripsi/", "/home/u/Skripsi"));
+    assert.ok(sameWorkspace("/home/u/Skripsi", "/home/u/Skripsi/"));
+  });
+  it("distinguishes different roots", () => {
+    assert.ok(!sameWorkspace("/home/u/Skripsi", "/home/u/Skripsi/Daedalus"));
+    assert.ok(!sameWorkspace("/home/u/A", "/home/u/B"));
+  });
+  it("empty never matches", () => {
+    assert.ok(!sameWorkspace("", ""));
+    assert.ok(!sameWorkspace("/a", ""));
   });
 });
