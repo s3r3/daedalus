@@ -17,6 +17,13 @@ import {
   normalizeWorkspacePath,
   errText,
   engineLabel,
+  enabledEngines,
+  canDisableEngine,
+  trustToAutoApprove,
+  autoApproveToTrust,
+  queueRow,
+  queueRows,
+  THINKING_LEVELS,
 } from "../ui/logic.js";
 
 const turn = (over = {}) => ({
@@ -195,5 +202,54 @@ describe("pendingApprovals", () => {
     assert.deepEqual(pendingApprovals([]), []);
     assert.deepEqual(pendingApprovals(null), []);
     assert.deepEqual(pendingApprovals([{ turns: [] }]), []);
+  });
+});
+
+describe("enabledEngines / canDisableEngine", () => {
+  it("filters disabled engines for chips", () => {
+    assert.deepEqual(enabledEngines([]), [...ENGINES]);
+    assert.deepEqual(enabledEngines(["slide", "research"]), ["coding", "dokumen", "spreadsheet"]);
+  });
+  it("never strands the user with zero engines", () => {
+    const allButOne = ENGINES.slice(1);
+    assert.equal(canDisableEngine("coding", allButOne), false);
+    assert.equal(canDisableEngine("slide", ["research"]), true);
+    assert.equal(canDisableEngine("slide", ["slide"]), true); // re-enable always fine
+  });
+});
+
+describe("trust mapping", () => {
+  it("maps dropdown to boolean autoApprove", () => {
+    assert.equal(trustToAutoApprove("auto"), true);
+    assert.equal(trustToAutoApprove("ask"), false);
+    assert.equal(autoApproveToTrust(true), "auto");
+    assert.equal(autoApproveToTrust(false), "ask");
+    assert.equal(autoApproveToTrust(undefined), "ask");
+  });
+  it("thinking levels cover the server tiers", () => {
+    assert.deepEqual([...THINKING_LEVELS].sort(), ["high", "low", "medium", "off"]);
+  });
+});
+
+describe("queueRow", () => {
+  it("badges running/done/failed/cancelled honestly", () => {
+    assert.equal(queueRow({ engine: "coding", status: "running", goal: "x" }).badge, "progress");
+    assert.equal(queueRow({ engine: "slide", status: "done", goal: "x" }).badge, "done");
+    assert.equal(queueRow({ engine: "dokumen", status: "failed", goal: "x" }).badge, "failed");
+    assert.equal(queueRow({ engine: "research", status: "cancelled", goal: "x" }).badge, "cancelled");
+  });
+  it("flags approval badge when approvals pending", () => {
+    const r = queueRow({ engine: "coding", status: "running", goal: "x", pending_approvals: [{ key: "k" }] });
+    assert.equal(r.badge, "approval");
+    assert.equal(r.approvals.length, 1);
+  });
+  it("queueRows maps every turn", () => {
+    const rows = queueRows({ turns: [
+      { engine: "coding", status: "running", goal: "a", task_id: "t1" },
+      { engine: "slide", status: "done", goal: "b", task_id: "t2" },
+    ]});
+    assert.equal(rows.length, 2);
+    assert.equal(rows[0].label, "Coding");
+    assert.equal(rows[1].badge, "done");
   });
 });

@@ -18,6 +18,12 @@ import {
   pendingApprovals,
   errText,
   engineLabel,
+  enabledEngines,
+  canDisableEngine,
+  trustToAutoApprove,
+  autoApproveToTrust,
+  queueRows,
+  THINKING_LEVELS,
 } from "./logic.js";
 
 const $ = (id) => document.getElementById(id);
@@ -47,6 +53,7 @@ const state = {
   prefs: null,
   workspaceRoot: "",
   runId: null,
+  workflowRunId: null, // run shown in the workflow queue view
   engineOverride: null, // null = auto
   expanded: false,
   runs: [],
@@ -59,10 +66,13 @@ const state = {
 // ---------------------------------------------------------------------------
 
 function showView(name) {
-  for (const v of ["main", "status", "settings", "workspace", "setup", "boot"]) {
+  for (const v of ["main", "status", "workflow", "settings", "workspace", "setup", "boot"]) {
     $("view-" + v).classList.toggle("hidden", v !== name);
   }
   if (name === "status") renderStatusView();
+  if (name === "workflow") renderWorkflowView();
+  if (name === "settings") loadSettingsView();
+  if (name === "workspace") { renderWorkspaceStatus(); renderPresets(); }
 }
 
 function expand() {
@@ -234,6 +244,7 @@ function renderTranscript() {
 function renderEngineChips() {
   const box = $("engine-chips");
   box.innerHTML = "";
+  const disabled = state.prefs?.disabled_engines ?? [];
   const mk = (value, label) => {
     const b = document.createElement("button");
     b.textContent = label;
@@ -245,7 +256,7 @@ function renderEngineChips() {
     box.appendChild(b);
   };
   mk(null, "Auto");
-  for (const e of ENGINES) mk(e, engineLabel(e));
+  for (const e of enabledEngines(disabled)) mk(e, engineLabel(e));
 }
 
 async function sendChat(message, override) {
@@ -318,6 +329,11 @@ function renderStatusView() {
     head.innerHTML = `<span class="dot ${turns.some((t) => t.status === "running") ? "green" : "blue"}"></span>
       run <span class="mono">${escapeHtml(String(run.run_id ?? "").slice(0, 8))}</span>
       <span class="hint">${turns.length} turn</span>`;
+    const openBtn = document.createElement("button");
+    openBtn.className = "ghost-btn";
+    openBtn.textContent = "Detail →";
+    openBtn.onclick = () => { state.workflowRunId = run.run_id; showView("workflow"); };
+    head.appendChild(openBtn);
     card.appendChild(head);
     for (const t of turns.slice(-6)) {
       const attn = (t.pending_approvals ?? []).length + (t.pending_questions ?? []).length;
@@ -332,6 +348,153 @@ function renderStatusView() {
     }
     box.appendChild(card);
   }
+}
+
+const WF_BADGES = {
+  progress: ["In Progress", "blue"],
+  approval: ["Butuh persetujuan", "amber"],
+  done: ["Done", "green"],
+  failed: ["Failed", "red"],
+  cancelled: ["Cancelled", "gray"],
+};
+
+/** Workflow queue view: one run's turns as task rows (all real data). */
+async function renderWorkflowView() {
+  const runId = state.workflowRunId ?? state.runId;
+  const box = $("wf-rows");
+  const statusEl = $("wf-status");
+  box.innerHTML = "";
+  statusEl.textContent = "";
+  $("wf-cancel").classList.add("hidden");
+  if (!runId) {
+    $("wf-prompt").textContent = "Belum ada run — kirim perintah dulu dari Chat.";
+    $("wf-count").textContent = "";
+    return;
+  }
+  let run;
+  try {
+    const data = await state.api.workflowRun(runId, state.workspaceRoot);
+    run = data.run;
+  } catch (e) {
+    $("wf-prompt").textContent = "Gagal memuat run: " + errText(e);
+    $("wf-count").textContent = "";
+    return;
+  }
+  const rows = queueRows(run);
+  $("wf-prompt").textContent = rows.length ? rows[0].goal : "Run kosong.";
+  $("wf-count").textContent = rows.length
+    ? `Workflow: ${rows.length} task${rows.length > 1 ? "s" : ""}`
+    : "";
+  const running = rows.filter((r) => r.status === "running");
+  if (running.length) $("wf-cancel").classList.remove("hidden");
+  for (const row of rows) {
+    const [badgeText, badgeClass] = WF_BADGES[row.badge] ?? ["?", "gray"];
+    const card = document.createElement("div");
+    card.className = "wf-row";
+    const head = document.createElement("div");
+    head.className = "wf-head";
+    head.innerHTML = `
+      <span class="wf-engine">${escapeHtml(row.label)}</span>
+      <span class="badge ${badgeClass}">${escapeHtml(badgeText)}</span>`;
+    card.appendChild(head);
+    const goal = document.createElement("div");
+    goal.className = "wf-goal";
+    goal.textContent = row.goal;
+    card.appendChild(goal);
+    if (row.lastEvent) {
+      const logs = document.createElement("div");
+      logs.className = "wf-logs";
+      logs.textContent = "Logs: " + row.lastEvent;
+      card.appendChild(logs);
+    }
+    if (row.note) {
+      const note = document.createElement("div");
+      note.className = "hint";
+      note.textContent = row.note;
+      card.appendChild(note);
+    }
+    // Pending approvals → working [Approve]/[Deny] (same API as chat cards).
+    for (const ap of row.approvals) {
+      const apRow = document.createElement("div");
+      apRow.className = "row";
+      apRow.innerHTML = `<span class="hint">${escapeHtml(ap.tool ?? "approval")} menunggu keputusan</span>`;
+      const grant = document.createElement("button");
+      grant.className = "primary-btn";
+      grant.textContent = "Approve";
+      grant.onclick = () => decideRowApproval(row.taskId, ap, "grant", statusEl);
+      const deny = document.createElement("button");
+      deny.className = "deny-btn";
+      deny.textContent = "Deny";
+      deny.onclick = () => decideRowApproval(row.taskId, ap, "deny", statusEl);
+      apRow.append(grant, deny);
+      card.appendChild(apRow);
+    }
+    // Live feed: real event log for running tasks.
+    if (row.status === "running") {
+      const feedBtn = document.createElement("button");
+      feedBtn.className = "ghost-btn";
+      feedBtn.textContent = "View Live Feed";
+      const feedBox = document.createElement("div");
+      feedBox.className = "wf-feed hidden";
+      let loaded = false;
+      feedBtn.onclick = async () => {
+        feedBox.classList.toggle("hidden");
+        if (feedBox.classList.contains("hidden") || loaded) return;
+        feedBox.textContent = "Memuat…";
+        try {
+          const data = await state.api.taskEvents(row.taskId);
+          const events = (data.events ?? []).slice(-15).reverse();
+          feedBox.innerHTML = events.length
+            ? events.map((e) => `<div class="wf-event"><span class="mono">${escapeHtml(String(e.type ?? "?"))}</span> <span class="hint">${escapeHtml(String(e.ts ?? "").slice(11, 19))}</span></div>`).join("")
+            : `<span class="hint">Belum ada event.</span>`;
+          loaded = true;
+        } catch (e) {
+          feedBox.textContent = "Gagal memuat feed: " + errText(e);
+        }
+      };
+      card.appendChild(feedBtn);
+      card.appendChild(feedBox);
+    }
+    box.appendChild(card);
+  }
+}
+
+async function decideRowApproval(taskId, approval, decision, statusEl) {
+  try {
+    await decideApproval(taskId, approval, decision);
+    statusEl.className = "status-line ok";
+    statusEl.textContent = decision === "grant" ? "Disetujui ✓" : "Ditolak.";
+    await refreshRuns();
+    renderWorkflowView();
+  } catch (e) {
+    statusEl.className = "status-line error";
+    statusEl.textContent = "Gagal: " + errText(e);
+  }
+}
+
+/** Cancel every running turn in the displayed run (real per-task cancel). */
+async function cancelWorkflow() {
+  const statusEl = $("wf-status");
+  const runId = state.workflowRunId ?? state.runId;
+  if (!runId) return;
+  const btn = $("wf-cancel");
+  btn.disabled = true;
+  try {
+    const data = await state.api.workflowRun(runId, state.workspaceRoot);
+    const running = (data.run?.turns ?? []).filter((t) => t.status === "running");
+    let ok = 0;
+    for (const t of running) {
+      try { await state.api.cancelTask(t.task_id); ok++; } catch { /* lanjutkan sisanya */ }
+    }
+    statusEl.className = "status-line ok";
+    statusEl.textContent = ok ? `${ok} task dibatalkan.` : "Tidak ada task berjalan.";
+    await refreshRuns();
+    renderWorkflowView();
+  } catch (e) {
+    statusEl.className = "status-line error";
+    statusEl.textContent = "Gagal: " + errText(e);
+  }
+  btn.disabled = false;
 }
 
 async function refreshRuns() {
@@ -382,10 +545,98 @@ async function loadSettingsView() {
         `Kompositor: ${ci.desktop} (${ci.session_type}) — island: panel mengambang; ` +
         `layer-shell pinning: ${ci.layer_shell_pinned ? "aktif" : "follow-up (lihat BUILD.md)"}.`;
     }
+    await loadEngineToggles();
+    await loadTrustLevel();
+    await loadThinkingLevel();
   } catch (e) {
     status.className = "status-line error";
     status.textContent = "Gagal memuat pengaturan: " + errText(e);
   }
+}
+
+/** Sidebar navigation for the settings view. */
+function selectSettingsSection(sec) {
+  for (const b of document.querySelectorAll(".settings-nav button")) {
+    b.classList.toggle("active", b.dataset.sec === sec);
+  }
+  for (const s of ["general", "systems", "chat"]) {
+    $("set-sec-" + s).classList.toggle("hidden", s !== sec);
+  }
+}
+
+/** Agentic Systems toggles — persisted to Tauri prefs AND the live server. */
+async function loadEngineToggles() {
+  const box = $("engine-toggles");
+  box.innerHTML = "";
+  const disabled = state.prefs.disabled_engines ?? [];
+  for (const e of ENGINES) {
+    const on = !disabled.includes(e);
+    const row = document.createElement("div");
+    row.className = "engine-toggle-row";
+    row.innerHTML = `<span class="wf-engine">${escapeHtml(engineLabel(e))}</span>`;
+    const btn = document.createElement("button");
+    btn.className = "toggle " + (on ? "on" : "off");
+    btn.textContent = on ? "On" : "Off";
+    btn.setAttribute("aria-label", `${engineLabel(e)} ${on ? "aktif" : "nonaktif"}`);
+    btn.onclick = () => setEngineEnabled(e, !on);
+    row.appendChild(btn);
+    box.appendChild(row);
+  }
+}
+
+async function setEngineEnabled(engine, enabled) {
+  const status = $("set-status");
+  let disabled = [...(state.prefs.disabled_engines ?? [])];
+  if (enabled) {
+    disabled = disabled.filter((e) => e !== engine);
+  } else {
+    if (!canDisableEngine(engine, disabled)) {
+      status.className = "status-line error";
+      status.textContent = "Tidak bisa menonaktifkan engine terakhir — minimal satu harus aktif.";
+      return;
+    }
+    disabled.push(engine);
+  }
+  try {
+    state.prefs = { ...state.prefs, disabled_engines: disabled };
+    await invoke("set_prefs", { prefs: state.prefs });
+    // Server-side too: the router must skip disabled engines (additive API).
+    await state.api.updateSettings({ session: { disabledEngines: disabled } });
+    // A picked override for a now-disabled engine is no longer valid.
+    if (!enabled && state.engineOverride === engine) state.engineOverride = null;
+    status.className = "status-line ok";
+    status.textContent = `${engineLabel(engine)} ${enabled ? "diaktifkan" : "dinonaktifkan"}.`;
+    loadEngineToggles();
+    renderEngineChips();
+  } catch (e) {
+    status.className = "status-line error";
+    status.textContent = "Gagal: " + errText(e);
+  }
+}
+
+/** Push persisted engine toggles to a freshly (re)started server. */
+async function pushDisabledEngines() {
+  const disabled = state.prefs.disabled_engines ?? [];
+  if (!disabled.length) return;
+  try {
+    await state.api.updateSettings({ session: { disabledEngines: disabled } });
+  } catch { /* server restart pick-up; non-fatal */ }
+}
+
+/** Trust & Approval — honest 2-state mapping of the boolean autoApprove. */
+async function loadTrustLevel() {
+  try {
+    const s = await state.api.getSettings();
+    $("trust-level").value = autoApproveToTrust(s.session?.autoApprove);
+  } catch { /* biarkan default */ }
+}
+
+async function loadThinkingLevel() {
+  try {
+    const s = await state.api.getSettings();
+    const lvl = s.session?.thinkingLevel ?? "medium";
+    $("think-level").value = THINKING_LEVELS.includes(lvl) ? lvl : "medium";
+  } catch { /* biarkan default */ }
 }
 
 async function loadModels(providerId) {
@@ -429,6 +680,129 @@ function renderRecentWorkspaces() {
     box.appendChild(b);
   }
   if (!box.children.length) box.innerHTML = `<span class="hint">Belum ada.</span>`;
+}
+
+/**
+ * Real workspace status: is the folder valid, and is the server actually
+ * anchored to it (via server_health.workspace_root from PR #102)?
+ */
+async function renderWorkspaceStatus() {
+  const el = $("ws-health");
+  el.className = "status-line";
+  el.textContent = "Mengecek…";
+  const path = ($("ws-path").value || state.workspaceRoot).trim();
+  if (!path) {
+    el.textContent = "Belum ada workspace dipilih.";
+    return;
+  }
+  const valid = await invoke("validate_workspace", { path }).catch(() => false);
+  if (!valid) {
+    el.className = "status-line error";
+    el.textContent = "● Folder tidak valid: " + path;
+    return;
+  }
+  const health = await invoke("server_health").catch(() => null);
+  if (health?.healthy && health.workspace_root && sameWorkspace(health.workspace_root, path)) {
+    el.className = "status-line ok";
+    el.textContent = "● Aktif — server melayani workspace ini.";
+  } else if (health?.healthy && health.workspace_root) {
+    el.className = "status-line error";
+    el.textContent = `● Folder valid, tapi server melayani workspace lain (${health.workspace_root}). Klik "Pilih Folder" untuk re-anchor.`;
+  } else {
+    el.className = "status-line";
+    el.textContent = "● Folder valid — server belum jalan.";
+  }
+}
+
+/** Named workspace shortcuts, persisted in Tauri prefs. */
+function getPresets() {
+  return state.prefs.workspace_presets ?? [];
+}
+
+function renderPresets() {
+  const sel = $("ws-preset");
+  sel.innerHTML = "";
+  const presets = getPresets();
+  if (!presets.length) {
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = "— belum ada preset —";
+    sel.appendChild(o);
+    return;
+  }
+  for (const p of presets) {
+    const o = document.createElement("option");
+    o.value = p.name;
+    o.textContent = `${p.name} — ${p.path}`;
+    sel.appendChild(o);
+  }
+}
+
+async function savePreset(name, path) {
+  const presets = getPresets().filter((p) => p.name !== name);
+  presets.push({ name, path });
+  state.prefs = { ...state.prefs, workspace_presets: presets };
+  await invoke("set_prefs", { prefs: state.prefs });
+  renderPresets();
+  $("ws-preset").value = name;
+}
+
+async function deletePreset(name) {
+  if (!name) return;
+  state.prefs = {
+    ...state.prefs,
+    workspace_presets: getPresets().filter((p) => p.name !== name),
+  };
+  await invoke("set_prefs", { prefs: state.prefs });
+  renderPresets();
+}
+
+/** Scan Directory — real top-level listing via the list_dir command. */
+async function scanWorkspace() {
+  const out = $("ws-scan-out");
+  const status = $("ws-status");
+  const path = ($("ws-path").value || state.workspaceRoot).trim();
+  out.innerHTML = "";
+  if (!path) {
+    status.className = "status-line error";
+    status.textContent = "Isi folder dulu.";
+    return;
+  }
+  try {
+    const entries = await invoke("list_dir", { path });
+    if (!entries.length) {
+      out.innerHTML = `<span class="hint">Folder kosong.</span>`;
+      return;
+    }
+    out.innerHTML = entries
+      .map((e) => `<div class="scan-entry">${e.is_dir ? "📁" : "📄"} ${escapeHtml(e.name)}</div>`)
+      .join("");
+    status.className = "status-line ok";
+    status.textContent = `${entries.length} entri di ${path}.`;
+  } catch (e) {
+    status.className = "status-line error";
+    status.textContent = "Gagal memindai: " + errText(e);
+  }
+}
+
+/** "Buat folder baru" — creates the typed path, then uses it as workspace. */
+async function createWorkspace() {
+  const status = $("ws-status");
+  const path = $("ws-path").value.trim();
+  if (!path) {
+    status.className = "status-line error";
+    status.textContent = "Isi folder dulu.";
+    return;
+  }
+  try {
+    const created = await invoke("create_dir", { path });
+    status.className = "status-line ok";
+    status.textContent = created ? "Folder dibuat." : "Folder sudah ada — dipakai.";
+    await setWorkspace(path);
+  } catch (e) {
+    status.className = "status-line error";
+    status.textContent = "Gagal: " + errText(e);
+  }
 }
 
 async function setWorkspace(path) {
@@ -571,6 +945,9 @@ async function boot() {
     bootStatus("Server tidak menjawab di " + state.serverUrl + ": " + errText(e), true);
     return;
   }
+  // Persisted engine toggles survive app restarts (Tauri prefs) but the
+  // server is process-local — push them to every freshly booted server.
+  await pushDisabledEngines();
 
   bootStatus("Siap.");
   showView("main");
@@ -595,11 +972,47 @@ function bindEvents() {
   $("pill").onclick = expand;
   $("pill").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") expand(); };
   $("btn-collapse").onclick = collapse;
-  $("btn-settings").onclick = () => { showView("settings"); loadSettingsView(); };
+  $("btn-settings").onclick = () => showView("settings");
   $("set-back").onclick = () => showView("main");
-  $("btn-workspace").onclick = () => { showView("workspace"); $("ws-path").value = state.workspaceRoot; $("ws-status").textContent = ""; renderRecentWorkspaces(); };
+  for (const b of document.querySelectorAll(".settings-nav button")) {
+    b.onclick = () => selectSettingsSection(b.dataset.sec);
+  }
+  $("btn-workspace").onclick = () => { $("ws-path").value = state.workspaceRoot; $("ws-status").textContent = ""; $("ws-scan-out").innerHTML = ""; showView("workspace"); };
   $("ws-back").onclick = () => showView("main");
   $("ws-use").onclick = () => setWorkspace($("ws-path").value.trim());
+  $("ws-create").onclick = createWorkspace;
+  $("ws-scan").onclick = scanWorkspace;
+  $("ws-preset").onchange = (e) => {
+    const p = getPresets().find((x) => x.name === e.target.value);
+    if (p) { $("ws-path").value = p.path; setWorkspace(p.path); }
+  };
+  $("ws-preset-save").onclick = async () => {
+    const status = $("ws-status");
+    const name = $("ws-preset-name").value.trim();
+    const path = ($("ws-path").value || state.workspaceRoot).trim();
+    if (!name || !path) {
+      status.className = "status-line error";
+      status.textContent = "Isi nama preset dan folder dulu.";
+      return;
+    }
+    try {
+      await savePreset(name, path);
+      $("ws-preset-name").value = "";
+      status.className = "status-line ok";
+      status.textContent = `Preset "${name}" tersimpan.`;
+    } catch (e) {
+      status.className = "status-line error";
+      status.textContent = "Gagal: " + errText(e);
+    }
+  };
+  $("ws-preset-del").onclick = async () => {
+    try {
+      await deletePreset($("ws-preset").value);
+    } catch (e) {
+      $("ws-status").className = "status-line error";
+      $("ws-status").textContent = "Gagal: " + errText(e);
+    }
+  };
 
   $("chat-send").onclick = () => sendChat();
   $("chat-input").onkeydown = (e) => { if (e.key === "Enter") sendChat(); };
@@ -609,8 +1022,34 @@ function bindEvents() {
   $("btn-goto-status").onclick = () => showView("status");
   $("status-back").onclick = () => showView("main");
   $("status-open-web").onclick = openWebUI;
+  $("wf-back").onclick = () => showView("status");
+  $("wf-cancel").onclick = cancelWorkflow;
 
   $("set-provider").onchange = (e) => loadModels(e.target.value);
+  $("trust-level").onchange = async (e) => {
+    const status = $("set-status");
+    try {
+      await state.api.updateSettings({ session: { autoApprove: trustToAutoApprove(e.target.value) } });
+      status.className = "status-line ok";
+      status.textContent = "Tersimpan — berlaku untuk semua engine.";
+    } catch (err) {
+      status.className = "status-line error";
+      status.textContent = "Gagal: " + errText(err);
+      loadTrustLevel();
+    }
+  };
+  $("think-level").onchange = async (e) => {
+    const status = $("set-status");
+    try {
+      await state.api.updateSettings({ session: { thinkingLevel: e.target.value } });
+      status.className = "status-line ok";
+      status.textContent = "Tersimpan — berlaku untuk semua engine.";
+    } catch (err) {
+      status.className = "status-line error";
+      status.textContent = "Gagal: " + errText(err);
+      loadThinkingLevel();
+    }
+  };
   $("set-save").onclick = async () => {
     const status = $("set-status");
     try {

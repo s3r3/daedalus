@@ -214,6 +214,40 @@ fn validate_workspace(path: String) -> Result<bool, String> {
     Ok(Path::new(&path).is_dir())
 }
 
+#[derive(Serialize)]
+struct DirEntry {
+    name: String,
+    is_dir: bool,
+}
+
+/// List a workspace directory (for "Scan Directory"). Sorted dirs-first,
+/// capped at 200 entries — a readout, not a file manager.
+#[tauri::command]
+fn list_dir(path: String) -> Result<Vec<DirEntry>, String> {
+    let mut entries: Vec<DirEntry> = fs::read_dir(&path)
+        .map_err(|e| format!("read dir: {e}"))?
+        .filter_map(|e| e.ok())
+        .map(|e| DirEntry {
+            name: e.file_name().to_string_lossy().into_owned(),
+            is_dir: e.file_type().map(|t| t.is_dir()).unwrap_or(false),
+        })
+        .collect();
+    entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then_with(|| a.name.cmp(&b.name)));
+    entries.truncate(200);
+    Ok(entries)
+}
+
+/// Create a workspace directory (and parents). Returns false when it
+/// already existed — never an error for that.
+#[tauri::command]
+fn create_dir(path: String) -> Result<bool, String> {
+    if Path::new(&path).exists() {
+        return Ok(false);
+    }
+    fs::create_dir_all(&path).map_err(|e| format!("create dir: {e}"))?;
+    Ok(true)
+}
+
 // ---------------------------------------------------------------------------
 // Sidecar lifecycle
 //
@@ -494,6 +528,8 @@ fn main() {
             node_available,
             validate_repo_root,
             validate_workspace,
+            list_dir,
+            create_dir,
             spawn_server,
             stop_server,
             compositor_info,

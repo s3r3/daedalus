@@ -240,3 +240,70 @@ h3 { font-size: 12px; color: var(--dim); margin: 12px 0 6px; }
 .quit-dialog {
   border-top: 1px solid var(--line); padding: 10px 12px; background: var(--bg-soft);
 }
+
+/* ---- Workflow queue view (phase 2) ---- */
+.wf-rows { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.wf-row {
+  background: var(--bg-soft); border: 1px solid var(--line);
+  border-radius: 14px; padding: 10px 12px;
+}
+.wf-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 4px;
+}
+.wf-engine { font-weight: 700; font-size: 13px; }
+.badge {
+  font-size: 11px; font-weight: 700; border-radius: 999px; padding: 3px 10px;
+  white-space: nowrap;
+}
+.badge.blue { background: rgba(90, 169, 255, 0.15); color: var(--blue); }
+.badge.green { background: rgba(61, 220, 132, 0.15); color: var(--green); }
+.badge.amber { background: rgba(255, 176, 32, 0.15); color: var(--amber); }
+.badge.red { background: rgba(255, 107, 107, 0.15); color: var(--red); }
+.badge.gray { background: rgba(154, 160, 184, 0.15); color: var(--dim); }
+.wf-goal { font-size: 12px; overflow-wrap: anywhere; }
+.wf-logs { font-size: 11px; color: var(--dim); margin-top: 4px; font-family: ui-monospace, monospace; }
+.wf-feed {
+  margin-top: 8px; max-height: 160px; overflow-y: auto;
+  background: rgba(0, 0, 0, 0.25); border-radius: 10px; padding: 8px 10px;
+  font-family: ui-monospace, monospace; font-size: 11px;
+}
+.wf-event { padding: 2px 0; border-bottom: 1px solid var(--line); }
+.wf-event:last-child { border-bottom: 0; }
+.mono { font-family: ui-monospace, monospace; }
+
+/* ---- Settings sidebar (phase 3) ---- */
+.settings-layout { display: flex; gap: 0; min-height: 380px; }
+.settings-nav {
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 132px; border-right: 1px solid var(--line); padding-right: 8px;
+}
+.settings-nav button {
+  text-align: left; background: transparent; border: 0; color: var(--dim);
+  border-radius: 10px; padding: 9px 10px; font-size: 12px; font-weight: 600;
+}
+.settings-nav button:hover { background: var(--bg-soft); color: var(--text); }
+.settings-nav button.active { background: var(--bg-soft); color: var(--text); }
+.settings-body { flex: 1; padding-left: 12px; min-width: 0; }
+.engine-toggles { display: flex; flex-direction: column; gap: 6px; }
+.engine-toggle-row {
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--bg-soft); border: 1px solid var(--line);
+  border-radius: 12px; padding: 8px 12px;
+}
+.toggle {
+  border: 0; border-radius: 999px; padding: 5px 14px;
+  font-size: 11px; font-weight: 700; min-width: 52px;
+}
+.toggle.on { background: rgba(61, 220, 132, 0.18); color: var(--green); }
+.toggle.off { background: rgba(154, 160, 184, 0.15); color: var(--dim); }
+
+/* ---- Workspace (phase 4) ---- */
+.scan-out {
+  display: flex; flex-direction: column; gap: 2px; margin: 6px 0;
+  max-height: 150px; overflow-y: auto;
+  background: rgba(0, 0, 0, 0.25); border-radius: 10px; padding: 8px 10px;
+  font-size: 12px;
+}
+.scan-out:empty { display: none; }
+.scan-entry { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

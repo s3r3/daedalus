@@ -198,6 +198,12 @@ export type SessionState = {
   providerId?: string;
   model?: string;
   workspaceRoot: string;
+  /**
+   * Engines the user switched off (Dae Captain "Agentic Systems" toggles).
+   * The workflow router never auto-routes to a disabled engine; an explicit
+   * override targeting one is rejected. Empty/undefined = all enabled.
+   */
+  disabledEngines?: WorkflowEngine[];
 };
 
 /** One skill in the inventory payload: the collision winner, or a shadowed copy marked with the winner's origin. */
@@ -572,6 +578,15 @@ function applySessionUpdate(ctx: AppContext, parsed: Record<string, unknown>): v
   if (typeof parsed.providerId === "string") ctx.session.providerId = parsed.providerId;
   if (typeof parsed.provider_id === "string") ctx.session.providerId = parsed.provider_id;
   if (typeof parsed.model === "string") ctx.session.model = parsed.model;
+  // Dae Captain "Agentic Systems" toggles: engines the router must skip.
+  // Additive and validated — unknown engine names are rejected, never ignored.
+  const disabledRaw = parsed.disabledEngines ?? parsed.disabled_engines;
+  if (disabledRaw !== undefined) {
+    if (!Array.isArray(disabledRaw) || !disabledRaw.every(isWorkflowEngine)) {
+      throw new Error("disabledEngines must be an array of engine names");
+    }
+    ctx.session.disabledEngines = [...disabledRaw] as WorkflowEngine[];
+  }
   if (typeof parsed.workspaceRoot === "string") recordWorkspace(ctx, resolveAllowedRoot(ctx, parsed.workspaceRoot));
   if (typeof parsed.workspace_root === "string") recordWorkspace(ctx, resolveAllowedRoot(ctx, parsed.workspace_root));
 }
@@ -2327,6 +2342,32 @@ export function createApp(ctx: AppContext) {
               });
               return;
             }
+          }
+
+          // Disabled engines (Dae Captain "Agentic Systems" toggles) are
+          // never dispatched to. An explicit override is a client error;
+          // an auto-route becomes an honest clarify over enabled engines.
+          const disabledEngines = ctx.session.disabledEngines ?? [];
+          if (disabledEngines.includes(routed.engine)) {
+            if (overrideRaw) {
+              sendJson(res, 400, {
+                error: "engine_disabled",
+                engine: routed.engine,
+                request_id: requestId,
+              });
+              return;
+            }
+            const enabled = WORKFLOW_ENGINES.filter(
+              (e) => !disabledEngines.includes(e),
+            );
+            sendJson(res, 200, {
+              run_id: run.run_id,
+              needs_clarify: true,
+              options: enabled,
+              message: `Engine ${routed.engine} sedang nonaktif — pilih engine lain atau aktifkan dulu di Pengaturan.`,
+              request_id: requestId,
+            });
+            return;
           }
 
           const resolved = resolveReferences(message, run);

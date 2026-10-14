@@ -150,3 +150,71 @@ export function pendingApprovals(runs) {
   }
   return out;
 }
+
+/** Thinking-level tiers supported by PUT /settings (server THINKING_LEVELS). */
+export const THINKING_LEVELS = ["off", "low", "medium", "high"];
+
+/** Engines minus the disabled ones — drives the composer chips. */
+export function enabledEngines(disabled) {
+  const off = new Set(disabled ?? []);
+  return ENGINES.filter((e) => !off.has(e));
+}
+
+/**
+ * Whether `engine` may be switched off. Re-enabling is always fine;
+ * switching off is blocked only when it would strand the user with zero
+ * enabled engines (the router would clarify to an empty list).
+ */
+export function canDisableEngine(engine, disabled) {
+  const off = new Set(disabled ?? []);
+  if (!off.has(engine)) off.add(engine);
+  else off.delete(engine);
+  return enabledEngines([...off]).length > 0;
+}
+
+/** Trust dropdown value → session.autoApprove boolean (the backend is boolean-only). */
+export function trustToAutoApprove(value) {
+  return value === "auto";
+}
+
+export function autoApproveToTrust(autoApprove) {
+  return autoApprove === true ? "auto" : "ask";
+}
+
+const QUEUE_BADGES = {
+  running: "progress",
+  done: "done",
+  failed: "failed",
+  cancelled: "cancelled",
+};
+
+/**
+ * Queue row view-model for one workflow turn. Pure — the workflow view
+ * renders rows from this. A running turn with pending approvals gets the
+ * "approval" badge so its [Approve]/[Deny] buttons render.
+ */
+export function queueRow(turn) {
+  const status = turn.status ?? "running";
+  const approvals = turn.pending_approvals ?? [];
+  const questions = turn.pending_questions ?? [];
+  const badge = status === "running" && (approvals.length || questions.length)
+    ? "approval"
+    : (QUEUE_BADGES[status] ?? "progress");
+  return {
+    engine: turn.engine,
+    label: engineLabel(turn.engine),
+    goal: turn.goal ?? "",
+    status,
+    badge,
+    approvals,
+    questions,
+    lastEvent: turn.last_event ?? null,
+    note: turn.note ?? null,
+    taskId: turn.task_id,
+  };
+}
+
+/** Rows for every turn in a run, newest last (queue order). */
+export function queueRows(run) {
+  return (run?.turns ?? []).map(queueRow);
+}
