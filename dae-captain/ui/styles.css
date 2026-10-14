@@ -1,0 +1,161 @@
+/* Dae Captain island — dark dynamic-island theme. */
+:root {
+  --bg: rgba(16, 18, 34, 0.96);
+  --bg-soft: rgba(28, 31, 54, 0.96);
+  --line: rgba(255, 255, 255, 0.09);
+  --text: #e8eaf6;
+  --dim: #9aa0b8;
+  --accent: #6c7bff;
+  --green: #3ddc84;
+  --amber: #ffb020;
+  --blue: #5aa9ff;
+  --red: #ff6b6b;
+  --radius: 18px;
+}
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0; height: 100%;
+  background: transparent; color: var(--text);
+  font: 13px/1.45 -apple-system, "Segoe UI", Inter, sans-serif;
+  overflow: hidden; user-select: none;
+}
+.hidden { display: none !important; }
+button { font: inherit; cursor: pointer; }
+
+/* Compact pill */
+.pill {
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--bg); border: 1px solid var(--line);
+  border-radius: 999px; padding: 8px 14px 8px 8px;
+  margin: 6px auto; cursor: pointer; min-width: 64px; justify-content: center;
+  box-shadow: 0 8px 28px rgba(0,0,0,.5);
+}
+.pill-badge {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: #23263f; display: inline-flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: 14px;
+  border: 2px solid var(--blue);
+}
+.pill.status-green .pill-badge { border-color: var(--green); }
+.pill.status-amber .pill-badge { border-color: var(--amber); animation: pulse 1.2s infinite; }
+.pill.status-blue .pill-badge { border-color: var(--blue); }
+.pill-text { font-weight: 600; min-width: 4px; }
+@keyframes pulse { 50% { opacity: .45; } }
+body { display: flex; justify-content: center; align-items: flex-start; }
+
+/* Expanded panel */
+.panel {
+  width: 480px; max-height: 640px; margin-top: 6px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 18px 60px rgba(0,0,0,.6);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-bottom: 1px solid var(--line);
+  -webkit-app-region: drag;
+}
+.brand { font-weight: 700; font-size: 14px; display: inline-flex; align-items: center; gap: 8px; }
+.brand-badge {
+  width: 24px; height: 24px; border-radius: 7px; background: #23263f;
+  display: inline-flex; align-items: center; justify-content: center; font-weight: 800;
+  border: 1px solid var(--line);
+}
+.header-actions { display: flex; gap: 4px; -webkit-app-region: no-drag; }
+.icon-btn {
+  background: transparent; border: 0; color: var(--dim); font-size: 15px;
+  width: 30px; height: 30px; border-radius: 8px;
+}
+.icon-btn:hover { background: var(--bg-soft); color: var(--text); }
+section { padding: 10px 12px; overflow-y: auto; }
+h2 { font-size: 14px; margin: 4px 0 8px; }
+h3 { font-size: 12px; color: var(--dim); margin: 12px 0 6px; }
+
+/* Engine pills */
+.engine-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.engine-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--bg-soft); border: 1px solid var(--line);
+  border-radius: 999px; padding: 5px 10px; font-size: 12px;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); }
+.dot.green { background: var(--green); }
+.dot.amber { background: var(--amber); animation: pulse 1.2s infinite; }
+.engine-pill small { color: var(--dim); }
+
+/* Approvals */
+.approvals { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.approval-card {
+  border: 1px solid var(--amber); border-radius: 12px; padding: 10px;
+  background: rgba(255, 176, 32, 0.06);
+}
+.approval-card .title { font-weight: 600; margin-bottom: 8px; }
+.approval-card .row, .row { display: flex; gap: 8px; }
+.primary-btn {
+  background: var(--accent); color: #fff; border: 0; border-radius: 10px;
+  padding: 8px 14px; font-weight: 600;
+}
+.primary-btn:hover { filter: brightness(1.1); }
+.ghost-btn {
+  background: var(--bg-soft); color: var(--text); border: 1px solid var(--line);
+  border-radius: 10px; padding: 8px 14px;
+}
+.ghost-btn:hover { border-color: var(--dim); }
+.deny-btn {
+  background: transparent; color: var(--red); border: 1px solid var(--red);
+  border-radius: 10px; padding: 8px 14px; font-weight: 600;
+}
+
+/* Transcript + composer */
+.transcript { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; max-height: 260px; overflow-y: auto; }
+.turn {
+  background: var(--bg-soft); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px;
+}
+.turn .meta { display: flex; gap: 8px; align-items: center; margin-bottom: 4px; font-size: 12px; }
+.engine-chip {
+  background: #23263f; border: 1px solid var(--line); border-radius: 999px;
+  padding: 2px 8px; font-size: 11px; font-weight: 600;
+}
+.turn .goal { color: var(--text); }
+.turn .artifacts { color: var(--dim); font-size: 12px; margin-top: 4px; }
+.turn .note { color: var(--amber); font-size: 12px; margin-top: 4px; }
+.clarify button { margin: 4px 4px 0 0; }
+.composer { border-top: 1px solid var(--line); padding-top: 8px; }
+.engine-chips { display: flex; gap: 6px; margin-bottom: 6px; flex-wrap: wrap; }
+.engine-chips button {
+  background: transparent; border: 1px solid var(--line); color: var(--dim);
+  border-radius: 999px; padding: 3px 10px; font-size: 11px;
+}
+.engine-chips button.active { border-color: var(--accent); color: var(--text); }
+.composer-row { display: flex; gap: 8px; }
+.composer-row input {
+  flex: 1; background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
+  border-radius: 12px; padding: 9px 12px; outline: none;
+}
+.composer-row input:focus { border-color: var(--accent); }
+.send-btn {
+  background: var(--accent); color: #fff; border: 0; border-radius: 12px;
+  width: 40px; font-size: 16px;
+}
+
+/* Forms */
+.field { margin-bottom: 8px; }
+.field label { display: block; font-size: 11px; color: var(--dim); margin-bottom: 4px; }
+.field input, .field select {
+  width: 100%; background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
+  border-radius: 10px; padding: 8px 10px; outline: none;
+}
+.field input:focus, .field select:focus { border-color: var(--accent); }
+.status-line { min-height: 18px; font-size: 12px; color: var(--dim); }
+.status-line.error { color: var(--red); }
+.status-line.ok { color: var(--green); }
+.hint { font-size: 11px; color: var(--dim); }
+.recent-list { display: flex; flex-direction: column; gap: 4px; }
+.recent-list button {
+  text-align: left; background: var(--bg-soft); border: 1px solid var(--line);
+  color: var(--text); border-radius: 8px; padding: 6px 10px; font-size: 12px;
+}
+.check { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--dim); margin: 8px 0; }
+.quit-dialog {
+  border-top: 1px solid var(--line); padding: 10px 12px; background: var(--bg-soft);
+}

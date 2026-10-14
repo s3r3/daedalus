@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dae Captain</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Compact pill (dynamic island, collapsed) -->
+  <div id="pill" class="pill status-blue" role="button" tabindex="0" aria-label="Dae Captain — klik untuk membuka">
+    <span id="pill-badge" class="pill-badge">D</span>
+    <span id="pill-text" class="pill-text"></span>
+  </div>
+
+  <!-- Expanded panel -->
+  <div id="panel" class="panel hidden">
+    <header class="panel-header" data-tauri-drag-region>
+      <span class="brand"><span class="brand-badge">D</span> Dae Captain</span>
+      <span class="header-actions">
+        <button id="btn-workspace" class="icon-btn" title="Pilih workspace">📁</button>
+        <button id="btn-settings" class="icon-btn" title="Pengaturan">⚙</button>
+        <button id="btn-collapse" class="icon-btn" title="Kecilkan">–</button>
+        <button id="btn-quit" class="icon-btn" title="Keluar">✕</button>
+      </span>
+    </header>
+
+    <section id="view-main">
+      <div id="engine-pills" class="engine-pills"></div>
+      <div id="approvals" class="approvals"></div>
+      <div id="transcript" class="transcript"></div>
+      <div class="composer">
+        <div id="engine-chips" class="engine-chips"></div>
+        <div class="composer-row">
+          <input id="chat-input" type="text" placeholder="Perintah ke semua agentic…" autocomplete="off">
+          <button id="chat-send" class="send-btn" title="Kirim">➤</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-settings" class="hidden">
+      <h2>Pengaturan</h2>
+      <div class="field">
+        <label>Provider</label>
+        <select id="set-provider"></select>
+      </div>
+      <div class="field">
+        <label>Model (berlaku untuk semua engine)</label>
+        <select id="set-model"></select>
+      </div>
+      <button id="set-save" class="primary-btn">Simpan</button>
+      <h3>Tambah provider</h3>
+      <div class="field"><label>ID</label><input id="prov-id" type="text" placeholder="mis. openrouter"></div>
+      <div class="field"><label>Nama</label><input id="prov-name" type="text" placeholder="OpenRouter"></div>
+      <div class="field"><label>Base URL</label><input id="prov-url" type="text" placeholder="https://openrouter.ai/api/v1"></div>
+      <div class="field"><label>API key</label><input id="prov-key" type="password" placeholder="tidak pernah ditampilkan kembali"></div>
+      <div class="row">
+        <button id="prov-test" class="ghost-btn">Test koneksi</button>
+        <button id="prov-save" class="primary-btn">Simpan provider</button>
+      </div>
+      <p id="set-status" class="status-line"></p>
+      <p id="compositor-info" class="hint"></p>
+      <p class="hint">Kunci API tersimpan di server (~/.daedalus) dan tidak pernah ditampilkan kembali — sama seperti Web/CLI.</p>
+      <button id="set-back" class="ghost-btn">← Kembali</button>
+    </section>
+
+    <section id="view-workspace" class="hidden">
+      <h2>Workspace</h2>
+      <p class="hint">Folder ini menjadi workspace aktif untuk perintah berikutnya.</p>
+      <div class="field"><label>Folder</label><input id="ws-path" type="text" placeholder="/home/user/proyek"></div>
+      <button id="ws-use" class="primary-btn">Pakai folder ini</button>
+      <h3>Terakhir dipakai</h3>
+      <div id="ws-recent" class="recent-list"></div>
+      <p id="ws-status" class="status-line"></p>
+      <button id="ws-back" class="ghost-btn">← Kembali</button>
+    </section>
+
+    <section id="view-setup" class="hidden">
+      <h2>Selamat datang di Dae Captain 🦊</h2>
+      <p class="hint">Aplikasi butuh lokasi repo Daedalus (untuk menjalankan server sebagai sidecar).</p>
+      <div class="field"><label>Repo root Daedalus</label><input id="setup-repo" type="text" placeholder="/home/user/workspace/repos/daedalus"></div>
+      <div class="field"><label>Workspace awal</label><input id="setup-ws" type="text" placeholder="/home/user/proyek"></div>
+      <p id="setup-status" class="status-line"></p>
+      <button id="setup-save" class="primary-btn">Mulai</button>
+    </section>
+
+    <section id="view-boot" class="hidden">
+      <h2 id="boot-title">Menyiapkan…</h2>
+      <p id="boot-status" class="status-line">Menghubungi server…</p>
+    </section>
+
+    <div id="quit-dialog" class="quit-dialog hidden">
+      <p>Server Daedalus yang dijalankan aplikasi ini — biarkan tetap jalan?</p>
+      <label class="check"><input id="quit-remember" type="checkbox"> Ingat pilihan ini</label>
+      <div class="row">
+        <button id="quit-keep" class="primary-btn">Ya, biarkan jalan</button>
+        <button id="quit-stop" class="ghost-btn">Tidak, matikan</button>
+      </div>
+    </div>
+  </div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
