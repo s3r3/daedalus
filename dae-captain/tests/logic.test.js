@@ -260,3 +260,22 @@ describe("spawnServerArgs", () => {
     assert.deepEqual(Object.keys(spawnServerArgs("/r", "/w")), ["repoRoot", "workspace"]);
   });
 });
+
+describe("spawn_server JS/Rust arg contract", () => {
+  it("JS payload keys match Tauri's camelCase mapping of the Rust params", async () => {
+    // Tauri #[tauri::command] maps Rust param names to camelCase by default.
+    // Read the real Rust signature so drift on either side breaks this test,
+    // not the app on Farid's laptop.
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
+    const m = src.match(/fn spawn_server\(([\s\S]*?)\)\s*->/);
+    assert.ok(m, "spawn_server signature not found");
+    const params = [...m[1].matchAll(/(\w+)\s*:\s*(?:String|bool|u16|Vec<DirEntry>)/g)]
+      .map((x) => x[1])
+      .filter((p) => p !== "app" && p !== "state"); // injected by Tauri, not from payload
+    const toCamel = (s) => s.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+    const expected = params.map(toCamel).sort();
+    const actual = Object.keys(spawnServerArgs("/r", "/w")).sort();
+    assert.deepEqual(actual, expected);
+  });
+});
