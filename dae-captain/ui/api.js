@@ -48,6 +48,10 @@ export function createApiClient({ baseUrl, fetchImpl }) {
       }),
     approve: (taskId, payload) =>
       req("POST", `/tasks/${encodeURIComponent(taskId)}/approve`, payload),
+    cancelTask: (taskId) =>
+      req("POST", `/tasks/${encodeURIComponent(taskId)}/cancel`),
+    taskEvents: (taskId) =>
+      req("GET", `/tasks/${encodeURIComponent(taskId)}/events`),
     getSettings: () => req("GET", "/settings"),
     updateSettings: (patch) => req("PUT", "/settings", patch),
     getProviders: () => req("GET", "/providers"),

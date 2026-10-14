@@ -16,6 +16,8 @@ fn main() {
             "stop_server",
             "validate_repo_root",
             "validate_workspace",
+            "list_dir",
+            "create_dir",
         ])),
     )
     .expect("failed to run tauri-build")
