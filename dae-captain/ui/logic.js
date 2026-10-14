@@ -134,3 +134,19 @@ export function errText(e) {
     return String(e);
   }
 }
+
+/**
+ * Flatten every pending approval across runs into
+ * [{ taskId, turn, approval }]. Used by "Approve All".
+ */
+export function pendingApprovals(runs) {
+  const out = [];
+  for (const run of runs ?? []) {
+    for (const turn of run.turns ?? []) {
+      for (const approval of turn.pending_approvals ?? []) {
+        out.push({ taskId: turn.task_id, turn, approval });
+      }
+    }
+  }
+  return out;
+}

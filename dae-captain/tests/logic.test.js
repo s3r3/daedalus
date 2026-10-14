@@ -13,6 +13,7 @@ import {
   chatRequestBody,
   isClarifyResponse,
   sameWorkspace,
+  pendingApprovals,
   normalizeWorkspacePath,
   errText,
   engineLabel,
@@ -169,5 +170,30 @@ describe("errText", () => {
     assert.ok(errText(undefined) !== "undefined");
     assert.ok(errText(null) !== "undefined");
     assert.ok(!errText("x").includes("undefined"));
+  });
+});
+
+describe("pendingApprovals", () => {
+  const runs = [
+    { run_id: "r1", turns: [
+      { task_id: "t1", pending_approvals: [{ tool: "write_file", key: "k1" }, { tool: "run_command" }] },
+      { task_id: "t2", pending_approvals: [] },
+      { task_id: "t3" },
+    ]},
+    { run_id: "r2", turns: [
+      { task_id: "t4", pending_approvals: [{ tool: "x" }] },
+    ]},
+    { run_id: "r3" },
+  ];
+  it("flattens every pending approval with its task id", () => {
+    const list = pendingApprovals(runs);
+    assert.equal(list.length, 3);
+    assert.deepEqual(list.map((x) => x.taskId), ["t1", "t1", "t4"]);
+    assert.equal(list[0].approval.key, "k1");
+  });
+  it("returns empty for no runs / no approvals", () => {
+    assert.deepEqual(pendingApprovals([]), []);
+    assert.deepEqual(pendingApprovals(null), []);
+    assert.deepEqual(pendingApprovals([{ turns: [] }]), []);
   });
 });
