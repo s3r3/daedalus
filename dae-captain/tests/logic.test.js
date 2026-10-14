@@ -14,6 +14,7 @@ import {
   isClarifyResponse,
   sameWorkspace,
   normalizeWorkspacePath,
+  errText,
   engineLabel,
 } from "../ui/logic.js";
 
@@ -154,5 +155,19 @@ describe("sameWorkspace / normalizeWorkspacePath", () => {
   it("empty never matches", () => {
     assert.ok(!sameWorkspace("", ""));
     assert.ok(!sameWorkspace("/a", ""));
+  });
+});
+
+describe("errText", () => {
+  it("passes Tauri string rejections through (not undefined)", () => {
+    assert.equal(errText("server exited during startup"), "server exited during startup");
+  });
+  it("reads Error.message", () => {
+    assert.equal(errText(new Error("boom")), "boom");
+  });
+  it("never returns undefined", () => {
+    assert.ok(errText(undefined) !== "undefined");
+    assert.ok(errText(null) !== "undefined");
+    assert.ok(!errText("x").includes("undefined"));
   });
 });
