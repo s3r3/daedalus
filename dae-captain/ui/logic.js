@@ -101,3 +101,18 @@ export function chatRequestBody({ message, runId, workspaceRoot, engineOverride 
 export function isClarifyResponse(res) {
   return res != null && res.needs_clarify === true && Array.isArray(res.options);
 }
+
+/**
+ * Compare workspace paths the way the server does: the server resolves and
+ * the UI may carry a trailing slash (e.g. from the folder picker).
+ * Used to detect "server healthy but anchored to another workspace" (HTTP 403).
+ */
+export function normalizeWorkspacePath(p) {
+  return String(p || "").replace(/\/+$/, "");
+}
+
+export function sameWorkspace(a, b) {
+  const na = normalizeWorkspacePath(a);
+  const nb = normalizeWorkspacePath(b);
+  return na !== "" && na === nb;
+}

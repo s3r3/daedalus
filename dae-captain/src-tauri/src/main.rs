@@ -130,19 +130,51 @@ fn tcp_get_ok(host: &str, port: u16, path: &str) -> bool {
     head.starts_with("HTTP/1.1 200") || head.starts_with("HTTP/1.0 200")
 }
 
+/// Raw-TCP HTTP GET that returns the response body (for /health JSON).
+/// std-only like tcp_get_ok; the body may exceed one read, so read to end.
+fn http_get_body(host: &str, port: u16, path: &str) -> Option<String> {
+    let addr = format!("{host}:{port}");
+    let socket_addr: std::net::SocketAddr = addr.parse().ok()?;
+    let mut stream = TcpStream::connect_timeout(&socket_addr, Duration::from_millis(800)).ok()?;
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(1500)));
+    let req = format!("GET {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
+    stream.write_all(req.as_bytes()).ok()?;
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).ok()?;
+    let text = String::from_utf8_lossy(&buf);
+    let body_start = text.find("\r\n\r\n")? + 4;
+    Some(text[body_start..].to_string())
+}
+
 #[derive(Serialize)]
 struct HealthInfo {
     healthy: bool,
     url: String,
+    /// Workspace the server is anchored to (from /health), if reachable.
+    /// The UI uses it to detect "healthy but serving another workspace".
+    workspace_root: Option<String>,
 }
 
 #[tauri::command]
 fn server_health(app: AppHandle) -> Result<HealthInfo, String> {
     let prefs = get_prefs(app)?;
     let url = format!("http://{}:{}", prefs.server_host, prefs.server_port);
+    let healthy = tcp_get_ok(&prefs.server_host, prefs.server_port, "/health");
+    let workspace_root = if healthy {
+        http_get_body(&prefs.server_host, prefs.server_port, "/health")
+            .and_then(|b| serde_json::from_str::<serde_json::Value>(&b).ok())
+            .and_then(|v| {
+                v.get("workspace_root")?
+                    .as_str()
+                    .map(|s| s.to_string())
+            })
+    } else {
+        None
+    };
     Ok(HealthInfo {
-        healthy: tcp_get_ok(&prefs.server_host, prefs.server_port, "/health"),
+        healthy,
         url,
+        workspace_root,
     })
 }
 
@@ -487,4 +519,40 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("failed to run dae-captain");
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests (run: cargo test)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as IoWrite;
+    use std::net::TcpListener;
+
+    #[test]
+    fn http_get_body_returns_health_json_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = std::io::Read::read(&mut stream, &mut buf);
+            let body = r#"{"status":"ok","workspace_root":"/tmp/ws"}"#;
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = IoWrite::write_all(&mut stream, resp.as_bytes());
+        });
+        let body = http_get_body("127.0.0.1", port, "/health").expect("expected a body");
+        assert!(body.contains("\"workspace_root\":\"/tmp/ws\""), "got: {body}");
+    }
+
+    #[test]
+    fn http_get_body_returns_none_when_unreachable() {
+        assert!(http_get_body("127.0.0.1", 1, "/health").is_none());
+    }
 }

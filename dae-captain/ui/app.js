@@ -14,6 +14,7 @@ import {
   approvalTitle,
   chatRequestBody,
   isClarifyResponse,
+  sameWorkspace,
   engineLabel,
 } from "./logic.js";
 
@@ -361,6 +362,14 @@ async function setWorkspace(path) {
     const recent = [path, ...(state.prefs.recent_workspaces ?? []).filter((w) => w !== path)].slice(0, 8);
     state.prefs = { ...state.prefs, workspace_root: path, recent_workspaces: recent };
     await invoke("set_prefs", { prefs: state.prefs });
+    const serverOk = await ensureServer((t, e) => {
+      status.className = "status-line" + (e ? " error" : "");
+      status.textContent = t;
+    });
+    if (!serverOk) {
+      renderRecentWorkspaces();
+      return;
+    }
     status.className = "status-line ok";
     status.textContent = "Workspace aktif: " + path;
     renderRecentWorkspaces();
@@ -379,6 +388,51 @@ function bootStatus(text, isError = false) {
   const el = $("boot-status");
   el.textContent = text;
   el.className = "status-line" + (isError ? " error" : "");
+}
+
+/**
+ * Ensure a server is up AND anchored to state.workspaceRoot.
+ * A healthy server anchored elsewhere answers chat with HTTP 403, so:
+ * our sidecar gets respawned for the new workspace, a foreign server gets
+ * a clear instruction instead of silent breakage.
+ * Returns true when the server is usable.
+ */
+async function ensureServer(statusFn) {
+  let health = await invoke("server_health").catch(() => ({ healthy: false, url: "" }));
+  state.serverUrl = health.url || state.serverUrl;
+  if (
+    health.healthy &&
+    health.workspace_root &&
+    !sameWorkspace(health.workspace_root, state.workspaceRoot)
+  ) {
+    const managed = await invoke("server_managed").catch(() => false);
+    if (!managed) {
+      statusFn(
+        "Port 3080 dipakai server Daedalus lain (workspace: " + health.workspace_root + "). Jalankan `daedalus stop`, lalu restart aplikasi.",
+        true,
+      );
+      return false;
+    }
+    statusFn("Workspace berubah — me-restart server…");
+    await invoke("stop_server").catch(() => {});
+    await new Promise((r) => setTimeout(r, 800));
+    health = { healthy: false, url: state.serverUrl };
+  }
+  if (!health.healthy) {
+    statusFn("Server belum jalan — menjalankan sebagai sidecar…");
+    try {
+      const info = await invoke("spawn_server", {
+        repo_root: state.prefs.repo_root,
+        workspace: state.workspaceRoot,
+      });
+      state.serverUrl = info.url;
+      statusFn(info.started ? `Server jalan (pid ${info.pid}).` : "Server sudah jalan.");
+    } catch (e) {
+      statusFn("Gagal menjalankan server: " + e.message, true);
+      return false;
+    }
+  }
+  return true;
 }
 
 async function boot() {
@@ -425,19 +479,8 @@ async function boot() {
   }
 
   bootStatus("Menghubungi server…");
-  let health = await invoke("server_health").catch(() => ({ healthy: false, url: "" }));
-  state.serverUrl = health.url || state.serverUrl;
-  if (!health.healthy) {
-    bootStatus("Server belum jalan — menjalankan sebagai sidecar…");
-    try {
-      const info = await invoke("spawn_server", { repo_root: prefs.repo_root, workspace: state.workspaceRoot });
-      state.serverUrl = info.url;
-      bootStatus(info.started ? `Server jalan (pid ${info.pid}).` : "Server sudah jalan.");
-    } catch (e) {
-      bootStatus("Gagal menjalankan server: " + e.message, true);
-      return;
-    }
-  }
+  const serverOk = await ensureServer((t, e) => bootStatus(t, e));
+  if (!serverOk) return;
 
   state.api = createApiClient({ baseUrl: state.serverUrl });
   try {
