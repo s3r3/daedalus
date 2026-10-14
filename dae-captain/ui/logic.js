@@ -116,3 +116,37 @@ export function sameWorkspace(a, b) {
   const nb = normalizeWorkspacePath(b);
   return na !== "" && na === nb;
 }
+
+/**
+ * Render a caught rejection as text. Tauri's invoke() rejects with the RAW
+ * error value (a plain string for Rust `Err(String)`), NOT an Error object —
+ * so `e.message` is undefined and every message was swallowed. fetch-based
+ * API calls reject with real Errors. Handle both.
+ */
+export function errText(e) {
+  if (e == null) return "unknown error";
+  if (typeof e === "string") return e || "unknown error";
+  if (typeof e.message === "string" && e.message) return e.message;
+  try {
+    const j = JSON.stringify(e);
+    return j && j !== "{}" ? j : String(e);
+  } catch {
+    return String(e);
+  }
+}
+
+/**
+ * Flatten every pending approval across runs into
+ * [{ taskId, turn, approval }]. Used by "Approve All".
+ */
+export function pendingApprovals(runs) {
+  const out = [];
+  for (const run of runs ?? []) {
+    for (const turn of run.turns ?? []) {
+      for (const approval of turn.pending_approvals ?? []) {
+        out.push({ taskId: turn.task_id, turn, approval });
+      }
+    }
+  }
+  return out;
+}

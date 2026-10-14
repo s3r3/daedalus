@@ -9,14 +9,52 @@
 <body>
   <!-- Compact pill (dynamic island, collapsed) -->
   <div id="pill" class="pill status-blue" role="button" tabindex="0" aria-label="Dae Captain — klik untuk membuka">
-    <span id="pill-badge" class="pill-badge">D</span>
+    <span class="mascot mascot-sm" aria-hidden="true">
+      <svg class="mascot-svg" viewBox="0 0 48 48">
+        <defs>
+          <linearGradient id="daeGradPill" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#7c8bff"/>
+            <stop offset="1" stop-color="#4a5ae0"/>
+          </linearGradient>
+        </defs>
+        <rect class="m-body" x="6" y="8" width="36" height="34" rx="15" fill="url(#daeGradPill)"/>
+        <g class="m-eyes">
+          <ellipse cx="19" cy="24" rx="3.4" ry="4.4" fill="#14162b"/>
+          <ellipse cx="29" cy="24" rx="3.4" ry="4.4" fill="#14162b"/>
+          <circle cx="20.2" cy="22.4" r="1.1" fill="#fff" opacity="0.9"/>
+          <circle cx="30.2" cy="22.4" r="1.1" fill="#fff" opacity="0.9"/>
+        </g>
+      </svg>
+    </span>
     <span id="pill-text" class="pill-text"></span>
   </div>
 
   <!-- Expanded panel -->
   <div id="panel" class="panel hidden">
     <header class="panel-header" data-tauri-drag-region>
-      <span class="brand"><span class="brand-badge">D</span> Dae Captain</span>
+      <div class="identity">
+        <span class="mascot" aria-hidden="true">
+          <svg class="mascot-svg" viewBox="0 0 48 48">
+            <defs>
+              <linearGradient id="daeGradHead" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#7c8bff"/>
+                <stop offset="1" stop-color="#4a5ae0"/>
+              </linearGradient>
+            </defs>
+            <rect class="m-body" x="6" y="8" width="36" height="34" rx="15" fill="url(#daeGradHead)"/>
+            <g class="m-eyes">
+              <ellipse cx="19" cy="24" rx="3.4" ry="4.4" fill="#14162b"/>
+              <ellipse cx="29" cy="24" rx="3.4" ry="4.4" fill="#14162b"/>
+              <circle cx="20.2" cy="22.4" r="1.1" fill="#fff" opacity="0.9"/>
+              <circle cx="30.2" cy="22.4" r="1.1" fill="#fff" opacity="0.9"/>
+            </g>
+          </svg>
+        </span>
+        <div class="identity-text">
+          <div class="identity-title">Dae Captain <span class="identity-sub">AI Assistant</span></div>
+          <div id="header-status" class="identity-status">menyiapkan…</div>
+        </div>
+      </div>
       <span class="header-actions">
         <button id="btn-workspace" class="icon-btn" title="Pilih workspace">📁</button>
         <button id="btn-settings" class="icon-btn" title="Pengaturan">⚙</button>
@@ -26,15 +64,30 @@
     </header>
 
     <section id="view-main">
-      <div id="engine-pills" class="engine-pills"></div>
-      <div id="approvals" class="approvals"></div>
       <div id="transcript" class="transcript"></div>
+      <div id="approvals" class="approvals"></div>
+      <div class="action-row">
+        <button id="btn-approve-all" class="action-btn">Approve All</button>
+        <button id="btn-goto-chat" class="action-btn">Chat</button>
+        <button id="btn-goto-status" class="action-btn">Status</button>
+      </div>
+      <div id="action-status" class="action-status"></div>
       <div class="composer">
         <div id="engine-chips" class="engine-chips"></div>
         <div class="composer-row">
-          <input id="chat-input" type="text" placeholder="Perintah ke semua agentic…" autocomplete="off">
+          <input id="chat-input" type="text" placeholder="Tanya Dae Captain sesuatu…" autocomplete="off">
           <button id="chat-send" class="send-btn" title="Kirim">➤</button>
         </div>
+      </div>
+    </section>
+
+    <section id="view-status" class="hidden">
+      <h2>Status Agent</h2>
+      <div id="engine-pills" class="engine-pills"></div>
+      <div id="runs-list" class="runs-list"></div>
+      <div class="row">
+        <button id="status-open-web" class="ghost-btn">Buka Web UI</button>
+        <button id="status-back" class="ghost-btn">← Kembali</button>
       </div>
     </section>
 
@@ -76,7 +129,7 @@
     </section>
 
     <section id="view-setup" class="hidden">
-      <h2>Selamat datang di Dae Captain 🦊</h2>
+      <h2>Selamat datang di Dae Captain</h2>
       <p class="hint">Aplikasi butuh lokasi repo Daedalus (untuk menjalankan server sebagai sidecar).</p>
       <div class="field"><label>Repo root Daedalus</label><input id="setup-repo" type="text" placeholder="/home/user/workspace/repos/daedalus"></div>
       <div class="field"><label>Workspace awal</label><input id="setup-ws" type="text" placeholder="/home/user/proyek"></div>

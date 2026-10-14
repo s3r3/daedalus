@@ -109,6 +109,16 @@ fn set_prefs(app: AppHandle, prefs: Prefs) -> Result<(), String> {
 // Server health — dependency-free raw TCP check (no HTTP client crate)
 // ---------------------------------------------------------------------------
 
+/// True when something accepts TCP on host:port (healthy or not).
+fn port_in_use(host: &str, port: u16) -> bool {
+    let addr = format!("{host}:{port}");
+    let socket_addr: std::net::SocketAddr = match addr.parse() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    TcpStream::connect_timeout(&socket_addr, Duration::from_millis(800)).is_ok()
+}
+
 fn tcp_get_ok(host: &str, port: u16, path: &str) -> bool {
     let addr = format!("{host}:{port}");
     let socket_addr: std::net::SocketAddr = match addr.parse() {
@@ -292,6 +302,15 @@ fn spawn_server(
             url,
             log_path: String::new(),
         });
+    }
+
+    // Something accepts TCP on the port but isn't a healthy Daedalus server
+    // (zombie process, another app). Spawning now would just crash with
+    // EADDRINUSE — say so clearly instead.
+    if port_in_use(&host, port) {
+        return Err(format!(
+            "port {port} is already in use by another process (not a healthy Daedalus server); stop it first, then retry"
+        ));
     }
 
     let server_main = Path::new(&repo_root).join("server/src/main.ts");

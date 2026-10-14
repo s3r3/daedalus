@@ -15,6 +15,8 @@ import {
   chatRequestBody,
   isClarifyResponse,
   sameWorkspace,
+  pendingApprovals,
+  errText,
   engineLabel,
 } from "./logic.js";
 
@@ -57,9 +59,10 @@ const state = {
 // ---------------------------------------------------------------------------
 
 function showView(name) {
-  for (const v of ["main", "settings", "workspace", "setup", "boot"]) {
+  for (const v of ["main", "status", "settings", "workspace", "setup", "boot"]) {
     $("view-" + v).classList.toggle("hidden", v !== name);
   }
+  if (name === "status") renderStatusView();
 }
 
 function expand() {
@@ -112,11 +115,9 @@ function renderEnginePills() {
 function renderApprovals() {
   const box = $("approvals");
   box.innerHTML = "";
-  let any = false;
   for (const run of state.runs) {
     for (const turn of run.turns ?? []) {
       for (const ap of turn.pending_approvals ?? []) {
-        any = true;
         const card = document.createElement("div");
         card.className = "approval-card";
         card.innerHTML = `
@@ -125,12 +126,11 @@ function renderApprovals() {
             <button class="primary-btn" data-act="grant">Allow</button>
             <button class="deny-btn" data-act="deny">Deny</button>
           </div>`;
-        card.querySelector('[data-act="grant"]').onclick = () => decideApproval(turn.task_id, ap, "grant", card);
-        card.querySelector('[data-act="deny"]').onclick = () => decideApproval(turn.task_id, ap, "deny", card);
+        card.querySelector('[data-act="grant"]').onclick = () => decideCardApproval(turn.task_id, ap, "grant", card);
+        card.querySelector('[data-act="deny"]').onclick = () => decideCardApproval(turn.task_id, ap, "deny", card);
         box.appendChild(card);
       }
       for (const q of turn.pending_questions ?? []) {
-        any = true;
         const card = document.createElement("div");
         card.className = "approval-card";
         card.innerHTML = `
@@ -141,18 +141,49 @@ function renderApprovals() {
       }
     }
   }
-  if (any && !state.expanded) expand(); // approval baru → island mekar
+}
+async function decideApproval(taskId, approval, decision) {
+  await state.api.approve(taskId, approvalPayload(approval, decision));
 }
 
-async function decideApproval(taskId, approval, decision, card) {
+async function decideCardApproval(taskId, approval, decision, card) {
   try {
-    await state.api.approve(taskId, approvalPayload(approval, decision));
+    await decideApproval(taskId, approval, decision);
     card.querySelectorAll("button").forEach((b) => (b.disabled = true));
     card.querySelector(".title").textContent += decision === "grant" ? " — diizinkan ✓" : " — ditolak ✕";
     await refreshRuns();
   } catch (e) {
-    card.querySelector(".title").textContent = "Gagal: " + e.message;
+    card.querySelector(".title").textContent = "Gagal: " + errText(e);
   }
+}
+
+/** Grant every pending approval across all runs. */
+async function approveAll() {
+  const btn = $("btn-approve-all");
+  const status = $("action-status");
+  const list = pendingApprovals(state.runs);
+  if (!list.length) {
+    status.className = "action-status";
+    status.textContent = "Tidak ada approval tertunda.";
+    return;
+  }
+  btn.disabled = true;
+  status.className = "action-status";
+  status.textContent = `Menyetujui ${list.length}…`;
+  let ok = 0;
+  let fail = 0;
+  for (const { taskId, approval } of list) {
+    try {
+      await decideApproval(taskId, approval, "grant");
+      ok++;
+    } catch {
+      fail++;
+    }
+  }
+  await refreshRuns();
+  btn.disabled = false;
+  status.className = "action-status " + (fail ? "error" : "ok");
+  status.textContent = fail ? `${ok} diizinkan, ${fail} gagal.` : `${ok} approval diizinkan ✓`;
 }
 
 // ---------------------------------------------------------------------------
@@ -166,23 +197,24 @@ function escapeHtml(s) {
 function renderTranscript() {
   const box = $("transcript");
   box.innerHTML = "";
-  for (const m of state.transcript.slice(-20)) {
+  for (const m of state.transcript.slice(-30)) {
     const el = document.createElement("div");
     if (m.kind === "user") {
-      el.className = "turn";
-      el.innerHTML = `<div class="meta"><b>Kamu</b></div><div class="goal">${escapeHtml(m.text)}</div>`;
-    } else if (m.kind === "turn") {
-      el.className = "turn";
+      el.className = "bubble user";
+      el.innerHTML = `<div class="body">${escapeHtml(m.text)}</div>`;
+    } else if (m.kind === "turn" || m.kind === "assistant") {
+      el.className = "bubble assistant";
+      const who = m.kind === "assistant" ? "Dae Captain" : engineLabel(m.engine);
       const arts = formatResolvedArtifacts(m.resolved);
       el.innerHTML = `
-        <div class="meta"><span class="engine-chip">→ ${escapeHtml(engineLabel(m.engine))}</span>
-        <span class="hint">${escapeHtml(m.router?.layer ?? "")} · ${escapeHtml(m.goal)}</span></div>
+        <div class="who">${escapeHtml(who)}</div>
+        <div class="body">${escapeHtml(m.kind === "assistant" ? m.text : m.goal)}</div>
         ${m.staged ? `<div class="note">Staged — menunggu gate di Web UI / aplikasi.</div>` : ""}
         ${arts.length ? `<div class="artifacts">Mengambil:<br>${arts.map((a) => "• " + escapeHtml(a)).join("<br>")}</div>` : ""}`;
     } else if (m.kind === "clarify") {
-      el.className = "turn clarify";
-      el.innerHTML = `<div class="meta"><b>Dae Captain</b></div><div>${escapeHtml(m.text)}</div><div></div>`;
-      const btnBox = el.lastElementChild;
+      el.className = "bubble assistant clarify";
+      el.innerHTML = `<div class="who">Dae Captain</div><div class="body">${escapeHtml(m.text)}</div><div class="opt-row"></div>`;
+      const btnBox = el.querySelector(".opt-row");
       for (const opt of m.options) {
         const b = document.createElement("button");
         b.className = "ghost-btn";
@@ -191,8 +223,8 @@ function renderTranscript() {
         btnBox.appendChild(b);
       }
     } else if (m.kind === "error") {
-      el.className = "turn";
-      el.innerHTML = `<div class="note">Gagal: ${escapeHtml(m.text)}</div>`;
+      el.className = "bubble assistant error";
+      el.innerHTML = `<div class="who">Dae Captain</div><div class="body">Gagal: ${escapeHtml(m.text)}</div>`;
     }
     box.appendChild(el);
   }
@@ -246,7 +278,7 @@ async function sendChat(message, override) {
       });
     }
   } catch (e) {
-    state.transcript.push({ kind: "error", text: e.message });
+    state.transcript.push({ kind: "error", text: errText(e) });
   }
   renderTranscript();
   await refreshRuns();
@@ -255,6 +287,52 @@ async function sendChat(message, override) {
 // ---------------------------------------------------------------------------
 // Polling
 // ---------------------------------------------------------------------------
+
+function renderHeaderStatus() {
+  const el = $("header-status");
+  const ws = state.workspaceRoot ? state.workspaceRoot.replace(/\/+$/, "").split("/").pop() : "";
+  const agg = aggregateStatus(state.runs);
+  const what = agg.status === "attention"
+    ? `${agg.attention} butuh persetujuan`
+    : agg.status === "working"
+      ? `${agg.running} agent berjalan`
+      : "siap";
+  el.textContent = (ws ? ws + " • " : "") + what;
+}
+
+/** Status view: live engine pills + per-run cards. All data from polling. */
+function renderStatusView() {
+  renderEnginePills();
+  const box = $("runs-list");
+  box.innerHTML = "";
+  if (!state.runs.length) {
+    box.innerHTML = `<span class="hint">Belum ada run di workspace ini.</span>`;
+    return;
+  }
+  for (const run of state.runs.slice(-10).reverse()) {
+    const card = document.createElement("div");
+    card.className = "run-card";
+    const turns = run.turns ?? [];
+    const head = document.createElement("div");
+    head.className = "run-head";
+    head.innerHTML = `<span class="dot ${turns.some((t) => t.status === "running") ? "green" : "blue"}"></span>
+      run <span class="mono">${escapeHtml(String(run.run_id ?? "").slice(0, 8))}</span>
+      <span class="hint">${turns.length} turn</span>`;
+    card.appendChild(head);
+    for (const t of turns.slice(-6)) {
+      const attn = (t.pending_approvals ?? []).length + (t.pending_questions ?? []).length;
+      const row = document.createElement("div");
+      row.className = "run-turn";
+      const dot = t.status === "running" ? (attn ? "amber" : "green") : "blue";
+      row.innerHTML = `<span class="dot ${dot}"></span>
+        <div><div class="goal"><b>${escapeHtml(engineLabel(t.engine))}</b> — ${escapeHtml(turnSummary(t).goal)}</div>
+        <div class="detail">${escapeHtml(turnSummary(t).detail)}</div>
+        ${attn ? `<div class="attn">${attn} menunggu keputusanmu</div>` : ""}</div>`;
+      card.appendChild(row);
+    }
+    box.appendChild(card);
+  }
+}
 
 async function refreshRuns() {
   if (!state.api) return;
@@ -265,8 +343,12 @@ async function refreshRuns() {
     state.runs = [];
   }
   renderPill();
-  if (state.expanded) {
-    renderEnginePills();
+  renderHeaderStatus();
+  if (pendingApprovals(state.runs).length > 0) expand(); // approval baru → island mekar
+  if (!state.expanded) return;
+  if (!$("view-status").classList.contains("hidden")) {
+    renderStatusView();
+  } else {
     renderApprovals();
   }
 }
@@ -302,7 +384,7 @@ async function loadSettingsView() {
     }
   } catch (e) {
     status.className = "status-line error";
-    status.textContent = "Gagal memuat pengaturan: " + e.message;
+    status.textContent = "Gagal memuat pengaturan: " + errText(e);
   }
 }
 
@@ -376,7 +458,7 @@ async function setWorkspace(path) {
     await refreshRuns();
   } catch (e) {
     status.className = "status-line error";
-    status.textContent = "Gagal: " + e.message;
+    status.textContent = "Gagal: " + errText(e);
   }
 }
 
@@ -428,7 +510,7 @@ async function ensureServer(statusFn) {
       state.serverUrl = info.url;
       statusFn(info.started ? `Server jalan (pid ${info.pid}).` : "Server sudah jalan.");
     } catch (e) {
-      statusFn("Gagal menjalankan server: " + e.message, true);
+      statusFn("Gagal menjalankan server: " + errText(e), true);
       return false;
     }
   }
@@ -444,7 +526,7 @@ async function boot() {
   try {
     prefs = await invoke("get_prefs");
   } catch (e) {
-    bootStatus("Gagal membaca preferensi: " + e.message + " — pastikan berjalan di aplikasi Tauri.", true);
+    bootStatus("Gagal membaca preferensi: " + errText(e) + " — pastikan berjalan di aplikasi Tauri.", true);
     return;
   }
   state.prefs = prefs;
@@ -486,14 +568,21 @@ async function boot() {
   try {
     await state.api.health();
   } catch (e) {
-    bootStatus("Server tidak menjawab di " + state.serverUrl + ": " + e.message, true);
+    bootStatus("Server tidak menjawab di " + state.serverUrl + ": " + errText(e), true);
     return;
   }
 
   bootStatus("Siap.");
   showView("main");
+  if (!state.transcript.length) {
+    state.transcript.push({
+      kind: "assistant",
+      text: "Halo! Ada yang bisa kubantu? Kirim perintah — aku teruskan ke engine yang tepat (Coding, Slide, Dokumen, Spreadsheet, Research).",
+    });
+  }
   renderEngineChips();
   renderTranscript();
+  renderHeaderStatus();
   await refreshRuns();
   setInterval(refreshRuns, 2500);
 }
@@ -515,6 +604,12 @@ function bindEvents() {
   $("chat-send").onclick = () => sendChat();
   $("chat-input").onkeydown = (e) => { if (e.key === "Enter") sendChat(); };
 
+  $("btn-approve-all").onclick = approveAll;
+  $("btn-goto-chat").onclick = () => { showView("main"); $("chat-input").focus(); };
+  $("btn-goto-status").onclick = () => showView("status");
+  $("status-back").onclick = () => showView("main");
+  $("status-open-web").onclick = openWebUI;
+
   $("set-provider").onchange = (e) => loadModels(e.target.value);
   $("set-save").onclick = async () => {
     const status = $("set-status");
@@ -524,7 +619,7 @@ function bindEvents() {
       status.textContent = "Tersimpan — berlaku untuk semua engine.";
     } catch (e) {
       status.className = "status-line error";
-      status.textContent = "Gagal: " + e.message;
+      status.textContent = "Gagal: " + errText(e);
     }
   };
   $("prov-test").onclick = async () => {
@@ -545,7 +640,7 @@ function bindEvents() {
       if (res.ok) { $("prov-key").value = ""; loadSettingsView(); }
     } catch (e) {
       status.className = "status-line error";
-      status.textContent = "Gagal: " + e.message;
+      status.textContent = "Gagal: " + errText(e);
     }
   };
   $("prov-save").onclick = async () => {
@@ -563,7 +658,7 @@ function bindEvents() {
       loadSettingsView();
     } catch (e) {
       status.className = "status-line error";
-      status.textContent = "Gagal: " + e.message;
+      status.textContent = "Gagal: " + errText(e);
     }
   };
 
@@ -597,14 +692,6 @@ function bindEvents() {
   };
   $("quit-keep").onclick = () => quitWith(true);
   $("quit-stop").onclick = () => quitWith(false);
-
-  // Intercept window close → quit flow above (Tauri close-requested).
-  try {
-    tauriWindow?.getCurrentWindow?.()?.onCloseRequested?.((e) => {
-      e.preventDefault();
-      $("btn-quit").onclick();
-    });
-  } catch { /* non-Tauri: ignore */ }
 }
 
 bindEvents();
