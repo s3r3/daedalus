@@ -97,14 +97,14 @@ body { display: flex; justify-content: center; align-items: flex-start; }
   width: 30px; height: 30px; border-radius: 8px;
 }
 .icon-btn:hover { background: var(--bg-soft); color: var(--text); }
-section { padding: 10px 12px; overflow-y: auto; display: flex; flex-direction: column; }
+section { padding: 10px 12px; overflow-y: auto; display: flex; flex-direction: column; min-height: 0; flex: 1 1 auto; }
 h2 { font-size: 14px; margin: 4px 0 8px; }
 h3 { font-size: 12px; color: var(--dim); margin: 12px 0 6px; }
 
 /* ---- Chat bubbles ---- */
 .transcript {
   display: flex; flex-direction: column; gap: 8px;
-  margin-bottom: 8px; max-height: 300px; overflow-y: auto; padding: 2px;
+  margin-bottom: 8px; max-height: 300px; min-height: 0; overflow-y: auto; padding: 2px;
 }
 .bubble {
   max-width: 88%; padding: 8px 12px; border-radius: 16px;
@@ -307,3 +307,21 @@ h3 { font-size: 12px; color: var(--dim); margin: 12px 0 6px; }
 }
 .scan-out:empty { display: none; }
 .scan-entry { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- Chat live activity (thinking + tool calls, like the web panel) ---- */
+.turn-activity { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.turn-activity .thinking { font-size: 12px; color: var(--dim); }
+.turn-activity .thinking summary { cursor: pointer; user-select: none; }
+.turn-activity .thought {
+  margin-top: 4px; padding: 6px 8px; background: var(--bg-soft);
+  border-radius: 8px; font-size: 12px; color: var(--text);
+  max-height: 120px; overflow-y: auto; white-space: pre-wrap;
+}
+.tool-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.tool-chip {
+  font-size: 11px; padding: 2px 8px; border-radius: 999px;
+  background: var(--bg-soft); border: 1px solid var(--line); color: var(--dim);
+}
+.tool-chip.ok { color: var(--green); border-color: rgba(61,220,132,.35); }
+.tool-chip.running { color: var(--blue); border-color: rgba(90,169,255,.35); }
+.tool-chip.bad { color: var(--red); border-color: rgba(255,107,107,.35); }

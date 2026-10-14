@@ -279,3 +279,39 @@ describe("spawn_server JS/Rust arg contract", () => {
     assert.deepEqual(actual, expected);
   });
 });
+
+describe("summarizeTaskEvents", () => {
+  it("extracts thoughts and tool calls in order", async () => {
+    const { summarizeTaskEvents } = await import("../ui/logic.js");
+    const s = summarizeTaskEvents([
+      { type: "THOUGHT", payload: { text: "  perlu baca file dulu  " } },
+      { type: "TOOL_CALL_STARTED", payload: { call: { id: "c1", tool: "read_file" } } },
+      { type: "TOOL_CALL_FINISHED", payload: { call: { id: "c1", tool: "read_file" }, result: { status: "ok" } } },
+      { type: "TOOL_CALL_STARTED", payload: { call: { id: "c2", tool: "run_command" } } },
+    ]);
+    assert.deepEqual(s.thoughts, ["perlu baca file dulu"]);
+    assert.deepEqual(s.tools, [
+      { tool: "read_file", status: "ok" },
+      { tool: "run_command", status: "running" },
+    ]);
+  });
+
+  it("marks failed tool calls", async () => {
+    const { summarizeTaskEvents } = await import("../ui/logic.js");
+    const s = summarizeTaskEvents([
+      { type: "TOOL_CALL_FINISHED", payload: { call: { id: "c9", tool: "write_file" }, result: { status: "denied" } } },
+    ]);
+    assert.deepEqual(s.tools, [{ tool: "write_file", status: "denied" }]);
+  });
+
+  it("ignores empty thoughts and unknown events", async () => {
+    const { summarizeTaskEvents } = await import("../ui/logic.js");
+    const s = summarizeTaskEvents([
+      { type: "THOUGHT", payload: { text: "   " } },
+      { type: "TASK_STARTED", payload: {} },
+      null,
+    ]);
+    assert.deepEqual(s.thoughts, []);
+    assert.deepEqual(s.tools, []);
+  });
+});

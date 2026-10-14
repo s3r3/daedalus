@@ -24,6 +24,7 @@ import {
   trustToAutoApprove,
   autoApproveToTrust,
   queueRows,
+  summarizeTaskEvents,
   THINKING_LEVELS,
 } from "./logic.js";
 
@@ -205,8 +206,46 @@ function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function renderTranscript() {
-  const box = $("transcript");
+/**
+ * Live activity block for a chat turn: thinking (collapsible) + tool-call
+ * chips, mirroring the web panel's THINKING view. Returns null when empty.
+ */
+function renderTurnActivity(activity) {
+  if (!activity) return null;
+  const thoughts = activity.thoughts ?? [];
+  const tools = activity.tools ?? [];
+  if (!thoughts.length && !tools.length) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "turn-activity";
+  if (thoughts.length) {
+    const det = document.createElement("details");
+    det.className = "thinking";
+    const sum = document.createElement("summary");
+    sum.textContent = `💭 thinking (${thoughts.length})`;
+    det.appendChild(sum);
+    for (const t of thoughts.slice(-3)) {
+      const p = document.createElement("div");
+      p.className = "thought";
+      p.textContent = t;
+      det.appendChild(p);
+    }
+    wrap.appendChild(det);
+  }
+  if (tools.length) {
+    const row = document.createElement("div");
+    row.className = "tool-chips";
+    for (const t of tools.slice(-8)) {
+      const chip = document.createElement("span");
+      chip.className = `tool-chip ${t.status === "ok" ? "ok" : t.status === "running" ? "running" : "bad"}`;
+      chip.textContent = `${t.tool} ${t.status === "ok" ? "OK" : t.status === "running" ? "…" : t.status.toUpperCase()}`;
+      row.appendChild(chip);
+    }
+    wrap.appendChild(row);
+  }
+  return wrap;
+}
+
+function renderTranscript() {  const box = $("transcript");
   box.innerHTML = "";
   for (const m of state.transcript.slice(-30)) {
     const el = document.createElement("div");
@@ -222,6 +261,8 @@ function renderTranscript() {
         <div class="body">${escapeHtml(m.kind === "assistant" ? m.text : m.goal)}</div>
         ${m.staged ? `<div class="note">Staged — menunggu gate di Web UI / aplikasi.</div>` : ""}
         ${arts.length ? `<div class="artifacts">Mengambil:<br>${arts.map((a) => "• " + escapeHtml(a)).join("<br>")}</div>` : ""}`;
+      const act = renderTurnActivity(m.activity);
+      if (act) el.appendChild(act);
     } else if (m.kind === "clarify") {
       el.className = "bubble assistant clarify";
       el.innerHTML = `<div class="who">Dae Captain</div><div class="body">${escapeHtml(m.text)}</div><div class="opt-row"></div>`;
@@ -287,6 +328,11 @@ async function sendChat(message, override) {
         router: res.router,
         resolved: res.resolved_artifacts,
         staged: res.staged === true,
+        taskId: res.task_id ?? null,
+        turnId: res.turn_id ?? null,
+        activity: null,
+        activityKey: "",
+        activityDone: false,
       });
     }
   } catch (e) {
@@ -509,11 +555,61 @@ async function refreshRuns() {
   renderPill();
   renderHeaderStatus();
   if (pendingApprovals(state.runs).length > 0) expand(); // approval baru → island mekar
+  await refreshTurnActivity();
   if (!state.expanded) return;
   if (!$("view-status").classList.contains("hidden")) {
     renderStatusView();
   } else {
     renderApprovals();
+  }
+}
+
+/** Find a workflow turn across runs by its task id. */
+function findRunTurn(taskId) {
+  for (const run of state.runs ?? []) {
+    for (const t of run.turns ?? []) {
+      if (t.task_id === taskId) return t;
+    }
+  }
+  return null;
+}
+
+function isChatViewVisible() {
+  return state.expanded && !$("view-main").classList.contains("hidden");
+}
+
+/**
+ * Live activity for the latest chat turn (thinking + tool calls, like the
+ * web panel). Polls task events while the turn is running; stops when the
+ * turn leaves "running". Re-renders the transcript only on change.
+ */
+async function refreshTurnActivity() {
+  if (!state.api) return;
+  const turn = [...state.transcript].reverse().find(
+    (m) => m.kind === "turn" && m.taskId && !m.activityDone
+  );
+  if (!turn) return;
+  const runTurn = findRunTurn(turn.taskId);
+  try {
+    const data = await state.api.taskEvents(turn.taskId);
+    const summary = summarizeTaskEvents(data.events ?? []);
+    const key = JSON.stringify(summary);
+    if (key !== turn.activityKey) {
+      turn.activityKey = key;
+      turn.activity = summary;
+      if (isChatViewVisible()) renderTranscript();
+    }
+  } catch {
+    /* events unavailable — keep last activity */
+  }
+  if (runTurn && runTurn.status !== "running") {
+    turn.activityDone = true;
+    if (runTurn.note && !turn.noteShown) {
+      turn.noteShown = true;
+      // Surface the failure reason in chat too, not just the workflow view.
+      state.transcript.push({ kind: "error", text: runTurn.note });
+      if (isChatViewVisible()) renderTranscript();
+    }
   }
 }
 
