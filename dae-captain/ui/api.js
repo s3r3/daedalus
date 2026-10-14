@@ -2,7 +2,7 @@
 // `fetchImpl` is injectable so unit tests run without a server.
 // Never logs or stores API keys; the server redacts them.
 
-export function createApiClient({ baseUrl, fetchImpl }) {
+export function createApiClient({ baseUrl, fetchImpl, getToken }) {
   const fetchFn = fetchImpl ?? globalThis.fetch?.bind(globalThis);
   if (!fetchFn) throw new Error("no fetch implementation available");
 
@@ -16,9 +16,19 @@ export function createApiClient({ baseUrl, fetchImpl }) {
       const s = qs.toString();
       if (s) url += "?" + s;
     }
+    const headers = body !== undefined ? { "content-type": "application/json" } : {};
+    // Local daemon token for sensitive endpoints (approve/cancel).
+    if (getToken) {
+      try {
+        const token = await getToken();
+        if (token) headers["authorization"] = "Bearer " + token;
+      } catch {
+        /* no token — server may still allow (no daemon.json yet) */
+      }
+    }
     const res = await fetchFn(url, {
       method,
-      headers: body !== undefined ? { "content-type": "application/json" } : {},
+      headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     let data = null;

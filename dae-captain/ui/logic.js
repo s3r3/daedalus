@@ -228,3 +228,37 @@ export function queueRows(run) {
 export function spawnServerArgs(repoRoot, workspace) {
   return { repoRoot, workspace };
 }
+
+/**
+ * Summarize task events for the chat's live-activity view (thinking +
+ * tool calls, like the web panel). Pure — the chat renders from this.
+ * Returns { thoughts: string[], tools: [{ tool, status }] } in event order.
+ */
+export function summarizeTaskEvents(events) {
+  const thoughts = [];
+  const tools = new Map();
+  for (const e of events ?? []) {
+    const p = e?.payload ?? {};
+    if (e?.type === "THOUGHT" && typeof p.text === "string" && p.text.trim()) {
+      thoughts.push(p.text.trim().slice(0, 500));
+    } else if (e?.type === "TOOL_CALL_STARTED" && p.call?.id) {
+      const args = summarizeArgs(p.call.tool, p.call.args);
+      tools.set(p.call.id, { tool: p.call.tool ?? "tool", status: "running", args });
+    } else if (e?.type === "TOOL_CALL_FINISHED" && p.call?.id) {
+      const t = tools.get(p.call.id) ?? { tool: p.call.tool ?? "tool" };
+      t.status = p.result?.status ?? "ok";
+      if (!t.args) t.args = summarizeArgs(p.call.tool, p.call.args);
+      tools.set(p.call.id, t);
+    }
+  }
+  return { thoughts, tools: [...tools.values()] };
+}
+
+/** Short human-readable arg summary for a tool call (mockup: "./", "package.json"). */
+function summarizeArgs(tool, args) {
+  if (!args || typeof args !== "object") return "";
+  const a = args;
+  const pick = a.path ?? a.file ?? a.dir ?? a.command ?? a.cmd ?? "";
+  if (typeof pick === "string" && pick) return pick.length > 40 ? "…" + pick.slice(-39) : pick;
+  return "";
+}

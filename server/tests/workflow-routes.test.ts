@@ -47,7 +47,7 @@ async function listen(): Promise<{ base: string; home: string }> {
     bus: new EventBus(),
     cwd: workspace,
     settings,
-    // Empty provider registry: layer-B is skipped (→ needs_clarify) and
+    // Empty provider registry: layer-B is skipped (→ chat-first fallback) and
     // research staging fails as no_provider_configured — deterministic on
     // any machine, with or without a real ~/.daedalus.
     providerStore: new ProviderRegistryStore(join(tmp, 'providers-home')),
@@ -111,12 +111,13 @@ describe('POST /workflow/chat', () => {
     expect(body.router).toMatchObject({ rule: 'engine_override' })
   })
 
-  test('ambiguous message → needs_clarify (no layer-B without a provider)', async () => {
+  test('ambiguous message → chat reply (chat-first, no layer-B without a provider)', async () => {
     const { base } = await listen()
     const { status, body } = await postChat(base, { message: 'tolong bereskan ini' })
     expect(status).toBe(200)
-    expect(body.needs_clarify).toBe(true)
-    expect(body.options).toEqual(['coding', 'slide', 'dokumen', 'spreadsheet', 'research'])
+    expect(body.kind).toBe('chat')
+    expect(typeof body.text).toBe('string')
+    expect(body.needs_clarify).toBeUndefined()
     expect(typeof body.run_id).toBe('string')
   })
 
@@ -197,5 +198,35 @@ describe('GET /workflow/runs', () => {
     expect(res.status).toBe(404)
     const body = (await res.json()) as { error: string }
     expect(body.error).toBe('run_not_found')
+  })
+})
+
+describe('GET /workflow/runs/:id failed-turn note', () => {
+  test('failed task error surfaces on the turn note', async () => {
+    const { base, home } = await listen()
+    const runs = new WorkflowRunStore(home)
+    const run = createWorkflowRun(workspace!)
+    appendTurn(run, {
+      engine: 'coding',
+      task_id: 'task-gagal',
+      goal: 'tugas gagal',
+      status: 'running',
+    })
+    runs.saveRun(run)
+    // Seed a failed task state with the runner's error.
+    const store = new TaskStore(home)
+    store.saveState('task-gagal', {
+      status: 'failed',
+      last_error: 'provider_timeout: model did not respond',
+    })
+
+    const res = await fetch(new URL(`/workflow/runs/${run.run_id}`, base))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      run: { turns: Array<{ status: string; note?: string }> }
+    }
+    expect(body.run.turns).toHaveLength(1)
+    expect(body.run.turns[0]!.status).toBe('failed')
+    expect(body.run.turns[0]!.note).toContain('provider_timeout')
   })
 })
