@@ -325,3 +325,23 @@ h3 { font-size: 12px; color: var(--dim); margin: 12px 0 6px; }
 .tool-chip.ok { color: var(--green); border-color: rgba(61,220,132,.35); }
 .tool-chip.running { color: var(--blue); border-color: rgba(90,169,255,.35); }
 .tool-chip.bad { color: var(--red); border-color: rgba(255,107,107,.35); }
+
+/* ---- Stop button ---- */
+.stop-btn {
+  background: var(--red); border: 0; color: #fff;
+  width: 40px; height: 40px; border-radius: 50%;
+  font-size: 14px; flex-shrink: 0;
+}
+.stop-btn:hover { filter: brightness(1.1); }
+
+/* ---- Dark form controls (fix white dropdown popup) ---- */
+:root { color-scheme: dark; }
+.field select option {
+  background: var(--bg-soft);
+  color: var(--text);
+}
+
+/* ---- Settings advanced (collapsed) ---- */
+.advanced { margin-top: 12px; }
+.advanced summary { cursor: pointer; color: var(--dim); font-size: 12px; }
+.advanced summary:hover { color: var(--text); }

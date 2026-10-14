@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { basename, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -249,6 +249,8 @@ export type AppContext = {
   session: SessionState;
   workspaces: Set<string>;
   providersReady?: Promise<void>;
+  /** Local daemon token for sensitive endpoints (approve/cancel). */
+  daemonToken?: string;
   webDist?: string;
   extensionStatusCache?: Map<string, { expiresAt: number; value: ExtensionStatus }>;
   /** Memoized taskStores() result (see TASK_STORES_CACHE_MS). */
@@ -1847,6 +1849,41 @@ async function runWorkflowLayerB(
 }
 
 /**
+ * Chat-first: a conversational reply for messages that are not work commands.
+ * Used when the router cannot confidently dispatch to an engine — the user
+ * gets a normal chat reply, not an "which engine?" picker.
+ */
+async function runWorkflowChatReply(
+  ctx: AppContext,
+  message: string,
+): Promise<string | undefined> {
+  const provider = resolveFastPathProvider(ctx, { poolModels: [] });
+  if (!provider) return undefined;
+  try {
+    const response = await provider.chat([
+      {
+        role: "system",
+        content:
+          "Kamu Dae Captain, asisten AI yang ramah dan membantu. " +
+          "Balas dengan singkat dan natural dalam bahasa Indonesia. " +
+          "Kamu bisa membantu membuat kode, slide presentasi, dokumen, spreadsheet, dan riset — " +
+          "tapi untuk obrolan biasa cukup ngobrol saja, jangan tanya mau pakai engine apa.",
+      },
+      { role: "user", content: message },
+    ]);
+    const content = response.message.content;
+    return typeof content === "string" && content.trim().length > 0
+      ? content
+      : undefined;
+  } catch (error) {
+    ctx.log.error("workflow chat reply failed", {
+      error: String(error),
+    });
+    return undefined;
+  }
+}
+
+/**
  * Reconcile a run's running turns against the live runners and persisted
  * task state. Mutates the run; returns true when anything changed (caller
  * saves). Research turns resolve via the plan→report mapping.
@@ -1993,10 +2030,49 @@ function presentWorkflowRun(
     turns: run.turns.map((turn) => presentWorkflowTurn(ctx, tasks, turn)),
   };
 }
+/**
+ * Local daemon token (FASE 4 security). Generated once, stored in
+ * ~/.daedalus/daemon.json. Sensitive endpoints (approve/cancel) require it
+ * via `Authorization: Bearer <token>`. The Tauri app reads the same file
+ * from disk — no network fetch, no exposure.
+ */
+export function ensureDaemonToken(daedalusHome: string): string {
+  const path = join(daedalusHome, "daemon.json");
+  try {
+    const raw = readFileSync(path, "utf-8");
+    const parsed = JSON.parse(raw) as { token?: unknown };
+    if (typeof parsed.token === "string" && parsed.token.length >= 32) {
+      return parsed.token;
+    }
+  } catch {
+    /* missing or invalid — generate below */
+  }
+  const token = randomBytes(32).toString("hex");
+  try {
+    mkdir(daedalusHome, { recursive: true });
+    writeFile(path, JSON.stringify({ token }, null, 2) + "\n");
+  } catch {
+    /* best effort — token still returned for this process */
+  }
+  return token;
+}
+
+function bearerToken(req: IncomingMessage): string | undefined {
+  const h = req.headers.authorization;
+  if (typeof h !== "string") return undefined;
+  const m = /^Bearer\s+(.+)$/i.exec(h.trim());
+  return m?.[1];
+}
 
 
 export function createApp(ctx: AppContext) {
   reconcileInterruptedTasks(ctx);
+  // Local daemon token for sensitive endpoints (approve/cancel).
+  if (!ctx.daemonToken) {
+    ctx.daemonToken = ensureDaemonToken(
+      resolveDaedalusHome(ctx.settings.daedalusHome, ctx.cwd),
+    );
+  }
   // Permanent bundled skills: make sure the starter set is installed in the
   // Daedalus-global skills dir at startup, so the Web inventory (Settings →
   // Extensions) shows them even before the first task runs. Idempotent and
@@ -2341,12 +2417,16 @@ export function createApp(ctx: AppContext) {
               };
               routerLayer = "llm";
             } else {
+              // Chat-first: when the router cannot confidently dispatch to an
+              // engine, reply conversationally instead of asking "which
+              // engine?". An explicit engineOverride still forces a dispatch.
+              const chatText =
+                (await runWorkflowChatReply(ctx, message)) ??
+                "Halo! Ada yang bisa dibantu?";
               sendJson(res, 200, {
                 run_id: run.run_id,
-                needs_clarify: true,
-                options: [...WORKFLOW_ENGINES],
-                message:
-                  "Perintahnya ambigu — engine mana yang kamu maksud?",
+                kind: "chat",
+                text: chatText,
                 request_id: requestId,
               });
               return;
@@ -2355,7 +2435,7 @@ export function createApp(ctx: AppContext) {
 
           // Disabled engines (Dae Captain "Agentic Systems" toggles) are
           // never dispatched to. An explicit override is a client error;
-          // an auto-route becomes an honest clarify over enabled engines.
+          // an auto-route becomes an honest message over enabled engines.
           const disabledEngines = ctx.session.disabledEngines ?? [];
           if (disabledEngines.includes(routed.engine)) {
             if (overrideRaw) {
@@ -2371,9 +2451,30 @@ export function createApp(ctx: AppContext) {
             );
             sendJson(res, 200, {
               run_id: run.run_id,
-              needs_clarify: true,
-              options: enabled,
-              message: `Engine ${routed.engine} sedang nonaktif — pilih engine lain atau aktifkan dulu di Pengaturan.`,
+              kind: "chat",
+              text: `Engine ${routed.engine} sedang nonaktif. Aktifkan dulu di Pengaturan, atau pilih salah satu yang aktif: ${enabled.join(", ")}.`,
+              request_id: requestId,
+            });
+            return;
+          }
+
+          // Workspace on-demand: work commands need an explicit workspace.
+          // Chat replies don't. If the client hasn't picked one (and the
+          // session doesn't remember one), ask instead of silently using cwd.
+          const explicitWorkspace =
+            (typeof parsed.workspace_root === "string" &&
+              parsed.workspace_root.length > 0 &&
+              parsed.workspace_root) ||
+            (typeof parsed.workspaceRoot === "string" &&
+              parsed.workspaceRoot.length > 0 &&
+              parsed.workspaceRoot) ||
+            "";
+          if (!explicitWorkspace && !ctx.session.workspaceRoot) {
+            sendJson(res, 200, {
+              run_id: run.run_id,
+              kind: "need_workspace",
+              message:
+                "Pilih folder workspace dulu — file yang dibuat akan ditulis di sana.",
               request_id: requestId,
             });
             return;
@@ -2581,6 +2682,11 @@ export function createApp(ctx: AppContext) {
     const approveMatch = /^\/tasks\/([^/]+)\/approve$/.exec(url.pathname);
     if (method === "POST" && approveMatch?.[1] !== undefined) {
       void (async () => {
+        // Sensitive: require the local daemon token.
+        if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
+          sendJson(res, 401, { error: "unauthorized" });
+          return;
+        }
         const taskId = approveMatch[1] as string;
         const parsed = await readJson(req);
         if (!parsed) {
@@ -2705,6 +2811,11 @@ export function createApp(ctx: AppContext) {
 
     const cancelMatch = /^\/tasks\/([^/]+)\/cancel$/.exec(url.pathname);
     if (method === "POST" && cancelMatch?.[1] !== undefined) {
+      // Sensitive: require the local daemon token.
+      if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
+        sendJson(res, 401, { error: "unauthorized" });
+        return;
+      }
       const taskId = cancelMatch[1] as string;
       const runner = ctx.activeRunners.get(taskId);
       const lookup = findTask(ctx, taskId);

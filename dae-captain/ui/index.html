@@ -76,6 +76,7 @@
         <div id="engine-chips" class="engine-chips"></div>
         <div class="composer-row">
           <input id="chat-input" type="text" placeholder="Tanya Dae Captain sesuatu…" autocomplete="off">
+          <button id="chat-stop" class="stop-btn hidden" title="Hentikan task">■</button>
           <button id="chat-send" class="send-btn" title="Kirim">➤</button>
         </div>
       </div>
@@ -122,16 +123,19 @@
               <select id="set-model"></select>
             </div>
             <button id="set-save" class="primary-btn">Simpan</button>
-            <h3>Tambah provider</h3>
-            <div class="field"><label>ID</label><input id="prov-id" type="text" placeholder="mis. openrouter"></div>
-            <div class="field"><label>Nama</label><input id="prov-name" type="text" placeholder="OpenRouter"></div>
-            <div class="field"><label>Base URL</label><input id="prov-url" type="text" placeholder="https://openrouter.ai/api/v1"></div>
-            <div class="field"><label>API key</label><input id="prov-key" type="password" placeholder="tidak pernah ditampilkan kembali"></div>
-            <div class="row">
-              <button id="prov-test" class="ghost-btn">Test koneksi</button>
-              <button id="prov-save" class="primary-btn">Simpan provider</button>
-            </div>
-            <p class="hint">Kunci API tersimpan di server (~/.daedalus) dan tidak pernah ditampilkan kembali — sama seperti Web/CLI.</p>
+            <details class="advanced">
+              <summary>Lanjutan</summary>
+              <h3>Tambah provider</h3>
+              <div class="field"><label>ID</label><input id="prov-id" type="text" placeholder="mis. openrouter"></div>
+              <div class="field"><label>Nama</label><input id="prov-name" type="text" placeholder="OpenRouter"></div>
+              <div class="field"><label>Base URL</label><input id="prov-url" type="text" placeholder="https://openrouter.ai/api/v1"></div>
+              <div class="field"><label>API key</label><input id="prov-key" type="password" placeholder="tidak pernah ditampilkan kembali"></div>
+              <div class="row">
+                <button id="prov-test" class="ghost-btn">Test koneksi</button>
+                <button id="prov-save" class="primary-btn">Simpan provider</button>
+              </div>
+              <p class="hint">Kunci API tersimpan di server (~/.daedalus) dan tidak pernah ditampilkan kembali — sama seperti Web/CLI.</p>
+            </details>
           </div>
           <div id="set-sec-systems" class="hidden">
             <h3>Agentic Systems</h3>

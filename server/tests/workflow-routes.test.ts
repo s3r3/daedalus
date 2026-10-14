@@ -47,7 +47,7 @@ async function listen(): Promise<{ base: string; home: string }> {
     bus: new EventBus(),
     cwd: workspace,
     settings,
-    // Empty provider registry: layer-B is skipped (→ needs_clarify) and
+    // Empty provider registry: layer-B is skipped (→ chat-first fallback) and
     // research staging fails as no_provider_configured — deterministic on
     // any machine, with or without a real ~/.daedalus.
     providerStore: new ProviderRegistryStore(join(tmp, 'providers-home')),
@@ -111,12 +111,13 @@ describe('POST /workflow/chat', () => {
     expect(body.router).toMatchObject({ rule: 'engine_override' })
   })
 
-  test('ambiguous message → needs_clarify (no layer-B without a provider)', async () => {
+  test('ambiguous message → chat reply (chat-first, no layer-B without a provider)', async () => {
     const { base } = await listen()
     const { status, body } = await postChat(base, { message: 'tolong bereskan ini' })
     expect(status).toBe(200)
-    expect(body.needs_clarify).toBe(true)
-    expect(body.options).toEqual(['coding', 'slide', 'dokumen', 'spreadsheet', 'research'])
+    expect(body.kind).toBe('chat')
+    expect(typeof body.text).toBe('string')
+    expect(body.needs_clarify).toBeUndefined()
     expect(typeof body.run_id).toBe('string')
   })
 

@@ -72,8 +72,7 @@ fn prefs_path(app: &AppHandle) -> Result<PathBuf, String> {
 }
 
 #[tauri::command]
-fn get_prefs(app: AppHandle) -> Result<Prefs, String> {
-    let path = prefs_path(&app)?;
+fn get_prefs(app: AppHandle) -> Result<Prefs, String> {    let path = prefs_path(&app)?;
     if !path.exists() {
         return Ok(Prefs::default());
     }
@@ -89,6 +88,22 @@ fn get_prefs(app: AppHandle) -> Result<Prefs, String> {
         prefs.keep_alive = "ask".to_string();
     }
     Ok(prefs)
+}
+
+/// Read the local daemon token from ~/.daedalus/daemon.json.
+/// The server generates this on first start; sensitive endpoints (approve,
+/// cancel) require it as `Authorization: Bearer <token>`.
+#[tauri::command]
+fn daemon_token() -> Result<String, String> {
+    let home = dirs::home_dir().ok_or("tidak bisa menemukan home directory")?;
+    let path = home.join(".daedalus").join("daemon.json");
+    let raw = fs::read_to_string(&path).map_err(|e| format!("baca daemon.json: {e}"))?;
+    let v: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("parse daemon.json: {e}"))?;
+    v.get("token")
+        .and_then(|t| t.as_str())
+        .map(|s| s.to_string())
+        .ok_or("token tidak ada di daemon.json".to_string())
 }
 
 #[tauri::command]
@@ -523,6 +538,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_prefs,
             set_prefs,
+            daemon_token,
             server_health,
             server_managed,
             node_available,

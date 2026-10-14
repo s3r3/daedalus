@@ -61,6 +61,8 @@ const state = {
   runs: [],
   transcript: [], // {kind: 'user'|'turn'|'clarify'|'error', ...}
   serverUrl: "http://127.0.0.1:3080",
+  pendingMessage: null, // work command waiting for a workspace pick
+  pendingOverride: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -319,6 +321,21 @@ async function sendChat(message, override) {
     if (isClarifyResponse(res)) {
       state.runId = res.run_id ?? state.runId;
       state.transcript.push({ kind: "clarify", text: res.message, options: res.options, original: text });
+    } else if (res.kind === "chat") {
+      // Chat-first: a conversational reply, no engine, no task.
+      state.runId = res.run_id ?? state.runId;
+      state.transcript.push({ kind: "assistant", text: res.text });
+    } else if (res.kind === "need_workspace") {
+      // Workspace on-demand: the command needs a folder. Remember the
+      // original message, show the picker, retry after the user picks.
+      state.runId = res.run_id ?? state.runId;
+      state.pendingMessage = text;
+      state.pendingOverride = override ?? state.engineOverride;
+      state.transcript.push({ kind: "assistant", text: res.message ?? "Pilih folder workspace dulu." });
+      renderTranscript();
+      showView("workspace");
+      renderRecentWorkspaces();
+      return;
     } else {
       state.runId = res.run_id ?? state.runId;
       state.transcript.push({
@@ -334,6 +351,7 @@ async function sendChat(message, override) {
         activityKey: "",
         activityDone: false,
       });
+      updateStopButton();
     }
   } catch (e) {
     state.transcript.push({ kind: "error", text: errText(e) });
@@ -583,6 +601,15 @@ function isChatViewVisible() {
  * web panel). Polls task events while the turn is running; stops when the
  * turn leaves "running". Re-renders the transcript only on change.
  */
+/** Show the Stop button only while a chat task is running. */
+function updateStopButton() {
+  const running = [...state.transcript].reverse().some(
+    (m) => m.kind === "turn" && m.taskId && !m.activityDone
+  );
+  $("chat-stop").classList.toggle("hidden", !running);
+  $("chat-send").classList.toggle("hidden", running);
+}
+
 async function refreshTurnActivity() {
   if (!state.api) return;
   const turn = [...state.transcript].reverse().find(
@@ -604,6 +631,7 @@ async function refreshTurnActivity() {
   }
   if (runTurn && runTurn.status !== "running") {
     turn.activityDone = true;
+    updateStopButton();
     if (runTurn.note && !turn.noteShown) {
       turn.noteShown = true;
       // Surface the failure reason in chat too, not just the workflow view.
@@ -927,6 +955,15 @@ async function setWorkspace(path) {
     status.textContent = "Workspace aktif: " + path;
     renderRecentWorkspaces();
     await refreshRuns();
+    // Retry a work command that was waiting for a workspace.
+    if (state.pendingMessage) {
+      const msg = state.pendingMessage;
+      const ov = state.pendingOverride;
+      state.pendingMessage = null;
+      state.pendingOverride = null;
+      showView("main");
+      await sendChat(msg, ov);
+    }
   } catch (e) {
     status.className = "status-line error";
     status.textContent = "Gagal: " + errText(e);
@@ -1015,11 +1052,8 @@ async function boot() {
   }
 
   state.workspaceRoot = prefs.workspace_root || "";
-  if (!state.workspaceRoot) {
-    showView("workspace");
-    renderRecentWorkspaces();
-    return;
-  }
+  // Workspace is on-demand: boot to chat even without one. The server asks
+  // for a folder (kind: "need_workspace") only when a work command arrives.
 
   bootStatus("Mengecek node…");
   const nodeOk = await invoke("node_available").catch(() => false);
@@ -1032,7 +1066,10 @@ async function boot() {
   const serverOk = await ensureServer((t, e) => bootStatus(t, e));
   if (!serverOk) return;
 
-  state.api = createApiClient({ baseUrl: state.serverUrl });
+  state.api = createApiClient({
+    baseUrl: state.serverUrl,
+    getToken: () => invoke("daemon_token").catch(() => null),
+  });
   try {
     await state.api.health();
   } catch (e) {
@@ -1110,6 +1147,20 @@ function bindEvents() {
 
   $("chat-send").onclick = () => sendChat();
   $("chat-input").onkeydown = (e) => { if (e.key === "Enter") sendChat(); };
+  $("chat-stop").onclick = async () => {
+    const turn = [...state.transcript].reverse().find(
+      (m) => m.kind === "turn" && m.taskId && !m.activityDone
+    );
+    if (!turn || !state.api) return;
+    try {
+      await state.api.cancelTask(turn.taskId);
+      state.transcript.push({ kind: "assistant", text: "Task dihentikan." });
+    } catch (e) {
+      state.transcript.push({ kind: "error", text: "Gagal menghentikan: " + errText(e) });
+    }
+    renderTranscript();
+    updateStopButton();
+  };
 
   $("btn-approve-all").onclick = approveAll;
   $("btn-goto-chat").onclick = () => { showView("main"); $("chat-input").focus(); };
