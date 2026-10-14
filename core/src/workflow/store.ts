@@ -67,7 +67,14 @@ export class WorkflowRunStore {
       const run = this.loadRun(file.slice(0, -".json".length));
       if (run) runs.push(run);
     }
-    runs.sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+    // Total order: newest first; ties (same-millisecond writes are common)
+    // break deterministically by created_at, then run_id.
+    runs.sort(
+      (a, b) =>
+        b.updated_at.localeCompare(a.updated_at) ||
+        b.created_at.localeCompare(a.created_at) ||
+        b.run_id.localeCompare(a.run_id),
+    );
     return runs;
   }
 }
