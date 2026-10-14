@@ -430,7 +430,7 @@ async function boot() {
   if (!health.healthy) {
     bootStatus("Server belum jalan — menjalankan sebagai sidecar…");
     try {
-      const info = await invoke("spawn_server", { repoRoot: prefs.repo_root, workspace: state.workspaceRoot });
+      const info = await invoke("spawn_server", { repo_root: prefs.repo_root, workspace: state.workspaceRoot });
       state.serverUrl = info.url;
       bootStatus(info.started ? `Server jalan (pid ${info.pid}).` : "Server sudah jalan.");
     } catch (e) {
