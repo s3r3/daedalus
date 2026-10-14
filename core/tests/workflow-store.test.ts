@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
@@ -50,13 +50,45 @@ describe("WorkflowRunStore", () => {
     const a = createWorkflowRun("/ws");
     store.saveRun(a);
     const b = createWorkflowRun("/ws");
-    // Same-millisecond timestamps tie — force an order to test the sort.
-    b.updated_at = new Date(Date.now() + 60_000).toISOString();
     store.saveRun(b);
+    // saveRun stamps updated_at at write time, so force b to be newest by
+    // rewriting its file with a later timestamp (post-save).
+    const bFile = join(dir, "workflow", "runs", `${b.run_id}.json`);
+    const bRaw = JSON.parse(readFileSync(bFile, "utf8"));
+    bRaw.updated_at = new Date(Date.now() + 60_000).toISOString();
+    writeFileSync(bFile, JSON.stringify(bRaw, null, 2), "utf8");
+    // Corrupt file must be skipped, never thrown.
+    writeFileSync(join(dir, "workflow", "runs", "corrupt.json"), "{nope", "utf8");
+
     const ids = store.listRuns().map((r) => r.run_id);
     expect(ids).toContain(a.run_id);
     expect(ids).toContain(b.run_id);
+    expect(ids).not.toContain("corrupt");
     expect(ids[0]).toBe(b.run_id);
+  });
+
+  test("listRuns breaks timestamp ties deterministically", () => {
+    const mk = () => {
+      const r = createWorkflowRun("/ws");
+      store.saveRun(r);
+      return r;
+    };
+    const runs = [mk(), mk(), mk(), mk(), mk()];
+    // Force identical timestamps on all files.
+    const stamp = new Date("2026-10-14T00:00:00.000Z").toISOString();
+    for (const r of runs) {
+      const f = join(dir, "workflow", "runs", `${r.run_id}.json`);
+      const raw = JSON.parse(readFileSync(f, "utf8"));
+      raw.updated_at = stamp;
+      raw.created_at = stamp;
+      writeFileSync(f, JSON.stringify(raw, null, 2), "utf8");
+    }
+    const first = store.listRuns().map((r) => r.run_id);
+    const second = store.listRuns().map((r) => r.run_id);
+    expect(first).toEqual(second);
+    expect(first).toHaveLength(5);
+    // Tiebreak is run_id descending.
+    expect(first).toEqual([...first].sort((x, y) => y.localeCompare(x)));
   });
 
   test("updateTurn patches status/artifacts/note", () => {
