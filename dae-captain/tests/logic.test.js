@@ -291,8 +291,8 @@ describe("summarizeTaskEvents", () => {
     ]);
     assert.deepEqual(s.thoughts, ["perlu baca file dulu"]);
     assert.deepEqual(s.tools, [
-      { tool: "read_file", status: "ok" },
-      { tool: "run_command", status: "running" },
+      { tool: "read_file", status: "ok", args: "" },
+      { tool: "run_command", status: "running", args: "" },
     ]);
   });
 
@@ -301,7 +301,7 @@ describe("summarizeTaskEvents", () => {
     const s = summarizeTaskEvents([
       { type: "TOOL_CALL_FINISHED", payload: { call: { id: "c9", tool: "write_file" }, result: { status: "denied" } } },
     ]);
-    assert.deepEqual(s.tools, [{ tool: "write_file", status: "denied" }]);
+    assert.deepEqual(s.tools, [{ tool: "write_file", status: "denied", args: "" }]);
   });
 
   it("ignores empty thoughts and unknown events", async () => {

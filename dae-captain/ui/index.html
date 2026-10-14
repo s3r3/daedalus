@@ -64,6 +64,7 @@
     </header>
 
     <section id="view-main">
+      <div id="chat-engine-pills" class="chat-engine-pills"></div>
       <div id="transcript" class="transcript"></div>
       <div id="approvals" class="approvals"></div>
       <div class="action-row">
@@ -93,7 +94,14 @@
     </section>
 
     <section id="view-workflow" class="hidden">
-      <h2>Multi-Agent Workflow</h2>
+      <h2>Antrean</h2>
+      <div id="wf-filters" class="filter-chips">
+        <button data-filter="all" class="filter-chip active">Semua</button>
+        <button data-filter="running" class="filter-chip">Jalan</button>
+        <button data-filter="approval" class="filter-chip">Butuh approval</button>
+        <button data-filter="done" class="filter-chip">Selesai</button>
+        <button data-filter="failed" class="filter-chip">Gagal</button>
+      </div>
       <p id="wf-prompt" class="hint"></p>
       <p id="wf-count" class="hint"></p>
       <div id="wf-rows" class="wf-rows"></div>
@@ -105,98 +113,88 @@
     </section>
 
     <section id="view-settings" class="hidden">
-      <div class="settings-layout">
-        <nav class="settings-nav" aria-label="Bagian pengaturan">
-          <button data-sec="general" class="active">⚙️ Umum</button>
-          <button data-sec="systems">🤖 Agentic Systems</button>
-          <button data-sec="chat">💬 Chat AI</button>
-        </nav>
-        <div class="settings-body">
-          <div id="set-sec-general">
-            <h3>Provider & Model</h3>
-            <div class="field">
-              <label>Provider</label>
-              <select id="set-provider"></select>
-            </div>
-            <div class="field">
-              <label>Model (berlaku untuk semua engine)</label>
-              <select id="set-model"></select>
-            </div>
-            <button id="set-save" class="primary-btn">Simpan</button>
-            <details class="advanced">
-              <summary>Lanjutan</summary>
-              <h3>Tambah provider</h3>
-              <div class="field"><label>ID</label><input id="prov-id" type="text" placeholder="mis. openrouter"></div>
-              <div class="field"><label>Nama</label><input id="prov-name" type="text" placeholder="OpenRouter"></div>
-              <div class="field"><label>Base URL</label><input id="prov-url" type="text" placeholder="https://openrouter.ai/api/v1"></div>
-              <div class="field"><label>API key</label><input id="prov-key" type="password" placeholder="tidak pernah ditampilkan kembali"></div>
-              <div class="row">
-                <button id="prov-test" class="ghost-btn">Test koneksi</button>
-                <button id="prov-save" class="primary-btn">Simpan provider</button>
-              </div>
-              <p class="hint">Kunci API tersimpan di server (~/.daedalus) dan tidak pernah ditampilkan kembali — sama seperti Web/CLI.</p>
-            </details>
-          </div>
-          <div id="set-sec-systems" class="hidden">
-            <h3>Agentic Systems</h3>
-            <p class="hint">Engine yang dimatikan tidak dipakai router otomatis dan tidak bisa dipilih.</p>
-            <div id="engine-toggles" class="engine-toggles"></div>
-            <h3>Agent Trust & Approval</h3>
-            <div class="field">
-              <label>Konfirmasi</label>
-              <select id="trust-level">
-                <option value="ask">Selalu minta konfirmasi</option>
-                <option value="auto">Otomatis setujui semua</option>
-              </select>
-            </div>
-            <p class="hint">"Otomatis setujui semua" = auto-approve aktif, agent tidak menunggu persetujuanmu.</p>
-          </div>
-          <div id="set-sec-chat" class="hidden">
-            <h3>Chat AI</h3>
-            <div class="field">
-              <label>Thinking level</label>
-              <select id="think-level">
-                <option value="off">Off</option>
-                <option value="low">Low</option>
-                <option value="medium">Medium</option>
-                <option value="high">High</option>
-              </select>
-            </div>
-            <p class="hint">Upaya penalaran model — berlaku untuk semua engine.</p>
-          </div>
-          <p id="set-status" class="status-line"></p>
-          <p id="compositor-info" class="hint"></p>
-          <button id="set-back" class="ghost-btn">← Kembali</button>
+      <div class="settings-single">
+        <h2 class="settings-title">Pengaturan</h2>
+
+        <h3 class="section-header">Model AI · Berlaku untuk semua engine</h3>
+        <div class="field">
+          <label>Provider</label>
+          <select id="set-provider"></select>
         </div>
+        <div class="field">
+          <label>Model</label>
+          <select id="set-model"></select>
+        </div>
+        <div class="field">
+          <label>API key</label>
+          <div class="row">
+            <input id="set-apikey" type="password" placeholder="••••••••••" style="flex:1">
+            <button id="set-showkey" class="ghost-btn">Tampilkan</button>
+          </div>
+        </div>
+        <div class="row">
+          <button id="set-test" class="ghost-btn">Test connection</button>
+          <button id="set-save" class="primary-btn">Simpan</button>
+        </div>
+        <p id="set-conn-status" class="status-line"></p>
+        <details class="advanced">
+          <summary>Lanjutan</summary>
+          <h3>Tambah provider</h3>
+          <div class="field"><label>ID</label><input id="prov-id" type="text" placeholder="mis. openrouter"></div>
+          <div class="field"><label>Nama</label><input id="prov-name" type="text" placeholder="OpenRouter"></div>
+          <div class="field"><label>Base URL</label><input id="prov-url" type="text" placeholder="https://openrouter.ai/api/v1"></div>
+          <div class="field"><label>API key</label><input id="prov-key" type="password" placeholder="tidak pernah ditampilkan kembali"></div>
+          <div class="row">
+            <button id="prov-test" class="ghost-btn">Test koneksi</button>
+            <button id="prov-save" class="primary-btn">Simpan provider</button>
+          </div>
+          <p class="hint">Kunci API tersimpan di server (~/.daedalus) dan tidak pernah ditampilkan kembali — sama seperti Web/CLI.</p>
+        </details>
+
+        <h3 class="section-header">Engine aktif</h3>
+        <div id="engine-toggles" class="engine-toggles"></div>
+
+        <h3 class="section-header">Persetujuan</h3>
+        <div class="row">
+          <button id="approve-ask" class="primary-btn">Tanya setiap kali</button>
+          <button id="approve-auto" class="ghost-btn">Setujui otomatis</button>
+        </div>
+        <p class="hint warning">Mode otomatis menjalankan perintah dan menulis file tanpa bertanya.</p>
+
+        <h3 class="section-header">Workspace</h3>
+        <div class="row">
+          <input id="set-workspace" type="text" readonly style="flex:1" placeholder="~/workspace">
+          <button id="set-pick-workspace" class="ghost-btn">Pilih folder</button>
+        </div>
+
+        <p id="set-status" class="status-line"></p>
+        <button id="set-back" class="ghost-btn">← Kembali</button>
       </div>
     </section>
 
     <section id="view-workspace" class="hidden">
-      <h2>Workspace</h2>
-      <h3>Target Workspace</h3>
-      <p class="hint">Folder ini menjadi workspace aktif untuk perintah berikutnya.</p>
-      <div class="field"><label>Folder proyek</label><input id="ws-path" type="text" placeholder="/home/user/proyek"></div>
-      <div class="row">
-        <button id="ws-use" class="primary-btn">📁 Pilih Folder</button>
-        <button id="ws-create" class="ghost-btn">＋ Buat folder baru</button>
+      <h2 class="settings-title">Workspace</h2>
+
+      <h3 class="section-header">Folder aktif</h3>
+      <div class="field">
+        <input id="ws-path" type="text" placeholder="~/workspace">
       </div>
-      <h3>Status Workspace</h3>
-      <p id="ws-health" class="status-line"></p>
-      <h3>Preset Workspace</h3>
-      <div class="field"><label>Preset</label><select id="ws-preset"></select></div>
-      <div class="row">
-        <input id="ws-preset-name" type="text" placeholder="Nama preset…" style="flex:1">
-        <button id="ws-preset-save" class="ghost-btn">＋ Simpan preset ini</button>
-        <button id="ws-preset-del" class="ghost-btn">Hapus</button>
-      </div>
-      <div class="row">
-        <button id="ws-scan" class="ghost-btn">⚡ Scan Directory</button>
-      </div>
-      <div id="ws-scan-out" class="scan-out"></div>
-      <h3>Terakhir dipakai</h3>
+      <p id="ws-health" class="status-line ok">✓ Server melayani folder ini</p>
+      <button id="ws-use" class="primary-btn">Pilih folder lain</button>
+
+      <h3 class="section-header">Riwayat</h3>
       <div id="ws-recent" class="recent-list"></div>
+
+      <h3 class="section-header">Folder baru</h3>
+      <div class="row">
+        <input id="ws-new-name" type="text" placeholder="nama-folder" style="flex:1">
+        <button id="ws-create" class="ghost-btn">Buat</button>
+      </div>
+      <p class="hint">Folder diminta hanya saat perintah perlu menulis file. Pilihan terakhir diingat.</p>
+
       <p id="ws-status" class="status-line"></p>
       <button id="ws-back" class="ghost-btn">← Kembali</button>
+    </section>
     </section>
 
     <section id="view-setup" class="hidden">

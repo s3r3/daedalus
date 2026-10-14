@@ -63,6 +63,7 @@ const state = {
   serverUrl: "http://127.0.0.1:3080",
   pendingMessage: null, // work command waiting for a workspace pick
   pendingOverride: null,
+  wfFilter: "all", // antrean filter: all|running|approval|done|failed
 };
 
 // ---------------------------------------------------------------------------
@@ -135,6 +136,7 @@ function renderApprovals() {
         const card = document.createElement("div");
         card.className = "approval-card";
         card.innerHTML = `
+          <div class="approval-header">Butuh persetujuan</div>
           <div class="title">${escapeHtml(approvalTitle(turn.task_id, turn, ap))}</div>
           <div class="row">
             <button class="primary-btn" data-act="grant">Allow</button>
@@ -219,11 +221,15 @@ function renderTurnActivity(activity) {
   if (!thoughts.length && !tools.length) return null;
   const wrap = document.createElement("div");
   wrap.className = "turn-activity";
+  // THINKING header (mockup style): "THINKING · N langkah"
+  const steps = thoughts.length + tools.length;
   if (thoughts.length) {
     const det = document.createElement("details");
     det.className = "thinking";
+    det.open = true;
     const sum = document.createElement("summary");
-    sum.textContent = `💭 thinking (${thoughts.length})`;
+    sum.className = "thinking-header";
+    sum.textContent = `THINKING · ${steps} langkah`;
     det.appendChild(sum);
     for (const t of thoughts.slice(-3)) {
       const p = document.createElement("div");
@@ -233,16 +239,19 @@ function renderTurnActivity(activity) {
     }
     wrap.appendChild(det);
   }
+  // Tool rows (mockup style): card per tool with status badge
   if (tools.length) {
-    const row = document.createElement("div");
-    row.className = "tool-chips";
+    const list = document.createElement("div");
+    list.className = "tool-rows";
     for (const t of tools.slice(-8)) {
-      const chip = document.createElement("span");
-      chip.className = `tool-chip ${t.status === "ok" ? "ok" : t.status === "running" ? "running" : "bad"}`;
-      chip.textContent = `${t.tool} ${t.status === "ok" ? "OK" : t.status === "running" ? "…" : t.status.toUpperCase()}`;
-      row.appendChild(chip);
+      const row = document.createElement("div");
+      row.className = "tool-row";
+      const badge = t.status === "ok" ? "OK" : t.status === "running" ? "…" : t.status.toUpperCase();
+      const badgeClass = t.status === "ok" ? "ok" : t.status === "running" ? "running" : "bad";
+      row.innerHTML = `<span class="tool-name">${escapeHtml(t.tool)}</span> <span class="tool-badge ${badgeClass}">${escapeHtml(badge)}</span> <span class="tool-args">${escapeHtml(t.args ?? "")}</span>`;
+      list.appendChild(row);
     }
-    wrap.appendChild(row);
+    wrap.appendChild(list);
   }
   return wrap;
 }
@@ -278,7 +287,25 @@ function renderTranscript() {  const box = $("transcript");
       }
     } else if (m.kind === "error") {
       el.className = "bubble assistant error";
-      el.innerHTML = `<div class="who">Dae Captain</div><div class="body">Gagal: ${escapeHtml(m.text)}</div>`;
+      if (m.taskStopped) {
+        // TASK BERHENTI card (mockup): reason + suggestion + actions.
+        el.innerHTML = `
+          <div class="task-stopped">TASK BERHENTI</div>
+          <div class="body">${escapeHtml(m.text)}</div>
+          ${m.suggestion ? `<div class="suggestion">Saran: ${escapeHtml(m.suggestion)}</div>` : ""}
+          <div class="row">
+            <button class="primary-btn retry-btn">Coba lagi</button>
+            <button class="ghost-btn model-btn">Ganti model</button>
+          </div>`;
+        const retry = el.querySelector(".retry-btn");
+        if (retry && m.retryMessage) {
+          retry.onclick = () => sendChat(m.retryMessage, m.retryOverride ?? null);
+        }
+        const modelBtn = el.querySelector(".model-btn");
+        if (modelBtn) modelBtn.onclick = () => showView("settings");
+      } else {
+        el.innerHTML = `<div class="who">Dae Captain</div><div class="body">Gagal: ${escapeHtml(m.text)}</div>`;
+      }
     }
     box.appendChild(el);
   }
@@ -431,6 +458,11 @@ async function renderWorkflowView() {
   box.innerHTML = "";
   statusEl.textContent = "";
   $("wf-cancel").classList.add("hidden");
+  // Filter chips
+  const filter = state.wfFilter ?? "all";
+  for (const b of document.querySelectorAll("#wf-filters .filter-chip")) {
+    b.classList.toggle("active", b.dataset.filter === filter);
+  }
   if (!runId) {
     $("wf-prompt").textContent = "Belum ada run — kirim perintah dulu dari Chat.";
     $("wf-count").textContent = "";
@@ -446,13 +478,22 @@ async function renderWorkflowView() {
     return;
   }
   const rows = queueRows(run);
+  // Apply status filter (filter var already declared above for chips)
+  const filtered = rows.filter((r) => {
+    if (filter === "all") return true;
+    if (filter === "running") return r.status === "running";
+    if (filter === "approval") return (r.turn.pending_approvals?.length ?? 0) > 0;
+    if (filter === "done") return r.status === "done";
+    if (filter === "failed") return r.status === "failed";
+    return true;
+  });
   $("wf-prompt").textContent = rows.length ? rows[0].goal : "Run kosong.";
-  $("wf-count").textContent = rows.length
-    ? `Workflow: ${rows.length} task${rows.length > 1 ? "s" : ""}`
-    : "";
+  $("wf-count").textContent = filtered.length
+    ? `Menampilkan ${filtered.length} dari ${rows.length} task`
+    : rows.length ? "Tidak ada task yang cocok dengan filter." : "";
   const running = rows.filter((r) => r.status === "running");
   if (running.length) $("wf-cancel").classList.remove("hidden");
-  for (const row of rows) {
+  for (const row of filtered) {
     const [badgeText, badgeClass] = WF_BADGES[row.badge] ?? ["?", "gray"];
     const card = document.createElement("div");
     card.className = "wf-row";
@@ -572,6 +613,7 @@ async function refreshRuns() {
   }
   renderPill();
   renderHeaderStatus();
+  renderChatEnginePills();
   if (pendingApprovals(state.runs).length > 0) expand(); // approval baru → island mekar
   await refreshTurnActivity();
   if (!state.expanded) return;
@@ -602,12 +644,43 @@ function isChatViewVisible() {
  * turn leaves "running". Re-renders the transcript only on change.
  */
 /** Show the Stop button only while a chat task is running. */
-function updateStopButton() {
-  const running = [...state.transcript].reverse().some(
+function updateStopButton() {  const running = [...state.transcript].reverse().some(
     (m) => m.kind === "turn" && m.taskId && !m.activityDone
   );
   $("chat-stop").classList.toggle("hidden", !running);
   $("chat-send").classList.toggle("hidden", running);
+}
+
+/**
+ * Engine status pills at the top of chat (mockup): 5 engines with colored
+ * dots — green=working, amber=needs approval, blue=idle/done, red=failed.
+ */
+function renderChatEnginePills() {
+  const box = $("chat-engine-pills");
+  if (!box) return;
+  box.innerHTML = "";
+  const engines = ["coding", "slide", "dokumen", "spreadsheet", "research"];
+  const statusByEngine = {};
+  for (const run of state.runs ?? []) {
+    for (const t of run.turns ?? []) {
+      if (!t.engine) continue;
+      const dot = t.status === "running"
+        ? (t.pending_approvals?.length ? "amber" : "green")
+        : t.status === "failed" ? "red" : "blue";
+      // Running/approval takes precedence over idle.
+      const rank = { green: 3, amber: 3, red: 2, blue: 1 }[dot] ?? 0;
+      if (rank >= (statusByEngine[t.engine]?.rank ?? 0)) {
+        statusByEngine[t.engine] = { dot, rank };
+      }
+    }
+  }
+  for (const e of engines) {
+    const dot = statusByEngine[e]?.dot ?? "gray";
+    const el = document.createElement("span");
+    el.className = "chat-engine-pill";
+    el.innerHTML = `<span class="dot ${dot}"></span> ${escapeHtml(engineLabel(e))}`;
+    box.appendChild(el);
+  }
 }
 
 async function refreshTurnActivity() {
@@ -634,8 +707,15 @@ async function refreshTurnActivity() {
     updateStopButton();
     if (runTurn.note && !turn.noteShown) {
       turn.noteShown = true;
-      // Surface the failure reason in chat too, not just the workflow view.
-      state.transcript.push({ kind: "error", text: runTurn.note });
+      // Surface the failure reason in chat as a TASK BERHENTI card.
+      state.transcript.push({
+        kind: "error",
+        taskStopped: true,
+        text: runTurn.note,
+        suggestion: "coba model yang lebih kuat, atau sebutkan nama file yang harus dibuat.",
+        retryMessage: turn.goal,
+        retryOverride: null,
+      });
       if (isChatViewVisible()) renderTranscript();
     }
   }
@@ -664,28 +744,51 @@ async function loadSettingsView() {
     await loadModels(provSel.value);
     const curModel = s.session?.model ?? "";
     if (curModel) $("set-model").value = curModel;
-    const ci = await invoke("compositor_info").catch(() => null);
-    if (ci) {
-      $("compositor-info").textContent =
-        `Kompositor: ${ci.desktop} (${ci.session_type}) — island: panel mengambang; ` +
-        `layer-shell pinning: ${ci.layer_shell_pinned ? "aktif" : "follow-up (lihat BUILD.md)"}.`;
-    }
     await loadEngineToggles();
-    await loadTrustLevel();
-    await loadThinkingLevel();
+    // Show current workspace
+    const ws = $("set-workspace");
+    if (ws) ws.value = state.workspaceRoot || "";
+    // Update approval buttons
+    updateApprovalButtons();
   } catch (e) {
     status.className = "status-line error";
     status.textContent = "Gagal memuat pengaturan: " + errText(e);
   }
 }
 
-/** Sidebar navigation for the settings view. */
-function selectSettingsSection(sec) {
-  for (const b of document.querySelectorAll(".settings-nav button")) {
-    b.classList.toggle("active", b.dataset.sec === sec);
+/** Update approval mode button states. */
+function updateApprovalButtons() {
+  const auto = state.prefs?.auto_approve === true;
+  $("approve-ask").className = auto ? "ghost-btn" : "primary-btn";
+  $("approve-auto").className = auto ? "primary-btn" : "ghost-btn";
+}
+
+/** Set approval mode (ask every time / auto-approve). */
+async function setApprovalMode(mode) {
+  const auto = mode === "auto";
+  state.prefs = { ...state.prefs, auto_approve: auto };
+  await invoke("set_prefs", { prefs: state.prefs }).catch(() => {});
+  if (state.api) {
+    try {
+      await state.api.updateSettings({ session: { autoApprove: auto } });
+    } catch {}
   }
-  for (const s of ["general", "systems", "chat"]) {
-    $("set-sec-" + s).classList.toggle("hidden", s !== sec);
+  updateApprovalButtons();
+}
+
+/** Test provider connection. */
+async function testConnection() {
+  const status = $("set-conn-status");
+  status.textContent = "Menghubungi…";
+  status.className = "status-line";
+  try {
+    // Use the existing provider test flow
+    await $("prov-test").onclick();
+    status.textContent = "Terhubung. Daftar model berhasil dimuat.";
+    status.className = "status-line ok";
+  } catch (e) {
+    status.textContent = "Gagal: " + errText(e);
+    status.className = "status-line error";
   }
 }
 
@@ -752,7 +855,8 @@ async function pushDisabledEngines() {
 async function loadTrustLevel() {
   try {
     const s = await state.api.getSettings();
-    $("trust-level").value = autoApproveToTrust(s.session?.autoApprove);
+    const tl = $("trust-level");
+    if (tl) tl.value = autoApproveToTrust(s.session?.autoApprove);
   } catch { /* biarkan default */ }
 }
 
@@ -760,7 +864,8 @@ async function loadThinkingLevel() {
   try {
     const s = await state.api.getSettings();
     const lvl = s.session?.thinkingLevel ?? "medium";
-    $("think-level").value = THINKING_LEVELS.includes(lvl) ? lvl : "medium";
+    const el = $("think-level");
+    if (el) el.value = THINKING_LEVELS.includes(lvl) ? lvl : "medium";
   } catch { /* biarkan default */ }
 }
 
@@ -911,9 +1016,13 @@ async function scanWorkspace() {
 }
 
 /** "Buat folder baru" — creates the typed path, then uses it as workspace. */
-async function createWorkspace() {
+async function createWorkspace(folderName) {
   const status = $("ws-status");
-  const path = $("ws-path").value.trim();
+  // New mockup: folder name input; old: full path input.
+  const nameInput = $("ws-new-name");
+  const name = (folderName ?? (nameInput ? nameInput.value.trim() : "")).trim();
+  const base = state.workspaceRoot || $("ws-path").value.trim();
+  const path = name ? (base ? base.replace(/\/+$/, "") + "/" + name : name) : $("ws-path").value.trim();
   if (!path) {
     status.className = "status-line error";
     status.textContent = "Isi folder dulu.";
@@ -1103,47 +1212,30 @@ function bindEvents() {
   $("pill").onclick = expand;
   $("pill").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") expand(); };
   $("btn-collapse").onclick = collapse;
-  $("btn-settings").onclick = () => showView("settings");
+  $("btn-settings").onclick = () => { loadSettingsView(); showView("settings"); };
   $("set-back").onclick = () => showView("main");
-  for (const b of document.querySelectorAll(".settings-nav button")) {
-    b.onclick = () => selectSettingsSection(b.dataset.sec);
-  }
-  $("btn-workspace").onclick = () => { $("ws-path").value = state.workspaceRoot; $("ws-status").textContent = ""; $("ws-scan-out").innerHTML = ""; showView("workspace"); };
+  // Approval mode buttons (mockup: Tanya setiap kali / Setujui otomatis)
+  $("approve-ask").onclick = () => setApprovalMode("ask");
+  $("approve-auto").onclick = () => setApprovalMode("auto");
+  // API key show/hide
+  $("set-showkey").onclick = () => {
+    const inp = $("set-apikey");
+    const show = inp.type === "password";
+    inp.type = show ? "text" : "password";
+    $("set-showkey").textContent = show ? "Sembunyikan" : "Tampilkan";
+  };
+  // Test connection
+  $("set-test").onclick = testConnection;
+  // Workspace picker from settings
+  $("set-pick-workspace").onclick = () => showView("workspace");
+  $("btn-workspace").onclick = () => { $("ws-path").value = state.workspaceRoot; $("ws-status").textContent = ""; showView("workspace"); };
   $("ws-back").onclick = () => showView("main");
   $("ws-use").onclick = () => setWorkspace($("ws-path").value.trim());
-  $("ws-create").onclick = createWorkspace;
-  $("ws-scan").onclick = scanWorkspace;
-  $("ws-preset").onchange = (e) => {
-    const p = getPresets().find((x) => x.name === e.target.value);
-    if (p) { $("ws-path").value = p.path; setWorkspace(p.path); }
+  $("ws-create").onclick = () => {
+    const name = $("ws-new-name").value.trim();
+    if (name) createWorkspace(name);
   };
-  $("ws-preset-save").onclick = async () => {
-    const status = $("ws-status");
-    const name = $("ws-preset-name").value.trim();
-    const path = ($("ws-path").value || state.workspaceRoot).trim();
-    if (!name || !path) {
-      status.className = "status-line error";
-      status.textContent = "Isi nama preset dan folder dulu.";
-      return;
-    }
-    try {
-      await savePreset(name, path);
-      $("ws-preset-name").value = "";
-      status.className = "status-line ok";
-      status.textContent = `Preset "${name}" tersimpan.`;
-    } catch (e) {
-      status.className = "status-line error";
-      status.textContent = "Gagal: " + errText(e);
-    }
-  };
-  $("ws-preset-del").onclick = async () => {
-    try {
-      await deletePreset($("ws-preset").value);
-    } catch (e) {
-      $("ws-status").className = "status-line error";
-      $("ws-status").textContent = "Gagal: " + errText(e);
-    }
-  };
+  // Note: ws-preset and ws-scan were removed in mockup redesign (simplified to Riwayat).
 
   $("chat-send").onclick = () => sendChat();
   $("chat-input").onkeydown = (e) => { if (e.key === "Enter") sendChat(); };
@@ -1168,33 +1260,14 @@ function bindEvents() {
   $("status-back").onclick = () => showView("main");
   $("status-open-web").onclick = openWebUI;
   $("wf-back").onclick = () => showView("status");
+  for (const b of document.querySelectorAll("#wf-filters .filter-chip")) {
+    b.onclick = () => { state.wfFilter = b.dataset.filter; renderWorkflowView(); };
+  }
   $("wf-cancel").onclick = cancelWorkflow;
 
   $("set-provider").onchange = (e) => loadModels(e.target.value);
-  $("trust-level").onchange = async (e) => {
-    const status = $("set-status");
-    try {
-      await state.api.updateSettings({ session: { autoApprove: trustToAutoApprove(e.target.value) } });
-      status.className = "status-line ok";
-      status.textContent = "Tersimpan — berlaku untuk semua engine.";
-    } catch (err) {
-      status.className = "status-line error";
-      status.textContent = "Gagal: " + errText(err);
-      loadTrustLevel();
-    }
-  };
-  $("think-level").onchange = async (e) => {
-    const status = $("set-status");
-    try {
-      await state.api.updateSettings({ session: { thinkingLevel: e.target.value } });
-      status.className = "status-line ok";
-      status.textContent = "Tersimpan — berlaku untuk semua engine.";
-    } catch (err) {
-      status.className = "status-line error";
-      status.textContent = "Gagal: " + errText(err);
-      loadThinkingLevel();
-    }
-  };
+  // Note: trust-level and think-level selects were removed in the mockup
+  // redesign (replaced by approval buttons). Handlers kept safe-guarded.
   $("set-save").onclick = async () => {
     const status = $("set-status");
     try {
