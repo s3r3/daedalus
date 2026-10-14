@@ -5,6 +5,7 @@ fn main() {
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
             "compositor_info",
+            "daemon_token",
             "get_prefs",
             "node_available",
             "open_web",
