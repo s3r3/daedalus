@@ -17,6 +17,7 @@ import {
   sameWorkspace,
   pendingApprovals,
   errText,
+  spawnServerArgs,
   engineLabel,
   enabledEngines,
   canDisableEngine,
@@ -877,10 +878,7 @@ async function ensureServer(statusFn) {
   if (!health.healthy) {
     statusFn("Server belum jalan — menjalankan sebagai sidecar…");
     try {
-      const info = await invoke("spawn_server", {
-        repo_root: state.prefs.repo_root,
-        workspace: state.workspaceRoot,
-      });
+      const info = await invoke("spawn_server", spawnServerArgs(state.prefs.repo_root, state.workspaceRoot));
       state.serverUrl = info.url;
       statusFn(info.started ? `Server jalan (pid ${info.pid}).` : "Server sudah jalan.");
     } catch (e) {

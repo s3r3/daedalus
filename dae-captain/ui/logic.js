@@ -218,3 +218,13 @@ export function queueRow(turn) {
 export function queueRows(run) {
   return (run?.turns ?? []).map(queueRow);
 }
+
+/**
+ * Args for the Tauri `spawn_server` command.
+ * NOTE: Tauri's #[tauri::command] maps argument names to camelCase BY DEFAULT,
+ * so the Rust `repo_root: String` param must be sent as `repoRoot`.
+ * (A previous "fix" sent `repo_root` and broke spawning — do not change back.)
+ */
+export function spawnServerArgs(repoRoot, workspace) {
+  return { repoRoot, workspace };
+}

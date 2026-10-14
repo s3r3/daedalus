@@ -16,6 +16,7 @@ import {
   pendingApprovals,
   normalizeWorkspacePath,
   errText,
+  spawnServerArgs,
   engineLabel,
   enabledEngines,
   canDisableEngine,
@@ -251,5 +252,11 @@ describe("queueRow", () => {
     assert.equal(rows.length, 2);
     assert.equal(rows[0].label, "Coding");
     assert.equal(rows[1].badge, "done");
+  });
+});
+
+describe("spawnServerArgs", () => {
+  it("uses camelCase keys (Tauri command default)", () => {
+    assert.deepEqual(Object.keys(spawnServerArgs("/r", "/w")), ["repoRoot", "workspace"]);
   });
 });
