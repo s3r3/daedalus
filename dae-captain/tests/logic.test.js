@@ -420,6 +420,34 @@ describe("renderMarkdown tables and extras", () => {
   });
 });
 
+describe("renderMarkdown images, safe links, nested lists, highlight", () => {
+  it("renders images and blocks javascript: URLs", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const img = renderMarkdown("![denah](https://contoh.id/a.png)");
+    assert.ok(img.includes("<img"));
+    assert.ok(img.includes('src="https://contoh.id/a.png"'));
+    const evil = renderMarkdown("[klik](javascript:alert(1))");
+    assert.ok(!evil.includes("<a "));
+    assert.ok(evil.includes("klik"));
+    const evilImg = renderMarkdown("![x](javascript:alert(1))");
+    assert.ok(!evilImg.includes("<img"));
+  });
+  it("nests sub-lists with an indent class", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const html = renderMarkdown("- induk\n  - anak\n  - anak2\n- induk2");
+    assert.ok(html.includes("md-list sub"));
+    assert.ok(html.indexOf("induk2") > html.indexOf("anak2"));
+  });
+  it("highlights code without breaking structure", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const html = renderMarkdown("```js\nconst x = 1; // satu\n```");
+    assert.ok(html.includes("tok-kw"));
+    assert.ok(html.includes("tok-num"));
+    assert.ok(html.includes("tok-com"));
+    assert.ok(html.includes("const x = 1;".slice(0, 5)));
+  });
+});
+
 describe("spawnServerArgs", () => {
   it("uses camelCase keys (Tauri command default)", () => {
     assert.deepEqual(Object.keys(spawnServerArgs("/r", "/w")), ["repoRoot", "workspace"]);
@@ -535,8 +563,9 @@ describe("renderMarkdown", () => {
   it("renders code blocks with copy button", async () => {
     const { renderMarkdown } = await import("../ui/logic.js");
     const html = renderMarkdown("```js\nconst x = 1;\n```");
+    const plain = html.replace(/<[^>]+>/g, "");
     assert.ok(html.includes('class="code-block"'));
-    assert.ok(html.includes("const x = 1;"));
+    assert.ok(plain.includes("const x = 1;"));
     assert.ok(html.includes("Salin"));
   });
 

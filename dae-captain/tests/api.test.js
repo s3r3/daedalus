@@ -125,6 +125,19 @@ describe("createApiClient", () => {
     assert.deepEqual(res, { kind: "chat", text: "Hello", run_id: "r1" });
   });
 
+  it("workflowChatStream forwards an abort signal to fetch", async () => {
+    let seenSignal;
+    const fetchImpl = async (url, init) => {
+      seenSignal = init.signal;
+      return new Response('data: {"done":true,"text":"Hi"}\n\n', { status: 200, headers: { "content-type": "text/event-stream" } });
+    };
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    const controller = new AbortController();
+    const res = await api.workflowChatStream({ message: "halo" }, null, controller.signal);
+    assert.equal(seenSignal, controller.signal);
+    assert.equal(res.text, "Hi");
+  });
+
   it("workflowChatStream passes dispatch JSON through untouched", async () => {
     const payload = { engine: "coding", task_id: "t1", run_id: "r1" };
     const fetchImpl = async () => new Response(JSON.stringify(payload), { status: 201, headers: { "content-type": "application/json" } });

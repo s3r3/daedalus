@@ -59,7 +59,7 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
      * transport failure; a mid-stream model error throws with `.partial`
      * carrying whatever the user already saw.
      */
-    workflowChatStream: (body, onDelta) => streamChat({ baseUrl, fetchImpl, getToken }, body, onDelta),
+    workflowChatStream: (body, onDelta, signal) => streamChat({ baseUrl, fetchImpl, getToken }, body, onDelta, signal),
     workflowRuns: (workspaceRoot) =>
       req("GET", "/workflow/runs", undefined, { workspace_root: workspaceRoot }),
     workflowRun: (id, workspaceRoot) =>
@@ -85,7 +85,7 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
   };
 }
 
-async function streamChat({ baseUrl, fetchImpl, getToken }, body, onDelta) {
+async function streamChat({ baseUrl, fetchImpl, getToken }, body, onDelta, signal) {
   const fetchFn = fetchImpl ?? globalThis.fetch?.bind(globalThis);
   if (!fetchFn) throw new Error("no fetch implementation available");
   const headers = { "content-type": "application/json" };
@@ -98,7 +98,7 @@ async function streamChat({ baseUrl, fetchImpl, getToken }, body, onDelta) {
     }
   }
   const url = baseUrl.replace(/\/+$/, "") + "/workflow/chat/stream";
-  const res = await fetchFn(url, { method: "POST", headers, body: JSON.stringify(body) });
+  const res = await fetchFn(url, { method: "POST", headers, body: JSON.stringify(body), ...(signal ? { signal } : {}) });
   const contentType = res.headers?.get("content-type") ?? "";
   if (!contentType.includes("text/event-stream")) {
     let data = null;

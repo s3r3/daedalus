@@ -214,6 +214,26 @@ describe('chat streaming', () => {
   })
 })
 
+describe('history clipping', () => {
+  test('long sessions report clipped context instead of silently forgetting', async () => {
+    const { base } = await listenWithFake()
+    let runId: string | undefined
+    let clipped = false
+    // 8 exchanges = 16 turns > the 12-turn window (the 8th prompt
+    // sees 14 stored turns, so its oldest pair is dropped).
+    for (let i = 0; i < 8; i++) {
+      const res = await postChat(base, { message: `Ceritakan fakta nomor ${i}?`, ...(runId ? { run_id: runId } : {}) })
+      expect(res.status).toBe(200)
+      runId = res.body.run_id as string
+      clipped = res.body.clipped === true
+      if (i === 0) expect(res.body.clipped).toBe(false)
+    }
+    expect(clipped).toBe(true)
+    const run = await getRun(base, runId!)
+    expect(run.run.chat_turns).toBe(16)
+  })
+})
+
 describe('regenerate', () => {
   test('drops the previous answer instead of stacking a duplicate turn', async () => {
     const { base } = await listenWithFake()

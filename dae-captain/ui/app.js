@@ -85,6 +85,7 @@ const state = {
   slashIndex: -1, // suggestion-menu selection (-1 = none)
   stick: true, // auto-scroll pinned to bottom (false while reading history)
   viewLimit: 30, // rendered transcript window (grows via "load more")
+  streamAbort: null, // AbortController for the active chat stream, if any
 };
 
 // ---------------------------------------------------------------------------
@@ -413,13 +414,41 @@ function renderTranscript() {  const box = $("transcript");
         <div class="body">${bodyHtml}</div>
         ${m.staged ? `<div class="note">Staged — menunggu gate di Web UI / aplikasi.</div>` : ""}
         ${arts.length ? `<div class="artifacts"></div>` : ""}`;
-      if (m.kind === "assistant" && i === lastAssistantIdx) {
-        const regen = document.createElement("button");
-        regen.className = "ghost-btn small regen-btn";
-        regen.textContent = "↻ Coba lagi";
-        regen.title = "Minta jawaban baru untuk pesan ini";
-        regen.onclick = () => regenerateAssistant(m);
-        el.appendChild(regen);
+      if (m.stopped) {
+        const hint = document.createElement("div");
+        hint.className = "hint";
+        hint.textContent = "Dihentikan — respons tidak lengkap.";
+        el.appendChild(hint);
+      }
+      if (m.clipped) {
+        const hint = document.createElement("div");
+        hint.className = "hint";
+        hint.textContent = "Konteks awal sesi melebihi batas dan tidak ikut terkirim.";
+        el.appendChild(hint);
+      }
+      if (m.kind === "assistant" && !m.streaming) {
+        const actions = document.createElement("div");
+        actions.className = "msg-actions";
+        const copy = document.createElement("button");
+        copy.className = "ghost-btn small";
+        copy.textContent = "Salin jawaban";
+        copy.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(m.text);
+            copy.textContent = "Disalin!";
+            setTimeout(() => { copy.textContent = "Salin jawaban"; }, 1500);
+          } catch {}
+        };
+        actions.appendChild(copy);
+        if (i === lastAssistantIdx) {
+          const regen = document.createElement("button");
+          regen.className = "ghost-btn small regen-btn";
+          regen.textContent = "↻ Coba lagi";
+          regen.title = "Minta jawaban baru untuk pesan ini";
+          regen.onclick = () => regenerateAssistant(m);
+          actions.appendChild(regen);
+        }
+        el.appendChild(actions);
       }
       // Render artifact cards with Open/Reveal actions. Only entries that
       // carry a real path or URL get a card — no fake download cards.
@@ -536,12 +565,17 @@ function renderEngineChips() {
   for (const e of enabledEngines(disabled)) mk(e, engineLabel(e));
 }
 
+/** True while a chat answer is still streaming in. */
+function isStreaming() {
+  return state.transcript.some((m) => m.streaming);
+}
+
 /** Map one chat-route response onto transcript entries (shared by send/regenerate). */
 async function handleChatResponse(res, { text, override, attachments }) {
   if (res.kind === "chat") {
     // Chat-first: a conversational reply, no engine, no task.
     state.runId = res.run_id ?? state.runId;
-    state.transcript.push({ kind: "assistant", text: res.text, session: true, ts: Date.now() });
+    state.transcript.push({ kind: "assistant", text: res.text, session: true, ts: Date.now(), clipped: res.clipped === true });
   } else if (res.kind === "need_workspace") {
     // Workspace on-demand: the command needs a folder. Remember the
     // original message, show the picker, retry after the user picks.
@@ -603,6 +637,7 @@ async function sendChat(message, override) {
     renderTranscript();
     return;
   }
+  if (isStreaming()) return; // one answer at a time — typed text stays put
   const attachments = takeQueuedAttachments();
   state.transcript.push({ kind: "user", text, attachments, ts: Date.now() });
   renderTranscript();
@@ -611,9 +646,16 @@ async function sendChat(message, override) {
   const live = { kind: "assistant", text: "", streaming: true };
   state.transcript.push(live);
   renderTranscript();
+  updateStopButton();
+  const controller = new AbortController();
+  state.streamAbort = controller;
   const dropLive = () => {
     const i = state.transcript.indexOf(live);
     if (i >= 0) state.transcript.splice(i, 1);
+  };
+  const finishStream = () => {
+    if (state.streamAbort === controller) state.streamAbort = null;
+    updateStopButton();
   };
   try {
     const res = await state.api.workflowChatStream(
@@ -622,11 +664,23 @@ async function sendChat(message, override) {
         live.text += delta;
         renderLive();
       },
+      controller.signal,
     );
+    finishStream();
     dropLive();
     await handleChatResponse(res, { text, override, attachments });
   } catch (e) {
+    finishStream();
     dropLive();
+    if (e?.name === "AbortError") {
+      // User-pressed stop: keep the partial answer, marked as cut off.
+      if (live.text) {
+        state.transcript.push({ kind: "assistant", text: live.text, session: true, ts: Date.now(), stopped: true });
+      }
+      renderTranscript();
+      await refreshRuns();
+      return;
+    }
     if (e?.partial) {
       // The server streamed half an answer, then failed: keep what the
       // user already saw, labelled honestly, instead of failing blank.
@@ -655,43 +709,65 @@ async function sendChat(message, override) {
  * has no attachment bytes, so only live-session answers offer this.
  */
 async function regenerateAssistant(entry) {
+  if (isStreaming()) return;
   const idx = state.transcript.indexOf(entry);
   const userEntry = [...state.transcript.slice(0, idx)].reverse().find((m) => m.kind === "user");
   if (!userEntry || entry.streaming) return;
   const oldText = entry.text;
+  const oldClipped = entry.clipped;
   entry.text = "";
   entry.streaming = true;
+  entry.stopped = false;
   renderTranscript();
+  updateStopButton();
+  const controller = new AbortController();
+  state.streamAbort = controller;
+  const finishStream = () => {
+    if (state.streamAbort === controller) state.streamAbort = null;
+    updateStopButton();
+  };
   const body = chatBody(userEntry.text, null, userEntry.attachments ?? [], { regenerate: true });
   try {
     const res = await state.api.workflowChatStream(body, (delta) => {
       entry.text += delta;
       renderLive();
-    });
+    }, controller.signal);
     entry.streaming = false;
+    finishStream();
     if (res?.kind === "chat") {
       state.runId = res.run_id ?? state.runId;
       entry.text = res.text;
+      entry.clipped = res.clipped === true;
     } else {
       // Same words re-routed to work (e.g. toggled engine): restore the
       // old answer and say so instead of swapping in a task silently.
       entry.text = oldText;
+      entry.clipped = oldClipped;
       state.transcript.push({ kind: "error", text: "Regenerate dialihkan ke task — jawaban lama dipertahankan." });
     }
   } catch (e) {
+    entry.streaming = false;
+    finishStream();
+    if (e?.name === "AbortError") {
+      entry.stopped = true; // partial answer stays, marked cut off
+      renderTranscript();
+      await refreshRuns();
+      return;
+    }
     try {
       const res = await state.api.workflowChat(body);
-      entry.streaming = false;
       if (res?.kind === "chat") {
         state.runId = res.run_id ?? state.runId;
         entry.text = res.text;
+        entry.clipped = res.clipped === true;
       } else {
         entry.text = oldText;
+        entry.clipped = oldClipped;
         state.transcript.push({ kind: "error", text: "Regenerate dialihkan ke task — jawaban lama dipertahankan." });
       }
     } catch (e2) {
-      entry.streaming = false;
       entry.text = oldText;
+      entry.clipped = oldClipped;
       state.transcript.push({ kind: "error", text: "Regenerate gagal: " + errText(e2) });
     }
   }
@@ -1299,8 +1375,12 @@ function updateStopButton() {
   const running = [...state.transcript].reverse().some(
     (m) => m.kind === "turn" && m.taskId && !m.activityDone
   );
-  stop.classList.toggle("hidden", !running);
-  send.classList.toggle("hidden", running);
+  // Streaming answers are stoppable too — and sending is locked while one
+  // flows, otherwise two live bubbles would trade each other's deltas.
+  const busy = running || isStreaming();
+  stop.classList.toggle("hidden", !busy);
+  send.classList.toggle("hidden", busy);
+  stop.title = isStreaming() && !running ? "Hentikan jawaban" : "Hentikan task";
 }
 
 /**
@@ -2020,6 +2100,12 @@ function bindEvents() {
     $("chat-jump")?.classList.add("hidden");
   });
   bindGuarded("chat-stop", "click", async () => {
+    // A streaming answer stops first (aborts its fetch); task cancel stays
+    // one more click away so one press never kills two things at once.
+    if (state.streamAbort) {
+      state.streamAbort.abort();
+      return;
+    }
     const turn = [...state.transcript].reverse().find(
       (m) => m.kind === "turn" && m.taskId && !m.activityDone
     );

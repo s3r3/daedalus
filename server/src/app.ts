@@ -140,6 +140,8 @@ import { classifyWebIntent, executeFastPath, resolveFastPathProvider } from "./f
 import { gitStatus, revertFileToHead } from "./git-status.ts";
 import {
   ConversationStore,
+  MAX_HISTORY_CHARS,
+  MAX_HISTORY_TURNS,
   historyMessages,
   priorContextSection,
   recentTurns,
@@ -2020,12 +2022,30 @@ function messageContentText(message: { content: unknown }): string | undefined {
  * history baseline, persisted images, and the model-ready messages.
  * Persisting is idempotent (same filename per run/index/name).
  */
+/**
+ * True when the model's history window drops older context — mirroring the
+ * caps recentTurns enforces, so the UI can say so instead of silently
+ * forgetting. Evaluated on the exact baseline the prompt is built from.
+ */
+function isHistoryClipped(history: ConversationTurn[]): boolean {
+  let used = 0;
+  let kept = 0;
+  for (let index = history.length - 1; index >= 0 && kept < MAX_HISTORY_TURNS; index--) {
+    const cost = Math.min(history[index]!.text.length, 1200);
+    if (kept > 0 && used + cost > MAX_HISTORY_CHARS) return true;
+    used += cost;
+    kept++;
+  }
+  if (kept < history.length) return true;
+  return history.some((turn) => turn.text.length > 1200);
+}
+
 function prepareChatTurn(
   ctx: AppContext,
   root: string,
   run: RunContext,
   input: { message: string; attachments: ChatAttachmentIn[]; regenerate: boolean },
-): { store: ConversationStore; history: ConversationTurn[]; messages: Message[]; recordText: string } {
+): { store: ConversationStore; history: ConversationTurn[]; messages: Message[]; recordText: string; clipped: boolean } {
   const store = conversationStoreFor(ctx, root);
   const ensured = store.ensure(root, run.run_id);
   let history = ensured.turns;
@@ -2034,6 +2054,7 @@ function prepareChatTurn(
     history = history.slice(0, -1);
     store.replaceTurns(root, run.run_id, history);
   }
+  const clipped = isHistoryClipped(history);
   const saved = persistChatImages(root, run.run_id, input.attachments);
   const recordText = chatRecordText(input.message, input.attachments, saved);
   const messages = buildChatMessages({
@@ -2042,7 +2063,7 @@ function prepareChatTurn(
     message: input.message,
     attachments: input.attachments,
   });
-  return { store, history, messages, recordText };
+  return { store, history, messages, recordText, clipped };
 }
 
 /**
@@ -2056,7 +2077,7 @@ async function runChatReply(
   run: RunContext,
   runs: WorkflowRunStore,
   input: { message: string; attachments: ChatAttachmentIn[]; regenerate: boolean },
-): Promise<string | undefined> {
+): Promise<{ text: string; clipped: boolean } | undefined> {
   const prep = prepareChatTurn(ctx, root, run, input);
   const provider = resolveFastPathProvider(ctx, { poolModels: [] });
   if (!provider) return undefined;
@@ -2069,7 +2090,7 @@ async function runChatReply(
     }
     prep.store.append(root, run.run_id, { role: "assistant", text, ts: isoNow() });
     runs.saveRun(run); // touch: active chats sort newest-first in /history
-    return text;
+    return { text, clipped: prep.clipped };
   } catch (error) {
     ctx.log.error("workflow chat reply failed", { error: String(error) });
     throw new Error("model_unavailable");
@@ -2803,11 +2824,12 @@ export function createApp(ctx: AppContext) {
           const route = await routeChatMessage(ctx, message, run, overrideRaw);
           if (route.kind === "chat") {
             try {
-              const text = await runChatReply(ctx, root, run, runs, { message, attachments, regenerate });
+              const reply = await runChatReply(ctx, root, run, runs, { message, attachments, regenerate });
               sendJson(res, 200, {
                 run_id: run.run_id,
                 kind: "chat",
-                text: text ?? CHAT_FALLBACK,
+                text: reply?.text ?? CHAT_FALLBACK,
+                clipped: reply?.clipped === true,
                 request_id: requestId,
               });
             } catch (error) {
@@ -2987,7 +3009,7 @@ export function createApp(ctx: AppContext) {
           }
           prep.store.append(root, run.run_id, { role: "assistant", text, ts: isoNow() });
           runs.saveRun(run);
-          send({ done: true, run_id: run.run_id, text });
+          send({ done: true, run_id: run.run_id, text, clipped: prep.clipped });
           res.end();
         } catch (error) {
           try {

@@ -491,36 +491,82 @@ export function renderMarkdown(text) {
   let inCode = false;
   let codeLang = "";
   let codeBuf = [];
-  let inList = false;
-  let listType = "";
+  let listStack = []; // [{ type: "ul"|"ol", indent }], indent = leading spaces
 
   const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Attribute-safe URL: only http(s) and image data URLs ride along.
+  // javascript:/data:text payloads degrade to their visible label.
+  const attrUrl = (url) => {
+    const u = String(url ?? "").trim();
+    if (!/^(https?:\/\/|data:image\/)/i.test(u)) return null;
+    return esc(u).replace(/"/g, "&quot;");
+  };
 
   const inline = (s) => {
     // Inline code first (protect from other replacements)
     const codes = [];
     s = s.replace(/`([^`]+)`/g, (_, c) => {
       codes.push(`<code class="inline-code">${esc(c)}</code>`);
-      return `\u0000${codes.length - 1}\u0000`;
+      return ` ${codes.length - 1} `;
     });
     s = esc(s);
     // Restore inline code
-    s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => codes[Number(i)]);
+    s = s.replace(/ (\d+) /g, (_, i) => codes[Number(i)]);
+    // Images before links (the link pattern would eat the [alt](url) half).
+    s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => {
+      const safe = attrUrl(url);
+      return safe ? `<img src="${safe}" alt="${esc(alt).replace(/"/g, "&quot;")}" loading="lazy" class="md-img">` : esc(alt);
+    });
     // Bold, italic, strikethrough, links
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
     s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
-    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {
+      const safe = attrUrl(url);
+      return safe ? `<a href="${safe}" target="_blank" rel="noopener">${label}</a>` : label;
+    });
     return s;
   };
 
   const closeList = () => {
-    if (inList) {
-      html += listType === "ol" ? "</ol>" : "</ul>";
-      inList = false;
-      listType = "";
+    while (listStack.length) {
+      html += listStack.pop().type === "ol" ? "</ol>" : "</ul>";
     }
   };
+
+  // letter-only placeholder tags (digits would trip the number tokenizer)
+  const tagOf = (i) => `QX${i.toString(36).replace(/[0-9]/g, (d) => "ABCDEFGHIJ"[Number(d)])}ZQ`;
+  const CODE_KEYWORDS = [
+    "const", "let", "var", "function", "return", "if", "else", "for", "while",
+    "do", "switch", "case", "break", "continue", "import", "from", "export",
+    "default", "class", "extends", "new", "try", "catch", "finally", "throw",
+    "async", "await", "def", "lambda", "fn", "struct", "impl", "pub", "use",
+    "mod", "match", "elif", "print", "echo", "type", "interface", "enum",
+    "static", "public", "private", "void", "int", "string", "bool", "true",
+    "false", "null", "nil", "then", "end", "select", "where",
+  ];
+
+  /** Tiny generic code highlighter (comments/strings/keywords/numbers). */
+  function highlightCode(src) {
+    const parts = [];
+    const stash = (html) => {
+      parts.push(html);
+      return tagOf(parts.length - 1);
+    };
+    let s = esc(src);
+    // Strings first (comment markers inside strings must survive).
+    s = s.replace(/("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, (str) =>
+      stash(`<span class="tok-str">${str}</span>`));
+    // Comments (C/JS, shell/Python, SQL, C-style blocks).
+    s = s.replace(/(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/|--[^\n]*)/g, (com) =>
+      stash(`<span class="tok-com">${com}</span>`));
+    s = s.replace(new RegExp(`\\b(${CODE_KEYWORDS.join("|")})\\b`, "g"), `<span class="tok-kw">$1</span>`);
+    s = s.replace(/\b\d[\d_]*(?:\.\d+)?\b/g, `<span class="tok-num">$&</span>`);
+    parts.forEach((part, i) => {
+      s = s.split(tagOf(i)).join(part);
+    });
+    return s;
+  }
 
   for (let li = 0; li < lines.length; li++) {
     const line = lines[li];
@@ -554,7 +600,7 @@ export function renderMarkdown(text) {
         closeList();
       } else {
         inCode = false;
-        const code = esc(codeBuf.join("\n"));
+        const code = highlightCode(codeBuf.join("\n"));
         html += `<div class="code-block"><div class="code-head"><span>${esc(codeLang)}</span><button class="copy-btn" data-code="${encodeURIComponent(codeBuf.join("\n"))}">Salin</button></div><pre><code>${code}</code></pre></div>`;
       }
       continue;
@@ -571,28 +617,28 @@ export function renderMarkdown(text) {
       html += `<h${level + 2} class="md-h">${inline(h[2])}</h${level + 2}>`;
       continue;
     }
-    // Unordered list
-    const ul = line.match(/^\s*[-*]\s+(.*)$/);
-    if (ul) {
-      if (!inList || listType !== "ul") {
-        closeList();
-        html += "<ul class=\"md-list\">";
-        inList = true;
-        listType = "ul";
+    // Unordered / ordered list, indent-aware (two spaces per level).
+    const um = line.match(/^(\s*)[-*]\s+(.*)$/);
+    const om = line.match(/^(\s*)\d+\.\s+(.*)$/);
+    const item = um
+      ? { type: "ul", indent: um[1].replace(/\t/g, "  ").length, text: um[2] }
+      : om
+        ? { type: "ol", indent: om[1].replace(/\t/g, "  ").length, text: om[2] }
+        : null;
+    if (item) {
+      while (listStack.length && listStack[listStack.length - 1].indent > item.indent) {
+        html += listStack.pop().type === "ol" ? "</ol>" : "</ul>";
       }
-      html += `<li>${inline(ul[1])}</li>`;
-      continue;
-    }
-    // Ordered list
-    const ol = line.match(/^\s*\d+\.\s+(.*)$/);
-    if (ol) {
-      if (!inList || listType !== "ol") {
-        closeList();
-        html += "<ol class=\"md-list\">";
-        inList = true;
-        listType = "ol";
+      const top = listStack[listStack.length - 1];
+      if (!top || top.indent < item.indent) {
+        html += `<${item.type} class="md-list${listStack.length ? " sub" : ""}">`;
+        listStack.push({ type: item.type, indent: item.indent });
+      } else if (top.type !== item.type) {
+        listStack.pop();
+        html += `${top.type === "ol" ? "</ol>" : "</ul"}<${item.type} class="md-list${listStack.length ? " sub" : ""}">`;
+        listStack.push({ type: item.type, indent: item.indent });
       }
-      html += `<li>${inline(ol[1])}</li>`;
+      html += `<li>${inline(item.text)}</li>`;
       continue;
     }
     // Blank line
@@ -607,7 +653,7 @@ export function renderMarkdown(text) {
   closeList();
   // Unclosed code block
   if (inCode) {
-    const code = esc(codeBuf.join("\n"));
+    const code = highlightCode(codeBuf.join("\n"));
     html += `<div class="code-block"><div class="code-head"><span>${esc(codeLang)}</span><button class="copy-btn" data-code="${encodeURIComponent(codeBuf.join("\n"))}">Salin</button></div><pre><code>${code}</code></pre></div>`;
   }
   return html;
