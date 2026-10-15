@@ -115,6 +115,7 @@ import {
   type ArtifactRef,
   type ContentBlock,
   type LayerBResult,
+  type LLMProvider,
   type Message,
   type ProviderConfig,
   type RunContext,
@@ -1853,13 +1854,41 @@ async function stageResearchPlanCore(
  * POST /research/plan), so the engine-separation rule holds.
  */
 
+/**
+ * The provider + model the companion actually picked in Settings — chat
+ * and Layer-B routing honor it, instead of always using the first enabled
+ * registry entry (which made the whole Model AI section a dead control).
+ * Returns { error } (never a throw) when the pick names something missing,
+ * disabled, or URL-less, so callers can say exactly what is wrong instead
+ * of failing downstream in a confusing way.
+ */
+function resolveChatProvider(ctx: AppContext): { provider: LLMProvider } | { error: string } | { missing: true } {
+  const selection = { providerId: ctx.session.providerId, model: ctx.session.model, poolModels: [] as string[] };
+  if (selection.providerId) {
+    const picked = ctx.providerStore.registry.get(selection.providerId);
+    if (!picked) {
+      return { error: `Provider pilihan ("${selection.providerId}") tidak ditemukan. Pilih ulang di Pengaturan.` };
+    }
+    if (picked.enabled === false) {
+      return { error: `Provider "${selection.providerId}" dinonaktifkan. Aktifkan dulu di Pengaturan.` };
+    }
+    if (!picked.baseUrl) {
+      return { error: `Provider "${selection.providerId}" belum punya base URL. Lengkapi di Pengaturan.` };
+    }
+  }
+  const provider = resolveFastPathProvider(ctx, selection);
+  if (!provider) return { missing: true };
+  return { provider };
+}
+
 /** Layer B: one cheap model call, only for ambiguous messages. */
 async function runWorkflowLayerB(
   ctx: AppContext,
   message: string,
 ): Promise<LayerBResult | undefined> {
-  const provider = resolveFastPathProvider(ctx, { poolModels: [] });
-  if (!provider) return undefined;
+  const resolved = resolveChatProvider(ctx);
+  if (!("provider" in resolved)) return undefined;
+  const provider = resolved.provider;
   const prompt = buildLayerBPrompt(message);
   try {
     const response = await provider.chat([
@@ -2103,8 +2132,10 @@ async function runChatReply(
   input: { message: string; attachments: ChatAttachmentIn[]; regenerate: boolean },
 ): Promise<{ text: string; clipped: boolean; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } } | undefined> {
   const prep = prepareChatTurn(ctx, root, run, input);
-  const provider = resolveFastPathProvider(ctx, { poolModels: [] });
-  if (!provider) return undefined;
+  const resolved = resolveChatProvider(ctx);
+  if ("error" in resolved) throw new Error(`misconfigured:${resolved.error}`);
+  if (!("provider" in resolved)) return undefined;
+  const provider = resolved.provider;
   try {
     const response = await provider.chat(prep.messages);
     const text = messageContentText(response.message);
@@ -2858,6 +2889,15 @@ export function createApp(ctx: AppContext) {
                 request_id: requestId,
               });
             } catch (error) {
+              if (errorMessage(error).startsWith("misconfigured:")) {
+                sendJson(res, 200, {
+                  run_id: run.run_id,
+                  kind: "chat",
+                  text: errorMessage(error).slice("misconfigured:".length),
+                  request_id: requestId,
+                });
+                return;
+              }
               if (errorMessage(error) === "model_unavailable") {
                 sendJson(res, 200, {
                   run_id: run.run_id,
@@ -2974,7 +3014,17 @@ export function createApp(ctx: AppContext) {
           if (!regenerate) {
             prep.store.append(root, run.run_id, { role: "user", text: prep.recordText, ts: isoNow() });
           }
-          const provider = resolveFastPathProvider(ctx, { poolModels: [] });
+          const resolved = resolveChatProvider(ctx);
+          if ("error" in resolved) {
+            sendJson(res, 200, {
+              run_id: run.run_id,
+              kind: "chat",
+              text: resolved.error,
+              request_id: requestId,
+            });
+            return;
+          }
+          const provider = "provider" in resolved ? resolved.provider : undefined;
           res.writeHead(200, {
             "content-type": "text/event-stream; charset=utf-8",
             "cache-control": "no-cache",

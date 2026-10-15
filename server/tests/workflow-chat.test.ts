@@ -286,6 +286,61 @@ describe('export', () => {
   })
 })
 
+describe('session provider pick', () => {
+  async function addProvider(base: string, body: Record<string, unknown>) {
+    const res = await fetch(new URL('/providers', base), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    expect(res.status).toBe(201)
+  }
+
+  async function pickProvider(base: string, providerId: string) {
+    const res = await fetch(new URL('/settings', base), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ providerId }),
+    })
+    expect(res.status).toBe(200)
+  }
+
+  test('a registry with only a baseUrl-less draft falls back to greeting', async () => {
+    const { base } = await listenWithFake()
+    await addProvider(base, { id: 'draft', name: 'Draft', baseUrl: '' })
+    const del = await fetch(new URL('/providers/fake', base), { method: 'DELETE' })
+    expect(del.status).toBe(200)
+    // Before the fix this answered with a model failure apology (the
+    // draft was handed to the HTTP client); now the draft is skipped as
+    // unusable and the no-provider greeting applies.
+    const res = await postChat(base, { message: 'Siapa nama kucing saya?' })
+    expect(res.status).toBe(200)
+    expect(res.body.text).toBe('Halo! Ada yang bisa dibantu?')
+  })
+
+  test('an explicitly picked broken provider gets an honest actionable message', async () => {
+    const { base } = await listenWithFake()
+    await addProvider(base, { id: 'draft', name: 'Draft', baseUrl: '' })
+    await pickProvider(base, 'draft')
+    const res = await postChat(base, { message: 'Siapa nama kucing saya?' })
+    expect(res.status).toBe(200)
+    expect(res.body.kind).toBe('chat')
+    expect(res.body.text).toMatch(/base URL/i)
+
+    await pickProvider(base, 'tidak-ada')
+    const missing = await postChat(base, { message: 'Siapa nama kucing saya?' })
+    expect(missing.body.text).toMatch(/tidak ditemukan/i)
+  })
+
+  test('a picked working provider actually answers', async () => {
+    const { base } = await listenWithFake()
+    await pickProvider(base, 'fake')
+    const res = await postChat(base, { message: 'Siapa nama kucing saya? Kucing saya bernama Tomo.' })
+    expect(res.status).toBe(200)
+    expect(res.body.text).toContain('seen:2')
+  })
+})
+
 describe('regenerate', () => {
   test('drops the previous answer instead of stacking a duplicate turn', async () => {
     const { base } = await listenWithFake()

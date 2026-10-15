@@ -67,12 +67,17 @@ export type FastPathSelection = {
 /**
  * Resolve the provider for a fast path exactly like the composer expects:
  * the selected provider config (or the first enabled one), the selected
- * model (or the pool's first entry, or the config default). Returns
- * undefined when nothing is configured — callers fall back gracefully.
+ * model (or the pool's first entry, or the config default). Entries
+ * without a base URL are never usable — they are skipped in every
+ * fallback so a half-filled draft can neither answer nor bill anything.
+ * Returns undefined when nothing is configured — callers fall back
+ * gracefully.
  */
 export function resolveFastPathProvider(ctx: AppContext, selection: FastPathSelection): LLMProvider | undefined {
   const registry = ctx.providerStore.registry;
-  const config = (selection.providerId ? registry.get(selection.providerId) : undefined) ?? registry.listInternal().find((provider) => provider.enabled);
+  const selected = selection.providerId ? registry.get(selection.providerId) : undefined;
+  const usable = selected && selected.baseUrl ? selected : undefined;
+  const config = usable ?? registry.listInternal().find((provider) => provider.enabled && provider.baseUrl);
   const model = selection.model || selection.poolModels[0] || config?.defaultModel || config?.models[0] || ctx.settings.llm.model;
   const providerOptions = { defaultTimeoutMs: ctx.settings.llm.timeoutMs ?? undefined };
   if (config) return createProviderForConfig(config, model, providerOptions);
