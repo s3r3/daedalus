@@ -116,6 +116,7 @@ import {
   type ContentBlock,
   type LayerBResult,
   type Message,
+  type ProviderConfig,
   type RunContext,
   type RunTurn,
   type WorkflowEngine,
@@ -845,7 +846,7 @@ async function handleProviders(ctx: AppContext, req: IncomingMessage, res: Serve
         sendJson(res, 400, { error: "invalid_json", request_id: requestId });
         return;
       }
-      const provider = registry.upsert(providerInput(parsed) as never);
+      const provider = registry.upsert(providerInput(mergeProviderInput(registry, parsed)) as never);
       await ctx.providerStore.save();
       sendJson(res, 201, { provider });
       return;
@@ -891,7 +892,7 @@ async function handleProviders(ctx: AppContext, req: IncomingMessage, res: Serve
           sendJson(res, 400, { error: "invalid_json", request_id: requestId });
           return;
         }
-        const provider = registry.upsert(providerInput({ ...parsed, id }) as never);
+        const provider = registry.upsert(providerInput(mergeProviderInput(registry, { ...parsed, id })) as never);
         await ctx.providerStore.save();
         sendJson(res, 200, { provider });
         return;
@@ -912,6 +913,25 @@ async function handleProviders(ctx: AppContext, req: IncomingMessage, res: Serve
   } catch (error) {
     sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
   }
+}
+
+/**
+ * Merge a provider write over the stored record: fields the client omits
+ * are preserved instead of wiped. Without this, a key rotation
+ * (`PUT /providers/:id {apiKey}`) would silently erase the provider's
+ * baseUrl, models, and name. Explicit values (including explicit empty
+ * arrays) still win; an explicitly empty apiKey keeps the stored key.
+ */
+function mergeProviderInput(
+  registry: { get(id: string): ProviderConfig | undefined },
+  parsed: Record<string, unknown>,
+): Record<string, unknown> {
+  const rawId = parsed.id;
+  const id = typeof rawId === "string" && rawId.trim() ? rawId.trim() : undefined;
+  if (!id) return parsed;
+  const prev = registry.get(id);
+  if (!prev) return parsed;
+  return { ...prev, ...parsed, id };
 }
 
 function providerInput(parsed: Record<string, unknown>): Record<string, unknown> {

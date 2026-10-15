@@ -164,6 +164,15 @@ describe("createApiClient", () => {
     assert.ok(res.home.endsWith("providers.json"));
   });
 
+  it("updateProvider PUTs a partial patch to the id route (key rotation)", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({ provider: { id: "nine-router" } }));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await api.updateProvider("nine-router", { apiKey: "secret" });
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/providers/nine-router");
+    assert.equal(calls[0].init.method, "PUT");
+    assert.deepEqual(JSON.parse(calls[0].init.body), { apiKey: "secret" });
+  });
+
   it("decideApproval resolves by id (survives runner restart)", async () => {
     const { fetchImpl, calls } = mockFetch(() => ok({ success: true, decision: "grant" }));
     const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });

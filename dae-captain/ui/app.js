@@ -1549,6 +1549,10 @@ async function loadSettingsView() {
     await loadModels(provSel.value);
     const curModel = s.session?.model ?? "";
     if (curModel) $("set-model").value = curModel;
+    // The approval buttons reflect the LIVE server session, not just the
+    // last thing this panel wrote — another client may have changed it.
+    state.prefs = { ...state.prefs, auto_approve: s.session?.autoApprove === true };
+    await invoke("set_prefs", { prefs: state.prefs }).catch(() => {});
     await loadEngineToggles();
     // Show current workspace
     const ws = $("set-workspace");
@@ -1722,20 +1726,22 @@ async function pushDisabledEngines() {
 }
 
 async function loadModels(providerId) {
-  const sel = $("set-model");
-  if (!sel) return;
-  sel.innerHTML = "";
+  // Free-text input + datalist suggestions: known models are one click
+  // away, but a custom/brand-new model id is always typeable — even when
+  // the provider is unreachable and the list comes back empty.
+  const list = $("set-model-list");
+  if (!list) return;
+  list.innerHTML = "";
   if (!providerId) return;
   try {
     const data = await state.api.getModels(providerId);
     for (const m of data.models ?? []) {
       const o = document.createElement("option");
       o.value = m.model;
-      o.textContent = m.model;
-      sel.appendChild(o);
+      list.appendChild(o);
     }
   } catch {
-    /* daftar model opsional — user bisa ketik manual nanti */
+    /* suggestions are best-effort; the input stays usable regardless */
   }
 }
 
@@ -2176,10 +2182,25 @@ function bindEvents() {
   // the legacy trust/thinking selects were dropped in the mockup redesign.
   bindGuarded("set-save", "click", async () => {
     const status = $("set-status");
+    const providerId = ($("set-provider").value ?? "").trim();
+    const model = ($("set-model").value ?? "").trim();
+    const key = $("set-apikey").value ?? "";
     try {
-      await state.api.updateSettings({ providerId: $("set-provider").value, model: $("set-model").value });
+      // The key field used to be silently discarded here. A non-empty key
+      // rotates the selected provider's secret (partial update — base URL,
+      // models, and name are preserved server-side); an empty field leaves
+      // the stored key untouched.
+      let keyNote = "";
+      if (key && providerId) {
+        await state.api.updateProvider(providerId, { apiKey: key });
+        $("set-apikey").value = "";
+        keyNote = " Kunci diperbarui.";
+      } else if (key && !providerId) {
+        throw new Error("Pilih provider dulu untuk menyimpan kunci.");
+      }
+      await state.api.updateSettings({ providerId, model });
       status.className = "status-line ok";
-      status.textContent = "Tersimpan — berlaku untuk semua engine.";
+      status.textContent = "Tersimpan — berlaku untuk semua engine." + keyNote;
     } catch (e) {
       status.className = "status-line error";
       status.textContent = "Gagal: " + errText(e);

@@ -58,6 +58,41 @@ describe('GET /providers registry location', () => {
     expect(body.presets.map((p) => p.id)).toContain('nine-router')
   })
 
+  test('partial updates merge instead of wiping the record', async () => {
+    const base = await listen()
+    const created = await fetch(new URL('/providers', base), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id: 'k', name: 'K', baseUrl: 'https://example.com/v1', apiKey: 'old', models: ['m1'] }),
+    })
+    expect(created.status).toBe(201)
+
+    // Key rotation sends only the key: base URL, name, and models survive.
+    const rotated = await fetch(new URL('/providers/k', base), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ apiKey: 'new' }),
+    })
+    expect(rotated.status).toBe(200)
+    const got = (await (await fetch(new URL('/providers/k', base))).json()) as {
+      provider: { id: string; name: string; baseUrl: string; hasApiKey: boolean }
+    }
+    expect(got.provider).toMatchObject({ id: 'k', name: 'K', baseUrl: 'https://example.com/v1', hasApiKey: true })
+
+    // Explicit values still win, including an explicit empty key keeping
+    // the stored secret (never blanked by accident).
+    const renamed = await fetch(new URL('/providers/k', base), {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: 'K2', apiKey: '' }),
+    })
+    expect(renamed.status).toBe(200)
+    const got2 = (await (await fetch(new URL('/providers/k', base))).json()) as {
+      provider: { name: string; baseUrl: string; hasApiKey: boolean }
+    }
+    expect(got2.provider).toMatchObject({ name: 'K2', baseUrl: 'https://example.com/v1', hasApiKey: true })
+  })
+
   test('a newly added provider shows up in the same list', async () => {
     const base = await listen()
     const created = await fetch(new URL('/providers', base), {
