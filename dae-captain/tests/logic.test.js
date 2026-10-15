@@ -25,6 +25,8 @@ import {
   queueRow,
   queueRows,
   THINKING_LEVELS,
+  activityLabel,
+  completionLabel,
 } from "../ui/logic.js";
 
 const turn = (over = {}) => ({
@@ -93,8 +95,15 @@ describe("formatResolvedArtifacts", () => {
   it("formats path artifacts", () => {
     assert.deepEqual(
       formatResolvedArtifacts([{ kind: "deck", label: "deck bisnis", path: "deck.json" }]),
-      [{ label: "deck bisnis", path: "deck.json", url: null, display: "deck bisnis — deck.json" }]
+      [{ label: "deck bisnis", path: "deck.json", url: null, displayPath: "deck.json", display: "deck bisnis — deck.json" }]
     );
+  });
+  it("prefers absolute_path for the open/reveal action", () => {
+    const [out] = formatResolvedArtifacts([
+      { kind: "deck", label: "deck bisnis", path: "deck.json", absolute_path: "/ws/deck/deck.json" },
+    ]);
+    assert.equal(out.path, "/ws/deck/deck.json");
+    assert.equal(out.displayPath, "deck.json");
   });
   it("handles empty", () => {
     assert.deepEqual(formatResolvedArtifacts([]), []);
@@ -255,6 +264,18 @@ describe("queueRow", () => {
   });
 });
 
+describe("queueRows approval filter (regression: r.turn crash)", () => {
+  it("rows expose approvals/questions directly for the Antrean filter", () => {
+    const rows = queueRows({ turns: [
+      { engine: "coding", status: "running", goal: "a", task_id: "t1", pending_approvals: [{ key: "k" }] },
+      { engine: "slide", status: "done", goal: "b", task_id: "t2" },
+    ]});
+    const approval = rows.filter((r) => (r.approvals?.length ?? 0) > 0 || (r.questions?.length ?? 0) > 0);
+    assert.equal(approval.length, 1);
+    assert.equal(approval[0].taskId, "t1");
+  });
+});
+
 describe("spawnServerArgs", () => {
   it("uses camelCase keys (Tauri command default)", () => {
     assert.deepEqual(Object.keys(spawnServerArgs("/r", "/w")), ["repoRoot", "workspace"]);
@@ -277,6 +298,56 @@ describe("spawn_server JS/Rust arg contract", () => {
     const expected = params.map(toCamel).sort();
     const actual = Object.keys(spawnServerArgs("/r", "/w")).sort();
     assert.deepEqual(actual, expected);
+  });
+});
+
+describe("activityLabel", () => {
+  const agg = (status, running = 0, attention = 0) => ({ status, running, attention });
+  it("approval wording beats question wording", () => {
+    const runs = [{ turns: [
+      { status: "running", engine: "coding", pending_approvals: [{ key: "k" }], pending_questions: [{ id: "q" }] },
+    ] }];
+    assert.equal(activityLabel(runs, agg("attention", 1, 2)), "Butuh izin");
+  });
+  it("pluralises approvals", () => {
+    const runs = [{ turns: [
+      { status: "running", pending_approvals: [{ key: "a" }, { key: "b" }] },
+    ] }];
+    assert.equal(activityLabel(runs, agg("attention")), "2 butuh izin");
+  });
+  it("questions when no approvals pending", () => {
+    const runs = [{ turns: [{ status: "done", pending_questions: [{ id: "q1" }] }] }];
+    assert.equal(activityLabel(runs, agg("attention", 0, 1)), "Ada pertanyaan");
+  });
+  it("maps real last_event types to activity words", () => {
+    const mk = (last) => [{ turns: [{ status: "running", last_event: last }] }];
+    assert.equal(activityLabel(mk("TOOL_CALL_STARTED"), agg("working", 1)), "Menjalankan alat");
+    assert.equal(activityLabel(mk("FILE_CHANGED"), agg("working", 1)), "Mengubah file");
+    assert.equal(activityLabel(mk("COMMAND_FINISHED"), agg("working", 1)), "Menjalankan tes");
+    assert.equal(activityLabel(mk("THOUGHT"), agg("working", 1)), "Berpikir");
+    assert.equal(activityLabel(mk("SOMETHING_NEW"), agg("working", 1)), "Bekerja");
+  });
+  it("falls back to running count when no events yet", () => {
+    assert.equal(activityLabel([{ turns: [{ status: "running" }] }], agg("working", 2)), "2 agent berjalan");
+    assert.equal(activityLabel([{ turns: [{ status: "running" }] }], agg("working", 1)), "Bekerja");
+  });
+  it("idle is Siap", () => {
+    assert.equal(activityLabel([], agg("idle")), "Siap");
+  });
+});
+
+describe("completionLabel", () => {
+  it("reports failures first", () => {
+    assert.equal(completionLabel([{ turns: [{ status: "done" }, { status: "failed" }] }]), "Gagal");
+    assert.equal(completionLabel([{ turns: [{ status: "failed" }, { status: "failed" }] }]), "2 gagal");
+  });
+  it("reports done count", () => {
+    assert.equal(completionLabel([{ turns: [{ status: "done" }] }]), "Selesai");
+    assert.equal(completionLabel([{ turns: [{ status: "done" }, { status: "done" }] }]), "2 selesai");
+  });
+  it("empty when nothing finished", () => {
+    assert.equal(completionLabel([{ turns: [{ status: "running" }] }]), "");
+    assert.equal(completionLabel(null), "");
   });
 });
 

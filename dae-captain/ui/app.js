@@ -22,11 +22,11 @@ import {
   engineLabel,
   enabledEngines,
   canDisableEngine,
-  trustToAutoApprove,
-  autoApproveToTrust,
   queueRows,
   summarizeTaskEvents,
   renderMarkdown,
+  activityLabel,
+  completionLabel,
   THINKING_LEVELS,
 } from "./logic.js";
 
@@ -67,6 +67,10 @@ const state = {
   pendingMessage: null, // work command waiting for a workspace pick
   pendingOverride: null,
   wfFilter: "all", // antrean filter: all|running|approval|done|failed
+  connected: false, // event-stream/HTTP health (honest pill + header status)
+  seenEvents: new Map(), // task_id -> max seq applied (dedupe on reconnect)
+  wsSubscribed: false, // wildcard WS subscription done once per workspace
+  approvalOpen: false, // latch: auto-expand once per approval batch
 };
 
 // ---------------------------------------------------------------------------
@@ -79,7 +83,7 @@ function showView(name) {
   }
   if (name === "workflow") renderWorkflowView();
   if (name === "settings") loadSettingsView();
-  if (name === "workspace") { renderWorkspaceStatus(); renderPresets(); }
+  if (name === "workspace") { renderWorkspaceStatus(); }
 }
 
 function expand() {
@@ -105,12 +109,28 @@ function collapse() {
 function renderPill() {
   const agg = aggregateStatus(state.runs);
   const pill = $("pill");
+  if (!pill) return;
   pill.className = "pill status-" + statusColor(agg.status);
-  $("pill-text").textContent = pillText(agg);
+  const label = $("pill-text");
+  if (!label) return;
+  // Pill and main window share the SAME state.runs (one task state).
+  // Connection is explicit — never a fake idle pill while disconnected.
+  if (!state.connected && agg.status === "idle") {
+    label.textContent = "offline";
+    pill.setAttribute("aria-label", "Dae Captain — terputus, klik untuk membuka");
+  } else {
+    label.textContent = activityLabel(state.runs, agg);
+    pill.setAttribute("aria-label", agg.status === "attention"
+      ? "Dae Captain — butuh persetujuan, klik untuk membuka"
+      : agg.status === "working"
+        ? "Dae Captain — " + activityLabel(state.runs, agg) + ", klik untuk membuka"
+        : "Dae Captain — klik untuk membuka");
+  }
 }
 
 function renderEnginePills() {
-  const box = $("engine-pills");
+  const box = $("chat-engine-pills");
+  if (!box) return;
   box.innerHTML = "";
   const turns = [];
   for (const run of state.runs) for (const t of run.turns ?? []) turns.push(t);
@@ -131,6 +151,7 @@ function renderEnginePills() {
 
 function renderApprovals() {
   const box = $("approvals");
+  if (!box) return;
   box.innerHTML = "";
   for (const run of state.runs) {
     for (const turn of run.turns ?? []) {
@@ -152,16 +173,48 @@ function renderApprovals() {
         const card = document.createElement("div");
         card.className = "approval-card";
         card.innerHTML = `
-          <div class="title">${escapeHtml(engineLabel(turn.engine))} bertanya — butuh jawabanmu</div>
-          <div class="row"><button class="primary-btn">Buka Web UI</button></div>`;
-        card.querySelector("button").onclick = () => openWebUI();
+          <div class="approval-header">Butuh jawaban</div>
+          <div class="title">${escapeHtml(engineLabel(turn.engine))} bertanya — jawab di sini:</div>
+          <div class="row">
+            <input class="answer-input" type="text" placeholder="Tulis jawaban…" style="flex:1">
+            <button class="primary-btn">Kirim</button>
+          </div>`;
+        const send = () => answerCardQuestion(turn.task_id, q, card);
+        card.querySelector("button").onclick = send;
+        card.querySelector(".answer-input").addEventListener("keydown", (e) => {
+          if (e.key === "Enter") send();
+        });
         box.appendChild(card);
       }
     }
   }
 }
 async function decideApproval(taskId, approval, decision) {
+  // Prefer the id-addressed route: it searches every active runner, so a
+  // pending card still resolves after the server restarted mid-run. The
+  // key-addressed route requires the task's own runner and 404s.
+  if (approval && typeof approval.id === "string" && approval.id) {
+    await state.api.decideApproval(taskId, approval.id, { decision });
+    return;
+  }
   await state.api.approve(taskId, approvalPayload(approval, decision));
+}
+
+/** Answer a pending question inline — no more dead-end "open the Web UI". */
+async function answerCardQuestion(taskId, question, card) {
+  const input = card.querySelector(".answer-input");
+  const answer = (input?.value ?? "").trim();
+  if (!answer) return;
+  const btns = card.querySelectorAll("button, input");
+  btns.forEach((b) => (b.disabled = true));
+  try {
+    await state.api.answerQuestion(taskId, question.id, answer);
+    card.querySelector(".title").textContent += " — terjawab ✓";
+    await refreshRuns();
+  } catch (e) {
+    btns.forEach((b) => (b.disabled = false));
+    card.querySelector(".title").textContent = "Gagal menjawab: " + errText(e);
+  }
 }
 
 async function decideCardApproval(taskId, approval, decision, card) {
@@ -179,6 +232,7 @@ async function decideCardApproval(taskId, approval, decision, card) {
 async function approveAll() {
   const btn = $("btn-approve-all");
   const status = $("action-status");
+  if (!status) return;
   const list = pendingApprovals(state.runs);
   if (!list.length) {
     status.className = "action-status";
@@ -276,17 +330,22 @@ function renderTranscript() {  const box = $("transcript");
         <div class="body">${bodyHtml}</div>
         ${m.staged ? `<div class="note">Staged — menunggu gate di Web UI / aplikasi.</div>` : ""}
         ${arts.length ? `<div class="artifacts"></div>` : ""}`;
-      // Render artifact cards with Open/Reveal actions
+      // Render artifact cards with Open/Reveal actions. Only entries that
+      // carry a real path or URL get a card — no fake download cards.
       if (arts.length) {
         const artBox = el.querySelector(".artifacts");
         for (const art of arts) {
+          if (!art.path && !art.url) continue;
           const card = document.createElement("div");
           card.className = "artifact-card";
-          const icon = art.path?.endsWith(".pptx") ? "📊" : art.path?.endsWith(".docx") ? "📄" : art.path?.endsWith(".xlsx") ? "📈" : "📁";
+          const shown = art.displayPath || art.path || "";
+          const base = shown.split("/").pop() || art.label;
+          const ext = (base.split(".").pop() || "").toLowerCase();
+          const icon = ext === "pptx" || ext === "ppt" ? "📊" : ext === "docx" || ext === "doc" ? "📄" : ext === "xlsx" || ext === "csv" ? "📈" : ext === "html" ? "🌐" : "📁";
           card.innerHTML = `
             <span class="artifact-icon">${icon}</span>
-            <span class="artifact-name">${escapeHtml(art.label)}</span>
-            <span class="artifact-path">${escapeHtml(art.display.split(" — ")[1] ?? "")}</span>
+            <span class="artifact-name">${escapeHtml(base)}</span>
+            <span class="artifact-path" title="${escapeHtml(art.path ?? shown)}">${escapeHtml(art.label)}</span>
             <div class="artifact-actions"></div>`;
           const actions = card.querySelector(".artifact-actions");
           if (art.path) {
@@ -445,14 +504,19 @@ async function sendChat(message, override) {
 
 function renderHeaderStatus() {
   const el = $("header-status");
+  if (!el) return;
   const ws = state.workspaceRoot ? state.workspaceRoot.replace(/\/+$/, "").split("/").pop() : "";
   const agg = aggregateStatus(state.runs);
-  const what = agg.status === "attention"
-    ? `${agg.attention} butuh persetujuan`
-    : agg.status === "working"
-      ? `${agg.running} agent berjalan`
-      : "siap";
-  el.textContent = (ws ? ws + " • " : "") + what;
+  const wsName = state.workspaceRoot ? state.workspaceRoot.replace(/\/+$/, "").split("/").pop() : "";
+  const done = completionLabel(state.runs);
+  const what = (!state.connected && agg.status === "idle")
+    ? "terputus"
+    : agg.status === "attention"
+      ? agg.attention + " butuh perhatian"
+      : agg.status === "working"
+        ? activityLabel(state.runs, agg)
+        : (done || "siap");
+  el.textContent = (wsName ? wsName + " • " : "") + what;
 }
 
 /** Status view: live engine pills + per-run cards. All data from polling. */
@@ -496,7 +560,7 @@ async function renderWorkflowView() {
   const filtered = rows.filter((r) => {
     if (filter === "all") return true;
     if (filter === "running") return r.status === "running";
-    if (filter === "approval") return (r.turn.pending_approvals?.length ?? 0) > 0;
+    if (filter === "approval") return (r.approvals?.length ?? 0) > 0 || (r.questions?.length ?? 0) > 0;
     if (filter === "done") return r.status === "done";
     if (filter === "failed") return r.status === "failed";
     return true;
@@ -622,16 +686,29 @@ async function refreshRuns() {
   try {
     const data = await state.api.workflowRuns(state.workspaceRoot);
     state.runs = data.runs ?? [];
+    state.connected = true;
   } catch {
-    state.runs = [];
+    // Keep last-known runs: a transient failure must not flash the pill
+    // to idle or hide approvals.
+    state.connected = false;
+    renderPill();
+    renderHeaderStatus();
+    return;
   }
   renderPill();
   renderHeaderStatus();
   renderChatEnginePills();
-  if (pendingApprovals(state.runs).length > 0) expand(); // approval baru → island mekar
+  const pending = pendingApprovals(state.runs);
+  if (pending.length > 0 && !state.approvalOpen) {
+    state.approvalOpen = true;
+    expand(); // approval baru → island mekar (once per batch)
+  } else if (pending.length === 0) {
+    state.approvalOpen = false;
+  }
   await refreshTurnActivity();
   if (!state.expanded) return;
-  if (!$("view-workflow").classList.contains("hidden")) {
+  const wf = $("view-workflow");
+  if (wf && !wf.classList.contains("hidden")) {
     renderWorkflowView();
   } else {
     renderApprovals();
@@ -649,7 +726,9 @@ function findRunTurn(taskId) {
 }
 
 function isChatViewVisible() {
-  return state.expanded && !$("view-main").classList.contains("hidden");
+  const main = $("view-main");
+  if (!main) return false;
+  return state.expanded && !main.classList.contains("hidden");
 }
 
 /**
@@ -658,11 +737,15 @@ function isChatViewVisible() {
  * turn leaves "running". Re-renders the transcript only on change.
  */
 /** Show the Stop button only while a chat task is running. */
-function updateStopButton() {  const running = [...state.transcript].reverse().some(
+function updateStopButton() {
+  const stop = $("chat-stop");
+  const send = $("chat-send");
+  if (!stop || !send) return;
+  const running = [...state.transcript].reverse().some(
     (m) => m.kind === "turn" && m.taskId && !m.activityDone
   );
-  $("chat-stop").classList.toggle("hidden", !running);
-  $("chat-send").classList.toggle("hidden", running);
+  stop.classList.toggle("hidden", !running);
+  send.classList.toggle("hidden", running);
 }
 
 /**
@@ -703,9 +786,12 @@ async function refreshTurnActivity() {
     (m) => m.kind === "turn" && m.taskId && !m.activityDone
   );
   if (!turn) return;
-  // Subscribe to live events via WebSocket (replaces polling).
-  if (state.eventStream) {
-    state.eventStream.subscribe(turn.taskId);
+  // Wildcard subscription covers every running turn at once. Subscribing
+  // per-turn reset since_seq to 0 each poll cycle (replay storm) and hid
+  // events from all but the latest turn — subscribe once, keyed by flag.
+  if (state.eventStream && !state.wsSubscribed) {
+    state.eventStream.subscribe("*");
+    state.wsSubscribed = true;
   }
   const runTurn = findRunTurn(turn.taskId);
   if (runTurn && runTurn.status !== "running") {
@@ -717,14 +803,26 @@ async function refreshTurnActivity() {
 /** Handle live task events from WebSocket (or polling fallback). */
 function handleTaskEvents(events) {
   if (!events?.length) return;
-  const taskIds = new Set(events.map((e) => e.task_id ?? e.taskId).filter(Boolean));
+  // Dedupe on reconnect: the server replays from since_seq, but poll
+  // fallback and resubscribes can redeliver — apply each (task, seq) once.
+  const fresh = events.filter((e) => {
+    const id = e.task_id ?? e.taskId;
+    const seq = typeof e.seq === "number" ? e.seq : -1;
+    if (!id || seq < 0) return true;
+    const seen = state.seenEvents.get(id) ?? 0;
+    if (seq <= seen) return false;
+    state.seenEvents.set(id, seq);
+    return true;
+  });
+  if (!fresh.length) return;
+  const taskIds = new Set(fresh.map((e) => e.task_id ?? e.taskId).filter(Boolean));
   for (const taskId of taskIds) {
     const turn = [...state.transcript].reverse().find(
       (m) => m.kind === "turn" && m.taskId === taskId && !m.activityDone
     );
     if (!turn) continue;
     turn.eventBuffer = turn.eventBuffer ?? [];
-    turn.eventBuffer.push(...events.filter((e) => (e.task_id ?? e.taskId) === taskId));
+    turn.eventBuffer.push(...fresh.filter((e) => (e.task_id ?? e.taskId) === taskId));
     const summary = summarizeTaskEvents(turn.eventBuffer);
     const key = JSON.stringify(summary);
     if (key !== turn.activityKey) {
@@ -732,7 +830,7 @@ function handleTaskEvents(events) {
       turn.activity = summary;
       if (isChatViewVisible()) renderTranscript();
     }
-    const lastEvent = events[events.length - 1];
+    const lastEvent = fresh[fresh.length - 1];
     if (lastEvent?.type === "TASK_COMPLETED" || lastEvent?.type === "TASK_FAILED") {
       turn.activityDone = true;
       updateStopButton();
@@ -745,15 +843,32 @@ function handleTaskEvents(events) {
 async function refreshRunsQuiet() {
   if (!state.api) return;
   try {
-    const data = await state.api.runs();
+    const data = await state.api.workflowRuns(state.workspaceRoot);
     state.runs = data.runs ?? [];
+    state.connected = true;
   } catch {
-    state.runs = [];
+    state.connected = false;
+    renderPill();
+    renderHeaderStatus();
+    return;
   }
   renderPill();
   renderHeaderStatus();
   renderChatEnginePills();
-  if (pendingApprovals(state.runs).length > 0) expand();
+  const pending = pendingApprovals(state.runs);
+  if (pending.length > 0 && !state.approvalOpen) {
+    state.approvalOpen = true;
+    expand();
+  } else if (pending.length === 0) {
+    state.approvalOpen = false;
+  }
+  if (!state.expanded) return;
+  const wf = $("view-workflow");
+  if (wf && !wf.classList.contains("hidden")) {
+    renderWorkflowView();
+  } else {
+    renderApprovals();
+  }
 }
 
 
@@ -812,16 +927,57 @@ async function setApprovalMode(mode) {
   updateApprovalButtons();
 }
 
-/** Test provider connection. */
+/**
+ * Connection & diagnostics: real facts only — server health + the workspace
+ * the server is actually serving, plus whether the pill is layer-shell
+ * pinned (compositor_info). Surfaces failures instead of hiding them.
+ */
+async function runDiagnostics() {
+  const out = $("set-diag");
+  if (!out) return;
+  out.className = "status-line";
+  out.textContent = "Memeriksa…";
+  const lines = [];
+  let ok = true;
+  try {
+    const health = await invoke("server_health");
+    const served = health.workspace_root ?? "(tak diketahui)";
+    const matches = state.workspaceRoot && sameWorkspace(health.workspace_root ?? "", state.workspaceRoot);
+    lines.push(health.healthy ? "Server: aktif" : "Server: tidak merespons");
+    lines.push("Server melayani: " + served);
+    if (health.healthy) {
+      if (state.workspaceRoot && !matches) {
+        ok = false;
+        lines.push("≠ workspace UI (" + state.workspaceRoot + ")");
+      } else {
+        lines.push("Workspace sinkron");
+      }
+    } else ok = false;
+    try {
+      const comp = await invoke("compositor_info");
+      lines.push("Layer-shell pinned: " + (comp?.layer_shell_pinned ? "ya" : "tidak (panel mengapung)"));
+    } catch { /* optional command */ }
+    lines.push("Stream: " + (state.connected ? "terhubung" : "terputus"));
+  } catch (e) {
+    ok = false;
+    lines.push("Gagal memeriksa: " + errText(e));
+  }
+  out.className = "status-line " + (ok ? "ok" : "error");
+  out.textContent = "• " + lines.join("  ·  ");
+}
+
+/** Test provider connection (real server round-trip, no fake success). */
 async function testConnection() {
   const status = $("set-conn-status");
+  if (!status) return;
   status.textContent = "Menghubungi…";
   status.className = "status-line";
   try {
-    // Use the existing provider test flow
-    await $("prov-test").onclick();
-    status.textContent = "Terhubung. Daftar model berhasil dimuat.";
-    status.className = "status-line ok";
+    const providerId = ($("set-provider")?.value ?? "").trim();
+    if (!providerId) throw new Error("Pilih provider dulu.");
+    const res = await state.api.testProvider(providerId);
+    status.className = "status-line " + (res.ok ? "ok" : "error");
+    status.textContent = res.message ?? (res.ok ? "Koneksi OK." : "Koneksi gagal.");
   } catch (e) {
     status.textContent = "Gagal: " + errText(e);
     status.className = "status-line error";
@@ -831,6 +987,7 @@ async function testConnection() {
 /** Agentic Systems toggles — persisted to Tauri prefs AND the live server. */
 async function loadEngineToggles() {
   const box = $("engine-toggles");
+  if (!box) return;
   box.innerHTML = "";
   const disabled = state.prefs.disabled_engines ?? [];
   for (const e of ENGINES) {
@@ -887,26 +1044,9 @@ async function pushDisabledEngines() {
   } catch { /* server restart pick-up; non-fatal */ }
 }
 
-/** Trust & Approval — honest 2-state mapping of the boolean autoApprove. */
-async function loadTrustLevel() {
-  try {
-    const s = await state.api.getSettings();
-    const tl = $("trust-level");
-    if (tl) tl.value = autoApproveToTrust(s.session?.autoApprove);
-  } catch { /* biarkan default */ }
-}
-
-async function loadThinkingLevel() {
-  try {
-    const s = await state.api.getSettings();
-    const lvl = s.session?.thinkingLevel ?? "medium";
-    const el = $("think-level");
-    if (el) el.value = THINKING_LEVELS.includes(lvl) ? lvl : "medium";
-  } catch { /* biarkan default */ }
-}
-
 async function loadModels(providerId) {
   const sel = $("set-model");
+  if (!sel) return;
   sel.innerHTML = "";
   if (!providerId) return;
   try {
@@ -956,7 +1096,7 @@ async function renderWorkspaceStatus() {
   const el = $("ws-health");
   el.className = "status-line";
   el.textContent = "Mengecek…";
-  const path = ($("ws-path").value || state.workspaceRoot).trim();
+  const path = ((($("ws-path")?.value ?? "") || state.workspaceRoot)).trim();
   if (!path) {
     el.textContent = "Belum ada workspace dipilih.";
     return;
@@ -980,85 +1120,14 @@ async function renderWorkspaceStatus() {
   }
 }
 
-/** Named workspace shortcuts, persisted in Tauri prefs. */
-function getPresets() {
-  return state.prefs.workspace_presets ?? [];
-}
-
-function renderPresets() {
-  const sel = $("ws-preset");
-  sel.innerHTML = "";
-  const presets = getPresets();
-  if (!presets.length) {
-    const o = document.createElement("option");
-    o.value = "";
-    o.textContent = "— belum ada preset —";
-    sel.appendChild(o);
-    return;
-  }
-  for (const p of presets) {
-    const o = document.createElement("option");
-    o.value = p.name;
-    o.textContent = `${p.name} — ${p.path}`;
-    sel.appendChild(o);
-  }
-}
-
-async function savePreset(name, path) {
-  const presets = getPresets().filter((p) => p.name !== name);
-  presets.push({ name, path });
-  state.prefs = { ...state.prefs, workspace_presets: presets };
-  await invoke("set_prefs", { prefs: state.prefs });
-  renderPresets();
-  $("ws-preset").value = name;
-}
-
-async function deletePreset(name) {
-  if (!name) return;
-  state.prefs = {
-    ...state.prefs,
-    workspace_presets: getPresets().filter((p) => p.name !== name),
-  };
-  await invoke("set_prefs", { prefs: state.prefs });
-  renderPresets();
-}
-
-/** Scan Directory — real top-level listing via the list_dir command. */
-async function scanWorkspace() {
-  const out = $("ws-scan-out");
-  const status = $("ws-status");
-  const path = ($("ws-path").value || state.workspaceRoot).trim();
-  out.innerHTML = "";
-  if (!path) {
-    status.className = "status-line error";
-    status.textContent = "Isi folder dulu.";
-    return;
-  }
-  try {
-    const entries = await invoke("list_dir", { path });
-    if (!entries.length) {
-      out.innerHTML = `<span class="hint">Folder kosong.</span>`;
-      return;
-    }
-    out.innerHTML = entries
-      .map((e) => `<div class="scan-entry">${e.is_dir ? "📁" : "📄"} ${escapeHtml(e.name)}</div>`)
-      .join("");
-    status.className = "status-line ok";
-    status.textContent = `${entries.length} entri di ${path}.`;
-  } catch (e) {
-    status.className = "status-line error";
-    status.textContent = "Gagal memindai: " + errText(e);
-  }
-}
-
 /** "Buat folder baru" — creates the typed path, then uses it as workspace. */
 async function createWorkspace(folderName) {
   const status = $("ws-status");
   // New mockup: folder name input; old: full path input.
   const nameInput = $("ws-new-name");
   const name = (folderName ?? (nameInput ? nameInput.value.trim() : "")).trim();
-  const base = state.workspaceRoot || $("ws-path").value.trim();
-  const path = name ? (base ? base.replace(/\/+$/, "") + "/" + name : name) : $("ws-path").value.trim();
+  const base = state.workspaceRoot || (($("ws-path")?.value ?? "").trim());
+  const path = name ? (base ? base.replace(/\/+$/, "") + "/" + name : name) : (($("ws-path")?.value ?? "").trim());
   if (!path) {
     status.className = "status-line error";
     status.textContent = "Isi folder dulu.";
@@ -1088,6 +1157,9 @@ async function setWorkspace(path) {
     const recent = [path, ...(state.prefs.recent_workspaces ?? []).filter((w) => w !== path)].slice(0, 8);
     state.prefs = { ...state.prefs, workspace_root: path, recent_workspaces: recent };
     await invoke("set_prefs", { prefs: state.prefs });
+    state.seenEvents.clear(); // new workspace = new event history
+    state.wsSubscribed = false;
+    state.approvalOpen = false;
     const serverOk = await ensureServer((t, e) => {
       status.className = "status-line" + (e ? " error" : "");
       status.textContent = t;
@@ -1213,26 +1285,33 @@ async function boot() {
 
   state.api = createApiClient({
     baseUrl: state.serverUrl,
-    getToken: () => invoke("daemon_token").catch(() => null),
+    getToken: () => invoke("daemon_token", { workspace: state.workspaceRoot || null }).catch(() => null),
   });
   // WebSocket event stream for live task updates (replaces polling).
   state.eventStream = createEventStream({
     getWsUrl: () => state.serverUrl.replace(/^http/, "ws") + "/tasks/events",
     onEvents: handleTaskEvents,
-    onConnect: () => console.log("[events] connected"),
-    onDisconnect: () => console.log("[events] disconnected"),
+    onConnect: () => { state.connected = true; renderPill(); renderHeaderStatus(); },
+    onDisconnect: () => { state.connected = false; renderPill(); renderHeaderStatus(); },
   });
-  // HTTP polling fallback if WebSocket unavailable.
-  state.eventStream.setPollFn(async (taskId, sinceSeq) => {
-    if (!taskId || taskId === "*") return [];
+  // HTTP polling fallback if WebSocket unavailable. The wildcard WS
+  // subscription covers all turns, so the fallback polls the latest
+  // running chat turn directly (taskId arg is ignored).
+  state.eventStream.setPollFn(async (_taskId, sinceSeq) => {
+    const turn = [...state.transcript].reverse().find(
+      (m) => m.kind === "turn" && m.taskId && !m.activityDone
+    );
+    if (!turn) return [];
     try {
-      const data = await state.api.taskEvents(taskId);
+      const data = await state.api.taskEvents(turn.taskId);
       const events = data.events ?? [];
       return sinceSeq ? events.filter((e) => (e.seq ?? 0) > sinceSeq) : events;
     } catch {
       return [];
     }
   });
+  state.eventStream.subscribe("*");
+  state.wsSubscribed = true;
   try {
     await state.api.health();
   } catch (e) {
@@ -1265,50 +1344,60 @@ async function boot() {
 // ---------------------------------------------------------------------------
 
 function bindEvents() {
-  $("pill").onclick = expand;
-  $("pill").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") expand(); };
-  $("btn-collapse").onclick = collapse;
-  $("btn-settings").onclick = () => { loadSettingsView(); showView("settings"); };
-  $("set-back").onclick = () => showView("main");
+  const bindGuarded = (id, evt, fn) => {
+    const el = $(id);
+    if (!el) return; // HTML/JS drift must never crash boot.
+    if (evt === "change") el.onchange = fn;
+    else if (evt === "keydown") el.onkeydown = fn;
+    else el.onclick = fn;
+  };
+
+  bindGuarded("pill", "click", expand);
+  bindGuarded("pill", "keydown", (e) => { if (e.key === "Enter" || e.key === " ") expand(); });
+  bindGuarded("btn-collapse", "click", collapse);
+  bindGuarded("btn-settings", "click", () => { loadSettingsView(); showView("settings"); });
+  bindGuarded("set-back", "click", () => showView("main"));
   // Approval mode buttons (mockup: Tanya setiap kali / Setujui otomatis)
-  $("approve-ask").onclick = () => setApprovalMode("ask");
-  $("approve-auto").onclick = () => setApprovalMode("auto");
+  bindGuarded("approve-ask", "click", () => setApprovalMode("ask"));
+  bindGuarded("approve-auto", "click", () => setApprovalMode("auto"));
   // API key show/hide
-  $("set-showkey").onclick = () => {
+  bindGuarded("set-showkey", "click", () => {
     const inp = $("set-apikey");
+    if (!inp) return;
     const show = inp.type === "password";
     inp.type = show ? "text" : "password";
-    $("set-showkey").textContent = show ? "Sembunyikan" : "Tampilkan";
-  };
+    const _sk = $("set-showkey"); if (_sk) _sk.textContent = show ? "Sembunyikan" : "Tampilkan";
+  });
   // Test connection
-  $("set-test").onclick = testConnection;
+  bindGuarded("set-test", "click", testConnection);
+  // Connection & diagnostics
+  bindGuarded("set-diag-refresh", "click", runDiagnostics);
   // Workspace picker from settings
-  $("set-pick-workspace").onclick = () => showView("workspace");
-  $("btn-workspace").onclick = () => { $("ws-path").value = state.workspaceRoot; $("ws-status").textContent = ""; showView("workspace"); };
-  $("ws-back").onclick = () => showView("main");
-  $("ws-use").onclick = async () => {
+  bindGuarded("set-pick-workspace", "click", () => showView("workspace"));
+  bindGuarded("btn-workspace", "click", () => { const p = $("ws-path"); if (p) p.value = state.workspaceRoot; const st = $("ws-status"); if (st) st.textContent = ""; showView("workspace"); });
+  bindGuarded("ws-back", "click", () => showView("main"));
+  bindGuarded("ws-use", "click", async () => {
     // Native folder picker (Tauri dialog)
     try {
       const picked = await invoke("pick_folder");
       if (picked) {
-        $("ws-path").value = picked;
+        if ($("ws-path")) $("ws-path").value = picked;
         await setWorkspace(picked);
       }
     } catch (e) {
       // Fallback to manual path input
-      const path = $("ws-path").value.trim();
+      const path = (($("ws-path")?.value ?? "").trim());
       if (path) await setWorkspace(path);
     }
-  };
-  $("ws-create").onclick = () => {
-    const name = $("ws-new-name").value.trim();
+  });
+  bindGuarded("ws-create", "click", () => {
+    const name = (($("ws-new-name")?.value ?? "").trim());
     if (name) createWorkspace(name);
-  };
-  // Note: ws-preset and ws-scan were removed in mockup redesign (simplified to Riwayat).
+  });
 
-  $("chat-send").onclick = () => sendChat();
-  $("chat-input").onkeydown = (e) => { if (e.key === "Enter") sendChat(); };
-  $("chat-stop").onclick = async () => {
+  bindGuarded("chat-send", "click", () => sendChat());
+  bindGuarded("chat-input", "keydown", (e) => { if (e.key === "Enter") sendChat(); });
+  bindGuarded("chat-stop", "click", async () => {
     const turn = [...state.transcript].reverse().find(
       (m) => m.kind === "turn" && m.taskId && !m.activityDone
     );
@@ -1321,23 +1410,21 @@ function bindEvents() {
     }
     renderTranscript();
     updateStopButton();
-  };
+  });
 
-  $("btn-approve-all").onclick = approveAll;
-  $("btn-goto-chat").onclick = () => { showView("main"); $("chat-input").focus(); };
-  $("btn-goto-workflow").onclick = () => showView("workflow");
-  $("status-back").onclick = () => showView("main");
-  $("status-open-web").onclick = openWebUI;
-  $("wf-back").onclick = () => showView("main");
+  bindGuarded("btn-approve-all", "click", approveAll);
+  bindGuarded("btn-goto-chat", "click", () => { showView("main"); const ci = $("chat-input"); if (ci) ci.focus(); });
+  bindGuarded("btn-goto-workflow", "click", () => showView("workflow"));
+  bindGuarded("wf-back", "click", () => showView("main"));
   for (const b of document.querySelectorAll("#wf-filters .filter-chip")) {
     b.onclick = () => { state.wfFilter = b.dataset.filter; renderWorkflowView(); };
   }
-  $("wf-cancel").onclick = cancelWorkflow;
+  bindGuarded("wf-cancel", "click", cancelWorkflow);
 
-  $("set-provider").onchange = (e) => loadModels(e.target.value);
-  // Note: trust-level and think-level selects were removed in the mockup
-  // redesign (replaced by approval buttons). Handlers kept safe-guarded.
-  $("set-save").onclick = async () => {
+  bindGuarded("set-provider", "change", (e) => loadModels(e.target.value));
+  // Approval mode (ask/auto) and engine toggles cover the permission model;
+  // the legacy trust/thinking selects were dropped in the mockup redesign.
+  bindGuarded("set-save", "click", async () => {
     const status = $("set-status");
     try {
       await state.api.updateSettings({ providerId: $("set-provider").value, model: $("set-model").value });
@@ -1347,8 +1434,8 @@ function bindEvents() {
       status.className = "status-line error";
       status.textContent = "Gagal: " + errText(e);
     }
-  };
-  $("prov-test").onclick = async () => {
+  });
+  bindGuarded("prov-test", "click", async () => {
     const status = $("set-status");
     const id = $("prov-id").value.trim();
     if (!id) { status.textContent = "Isi ID dulu."; return; }
@@ -1368,8 +1455,8 @@ function bindEvents() {
       status.className = "status-line error";
       status.textContent = "Gagal: " + errText(e);
     }
-  };
-  $("prov-save").onclick = async () => {
+  });
+  bindGuarded("prov-save", "click", async () => {
     const status = $("set-status");
     try {
       await state.api.createProvider({
@@ -1386,9 +1473,9 @@ function bindEvents() {
       status.className = "status-line error";
       status.textContent = "Gagal: " + errText(e);
     }
-  };
+  });
 
-  $("setup-save").onclick = async () => {
+  bindGuarded("setup-save", "click", async () => {
     const status = $("setup-status");
     const repo = $("setup-repo").value.trim();
     const ws = $("setup-ws").value.trim();
@@ -1399,15 +1486,15 @@ function bindEvents() {
     state.prefs = { ...state.prefs, repo_root: repo, workspace_root: ws, recent_workspaces: [ws] };
     await invoke("set_prefs", { prefs: state.prefs });
     boot();
-  };
+  });
 
-  $("btn-quit").onclick = async () => {
+  bindGuarded("btn-quit", "click", async () => {
     const managed = await invoke("server_managed").catch(() => false);
     if (!managed) { invoke("quit_app"); return; }
     if (state.prefs.keep_alive === "keep") { invoke("quit_app"); return; }
     if (state.prefs.keep_alive === "stop") { await invoke("stop_server").catch(() => {}); invoke("quit_app"); return; }
     $("quit-dialog").classList.remove("hidden");
-  };
+  });
   const quitWith = async (keep) => {
     if ($("quit-remember").checked) {
       state.prefs = { ...state.prefs, keep_alive: keep ? "keep" : "stop" };
@@ -1416,8 +1503,8 @@ function bindEvents() {
     if (!keep) await invoke("stop_server").catch(() => {});
     invoke("quit_app");
   };
-  $("quit-keep").onclick = () => quitWith(true);
-  $("quit-stop").onclick = () => quitWith(false);
+  bindGuarded("quit-keep", "click", () => quitWith(true));
+  bindGuarded("quit-stop", "click", () => quitWith(false));
 }
 
 bindEvents();

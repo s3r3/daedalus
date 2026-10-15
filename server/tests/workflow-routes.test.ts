@@ -121,6 +121,30 @@ describe('POST /workflow/chat', () => {
     expect(typeof body.run_id).toBe('string')
   })
 
+  test('explanatory questions stay conversational (no agentic dispatch)', async () => {
+    const { base } = await listen()
+    for (const message of [
+      'Bagaimana cara membuat landing page?',
+      'Apa perbedaan React dan Vue?',
+      'Jelaskan kode ini tanpa mengubahnya.',
+    ]) {
+      const { status, body } = await postChat(base, { message })
+      expect(status).toBe(200)
+      expect(body.kind).toBe('chat')
+      expect(typeof body.text).toBe('string')
+    }
+  })
+
+  test('explicit execution requests still dispatch', async () => {
+    const { base } = await listen()
+    const { status, body } = await postChat(base, {
+      message: 'Buatkan landing page HTML tentang AI di folder huhu.',
+    })
+    expect(status).toBe(201)
+    expect(body.engine).toBe('coding')
+    expect(typeof body.task_id).toBe('string')
+  })
+
   test('research dispatch goes through plan staging (400 without a provider)', async () => {
     const { base } = await listen()
     const { status, body } = await postChat(base, {

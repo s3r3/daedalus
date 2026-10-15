@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { basename, extname, join, resolve, sep } from "node:path";
@@ -124,6 +124,7 @@ import {
   buildLayerBPrompt,
   createWorkflowRun,
   formatResolvedForGoal,
+  isConversationalMessage,
   isWorkflowEngine,
   lastTurn,
   parseLayerBResponse,
@@ -302,7 +303,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
   };
   return {
     bus: overrides.bus ?? new EventBus(),
-    store: overrides.store ?? new TaskStore(resolveDaedalusHome(settings.daedalusHome, cwd)),
+    store: overrides.store ?? new TaskStore(resolveDaedalusHome(settings.daedalusHome, anchoredWorkspace)),
     log: overrides.log ?? createLogger({ base: { service: "daedalus-server" } }),
     startedAt: overrides.startedAt ?? Date.now(),
     cwd,
@@ -310,7 +311,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     approvalMemory: overrides.approvalMemory ?? new Map<string, ApprovalDecision>(),
     terminals: overrides.terminals ?? new TerminalManager(),
     settings,
-    providerStore: overrides.providerStore ?? new ProviderRegistryStore(resolveDaedalusHome(settings.daedalusHome, cwd)),
+    providerStore: overrides.providerStore ?? new ProviderRegistryStore(resolveDaedalusHome(settings.daedalusHome, anchoredWorkspace)),
     session,
     workspaces: overrides.workspaces ?? new Set<string>([resolve(cwd), resolve(session.workspaceRoot)]),
     webDist: overrides.webDist,
@@ -1133,7 +1134,7 @@ function taskStores(ctx: AppContext): TaskStore[] {
   return stores;
 }
 
-function findTask(ctx: AppContext, taskId: string): TaskLookup | undefined {
+export function findTask(ctx: AppContext, taskId: string): TaskLookup | undefined {
   for (const store of taskStores(ctx)) {
     const state = store.loadState<Record<string, unknown>>(taskId);
     if (state !== undefined) return { store, state };
@@ -1142,7 +1143,7 @@ function findTask(ctx: AppContext, taskId: string): TaskLookup | undefined {
   return undefined;
 }
 
-function allTaskIds(ctx: AppContext): string[] {
+export function allTaskIds(ctx: AppContext): string[] {
   const ids = new Set<string>();
   for (const store of taskStores(ctx)) {
     for (const id of store.listTasks()) ids.add(id);
@@ -1923,7 +1924,7 @@ function reconcileWorkflowRun(ctx: AppContext, run: RunContext): boolean {
       continue;
     }
     if (ctx.activeRunners.has(turn.task_id)) continue;
-    const state = tasks.loadState<{ status?: string }>(turn.task_id);
+    const state = tasks.loadState<{ status?: string; last_error?: unknown }>(turn.task_id);
     if (state?.status === "done") {
       const report = tasks.loadReport<FinalReport>(turn.task_id);
       updateTurn(run, turn.turn_id, {
@@ -2005,6 +2006,11 @@ function presentWorkflowTurn(
     ...(stats.lastType ? { last_event: stats.lastType } : {}),
     ...(stats.lastTs ? { last_event_ts: stats.lastTs } : {}),
     pending_approvals: runner.approvals.pending().map((entry) => ({
+      // `id` first: the companion resolves approvals by id
+      // (`POST /tasks/:id/approvals/:approvalId`), which searches every
+      // active runner. The key-addressed route needs the task's own runner
+      // and 404s `runner_not_found` once the server restarted mid-run.
+      id: entry.info.id,
       key: entry.key,
       tool: entry.info.tool,
       policy: entry.policy,
@@ -2038,9 +2044,11 @@ function presentWorkflowRun(
  */
 export function ensureDaemonToken(daedalusHome: string): string {
   const path = join(daedalusHome, "daemon.json");
+  let previous: Record<string, unknown> = {};
   try {
     const raw = readFileSync(path, "utf-8");
-    const parsed = JSON.parse(raw) as { token?: unknown };
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object") previous = parsed;
     if (typeof parsed.token === "string" && parsed.token.length >= 32) {
       return parsed.token;
     }
@@ -2049,8 +2057,10 @@ export function ensureDaemonToken(daedalusHome: string): string {
   }
   const token = randomBytes(32).toString("hex");
   try {
-    mkdir(daedalusHome, { recursive: true });
-    writeFile(path, JSON.stringify({ token }, null, 2) + "\n");
+    mkdirSync(daedalusHome, { recursive: true });
+    // Preserve sidecar fields (pid/host/port/started_at/...) when present:
+    // overwriting daemon.json with only {token} breaks `daedalus status`.
+    writeFileSync(path, JSON.stringify({ ...previous, token }, null, 2) + "\n");
   } catch {
     /* best effort — token still returned for this process */
   }
@@ -2067,10 +2077,13 @@ function bearerToken(req: IncomingMessage): string | undefined {
 
 export function createApp(ctx: AppContext) {
   reconcileInterruptedTasks(ctx);
-  // Local daemon token for sensitive endpoints (approve/cancel).
+  // Local daemon token for sensitive endpoints (approve/cancel). Anchored to
+  // the session workspace so DAEDALUS_WORKSPACE sidecars, the Tauri
+  // `daemon_token(workspace)` command, and the CLI read the same file —
+  // the old cwd-anchored path broke approvals whenever cwd != workspace.
   if (!ctx.daemonToken) {
     ctx.daemonToken = ensureDaemonToken(
-      resolveDaedalusHome(ctx.settings.daedalusHome, ctx.cwd),
+      resolveDaedalusHome(ctx.settings.daedalusHome, ctx.session.workspaceRoot || ctx.cwd),
     );
   }
   // Permanent bundled skills: make sure the starter set is installed in the
@@ -2394,7 +2407,22 @@ export function createApp(ctx: AppContext) {
             runs.saveRun(run);
           }
 
-          // Route: override > rules > layer B > clarify.
+          // Route: override > conversational-first > rules > layer B > chat.
+          // A question ABOUT work ("Bagaimana cara membuat landing page?",
+          // "Apa perbedaan React dan Vue?", "Jelaskan kode ini tanpa
+          // mengubahnya") is never permission to execute it.
+          if (!overrideRaw && isConversationalMessage(message)) {
+            const chatText =
+              (await runWorkflowChatReply(ctx, message)) ??
+              "Halo! Ada yang bisa dibantu?";
+            sendJson(res, 200, {
+              run_id: run.run_id,
+              kind: "chat",
+              text: chatText,
+              request_id: requestId,
+            });
+            return;
+          }
           const previousEngine = lastTurn(run)?.engine;
           let routed = routeByRules(message, {
             ...(overrideRaw

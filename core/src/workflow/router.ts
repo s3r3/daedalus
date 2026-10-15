@@ -37,6 +37,50 @@ export type RouteOptions = {
 
 const lower = (s: string): string => s.toLowerCase();
 
+/**
+ * Explicit no-modification request — always conversational, even when the
+ * message names code ("Jelaskan kode ini tanpa mengubahnya").
+ */
+const NO_MODIFY_RE =
+  /\b(tanpa\s+(mengubah|merubah|diubah|modifikasi)|jangan\s+(diubah|mengubah|merubah)|hanya\s+jelaskan|cuma\s+jelaskan|tanpa\s+menulis\s+file|do\s+not\s+(modify|change|edit)|without\s+(modifying|changing|editing))\b/;
+
+/**
+ * Leading execution imperatives ("Buatkan … di folder huhu",
+ * "Perbaiki bug pada project ini"). When present the message is work even
+ * if it ends with "?" — a trailing question mark alone is not a chat signal.
+ */
+const EXEC_LEAD_RE =
+  /^\s*(buatkan|buatin|buat|tolong\s+(buatkan|buatin|buatkan?)?|perbaiki|betulkan|refactor|refaktor|deploy|tulis|tuliskan|catat|rekap|riset|telaah|research|analisis|analisa|analyse|fix|create|generate|build)\b/;
+
+/** Leading question words (ID + EN) — explanatory, not execution. */
+const QUESTION_LEAD_RE =
+  /^\s*(apa|apakah|siapa|kenapa|mengapa|bagaimana|gimana|kapan|dimana|di\s*mana|berapa|jelaskan|tolong\s+jelaskan|what|why|who|when|where|how|which|can you explain|explain)\b/;
+
+/** Trailing-? question markers ("1 + 1 berapa?", "Apa perbedaan React dan Vue?"). */
+const QUESTION_TAIL_RE =
+  /\b(berapa|siapa|apa|kenapa|mengapa|bagaimana|perbedaan|jelaskan|apakah|kapan|dimana)\b[^?.!]{0,80}\?\s*$/;
+
+/**
+ * Conversational-first guard for POST /workflow/chat.
+ *
+ * Returns true when the message is an ordinary question or explanation
+ * request that must NOT launch the agentic runtime — even when it names a
+ * domain verb ("Bagaimana cara membuat landing page?", "Apa perbedaan
+ * React dan Vue?", "Jelaskan kode ini tanpa mengubahnya").
+ *
+ * An explicit engine override (composer chip) bypasses this guard; the
+ * caller checks the override first.
+ */
+export function isConversationalMessage(message: string): boolean {
+  const text = lower(message).trim();
+  if (!text) return true;
+  if (NO_MODIFY_RE.test(text)) return true;
+  if (EXEC_LEAD_RE.test(text)) return false;
+  if (QUESTION_LEAD_RE.test(text)) return true;
+  if (QUESTION_TAIL_RE.test(text)) return true;
+  return false;
+}
+
 /** "dari <engine> tadi" — explicit engine mention with a continuation word. */
 const ENGINE_MENTION: Array<{ engine: WorkflowEngine; re: RegExp }> = [
   { engine: "slide", re: /\bslide\b/ },
