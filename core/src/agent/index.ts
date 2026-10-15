@@ -119,7 +119,6 @@ export {
 } from './review.ts';
 export {
   CONVERSATIONAL_SYSTEM_PROMPT,
-  DAE_CAPTAIN_PERSONA,
   QUESTION_SYSTEM_PROMPT,
   answerConversational,
   answerQuestion,
