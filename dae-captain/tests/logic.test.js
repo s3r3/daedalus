@@ -19,6 +19,10 @@ import {
   spawnServerArgs,
   engineLabel,
   enabledEngines,
+  parseSlashCommand,
+  freshConversation,
+  runHistoryLine,
+  SLASH_COMMANDS,
   canDisableEngine,
   trustToAutoApprove,
   autoApproveToTrust,
@@ -273,6 +277,53 @@ describe("queueRows approval filter (regression: r.turn crash)", () => {
     const approval = rows.filter((r) => (r.approvals?.length ?? 0) > 0 || (r.questions?.length ?? 0) > 0);
     assert.equal(approval.length, 1);
     assert.equal(approval[0].taskId, "t1");
+  });
+});
+
+describe("parseSlashCommand", () => {
+  it("parses leading commands with args", () => {
+    assert.deepEqual(parseSlashCommand("/clear"), { name: "clear", args: "" });
+    assert.deepEqual(parseSlashCommand("  /status  "), { name: "status", args: "" });
+    assert.deepEqual(parseSlashCommand("/resume 2"), { name: "resume", args: "2" });
+    assert.deepEqual(parseSlashCommand("/HISTORY"), { name: "history", args: "" });
+    assert.deepEqual(parseSlashCommand("/stop now please"), { name: "stop", args: "now please" });
+  });
+  it("ignores slashes mid-sentence (ordinary chat)", () => {
+    assert.equal(parseSlashCommand("What does /clear mean?"), null);
+    assert.equal(parseSlashCommand("a / b"), null);
+    assert.equal(parseSlashCommand("50/50 chance"), null);
+    assert.equal(parseSlashCommand("/"), null);
+    assert.equal(parseSlashCommand(""), null);
+    assert.equal(parseSlashCommand(null), null);
+  });
+  it("covers all seven commands in /help order", () => {
+    assert.deepEqual(SLASH_COMMANDS.map((c) => c.name), ["help", "clear", "new", "history", "resume", "status", "stop"]);
+  });
+});
+
+describe("freshConversation", () => {
+  it("yields a null run id and empty transcript (new server run, no history leak)", () => {
+    assert.deepEqual(freshConversation(), { runId: null, workflowRunId: null, transcript: [] });
+    // A null runId is omitted from the chat body, so the server starts a
+    // run with zero turns — the old transcript can never ride along.
+    assert.deepEqual(chatRequestBody({ message: "halo", workspaceRoot: "/w", runId: null }), {
+      message: "halo", workspace_root: "/w",
+    });
+  });
+});
+
+describe("runHistoryLine", () => {
+  it("summarizes runs for /history", () => {
+    const line = runHistoryLine({ run_id: "r1", turns: [
+      { goal: "buat landing page", status: "done" },
+      { goal: "slide", status: "running" },
+    ] }, 1);
+    assert.ok(line.startsWith("1. buat landing page"));
+    assert.ok(line.includes("2 task"));
+    assert.ok(line.includes("jalan"));
+  });
+  it("handles empty runs", () => {
+    assert.ok(runHistoryLine({ run_id: "r1", turns: [] }, 3).includes("kosong"));
   });
 });
 

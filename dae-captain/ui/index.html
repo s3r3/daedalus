@@ -74,6 +74,7 @@
       </div>
       <div id="action-status" class="action-status"></div>
       <div class="composer">
+        <div id="slash-menu" class="slash-menu hidden"></div>
         <div id="engine-chips" class="engine-chips"></div>
         <div class="composer-row">
           <input id="chat-input" type="text" placeholder="Tanya Dae Captain sesuatu…" autocomplete="off">
@@ -158,6 +159,10 @@
           <button id="set-pick-workspace" class="ghost-btn">Pilih folder</button>
         </div>
 
+        <h3 class="section-header">Koneksi &amp; diagnostik</h3>
+        <p id="set-diag" class="status-line">Belum diperiksa.</p>
+        <button id="set-diag-refresh" class="ghost-btn">Periksa koneksi</button>
+
         <p id="set-status" class="status-line"></p>
         <button id="set-back" class="ghost-btn">← Kembali</button>
       </div>
@@ -185,7 +190,6 @@
 
       <p id="ws-status" class="status-line"></p>
       <button id="ws-back" class="ghost-btn">← Kembali</button>
-    </section>
     </section>
 
     <section id="view-setup" class="hidden">

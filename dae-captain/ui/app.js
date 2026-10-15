@@ -27,6 +27,10 @@ import {
   renderMarkdown,
   activityLabel,
   completionLabel,
+  parseSlashCommand,
+  freshConversation,
+  runHistoryLine,
+  SLASH_COMMANDS,
   THINKING_LEVELS,
 } from "./logic.js";
 
@@ -71,6 +75,8 @@ const state = {
   seenEvents: new Map(), // task_id -> max seq applied (dedupe on reconnect)
   wsSubscribed: false, // wildcard WS subscription done once per workspace
   approvalOpen: false, // latch: auto-expand once per approval batch
+  historyList: [], // run_ids from the last /history listing (for /resume index)
+  slashIndex: -1, // suggestion-menu selection (-1 = none)
 };
 
 // ---------------------------------------------------------------------------
@@ -445,6 +451,14 @@ async function sendChat(message, override) {
   const text = (message ?? $("chat-input").value).trim();
   if (!text) return;
   $("chat-input").value = "";
+  hideSlashMenu();
+  // Local control commands never reach the model as user messages.
+  const cmd = parseSlashCommand(text);
+  if (cmd) {
+    await handleSlashCommand(cmd);
+    renderTranscript();
+    return;
+  }
   state.transcript.push({ kind: "user", text });
   renderTranscript();
   try {
@@ -496,6 +510,244 @@ async function sendChat(message, override) {
   }
   renderTranscript();
   await refreshRuns();
+}
+
+// ---------------------------------------------------------------------------
+// Slash commands (local control — never sent to the model)
+// ---------------------------------------------------------------------------
+
+function pushAssistant(text) {
+  state.transcript.push({ kind: "assistant", text });
+}
+
+async function handleSlashCommand({ name, args }) {
+  // Echo the typed command so the transcript shows what ran — except
+  // clear/new, which wipe the view by definition.
+  if (name !== "clear" && name !== "new") {
+    state.transcript.push({ kind: "user", text: "/" + name + (args ? " " + args : "") });
+  }
+  switch (name) {
+    case "help":
+      pushAssistant("Perintah yang tersedia:\n" + SLASH_COMMANDS.map((c) => `${c.usage} — ${c.description}`).join("\n"));
+      break;
+    case "clear":
+    case "new":
+      clearConversation();
+      break;
+    case "history":
+      await showHistory();
+      break;
+    case "resume":
+      await resumeConversation(args);
+      break;
+    case "status":
+      showStatus();
+      break;
+    case "stop":
+      await stopConversationTask();
+      break;
+    default:
+      state.transcript.push({ kind: "error", text: `Perintah tidak dikenal: /${name} — ketik /help untuk daftar perintah.` });
+      break;
+  }
+  updateStopButton();
+}
+
+/**
+ * Start a genuinely fresh conversation: new server run on the next message
+ * (runId null → the server creates a run with zero turns, so no old
+ * transcript, artifacts, or reasoning can leak into the new model context).
+ * Workspace, settings, engine override, stored runs, files, and running
+ * tasks are all preserved — a new chat is NOT a task cancel.
+ */
+function clearConversation() {
+  const running = state.transcript.filter((m) => m.kind === "turn" && m.taskId && !m.activityDone);
+  const fresh = freshConversation();
+  state.runId = fresh.runId;
+  state.workflowRunId = fresh.workflowRunId;
+  state.transcript = fresh.transcript;
+  state.pendingMessage = null;
+  state.pendingOverride = null;
+  state.historyList = [];
+  let text = "Percakapan baru dimulai. Workspace dan pengaturan tetap sama; riwayat lama tersimpan dan bisa dibuka via /history.";
+  if (running.length) {
+    text += ` ${running.length} task masih berjalan di latar dan TIDAK dibatalkan — pantau di Antrean atau hentikan via /stop.`;
+  }
+  pushAssistant(text);
+}
+
+/** List previous workflow runs (real backend data, newest first). */
+async function showHistory() {
+  await refreshRuns();
+  const runs = (state.runs ?? []).slice(0, 10);
+  state.historyList = runs.map((r) => r.run_id);
+  if (!runs.length) {
+    pushAssistant("Belum ada percakapan tersimpan di workspace ini.");
+    return;
+  }
+  const lines = runs.map((r) => runHistoryLine(r, state.historyList.indexOf(r.run_id) + 1));
+  pushAssistant("Percakapan sebelumnya (pakai /resume <nomor|id>):\n" + lines.join("\n"));
+}
+
+/**
+ * Resume a previous run explicitly. The run's turns reload as transcript
+ * history and the next message continues in that same run — nothing is
+ * resubmitted or restarted.
+ */
+async function resumeConversation(args) {
+  await refreshRuns();
+  const runs = state.runs ?? [];
+  let run = null;
+  if (!args) {
+    pushAssistant("Pilih targetnya: /history dulu, lalu /resume <nomor> — mis. /resume 1.");
+    return;
+  }
+  const byIndex = /^\d+$/.test(args) ? runs[Number(args) - 1] : null;
+  const matches = runs.filter((r) => r.run_id.startsWith(args));
+  run = byIndex ?? (matches.length === 1 ? matches[0] : null);
+  if (!run) {
+    const detail = !byIndex && matches.length > 1
+      ? ` — "${args}" cocok dengan ${matches.length} sesi, tulis id lebih lengkap.`
+      : !byIndex ? ` — tidak ada sesi berawalan "${args}".` : ` — hanya ada ${runs.length} sesi tersimpan.`;
+    state.transcript.push({ kind: "error", text: "Tidak bisa resume" + detail + " Lihat /history." });
+    return;
+  }
+  try {
+    const data = await state.api.workflowRun(run.run_id, state.workspaceRoot);
+    const full = data.run;
+    state.runId = full.run_id;
+    state.workflowRunId = full.run_id;
+    state.historyList = [];
+    state.transcript = [];
+    for (const t of full.turns ?? []) {
+      state.transcript.push({
+        kind: "turn",
+        engine: t.engine,
+        goal: t.goal,
+        resolved: t.artifacts,
+        staged: false,
+        taskId: t.task_id ?? null,
+        turnId: t.turn_id ?? null,
+        activity: null,
+        activityKey: "",
+        activityDone: t.status !== "running",
+      });
+    }
+    pushAssistant(`Membuka percakapan ${full.run_id.slice(0, 8)} — ${(full.turns ?? []).length} pesan dimuat. Pesan berikutnya lanjut di sesi ini.`);
+  } catch (e) {
+    state.transcript.push({ kind: "error", text: "Gagal membuka sesi: " + errText(e) });
+  }
+}
+
+/** Current workspace, session, and real task/connection state. */
+function showStatus() {
+  const runs = state.runs ?? [];
+  let running = 0;
+  let attention = 0;
+  for (const r of runs) {
+    for (const t of r.turns ?? []) {
+      if (t.status === "running") running++;
+      attention += (t.pending_approvals ?? []).length + (t.pending_questions ?? []).length;
+    }
+  }
+  pushAssistant(
+    `Status:\n- Workspace: ${state.workspaceRoot || "(belum dipilih)"}\n` +
+    `- Sesi: ${state.runId ? state.runId.slice(0, 8) : "(baru — belum ada pesan)"}\n` +
+    `- Koneksi: ${state.connected ? "terhubung" : "terputus"}\n` +
+    `- Sesi tersimpan: ${runs.length}, task berjalan: ${running}, butuh perhatian: ${attention}`
+  );
+}
+
+/**
+ * Cancel the running task(s) of THIS conversation via the real
+ * POST /tasks/:id/cancel endpoint. Reports each outcome honestly —
+ * never claims a cancel that failed, and never touches other runs.
+ */
+async function stopConversationTask() {
+  const turns = [...state.transcript].reverse().filter(
+    (m) => m.kind === "turn" && m.taskId && !m.activityDone
+  );
+  if (!turns.length) {
+    pushAssistant("Tidak ada task berjalan di percakapan ini. (Ini bukan clear chat — pakai /clear untuk sesi baru.)");
+    return;
+  }
+  const results = [];
+  for (const t of turns) {
+    try {
+      const res = await state.api.cancelTask(t.taskId);
+      // 200 = the cancel marker is recorded (a live runner is also
+      // signalled when present); either way the task will not continue.
+      t.activityDone = true;
+      results.push(`${engineLabel(t.engine)}: ${res?.cancelled ? "dibatalkan" : "permintaan batal tercatat"}`);
+    } catch (e) {
+      results.push(`${engineLabel(t.engine)}: gagal (${errText(e)})`);
+    }
+  }
+  pushAssistant("Stop:\n- " + results.join("\n- "));
+  await refreshRuns();
+}
+
+// ---------------------------------------------------------------------------
+// Slash suggestion menu (compact, island-style)
+// ---------------------------------------------------------------------------
+
+function hideSlashMenu() {
+  state.slashIndex = -1;
+  $("slash-menu")?.classList.add("hidden");
+}
+
+function matchingSlashCommands(prefix) {
+  const p = (prefix ?? "").toLowerCase();
+  return SLASH_COMMANDS.filter((c) => c.name.startsWith(p));
+}
+
+function renderSlashMenu() {
+  const box = $("slash-menu");
+  const input = $("chat-input");
+  if (!box || !input) return;
+  const m = /^\s*\/([a-z]*)$/i.exec(input.value);
+  if (!m || document.activeElement !== input) {
+    hideSlashMenu();
+    return;
+  }
+  const list = matchingSlashCommands(m[1]);
+  if (!list.length) {
+    hideSlashMenu();
+    return;
+  }
+  if (state.slashIndex < 0 || state.slashIndex >= list.length) state.slashIndex = 0;
+  box.innerHTML = "";
+  list.forEach((c, i) => {
+    const el = document.createElement("button");
+    el.className = "slash-item" + (i === state.slashIndex ? " active" : "");
+    el.innerHTML = `<span class="slash-name">/${escapeHtml(c.name)}</span> <span class="hint">${escapeHtml(c.description)}</span>`;
+    el.onmousedown = (e) => {
+      e.preventDefault(); // keep focus so Enter still sends
+      applySlashCompletion(c.name);
+    };
+    box.appendChild(el);
+  });
+  box.classList.remove("hidden");
+}
+
+function applySlashCompletion(name) {
+  const input = $("chat-input");
+  if (!input) return;
+  input.value = "/" + name + " ";
+  hideSlashMenu();
+  input.focus();
+}
+
+function slashMenuOpen() {
+  return !!$("slash-menu") && !$("slash-menu").classList.contains("hidden");
+}
+
+function stepSlashMenu(delta) {
+  const m = /^\s*\/([a-z]*)$/i.exec($("chat-input")?.value ?? "");
+  const list = matchingSlashCommands(m?.[1] ?? "");
+  if (!list.length) return;
+  state.slashIndex = ((state.slashIndex < 0 ? 0 : state.slashIndex) + delta + list.length) % list.length;
+  renderSlashMenu();
 }
 
 // ---------------------------------------------------------------------------
@@ -1324,6 +1576,12 @@ async function boot() {
 
   bootStatus("Siap.");
   showView("main");
+  // Fresh conversation by default: the transcript is memory-only and runId
+  // is never restored from prefs, so reopening the app never resumes an
+  // old session, resubmits a task, or injects old history into the model.
+  // refreshRuns() below only loads MONITORING state (past runs stay visible
+  // in Antrean / /history; vanished tasks reconcile as failed, never restart).
+  // Use /history + /resume to explicitly reopen a previous session.
   if (!state.transcript.length) {
     state.transcript.push({
       kind: "assistant",
@@ -1396,7 +1654,33 @@ function bindEvents() {
   });
 
   bindGuarded("chat-send", "click", () => sendChat());
-  bindGuarded("chat-input", "keydown", (e) => { if (e.key === "Enter") sendChat(); });
+  bindGuarded("chat-input", "keydown", (e) => {
+    if (slashMenuOpen()) {
+      if (e.key === "ArrowDown") { e.preventDefault(); stepSlashMenu(1); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); stepSlashMenu(-1); return; }
+      if (e.key === "Escape") { e.preventDefault(); hideSlashMenu(); return; }
+      if (e.key === "Tab" || e.key === "Enter") {
+        const m = /^\s*\/([a-z]*)$/i.exec($("chat-input")?.value ?? "");
+        const list = matchingSlashCommands(m?.[1] ?? "");
+        // Tab always completes; Enter completes a partial prefix,
+        // and sends only when a full command is already typed.
+        if (e.key === "Tab" || (m && m[1] && !list.some((c) => c.name === m[1].toLowerCase()))) {
+          e.preventDefault();
+          const pick = list[state.slashIndex] ?? list[0];
+          if (pick) applySlashCompletion(pick.name);
+          return;
+        }
+      }
+    }
+    if (e.key === "Enter") sendChat();
+  });
+  // Slash suggestion menu (separate listener so it never clobbers keydown).
+  {
+    const ci = $("chat-input");
+    ci?.addEventListener("input", renderSlashMenu);
+    ci?.addEventListener("blur", () => setTimeout(hideSlashMenu, 120));
+    ci?.addEventListener("focus", renderSlashMenu);
+  }
   bindGuarded("chat-stop", "click", async () => {
     const turn = [...state.transcript].reverse().find(
       (m) => m.kind === "turn" && m.taskId && !m.activityDone

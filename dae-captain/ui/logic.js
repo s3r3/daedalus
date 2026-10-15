@@ -40,7 +40,52 @@ export function statusColor(status) {
   return status === "attention" ? "amber" : status === "working" ? "green" : "blue";
 }
 
-/** Compact pill text: "!" when attention needed, else running count. */
+/**
+ * Truthful short label for the pill/working state, derived from real run
+ * data — never a fabricated percentage. Maps the server's last event type
+ * and any pending item onto a plain-language activity word.
+ */
+export function activityLabel(runs, agg) {
+  if (agg.status === "attention") {
+    const approvals = (runs ?? []).flatMap((r) => (r.turns ?? []).flatMap((t) => t.pending_approvals ?? [])).length;
+    const questions = (runs ?? []).flatMap((r) => (r.turns ?? []).flatMap((t) => t.pending_questions ?? [])).length;
+    if (approvals > 0) return approvals > 1 ? approvals + " butuh izin" : "Butuh izin";
+    if (questions > 0) return questions > 1 ? questions + " pertanyaan" : "Ada pertanyaan";
+    return "Butuh perhatian";
+  }
+  if (agg.status === "working") {
+    const last = (runs ?? [])
+      .flatMap((r) => (r.turns ?? []))
+      .filter((t) => t.status === "running")
+      .map((t) => t.last_event ?? "")
+      .sort()
+      .at(-1) ?? "";
+    if (/TOOL_CALL_STARTED/i.test(last)) return "Menjalankan alat";
+    if (/FILE_CHANGED/i.test(last)) return "Mengubah file";
+    if (/COMMAND|TEST/i.test(last)) return "Menjalankan tes";
+    if (/THOUGHT|MODEL|LLM/i.test(last)) return "Berpikir";
+    if (last) return "Bekerja";
+    return agg.running > 1 ? agg.running + " agent berjalan" : "Bekerja";
+  }
+  return "Siap";
+}
+
+/** Status text for a finished run: done/failed/cancelled from real status. */
+export function completionLabel(runs) {
+  let failed = 0;
+  let done = 0;
+  for (const run of runs ?? []) {
+    for (const t of run.turns ?? []) {
+      if (t.status === "failed") failed++;
+      else if (t.status === "done") done++;
+    }
+  }
+  if (failed > 0) return failed > 1 ? failed + " gagal" : "Gagal";
+  if (done > 0) return done > 1 ? done + " selesai" : "Selesai";
+  return "";
+}
+
+/** Stable pill text: status label when active, else empty (idle). */
 export function pillText(agg) {
   if (agg.status === "attention") return "!";
   if (agg.status === "working") return String(agg.running);
@@ -64,13 +109,17 @@ export function formatResolvedArtifacts(resolved) {
   if (!Array.isArray(resolved) || resolved.length === 0) return [];
   return resolved.map((a) => {
     const label = a.label ?? a.kind ?? "artifact";
-    const path = a.path ?? a.export_path ?? null;
+    // absolute_path wins: it is the only form open_file/reveal_in_folder can
+    // actually act on. A bare relative path would silently do nothing.
+    const path = a.absolute_path ?? a.path ?? a.export_path ?? null;
     const url = a.url ?? null;
     const where = path ?? (a.report_id ? `report ${a.report_id}` : url ?? "");
     return {
       label,
-      path, // absolute path for open_file/reveal_in_folder
+      path,
       url,
+      // Relative form (when available) is nicer to read than a long absolute.
+      displayPath: a.path ?? a.absolute_path ?? a.export_path ?? "",
       display: where ? `${label} — ${where}` : label,
     };
   });
@@ -259,6 +308,46 @@ export function summarizeTaskEvents(events) {
     }
   }
   return { thoughts, tools: [...tools.values()] };
+}
+
+/**
+ * Slash commands (local control commands — never sent to the model).
+ * Handlers live in app.js; this table drives /help and the suggestion menu.
+ */
+export const SLASH_COMMANDS = [
+  { name: "help", usage: "/help", description: "Tampilkan daftar perintah." },
+  { name: "clear", usage: "/clear", description: "Mulai percakapan baru (riwayat tersimpan, task jalan terus)." },
+  { name: "new", usage: "/new", description: "Sama seperti /clear — sesi baru yang terisolasi." },
+  { name: "history", usage: "/history", description: "Tampilkan percakapan sebelumnya." },
+  { name: "resume", usage: "/resume <nomor|id>", description: "Buka lagi percakapan sebelumnya." },
+  { name: "status", usage: "/status", description: "Workspace, sesi, dan status task saat ini." },
+  { name: "stop", usage: "/stop", description: "Hentikan task yang berjalan (bukan clear chat)." },
+];
+
+/**
+ * Parse a slash command. Returns null for ordinary messages — including
+ * sentences that merely MENTION a slash ("What does /clear mean?", "a / b").
+ * Only a leading "/name" (after trimming) counts as a command.
+ */
+export function parseSlashCommand(input) {
+  const m = /^\s*\/([A-Za-z]+)(?:\s+([\s\S]*))?\s*$/.exec(input ?? "");
+  if (!m) return null;
+  return { name: m[1].toLowerCase(), args: (m[2] ?? "").trim() };
+}
+
+/** Fresh client conversation: new server run on next message, empty view. */
+export function freshConversation() {
+  return { runId: null, workflowRunId: null, transcript: [] };
+}
+
+/** One-line summary of a workflow run for the /history listing. */
+export function runHistoryLine(run, index) {
+  const turns = run?.turns ?? [];
+  const firstGoal = turns[0]?.goal ?? "(obrolan)";
+  const running = turns.filter((t) => t.status === "running").length;
+  const failed = turns.filter((t) => t.status === "failed").length;
+  const state = running > 0 ? "jalan" : failed > 0 ? "gagal" : turns.length ? "selesai" : "kosong";
+  return `${index}. ${firstGoal} — ${turns.length} task, ${state}`;
 }
 
 /** Short human-readable arg summary for a tool call (mockup: "./", "package.json"). */

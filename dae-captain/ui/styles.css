@@ -196,7 +196,20 @@ h3 { font-size: 12px; color: var(--dim); margin: 12px 0 6px; }
 .action-status.error { color: var(--red); }
 
 /* ---- Composer ---- */
-.composer { border-top: 1px solid var(--line); padding-top: 8px; margin-top: auto; }
+.composer { border-top: 1px solid var(--line); padding-top: 8px; margin-top: auto; position: relative; }
+/* ---- Slash suggestion menu (compact, above the composer) ---- */
+.slash-menu {
+  position: absolute; left: 0; right: 0; bottom: 100%; margin-bottom: 6px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.5); overflow: hidden; z-index: 5;
+}
+.slash-item {
+  display: flex; gap: 8px; align-items: baseline; width: 100%; text-align: left;
+  background: transparent; border: 0; color: var(--text); padding: 7px 12px;
+}
+.slash-item + .slash-item { border-top: 1px solid var(--line); }
+.slash-item.active { background: var(--bubble-user); }
+.slash-name { font-weight: 700; color: var(--accent); white-space: nowrap; }
 .engine-chips { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
 .engine-chips button {
   background: transparent; border: 1px solid var(--line); color: var(--dim);

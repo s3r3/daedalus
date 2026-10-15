@@ -135,6 +135,20 @@ describe('POST /workflow/chat', () => {
     }
   })
 
+  test('messages without run_id start isolated runs (/clear session boundary)', async () => {
+    const { base } = await listen()
+    const first = await postChat(base, { message: 'halo' })
+    const second = await postChat(base, { message: 'halo lagi' })
+    expect(first.status).toBe(200)
+    expect(second.status).toBe(200)
+    // Distinct server runs: the second message carries no turns from the first.
+    expect(first.body.run_id).not.toBe(second.body.run_id)
+
+    const res = await fetch(new URL('/workflow/runs', base))
+    const body = (await res.json()) as { runs: Array<{ run_id: string; turns: unknown[] }> }
+    expect(body.runs).toHaveLength(2)
+  })
+
   test('explicit execution requests still dispatch', async () => {
     const { base } = await listen()
     const { status, body } = await postChat(base, {

@@ -3,6 +3,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { createApiClient } from "../ui/api.js";
+import { pendingApprovals } from "../ui/logic.js";
 
 function mockFetch(handler) {
   const calls = [];
@@ -81,5 +82,68 @@ describe("createApiClient", () => {
     await api.getModels("nine-router");
     assert.ok(calls[0].url.includes("/models?"));
     assert.ok(calls[0].url.includes("provider_id=nine-router"));
+  });
+
+  it("sends the daemon token as a Bearer header when provided", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({ success: true }));
+    const api = createApiClient({
+      baseUrl: "http://127.0.0.1:3080",
+      fetchImpl,
+      getToken: async () => "tok-123",
+    });
+    await api.approve("task-1", { decision: "grant" });
+    assert.equal(calls[0].init.headers.authorization, "Bearer tok-123");
+  });
+
+  it("omits the auth header when no token is available", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({ success: true }));
+    const api = createApiClient({
+      baseUrl: "http://127.0.0.1:3080",
+      fetchImpl,
+      getToken: async () => null,
+    });
+    await api.cancelTask("task-1");
+    assert.ok(!("authorization" in (calls[0].init.headers ?? {})));
+  });
+
+  it("cancelTask posts to the task cancel route (/stop)", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({ cancelled: true, cancel_requested: true }));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    const res = await api.cancelTask("task-9");
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/tasks/task-9/cancel");
+    assert.equal(calls[0].init.method, "POST");
+    assert.equal(res.cancelled, true);
+  });
+
+  it("decideApproval resolves by id (survives runner restart)", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({ success: true, decision: "grant" }));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await api.decideApproval("task-1", "appr-9", { decision: "grant" });
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/tasks/task-1/approvals/appr-9");
+    assert.deepEqual(JSON.parse(calls[0].init.body), { decision: "grant" });
+  });
+
+  it("answerQuestion posts the answer to the id-addressed route", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({ success: true }));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await api.answerQuestion("task-2", "q-7", "gunakan Tailwind");
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/tasks/task-2/questions/q-7");
+    assert.deepEqual(JSON.parse(calls[0].init.body), { answer: "gunakan Tailwind" });
+  });
+
+  it("url-encodes ids so paths cannot be broken by special chars", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({ success: true }));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await api.decideApproval("t/1", "a b", { decision: "deny" });
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/tasks/t%2F1/approvals/a%20b");
+  });
+
+  it("no approval-gating: pendingApprovals reads live run turns", () => {
+    const runs = [
+      { run_id: "r1", turns: [{ status: "done", pending_approvals: [], pending_questions: [] }] },
+      { run_id: "r2", turns: [{ status: "running", task_id: "t-9", pending_approvals: [{ key: "k" }], pending_questions: [] }] },
+    ];
+    assert.equal(pendingApprovals(runs).length, 1);
+    assert.equal(pendingApprovals(runs)[0].taskId, "t-9");
   });
 });
