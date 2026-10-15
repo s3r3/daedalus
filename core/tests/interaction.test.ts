@@ -243,6 +243,19 @@ describe('provider chat error handling', () => {
   });
 });
 
+describe('provider presets', () => {
+  test('every preset has a unique id and an http(s) base URL (or empty for custom)', async () => {
+    const { PROVIDER_PRESETS } = await import('../src/interaction/providers.ts');
+    const ids = PROVIDER_PRESETS.map((p) => p.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    for (const preset of PROVIDER_PRESETS) {
+      expect(preset.baseUrl === '' || /^https?:\/\//.test(preset.baseUrl)).toBe(true);
+    }
+    const local = PROVIDER_PRESETS.find((p) => p.id === 'nine-router-local');
+    expect(local?.baseUrl).toBe('http://localhost:20128/v1');
+  });
+});
+
 describe('provider registry', () => {
   test('masks API keys and discovers models through a real /models call', async () => {
     const registry = new ProviderRegistry(async (input) => {

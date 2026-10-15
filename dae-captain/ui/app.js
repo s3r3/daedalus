@@ -1826,14 +1826,18 @@ async function runDiagnostics() {
 }
 
 /**
- * One-click preset fill: ID/name/URL from the server's real preset list.
- * The key is still typed by hand, then Test koneksi proves it for real.
+ * Preset shortcuts from the server's real preset list. Clicking the name
+ * fills the form (the key is still typed by hand); the "+" creates the
+ * entry immediately without a key, so an empty registry stops being a
+ * dead end — Test koneksi then proves the key for real.
  */
 function renderProviderPresets(presets) {
   const box = $("prov-presets");
   if (!box) return;
   box.innerHTML = "";
   for (const preset of presets.filter((p) => p.id !== "custom")) {
+    const wrap = document.createElement("span");
+    wrap.className = "preset-wrap";
     const b = document.createElement("button");
     b.className = "ghost-btn small";
     b.textContent = preset.name ?? preset.id;
@@ -1844,7 +1848,31 @@ function renderProviderPresets(presets) {
       $("prov-url").value = preset.baseUrl ?? "";
       $("prov-key").focus?.();
     };
-    box.appendChild(b);
+    const add = document.createElement("button");
+    add.className = "ghost-btn small";
+    add.textContent = "+";
+    add.title = `Langsung tambah ${preset.name ?? preset.id} (tanpa kunci)`;
+    add.onclick = () => addPresetProvider(preset);
+    wrap.append(b, add);
+    box.appendChild(wrap);
+  }
+}
+
+/** Direct-add a preset as a keyless entry, then reload the real list. */
+async function addPresetProvider(preset) {
+  const status = $("set-status");
+  try {
+    await state.api.createProvider({
+      id: preset.id,
+      name: preset.name ?? preset.id,
+      baseUrl: preset.baseUrl ?? "",
+    });
+    status.className = "status-line ok";
+    status.textContent = `${preset.name ?? preset.id} ditambahkan tanpa kunci — isi key, Test koneksi, lalu Simpan.`;
+    await loadSettingsView();
+  } catch (e) {
+    status.className = "status-line error";
+    status.textContent = "Gagal: " + errText(e);
   }
 }
 
@@ -2548,7 +2576,9 @@ function bindEvents() {
     const id = $("prov-id").value.trim();
     if (!id) { status.textContent = "Isi ID dulu."; return; }
     try {
-      // simpan dulu (upsert), lalu test — pola yang sama dipakai Web UI
+      // simpan dulu (upsert), lalu test — pola yang sama dipakai Web UI.
+      // List selalu dimuat ulang akhirnya: entry yang tersimpan harus
+      // terlihat bahkan ketika tes koneksinya gagal.
       await state.api.createProvider({
         id,
         name: $("prov-name").value.trim() || id,
@@ -2558,11 +2588,12 @@ function bindEvents() {
       const res = await state.api.testProvider(id);
       status.className = "status-line " + (res.ok ? "ok" : "error");
       status.textContent = res.message ?? (res.ok ? "Koneksi OK." : "Koneksi gagal.");
-      if (res.ok) { $("prov-key").value = ""; loadSettingsView(); }
+      if (res.ok) $("prov-key").value = "";
     } catch (e) {
       status.className = "status-line error";
       status.textContent = "Gagal: " + errText(e);
     }
+    await loadSettingsView();
   });
   bindGuarded("prov-save", "click", async () => {
     const status = $("set-status");

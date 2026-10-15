@@ -10,6 +10,7 @@ export type ProviderPreset = { id: string; name: string; baseUrl: string; defaul
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   { id: 'nine-router', name: '9Router (Farid)', baseUrl: 'https://llm.ayid.cc.cd/v1', supportsVision: true },
+  { id: 'nine-router-local', name: '9Router (lokal)', baseUrl: 'http://localhost:20128/v1', supportsVision: true },
   { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', supportsVision: true },
   { id: 'openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', supportsVision: true },
   { id: 'groq', name: 'Groq', baseUrl: 'https://api.groq.com/openai/v1' },
