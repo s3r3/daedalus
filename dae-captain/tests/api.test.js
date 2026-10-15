@@ -115,6 +115,33 @@ describe("createApiClient", () => {
     assert.equal(res.cancelled, true);
   });
 
+  it("workflowChatStream accumulates SSE deltas into the done text", async () => {
+    const sse = 'data: {"delta":"Hel"}\n\ndata: {"delta":"lo"}\n\ndata: {"done":true,"run_id":"r1","text":"Hello"}\n\n';
+    const fetchImpl = async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    const seen = [];
+    const res = await api.workflowChatStream({ message: "halo" }, (d) => seen.push(d));
+    assert.deepEqual(seen, ["Hel", "lo"]);
+    assert.deepEqual(res, { kind: "chat", text: "Hello", run_id: "r1" });
+  });
+
+  it("workflowChatStream passes dispatch JSON through untouched", async () => {
+    const payload = { engine: "coding", task_id: "t1", run_id: "r1" };
+    const fetchImpl = async () => new Response(JSON.stringify(payload), { status: 201, headers: { "content-type": "application/json" } });
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    assert.deepEqual(await api.workflowChatStream({ message: "buatkan x" }), payload);
+  });
+
+  it("workflowChatStream throws with .partial when the model fails mid-stream", async () => {
+    const sse = 'data: {"delta":"Hel"}\n\ndata: {"error":"model_unavailable"}\n\n';
+    const fetchImpl = async () => new Response(sse, { status: 200, headers: { "content-type": "text/event-stream" } });
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await assert.rejects(api.workflowChatStream({ message: "halo" }), (e) => {
+      assert.equal(e.partial, "Hel");
+      return true;
+    });
+  });
+
   it("decideApproval resolves by id (survives runner restart)", async () => {
     const { fetchImpl, calls } = mockFetch(() => ok({ success: true, decision: "grant" }));
     const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });

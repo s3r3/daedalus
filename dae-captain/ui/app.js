@@ -33,6 +33,8 @@ import {
   questionOptions,
   questionText,
   questionAllowsFreeText,
+  validateAttachmentPick,
+  CHAT_ATTACH_LIMITS,
   SLASH_COMMANDS,
   THINKING_LEVELS,
 } from "./logic.js";
@@ -73,6 +75,7 @@ const state = {
   serverUrl: "http://127.0.0.1:3080",
   pendingMessage: null, // work command waiting for a workspace pick
   pendingOverride: null,
+  pendingAttachments: [], // queued composer attachments (cleared on send/clear)
   wfFilter: "all", // antrean filter: all|running|approval|done|failed
   connected: false, // event-stream/HTTP health (honest pill + header status)
   seenEvents: new Map(), // task_id -> max seq applied (dedupe on reconnect)
@@ -339,22 +342,52 @@ function renderTurnActivity(activity) {
 
 function renderTranscript() {  const box = $("transcript");
   box.innerHTML = "";
-  for (const m of state.transcript.slice(-30)) {
+  const visible = state.transcript.slice(-30);
+  // Regenerate is offered on the latest in-session chat answer only —
+  // resumed history has no attachment bytes and tasks have their own flow.
+  let lastAssistantIdx = -1;
+  visible.forEach((m, i) => {
+    if (m.kind === "assistant" && m.session && !m.streaming) lastAssistantIdx = i;
+  });
+  visible.forEach((m, i) => {
     const el = document.createElement("div");
     if (m.kind === "user") {
       el.className = "bubble user";
       el.innerHTML = `<div class="body">${escapeHtml(m.text)}</div>`;
+      if (m.attachments?.length) {
+        const chips = document.createElement("div");
+        chips.className = "msg-attachments";
+        for (const a of m.attachments) {
+          const chip = document.createElement("span");
+          chip.className = "attach-chip static";
+          chip.textContent = `${a.kind === "image" ? "🖼" : "📄"} ${a.name}`;
+          chips.appendChild(chip);
+        }
+        el.appendChild(chips);
+      }
     } else if (m.kind === "turn" || m.kind === "assistant") {
       el.className = "bubble assistant";
       const who = m.kind === "assistant" ? "Dae Captain" : engineLabel(m.engine);
       const arts = formatResolvedArtifacts(m.resolved);
+      // Streaming answers render as plain text with a caret (cheap per
+      // delta); the Markdown pass runs once the stream finishes.
       // Assistant chat messages render Markdown; turn goals stay plain.
-      const bodyHtml = m.kind === "assistant" ? renderMarkdown(m.text) : escapeHtml(m.goal);
+      const bodyHtml = m.kind === "assistant"
+        ? (m.streaming ? escapeHtml(m.text) + `<span class="stream-caret">▍</span>` : renderMarkdown(m.text))
+        : escapeHtml(m.goal);
       el.innerHTML = `
         <div class="who">${escapeHtml(who)}</div>
         <div class="body">${bodyHtml}</div>
         ${m.staged ? `<div class="note">Staged — menunggu gate di Web UI / aplikasi.</div>` : ""}
         ${arts.length ? `<div class="artifacts"></div>` : ""}`;
+      if (m.kind === "assistant" && i === lastAssistantIdx) {
+        const regen = document.createElement("button");
+        regen.className = "ghost-btn small regen-btn";
+        regen.textContent = "↻ Coba lagi";
+        regen.title = "Minta jawaban baru untuk pesan ini";
+        regen.onclick = () => regenerateAssistant(m);
+        el.appendChild(regen);
+      }
       // Render artifact cards with Open/Reveal actions. Only entries that
       // carry a real path or URL get a card — no fake download cards.
       if (arts.length) {
@@ -444,7 +477,7 @@ function renderTranscript() {  const box = $("transcript");
       }
     }
     box.appendChild(el);
-  }
+  });
   box.scrollTop = box.scrollHeight;
 }
 
@@ -466,6 +499,63 @@ function renderEngineChips() {
   for (const e of enabledEngines(disabled)) mk(e, engineLabel(e));
 }
 
+/** Map one chat-route response onto transcript entries (shared by send/regenerate). */
+async function handleChatResponse(res, { text, override, attachments }) {
+  if (isClarifyResponse(res)) {
+    state.runId = res.run_id ?? state.runId;
+    state.transcript.push({ kind: "clarify", text: res.message, options: res.options, original: text });
+  } else if (res.kind === "chat") {
+    // Chat-first: a conversational reply, no engine, no task.
+    state.runId = res.run_id ?? state.runId;
+    state.transcript.push({ kind: "assistant", text: res.text, session: true });
+  } else if (res.kind === "need_workspace") {
+    // Workspace on-demand: the command needs a folder. Remember the
+    // original message, show the picker, retry after the user picks.
+    state.runId = res.run_id ?? state.runId;
+    state.pendingMessage = text;
+    state.pendingOverride = override ?? state.engineOverride;
+    state.pendingAttachments = attachments;
+    state.transcript.push({ kind: "assistant", text: res.message ?? "Pilih folder workspace dulu." });
+    renderTranscript();
+    showView("workspace");
+    renderRecentWorkspaces();
+  } else {
+    state.runId = res.run_id ?? state.runId;
+    state.transcript.push({
+      kind: "turn",
+      engine: res.engine,
+      goal: text,
+      router: res.router,
+      resolved: res.resolved_artifacts,
+      staged: res.staged === true,
+      taskId: res.task_id ?? null,
+      turnId: res.turn_id ?? null,
+      activity: null,
+      activityKey: "",
+      activityDone: false,
+    });
+    updateStopButton();
+  }
+}
+
+function chatBody(text, override, attachments, extra) {
+  const body = chatRequestBody({
+    message: text,
+    runId: state.runId,
+    workspaceRoot: state.workspaceRoot,
+    engineOverride: override ?? state.engineOverride,
+  });
+  if (attachments?.length) {
+    body.attachments = attachments.map((a) => ({
+      name: a.name,
+      mime: a.mime,
+      ...(a.data_url ? { data_url: a.data_url } : {}),
+      ...(a.text ? { text: a.text } : {}),
+    }));
+  }
+  return { ...body, ...(extra ?? {}) };
+}
+
 async function sendChat(message, override) {
   const text = (message ?? $("chat-input").value).trim();
   if (!text) return;
@@ -478,54 +568,96 @@ async function sendChat(message, override) {
     renderTranscript();
     return;
   }
-  state.transcript.push({ kind: "user", text });
+  const attachments = takeQueuedAttachments();
+  state.transcript.push({ kind: "user", text, attachments });
   renderTranscript();
+  // Live placeholder: fills token-by-token while the server streams, then
+  // becomes the final message (or is dropped for dispatch outcomes).
+  const live = { kind: "assistant", text: "", streaming: true };
+  state.transcript.push(live);
+  renderTranscript();
+  const dropLive = () => {
+    const i = state.transcript.indexOf(live);
+    if (i >= 0) state.transcript.splice(i, 1);
+  };
   try {
-    const res = await state.api.workflowChat(
-      chatRequestBody({
-        message: text,
-        runId: state.runId,
-        workspaceRoot: state.workspaceRoot,
-        engineOverride: override ?? state.engineOverride,
-      })
+    const res = await state.api.workflowChatStream(
+      chatBody(text, override, attachments),
+      (delta) => {
+        live.text += delta;
+        renderTranscript();
+      },
     );
-    if (isClarifyResponse(res)) {
-      state.runId = res.run_id ?? state.runId;
-      state.transcript.push({ kind: "clarify", text: res.message, options: res.options, original: text });
-    } else if (res.kind === "chat") {
-      // Chat-first: a conversational reply, no engine, no task.
-      state.runId = res.run_id ?? state.runId;
-      state.transcript.push({ kind: "assistant", text: res.text });
-    } else if (res.kind === "need_workspace") {
-      // Workspace on-demand: the command needs a folder. Remember the
-      // original message, show the picker, retry after the user picks.
-      state.runId = res.run_id ?? state.runId;
-      state.pendingMessage = text;
-      state.pendingOverride = override ?? state.engineOverride;
-      state.transcript.push({ kind: "assistant", text: res.message ?? "Pilih folder workspace dulu." });
+    dropLive();
+    await handleChatResponse(res, { text, override, attachments });
+  } catch (e) {
+    dropLive();
+    if (e?.partial) {
+      // The server streamed half an answer, then failed: keep what the
+      // user already saw, labelled honestly, instead of failing blank.
+      state.transcript.push({ kind: "assistant", text: e.partial, session: true });
+      state.transcript.push({ kind: "error", text: "Respons terputus: " + errText(e) });
       renderTranscript();
-      showView("workspace");
-      renderRecentWorkspaces();
+      await refreshRuns();
       return;
-    } else {
+    }
+    // Fallback: plain non-streaming endpoint (older server, SSE-blocking proxy).
+    try {
+      const res = await state.api.workflowChat(chatBody(text, override, attachments));
+      await handleChatResponse(res, { text, override, attachments });
+    } catch (e2) {
+      state.transcript.push({ kind: "error", text: errText(e2) });
+    }
+  }
+  renderTranscript();
+  await refreshRuns();
+}
+
+/**
+ * Regenerate the last in-session assistant answer: same prompt (history
+ * minus that answer, same attachments), fresh completion. Resumed history
+ * has no attachment bytes, so only live-session answers offer this.
+ */
+async function regenerateAssistant(entry) {
+  const idx = state.transcript.indexOf(entry);
+  const userEntry = [...state.transcript.slice(0, idx)].reverse().find((m) => m.kind === "user");
+  if (!userEntry || entry.streaming) return;
+  const oldText = entry.text;
+  entry.text = "";
+  entry.streaming = true;
+  renderTranscript();
+  const body = chatBody(userEntry.text, null, userEntry.attachments ?? [], { regenerate: true });
+  try {
+    const res = await state.api.workflowChatStream(body, (delta) => {
+      entry.text += delta;
+      renderTranscript();
+    });
+    entry.streaming = false;
+    if (res?.kind === "chat") {
       state.runId = res.run_id ?? state.runId;
-      state.transcript.push({
-        kind: "turn",
-        engine: res.engine,
-        goal: text,
-        router: res.router,
-        resolved: res.resolved_artifacts,
-        staged: res.staged === true,
-        taskId: res.task_id ?? null,
-        turnId: res.turn_id ?? null,
-        activity: null,
-        activityKey: "",
-        activityDone: false,
-      });
-      updateStopButton();
+      entry.text = res.text;
+    } else {
+      // Same words re-routed to work (e.g. toggled engine): restore the
+      // old answer and say so instead of swapping in a task silently.
+      entry.text = oldText;
+      state.transcript.push({ kind: "error", text: "Regenerate dialihkan ke task — jawaban lama dipertahankan." });
     }
   } catch (e) {
-    state.transcript.push({ kind: "error", text: errText(e) });
+    try {
+      const res = await state.api.workflowChat(body);
+      entry.streaming = false;
+      if (res?.kind === "chat") {
+        state.runId = res.run_id ?? state.runId;
+        entry.text = res.text;
+      } else {
+        entry.text = oldText;
+        state.transcript.push({ kind: "error", text: "Regenerate dialihkan ke task — jawaban lama dipertahankan." });
+      }
+    } catch (e2) {
+      entry.streaming = false;
+      entry.text = oldText;
+      state.transcript.push({ kind: "error", text: "Regenerate gagal: " + errText(e2) });
+    }
   }
   renderTranscript();
   await refreshRuns();
@@ -587,6 +719,8 @@ function clearConversation() {
   state.transcript = fresh.transcript;
   state.pendingMessage = null;
   state.pendingOverride = null;
+  state.pendingAttachments = [];
+  renderAttachChips();
   state.historyList = [];
   let text = "Percakapan baru dimulai. Workspace dan pengaturan tetap sama; riwayat lama tersimpan dan bisa dibuka via /history.";
   if (running.length) {
@@ -638,21 +772,42 @@ async function resumeConversation(args) {
     state.workflowRunId = full.run_id;
     state.historyList = [];
     state.transcript = [];
+    // Merge engine turns and chat exchanges chronologically. Restored
+    // messages are marked resumed: visible and continuous for the model
+    // (the server kept them), but without regenerate (no attachment bytes).
+    const items = [];
     for (const t of full.turns ?? []) {
-      state.transcript.push({
-        kind: "turn",
-        engine: t.engine,
-        goal: t.goal,
-        resolved: t.artifacts,
-        staged: false,
-        taskId: t.task_id ?? null,
-        turnId: t.turn_id ?? null,
-        activity: null,
-        activityKey: "",
-        activityDone: t.status !== "running",
+      items.push({
+        ts: t.created_at ?? "",
+        entry: {
+          kind: "turn",
+          engine: t.engine,
+          goal: t.goal,
+          resolved: t.artifacts,
+          staged: false,
+          taskId: t.task_id ?? null,
+          turnId: t.turn_id ?? null,
+          activity: null,
+          activityKey: "",
+          activityDone: t.status !== "running",
+          resumed: true,
+        },
       });
     }
-    pushAssistant(`Membuka percakapan ${full.run_id.slice(0, 8)} — ${(full.turns ?? []).length} pesan dimuat. Pesan berikutnya lanjut di sesi ini.`);
+    for (const c of full.chat ?? []) {
+      items.push({
+        ts: c.ts ?? "",
+        entry: {
+          kind: c.role === "user" ? "user" : "assistant",
+          text: c.text,
+          ...(c.role === "user" ? {} : { resumed: true }),
+        },
+      });
+    }
+    items.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
+    for (const item of items) state.transcript.push(item.entry);
+    const loaded = items.length;
+    pushAssistant(`Membuka percakapan ${full.run_id.slice(0, 8)} — ${loaded} pesan dimuat. Pesan berikutnya lanjut di sesi ini.`);
   } catch (e) {
     state.transcript.push({ kind: "error", text: "Gagal membuka sesi: " + errText(e) });
   }
@@ -755,6 +910,79 @@ function applySlashCompletion(name) {
   input.value = "/" + name + " ";
   hideSlashMenu();
   input.focus();
+}
+
+// ---------------------------------------------------------------------------
+// Composer attachments (images → vision, text files → inline excerpt)
+// ---------------------------------------------------------------------------
+
+function renderAttachChips() {
+  const box = $("attach-chips");
+  if (!box) return;
+  box.innerHTML = "";
+  state.pendingAttachments.forEach((a, i) => {
+    const chip = document.createElement("span");
+    chip.className = "attach-chip";
+    chip.innerHTML = `<span>${escapeHtml(a.kind === "image" ? "🖼" : "📄")} ${escapeHtml(a.name)}</span>`;
+    const x = document.createElement("button");
+    x.className = "chip-x";
+    x.textContent = "✕";
+    x.title = "Hapus lampiran";
+    x.onclick = () => {
+      state.pendingAttachments.splice(i, 1);
+      renderAttachChips();
+    };
+    chip.appendChild(x);
+    box.appendChild(chip);
+  });
+}
+
+/** Take (and clear) the queued attachments for one send. */
+function takeQueuedAttachments() {
+  const out = [...state.pendingAttachments];
+  state.pendingAttachments = [];
+  renderAttachChips();
+  const fileInput = $("chat-file");
+  if (fileInput) fileInput.value = "";
+  return out;
+}
+
+function readFileAs(kind, file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("gagal membaca file"));
+    reader.onload = () => resolve(reader.result);
+    if (kind === "image") reader.readAsDataURL(file);
+    else reader.readAsText(file);
+  });
+}
+
+async function queuePickedFiles(files) {
+  for (const file of files ?? []) {
+    if (state.pendingAttachments.length >= CHAT_ATTACH_LIMITS.maxFiles) {
+      state.transcript.push({ kind: "error", text: `Maksimal ${CHAT_ATTACH_LIMITS.maxFiles} lampiran per pesan.` });
+      renderTranscript();
+      break;
+    }
+    const check = validateAttachmentPick({ name: file.name, mime: file.type, sizeBytes: file.size });
+    if (!check.ok) {
+      state.transcript.push({ kind: "error", text: `Lampiran "${file.name}" ditolak: ${check.reason}.` });
+      renderTranscript();
+      continue;
+    }
+    try {
+      const raw = await readFileAs(check.kind, file);
+      state.pendingAttachments.push(
+        check.kind === "image"
+          ? { name: file.name, mime: check.mime, kind: "image", data_url: String(raw) }
+          : { name: file.name, mime: check.mime, kind: "text", text: String(raw).slice(0, CHAT_ATTACH_LIMITS.textMaxChars) },
+      );
+    } catch (e) {
+      state.transcript.push({ kind: "error", text: `Lampiran "${file.name}" gagal dibaca: ${errText(e)}.` });
+      renderTranscript();
+    }
+  }
+  renderAttachChips();
 }
 
 function slashMenuOpen() {
@@ -1447,8 +1675,11 @@ async function setWorkspace(path) {
     if (state.pendingMessage) {
       const msg = state.pendingMessage;
       const ov = state.pendingOverride;
+      const atts = state.pendingAttachments ?? [];
       state.pendingMessage = null;
       state.pendingOverride = null;
+      state.pendingAttachments = [];
+      state.pendingAttachments.push(...atts);
       showView("main");
       await sendChat(msg, ov);
     }
@@ -1673,6 +1904,14 @@ function bindEvents() {
   });
 
   bindGuarded("chat-send", "click", () => sendChat());
+  bindGuarded("chat-attach", "click", () => $("chat-file")?.click());
+  {
+    const fi = $("chat-file");
+    fi?.addEventListener("change", () => {
+      queuePickedFiles(fi.files);
+      fi.value = "";
+    });
+  }
   bindGuarded("chat-input", "keydown", (e) => {
     if (slashMenuOpen()) {
       if (e.key === "ArrowDown") { e.preventDefault(); stepSlashMenu(1); return; }

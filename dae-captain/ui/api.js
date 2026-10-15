@@ -2,6 +2,8 @@
 // `fetchImpl` is injectable so unit tests run without a server.
 // Never logs or stores API keys; the server redacts them.
 
+import { parseStreamLine } from "./logic.js";
+
 export function createApiClient({ baseUrl, fetchImpl, getToken }) {
   const fetchFn = fetchImpl ?? globalThis.fetch?.bind(globalThis);
   if (!fetchFn) throw new Error("no fetch implementation available");
@@ -50,6 +52,14 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
     baseUrl,
     health: () => req("GET", "/health"),
     workflowChat: (body) => req("POST", "/workflow/chat", body),
+    /**
+     * Streaming chat: true token deltas via SSE. Dispatch outcomes come
+     * back as the identical JSON shape (non-SSE content-type) so the
+     * caller handles them exactly like workflowChat responses. Throws on
+     * transport failure; a mid-stream model error throws with `.partial`
+     * carrying whatever the user already saw.
+     */
+    workflowChatStream: (body, onDelta) => streamChat({ baseUrl, fetchImpl, getToken }, body, onDelta),
     workflowRuns: (workspaceRoot) =>
       req("GET", "/workflow/runs", undefined, { workspace_root: workspaceRoot }),
     workflowRun: (id, workspaceRoot) =>
@@ -58,6 +68,10 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
       }),
     approve: (taskId, payload) =>
       req("POST", `/tasks/${encodeURIComponent(taskId)}/approve`, payload),
+    decideApproval: (taskId, approvalId, payload) =>
+      req("POST", `/tasks/${encodeURIComponent(taskId)}/approvals/${encodeURIComponent(approvalId)}`, payload),
+    answerQuestion: (taskId, questionId, answer) =>
+      req("POST", `/tasks/${encodeURIComponent(taskId)}/questions/${encodeURIComponent(questionId)}`, { answer }),
     cancelTask: (taskId) =>
       req("POST", `/tasks/${encodeURIComponent(taskId)}/cancel`),
     taskEvents: (taskId) =>
@@ -69,4 +83,73 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
     testProvider: (id) => req("POST", `/providers/${encodeURIComponent(id)}/test`),
     getModels: (providerId) => req("GET", "/models", undefined, { provider_id: providerId }),
   };
+}
+
+async function streamChat({ baseUrl, fetchImpl, getToken }, body, onDelta) {
+  const fetchFn = fetchImpl ?? globalThis.fetch?.bind(globalThis);
+  if (!fetchFn) throw new Error("no fetch implementation available");
+  const headers = { "content-type": "application/json" };
+  if (getToken) {
+    try {
+      const token = await getToken();
+      if (token) headers["authorization"] = "Bearer " + token;
+    } catch {
+      /* no token — server may still allow (no daemon.json yet) */
+    }
+  }
+  const url = baseUrl.replace(/\/+$/, "") + "/workflow/chat/stream";
+  const res = await fetchFn(url, { method: "POST", headers, body: JSON.stringify(body) });
+  const contentType = res.headers?.get("content-type") ?? "";
+  if (!contentType.includes("text/event-stream")) {
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    if (!res.ok) {
+      const err = new Error(`HTTP ${res.status} POST /workflow/chat/stream`);
+      err.status = res.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  }
+  if (!res.ok || !res.body) {
+    throw new Error(`HTTP ${res.status} POST /workflow/chat/stream`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let text = "";
+  let runId;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const ev = parseStreamLine(line);
+      if (!ev) continue;
+      if ("delta" in ev && typeof ev.delta === "string" && ev.delta) {
+        text += ev.delta;
+        try {
+          onDelta?.(ev.delta);
+        } catch {
+          /* caller rendering must never break the stream */
+        }
+      } else if ("done" in ev && ev.done) {
+        if (ev.run_id !== undefined) runId = ev.run_id;
+        return { kind: "chat", text: typeof ev.text === "string" ? ev.text : text, run_id: runId };
+      } else if ("error" in ev && typeof ev.error === "string") {
+        const err = new Error(ev.error);
+        err.partial = text;
+        throw err;
+      }
+    }
+  }
+  // The socket closed without a done frame: return what arrived rather
+  // than failing an answer the user already read.
+  return { kind: "chat", text, run_id: runId };
 }

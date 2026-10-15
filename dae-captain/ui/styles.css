@@ -210,6 +210,22 @@ h3 { font-size: 12px; color: var(--dim); margin: 12px 0 6px; }
 .slash-item + .slash-item { border-top: 1px solid var(--line); }
 .slash-item.active { background: var(--bubble-user); }
 .slash-name { font-weight: 700; color: var(--accent); white-space: nowrap; }
+/* ---- Composer attachments ---- */
+.attach-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.attach-chips:empty { display: none; }
+.attach-chip {
+  display: inline-flex; gap: 6px; align-items: center;
+  background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
+  border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 11px;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chip-x { background: transparent; border: 0; color: var(--dim); font-size: 11px; padding: 0 2px; }
+.chip-x:hover { color: var(--red); }
+.msg-attachments { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.attach-chip.static { max-width: 100%; }
+/* ---- Streaming caret + regenerate ---- */
+.stream-caret { color: var(--accent); animation: pulse 1s infinite; font-weight: 700; }
+.regen-btn { margin-top: 6px; }
 /* ---- Ask-user question card: numbered option buttons ---- */
 .opt-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .opt-btn { display: flex; gap: 8px; align-items: baseline; text-align: left; }

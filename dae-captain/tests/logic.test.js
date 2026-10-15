@@ -19,6 +19,8 @@ import {
   spawnServerArgs,
   engineLabel,
   enabledEngines,
+  validateAttachmentPick,
+  parseStreamLine,
   questionOptions,
   questionText,
   questionAllowsFreeText,
@@ -344,6 +346,44 @@ describe("ask-user question helpers", () => {
     assert.equal(questionAllowsFreeText({}), true);
     assert.equal(questionAllowsFreeText({ allow_free_text: true }), true);
     assert.equal(questionAllowsFreeText({ allow_free_text: false }), false);
+  });
+});
+
+describe("validateAttachmentPick", () => {
+  it("accepts images and text within limits", () => {
+    assert.deepEqual(validateAttachmentPick({ name: "a.png", mime: "image/png", sizeBytes: 1000 }), { ok: true, kind: "image", mime: "image/png" });
+    assert.deepEqual(validateAttachmentPick({ name: "b.txt", mime: "text/plain", sizeBytes: 1000 }), { ok: true, kind: "text", mime: "text/plain" });
+  });
+  it("falls back to extension when the browser sends no mime", () => {
+    assert.equal(validateAttachmentPick({ name: "a.jpg", mime: "", sizeBytes: 10 }).kind, "image");
+    assert.equal(validateAttachmentPick({ name: "b.md", mime: "application/octet-stream", sizeBytes: 10 }).kind, "text");
+  });
+  it("rejects oversize and unsupported files", () => {
+    assert.equal(validateAttachmentPick({ name: "big.png", mime: "image/png", sizeBytes: 6 * 1024 * 1024 }).ok, false);
+    assert.equal(validateAttachmentPick({ name: "x.exe", mime: "application/x-msdownload", sizeBytes: 10 }).ok, false);
+    assert.equal(validateAttachmentPick({ name: "../evil.png", mime: "image/png", sizeBytes: 10 }).ok, false);
+  });
+});
+
+describe("parseStreamLine", () => {
+  it("parses deltas, done frames, and errors", () => {
+    assert.deepEqual(parseStreamLine('data: {"delta":"Hel"}'), { delta: "Hel" });
+    assert.deepEqual(parseStreamLine('data: {"done":true,"run_id":"r1","text":"Hi"}'), { done: true, run_id: "r1", text: "Hi" });
+    assert.deepEqual(parseStreamLine("data: [DONE]"), { done: true });
+    assert.deepEqual(parseStreamLine('data: {"error":"model_unavailable"}'), { error: "model_unavailable", partial: undefined });
+  });
+  it("ignores keep-alives and garbage without throwing", () => {
+    assert.equal(parseStreamLine(": ping"), null);
+    assert.equal(parseStreamLine(""), null);
+    assert.equal(parseStreamLine("data: {oops"), null);
+    assert.equal(parseStreamLine(null), null);
+  });
+});
+
+describe("runHistoryLine chat sessions", () => {
+  it("labels chat-only runs by message count", async () => {
+    const { runHistoryLine } = await import("../ui/logic.js");
+    assert.ok(runHistoryLine({ run_id: "r1", turns: [], chat_turns: 4 }, 2).includes("4 pesan"));
   });
 });
 

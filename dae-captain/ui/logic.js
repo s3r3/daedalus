@@ -112,6 +112,85 @@ export function questionAllowsFreeText(q) {
   return q?.allow_free_text !== false;
 }
 
+/**
+ * Attachment limits shared with the server (server/src/app.ts), which
+ * re-validates every byte — the client check is only for fast feedback.
+ */
+export const CHAT_ATTACH_LIMITS = {
+  maxFiles: 4,
+  imageMaxBytes: 5 * 1024 * 1024,
+  textMaxChars: 100 * 1024,
+  imageMimes: ["image/png", "image/jpeg", "image/gif", "image/webp"],
+  textMimes: [
+    "text/plain", "text/markdown", "text/csv", "application/json",
+    "text/html", "text/css", "text/javascript", "application/javascript",
+    "text/x-python", "application/x-python", "text/yaml", "application/yaml",
+    "application/toml", "text/xml", "application/xml", "text/x-sh",
+  ],
+  imageExts: { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" },
+  textExts: {
+    txt: "text/plain", md: "text/markdown", markdown: "text/markdown", csv: "text/csv",
+    json: "application/json", log: "text/plain", html: "text/html", css: "text/css",
+    js: "text/javascript", ts: "text/javascript", py: "text/x-python", sh: "text/x-sh",
+    yaml: "text/yaml", yml: "text/yaml", toml: "application/toml", xml: "text/xml",
+    java: "text/plain", c: "text/plain", h: "text/plain", rs: "text/plain", go: "text/plain",
+  },
+};
+
+function mimeForPick(name, mime) {
+  const m = String(mime ?? "").toLowerCase();
+  if (m && m !== "application/octet-stream") return m;
+  const ext = String(name ?? "").split(".").pop()?.toLowerCase() ?? "";
+  return CHAT_ATTACH_LIMITS.imageExts[ext] ?? CHAT_ATTACH_LIMITS.textExts[ext] ?? m;
+}
+
+/**
+ * Validate a picked file before reading it. Pure — tested, and the server
+ * enforces the same limits again on the bytes it actually receives.
+ */
+export function validateAttachmentPick({ name, mime, sizeBytes }) {
+  if (!name || /[/\\]/.test(name) || name.includes("..") || name.length > 120) {
+    return { ok: false, reason: "nama file tidak valid" };
+  }
+  const m = mimeForPick(name, mime);
+  if (CHAT_ATTACH_LIMITS.imageMimes.includes(m)) {
+    if ((sizeBytes ?? 0) > CHAT_ATTACH_LIMITS.imageMaxBytes) {
+      return { ok: false, reason: "gambar melebihi 5 MB" };
+    }
+    return { ok: true, kind: "image", mime: m };
+  }
+  if (CHAT_ATTACH_LIMITS.textMimes.includes(m)) {
+    if ((sizeBytes ?? 0) > CHAT_ATTACH_LIMITS.textMaxChars) {
+      return { ok: false, reason: "file teks melebihi 100 KB" };
+    }
+    return { ok: true, kind: "text", mime: m };
+  }
+  return { ok: false, reason: "tipe file belum didukung (gambar atau teks saja)" };
+}
+
+/**
+ * Parse one SSE line from POST /workflow/chat/stream. Returns null for
+ * keep-alives and garbage — the reader skips them, never crashes on them.
+ */
+export function parseStreamLine(line) {
+  const text = String(line ?? "");
+  const at = text.indexOf("data:");
+  if (at < 0) return null;
+  const payload = text.slice(at + 5).trim();
+  if (!payload || payload === "[DONE]") return { done: true };
+  let obj;
+  try {
+    obj = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  if (!obj || typeof obj !== "object") return null;
+  if (obj.done === true) return { done: true, run_id: obj.run_id, text: obj.text };
+  if (typeof obj.error === "string") return { error: obj.error, partial: obj.partial };
+  if (typeof obj.delta === "string") return { delta: obj.delta };
+  return null;
+}
+
 /** One-line summary for a turn, for the engine pills row. */
 export function turnSummary(turn) {
   const label = engineLabel(turn.engine);
@@ -363,6 +442,10 @@ export function freshConversation() {
 /** One-line summary of a workflow run for the /history listing. */
 export function runHistoryLine(run, index) {
   const turns = run?.turns ?? [];
+  const chatTurns = run?.chat_turns ?? 0;
+  if (turns.length === 0 && chatTurns > 0) {
+    return `${index}. (obrolan) — ${chatTurns} pesan`;
+  }
   const firstGoal = turns[0]?.goal ?? "(obrolan)";
   const running = turns.filter((t) => t.status === "running").length;
   const failed = turns.filter((t) => t.status === "failed").length;
