@@ -2299,7 +2299,12 @@ async function dispatchChatTurn(
   }
 
   const resolved = resolveReferences(message, run);
-  const goal = message + formatResolvedForGoal(resolved);
+  // Same-engine follow-up: the user is continuing the previous task
+  // ("buat css" after "buat html dengan css"). Give the agent the previous
+  // goal as context so it doesn't start from scratch.
+  const prevTurn = lastTurn(run);
+  const isContinuation = prevTurn?.engine === engine && prevTurn?.goal && prevTurn.goal !== message;
+  const goal = (isContinuation ? `[lanjutan dari: ${prevTurn.goal}]\n` : "") + message + formatResolvedForGoal(resolved);
   const routerInfo = { layer: routerLayer, confidence, rule: matchedRule };
 
   if (engine === "research") {
