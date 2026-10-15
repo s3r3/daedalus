@@ -231,6 +231,8 @@ h3 { font-size: 12px; color: var(--dim); margin: 12px 0 6px; }
 .stream-caret { color: var(--accent); animation: pulse 1s infinite; font-weight: 700; }
 .regen-btn { margin-top: 6px; }
 .msg-actions { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.preset-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.preset-row:empty { display: none; }
 /* ---- Code highlighting (tiny generic tokenizer, no dependencies) ---- */
 .tok-kw { color: #c792ea; }
 .tok-str { color: #9ece6a; }

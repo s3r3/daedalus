@@ -831,7 +831,11 @@ async function handleProviders(ctx: AppContext, req: IncomingMessage, res: Serve
     const registry = ctx.providerStore.registry;
 
     if (method === "GET" && url.pathname === "/providers") {
-      sendJson(res, 200, { providers: registry.list(), presets: PROVIDER_PRESETS });
+      // `home` tells companions WHERE this registry lives: the store is
+      // anchored to the session workspace, so providers added under a
+      // different workspace (or ~/.daedalus directly) legitimately show
+      // up as an empty list here — never silently merged, never guessed.
+      sendJson(res, 200, { providers: registry.list(), presets: PROVIDER_PRESETS, home: ctx.providerStore.filePath });
       return;
     }
 

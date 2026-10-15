@@ -1517,13 +1517,32 @@ async function loadSettingsView() {
   status.textContent = "";
   try {
     const [s, providers] = await Promise.all([state.api.getSettings(), state.api.getProviders()]);
+    const list = providers.providers ?? [];
     const provSel = $("set-provider");
     provSel.innerHTML = "";
-    for (const p of providers.providers ?? []) {
+    for (const p of list) {
       const o = document.createElement("option");
       o.value = p.id;
       o.textContent = `${p.name ?? p.id}${p.enabled === false ? " (nonaktif)" : ""}`;
       provSel.appendChild(o);
+    }
+    // Empty registry: say so with the real storage path instead of a
+    // dead dropdown. Providers live per workspace-home, so a list added
+    // under another workspace legitimately shows up empty here.
+    const emptyNote = $("set-prov-empty");
+    if (emptyNote) {
+      if (list.length === 0) {
+        emptyNote.textContent = "Belum ada provider di workspace ini. Pilih preset di bawah atau isi manual, lalu Test koneksi.";
+        emptyNote.className = "status-line error";
+      } else {
+        emptyNote.textContent = "";
+        emptyNote.className = "status-line hidden";
+      }
+    }
+    renderProviderPresets(providers.presets ?? []);
+    const homeHint = $("prov-home");
+    if (homeHint && providers.home) {
+      homeHint.textContent = `Kunci API tersimpan di server (${providers.home}) dan tidak pernah ditampilkan kembali — sama seperti Web/CLI.`;
     }
     const current = s.session?.providerId ?? s.session?.provider_id ?? "";
     if (current) provSel.value = current;
@@ -1599,6 +1618,29 @@ async function runDiagnostics() {
   }
   out.className = "status-line " + (ok ? "ok" : "error");
   out.textContent = "• " + lines.join("  ·  ");
+}
+
+/**
+ * One-click preset fill: ID/name/URL from the server's real preset list.
+ * The key is still typed by hand, then Test koneksi proves it for real.
+ */
+function renderProviderPresets(presets) {
+  const box = $("prov-presets");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const preset of presets.filter((p) => p.id !== "custom")) {
+    const b = document.createElement("button");
+    b.className = "ghost-btn small";
+    b.textContent = preset.name ?? preset.id;
+    b.title = preset.baseUrl ?? "";
+    b.onclick = () => {
+      $("prov-id").value = preset.id;
+      $("prov-name").value = preset.name ?? preset.id;
+      $("prov-url").value = preset.baseUrl ?? "";
+      $("prov-key").focus?.();
+    };
+    box.appendChild(b);
+  }
 }
 
 /** Test provider connection (real server round-trip, no fake success). */

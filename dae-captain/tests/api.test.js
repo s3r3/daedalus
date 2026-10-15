@@ -155,6 +155,15 @@ describe("createApiClient", () => {
     });
   });
 
+  it("getProviders passes presets and the registry home through", async () => {
+    const payload = { providers: [], presets: [{ id: "nine-router" }], home: "/ws/.daedalus/providers.json" };
+    const { fetchImpl } = mockFetch(() => ok(payload));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    const res = await api.getProviders();
+    assert.deepEqual(res.presets.map((p) => p.id), ["nine-router"]);
+    assert.ok(res.home.endsWith("providers.json"));
+  });
+
   it("decideApproval resolves by id (survives runner restart)", async () => {
     const { fetchImpl, calls } = mockFetch(() => ok({ success: true, decision: "grant" }));
     const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
