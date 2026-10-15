@@ -90,6 +90,10 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
     createProvider: (input) => req("POST", "/providers", input),
     updateProvider: (id, patch) =>
       req("PUT", `/providers/${encodeURIComponent(id)}`, patch),
+    setProviderEnabled: (id, enabled) =>
+      req("PUT", `/providers/${encodeURIComponent(id)}/enabled`, { enabled }),
+    deleteProvider: (id) =>
+      req("DELETE", `/providers/${encodeURIComponent(id)}`),
     testProvider: (id) => req("POST", `/providers/${encodeURIComponent(id)}/test`),
     getModels: (providerId) => req("GET", "/models", undefined, { provider_id: providerId }),
   };

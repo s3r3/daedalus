@@ -78,6 +78,8 @@ const state = {
   pendingMessage: null, // work command waiting for a workspace pick
   pendingOverride: null,
   pendingAttachments: [], // queued composer attachments (cleared on send/clear)
+  providersCache: [], // last GET /providers list (key state, manage buttons)
+  modelsVision: { loaded: false, set: new Set() }, // vision-capable models of the picked provider
   wfFilter: "all", // antrean filter: all|running|approval|done|failed
   connected: false, // event-stream/HTTP health (honest pill + header status)
   seenEvents: new Map(), // task_id -> max seq applied (dedupe on reconnect)
@@ -1239,6 +1241,7 @@ function applySlashCompletion(name) {
 // ---------------------------------------------------------------------------
 
 function renderAttachChips() {
+  updateAttachVisionWarn();
   const box = $("attach-chips");
   if (!box) return;
   box.innerHTML = "";
@@ -1736,9 +1739,17 @@ async function loadSettingsView() {
     }
     const current = s.session?.providerId ?? s.session?.provider_id ?? "";
     if (current) provSel.value = current;
+    state.providersCache = list;
+    updateKeyState();
+    updateToggleEnabledButton();
     await loadModels(provSel.value);
     const curModel = s.session?.model ?? "";
     if (curModel) $("set-model").value = curModel;
+    // Reasoning + creativity dials (server layer 1–2; same values Web/CLI use).
+    const thinking = s.session?.thinkingLevel ?? s.settings?.session?.thinkingLevel ?? "medium";
+    $("set-thinking").value = ["off", "low", "medium", "high"].includes(thinking) ? thinking : "medium";
+    const temp = s.settings?.llm?.temperature;
+    $("set-temperature").value = typeof temp === "number" ? String(temp) : "";
     // The approval buttons reflect the LIVE server session, not just the
     // last thing this panel wrote — another client may have changed it.
     state.prefs = { ...state.prefs, auto_approve: s.session?.autoApprove === true };
@@ -1837,6 +1848,91 @@ function renderProviderPresets(presets) {
   }
 }
 
+/** Key indicator: does the picked provider actually have a secret stored? */
+function updateKeyState() {
+  const hint = $("set-key-state");
+  if (!hint) return;
+  const id = ($("set-provider")?.value ?? "").trim();
+  const found = (state.providersCache ?? []).find((p) => p.id === id);
+  if (!id || !found) {
+    hint.textContent = "";
+    return;
+  }
+  hint.textContent = found.hasApiKey
+    ? `Kunci: tersimpan${found.apiKeyMasked ? ` (${found.apiKeyMasked})` : ""} — isi + Simpan untuk mengganti.`
+    : "Kunci: belum ada — isi lalu Simpan.";
+}
+
+/** Enable/disable + delete operate on the picked provider; labels stay honest. */
+function updateToggleEnabledButton() {
+  const btn = $("set-toggle-enabled");
+  if (!btn) return;
+  const id = ($("set-provider")?.value ?? "").trim();
+  const found = (state.providersCache ?? []).find((p) => p.id === id);
+  btn.textContent = found?.enabled === false ? "Aktifkan provider" : "Nonaktifkan provider";
+  const del = $("set-delete");
+  if (del && del.dataset.armed !== "1") del.textContent = "Hapus provider";
+}
+
+async function toggleSelectedProvider() {
+  const status = $("set-status");
+  const id = ($("set-provider")?.value ?? "").trim();
+  if (!id) {
+    status.className = "status-line error";
+    status.textContent = "Pilih provider dulu.";
+    return;
+  }
+  try {
+    const found = (state.providersCache ?? []).find((p) => p.id === id);
+    const next = !(found?.enabled !== false);
+    await state.api.setProviderEnabled(id, next);
+    status.className = "status-line ok";
+    status.textContent = next ? "Provider diaktifkan." : "Provider dinonaktifkan.";
+    await loadSettingsView();
+  } catch (e) {
+    status.className = "status-line error";
+    status.textContent = "Gagal: " + errText(e);
+  }
+}
+
+async function deleteSelectedProvider() {
+  const status = $("set-status");
+  const del = $("set-delete");
+  const id = ($("set-provider")?.value ?? "").trim();
+  if (!id) {
+    status.className = "status-line error";
+    status.textContent = "Pilih provider dulu.";
+    return;
+  }
+  // Two-step confirm (no modal in the island): first click arms, second executes.
+  if (del?.dataset.armed !== "1") {
+    if (del) {
+      del.dataset.armed = "1";
+      del.textContent = `Yakin hapus ${id}? Klik lagi.`;
+      setTimeout(() => {
+        if (del.dataset.armed === "1") {
+          del.dataset.armed = "";
+          del.textContent = "Hapus provider";
+        }
+      }, 5000);
+    }
+    return;
+  }
+  if (del) {
+    del.dataset.armed = "";
+    del.textContent = "Hapus provider";
+  }
+  try {
+    await state.api.deleteProvider(id);
+    status.className = "status-line ok";
+    status.textContent = "Provider dihapus.";
+    await loadSettingsView();
+  } catch (e) {
+    status.className = "status-line error";
+    status.textContent = "Gagal: " + errText(e);
+  }
+}
+
 /** Test provider connection (real server round-trip, no fake success). */
 async function testConnection() {
   const status = $("set-conn-status");
@@ -1922,16 +2018,45 @@ async function loadModels(providerId) {
   const list = $("set-model-list");
   if (!list) return;
   list.innerHTML = "";
-  if (!providerId) return;
+  state.modelsVision = { loaded: false, set: new Set() };
+  if (!providerId) {
+    updateAttachVisionWarn();
+    return;
+  }
   try {
     const data = await state.api.getModels(providerId);
+    const vision = new Set();
     for (const m of data.models ?? []) {
       const o = document.createElement("option");
       o.value = m.model;
+      // Vision badge: pickers must see which models can actually look at
+      // attached images — a text-only model fails those messages opaquely.
+      if (m.supportsVision) {
+        o.label = `${m.model}  👁 vision`;
+        vision.add(m.model);
+      }
       list.appendChild(o);
     }
+    state.modelsVision = { loaded: true, set: vision };
   } catch {
     /* suggestions are best-effort; the input stays usable regardless */
+  }
+  updateAttachVisionWarn();
+}
+
+/** Warn when a queued image meets a model known to lack vision. */
+function updateAttachVisionWarn() {
+  const warn = $("attach-warn");
+  if (!warn) return;
+  const hasImage = state.pendingAttachments.some((a) => a.kind === "image");
+  const model = ($("set-model")?.value ?? "").trim() || null;
+  const known = state.modelsVision.loaded && model;
+  if (hasImage && known && !state.modelsVision.set.has(model)) {
+    warn.textContent = `Model ${model} tampaknya tidak mendukung gambar — jawaban bisa gagal.`;
+    warn.classList.remove("hidden");
+  } else {
+    warn.textContent = "";
+    warn.classList.add("hidden");
   }
 }
 
@@ -2370,7 +2495,15 @@ function bindEvents() {
   }
   bindGuarded("wf-cancel", "click", cancelWorkflow);
 
-  bindGuarded("set-provider", "change", (e) => loadModels(e.target.value));
+  bindGuarded("set-provider", "change", (e) => {
+    updateKeyState();
+    updateToggleEnabledButton();
+    loadModels(e.target.value);
+  });
+  bindGuarded("set-model", "change", updateAttachVisionWarn);
+  $("set-model")?.addEventListener("input", updateAttachVisionWarn);
+  bindGuarded("set-toggle-enabled", "click", toggleSelectedProvider);
+  bindGuarded("set-delete", "click", deleteSelectedProvider);
   // Approval mode (ask/auto) and engine toggles cover the permission model;
   // the legacy trust/thinking selects were dropped in the mockup redesign.
   bindGuarded("set-save", "click", async () => {
@@ -2378,6 +2511,8 @@ function bindEvents() {
     const providerId = ($("set-provider").value ?? "").trim();
     const model = ($("set-model").value ?? "").trim();
     const key = $("set-apikey").value ?? "";
+    const thinking = $("set-thinking").value;
+    const tempRaw = ($("set-temperature").value ?? "").trim();
     try {
       // The key field used to be silently discarded here. A non-empty key
       // rotates the selected provider's secret (partial update — base URL,
@@ -2391,9 +2526,18 @@ function bindEvents() {
       } else if (key && !providerId) {
         throw new Error("Pilih provider dulu untuk menyimpan kunci.");
       }
-      await state.api.updateSettings({ providerId, model });
+      const patch = { providerId, model, thinkingLevel: thinking };
+      if (tempRaw !== "") {
+        const temp = Number(tempRaw);
+        if (!Number.isFinite(temp) || temp < 0 || temp > 2) {
+          throw new Error("Temperature harus angka 0–2.");
+        }
+        patch.llm_temperature = temp;
+      }
+      await state.api.updateSettings(patch);
       status.className = "status-line ok";
       status.textContent = "Tersimpan — berlaku untuk semua engine." + keyNote;
+      await loadSettingsView();
     } catch (e) {
       status.className = "status-line error";
       status.textContent = "Gagal: " + errText(e);

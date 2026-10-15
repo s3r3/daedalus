@@ -188,6 +188,18 @@ describe("createApiClient", () => {
     assert.deepEqual(JSON.parse(calls[3].init.body), { run_id: "r-1", workspace_root: "/ws" });
   });
 
+  it("setProviderEnabled and deleteProvider hit their routes", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({}));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await api.setProviderEnabled("nine-router", false);
+    await api.deleteProvider("old-one");
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/providers/nine-router/enabled");
+    assert.equal(calls[0].init.method, "PUT");
+    assert.deepEqual(JSON.parse(calls[0].init.body), { enabled: false });
+    assert.equal(calls[1].url, "http://127.0.0.1:3080/providers/old-one");
+    assert.equal(calls[1].init.method, "DELETE");
+  });
+
   it("decideApproval resolves by id (survives runner restart)", async () => {
     const { fetchImpl, calls } = mockFetch(() => ok({ success: true, decision: "grant" }));
     const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
