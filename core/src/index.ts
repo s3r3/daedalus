@@ -1151,6 +1151,7 @@ export {
   type RouteOptions,
   type LayerBResult,
   RULE_CONFIDENCE_THRESHOLD,
+  isConversationalMessage,
   routeByRules,
   resolveReferences,
   formatResolvedForGoal,

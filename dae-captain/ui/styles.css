@@ -34,6 +34,11 @@ html, body {
   overflow: hidden; user-select: none;
 }
 .hidden { display: none !important; }
+/* Chat text must stay selectable (the island shell keeps user-select: none
+   for drag areas, but a chat you cannot copy from is broken). */
+.transcript, .bubble, .composer-row textarea, .answer-input, .approval-card .title {
+  user-select: text; -webkit-user-select: text;
+}
 button { font: inherit; cursor: pointer; }
 body { display: flex; justify-content: center; align-items: flex-start; }
 
@@ -74,17 +79,33 @@ body { display: flex; justify-content: center; align-items: flex-start; }
 .pill.status-amber .mascot-sm { outline-color: var(--amber); animation: pulse 1.2s infinite; }
 .pill.status-blue .mascot-sm { outline-color: var(--blue); }
 .pill-text { font-weight: 600; min-width: 4px; }
+.pill.pill-offline { opacity: .75; }
+.pill.pill-offline .pill-text { color: var(--amber); font-size: 11px; }
 @keyframes pulse { 50% { opacity: .45; } }
+
+/* ---- Dynamic island morph: pill <-> panel share one origin ---- */
+@media (prefers-reduced-motion: no-preference) {
+  .pill { transition: transform .18s ease, opacity .18s ease; }
+  .panel {
+    transform-origin: top center;
+    animation: island-expand .22s ease;
+  }
+  .pill:active { transform: scale(.96); }
+}
+@keyframes island-expand {
+  from { transform: scale(.92) translateY(-6px); opacity: 0; }
+  to { transform: scale(1) translateY(0); opacity: 1; }
+}
 
 /* ---- Expanded panel ---- */
 .panel {
-  width: 420px; max-height: 640px; margin-top: 6px;
-  background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius);
+  width: 460px; max-width: calc(100vw - 24px); max-height: 680px; margin-top: 6px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: 0 18px 60px rgba(0,0,0,.6);
   display: flex; flex-direction: column; overflow: hidden;
 }
 .panel-header {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 10px 12px; border-bottom: 1px solid var(--line);
   -webkit-app-region: drag;
 }
@@ -133,7 +154,6 @@ h3 { font-size: 12px; color: var(--dim); margin: 12px 0 6px; }
 .bubble .note { color: var(--amber); font-size: 12px; margin-top: 6px; }
 .bubble.error { border-color: rgba(255, 107, 107, 0.4); }
 .bubble.error .body { color: var(--red); }
-.bubble.clarify .opt-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
 /* ---- Approvals ---- */
 .approvals { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
@@ -180,7 +200,67 @@ h3 { font-size: 12px; color: var(--dim); margin: 12px 0 6px; }
 .action-status.error { color: var(--red); }
 
 /* ---- Composer ---- */
-.composer { border-top: 1px solid var(--line); padding-top: 8px; margin-top: auto; }
+.composer { border-top: 1px solid var(--line); padding-top: 8px; margin-top: auto; position: relative; }
+/* ---- Slash suggestion menu (compact, above the composer) ---- */
+.slash-menu {
+  position: absolute; left: 0; right: 0; bottom: 100%; margin-bottom: 6px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0,0,0,.5); overflow: hidden; z-index: 5;
+}
+.slash-item {
+  display: flex; gap: 8px; align-items: baseline; width: 100%; text-align: left;
+  background: transparent; border: 0; color: var(--text); padding: 7px 12px;
+}
+.slash-item + .slash-item { border-top: 1px solid var(--line); }
+.slash-item.active { background: var(--bubble-user); }
+.slash-name { font-weight: 700; color: var(--accent); white-space: nowrap; }
+/* ---- Composer attachments ---- */
+.attach-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+.attach-chips:empty { display: none; }
+.attach-chip {
+  display: inline-flex; gap: 6px; align-items: center;
+  background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
+  border-radius: 999px; padding: 3px 6px 3px 10px; font-size: 11px;
+  max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chip-x { background: transparent; border: 0; color: var(--dim); font-size: 11px; padding: 0 2px; }
+.chip-x:hover { color: var(--red); }
+.msg-attachments { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.attach-chip.static { max-width: 100%; }
+/* ---- Streaming caret + regenerate ---- */
+.stream-caret { color: var(--accent); animation: pulse 1s infinite; font-weight: 700; }
+.regen-btn { margin-top: 6px; }
+.msg-actions { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+.preset-row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.preset-row:empty { display: none; }
+/* ---- Code highlighting (tiny generic tokenizer, no dependencies) ---- */
+.tok-kw { color: #c792ea; }
+.tok-str { color: #9ece6a; }
+.tok-com { color: #5b6478; font-style: italic; }
+.tok-num { color: #ff9e64; }
+.md-list.sub { margin: 4px 0 4px 18px; }
+.md-img { max-width: 100%; border-radius: 8px; margin: 4px 0; }
+.tool-image { max-width: 100%; border-radius: 8px; margin-top: 6px; border: 1px solid var(--line); }
+.crew-box { display: flex; flex-direction: column; gap: 2px; }
+.crew-row { display: flex; gap: 8px; align-items: baseline; padding: 3px 0; border-bottom: 1px solid var(--line); }
+.changes-box { margin-top: 6px; display: flex; flex-direction: column; gap: 6px; }
+.change-row { background: var(--bg-soft); border: 1px solid var(--line); border-radius: 10px; padding: 6px 10px; }
+.change-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.mono { font-family: ui-monospace, monospace; font-size: 12px; }
+.patch-details { margin-top: 4px; }
+.patch-box {
+  max-height: 220px; overflow: auto; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 8px; padding: 8px;
+  font-size: 11px; white-space: pre-wrap; overflow-wrap: break-word;
+}
+/* ---- Ask-user question card: numbered option buttons ---- */
+.opt-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.opt-btn { display: flex; gap: 8px; align-items: baseline; text-align: left; }
+.opt-num {
+  flex-shrink: 0; width: 18px; height: 18px; border: 1px solid var(--line);
+  border-radius: 50%; font-size: 10px; font-weight: 700; color: var(--dim);
+  display: inline-flex; align-items: center; justify-content: center;
+}
 .engine-chips { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
 .engine-chips button {
   background: transparent; border: 1px solid var(--line); color: var(--dim);
@@ -188,11 +268,32 @@ h3 { font-size: 12px; color: var(--dim); margin: 12px 0 6px; }
 }
 .engine-chips button.active { border-color: var(--accent); color: var(--text); }
 .composer-row { display: flex; gap: 8px; align-items: center; }
-.composer-row input {
+.composer-row textarea {
   flex: 1; background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
-  border-radius: 999px; padding: 10px 16px; outline: none; font-size: 13px;
+  border-radius: 16px; padding: 10px 16px; outline: none; font-size: 13px;
+  resize: none; line-height: 1.45; max-height: 110px; font-family: inherit;
+  user-select: text; -webkit-user-select: text;
 }
-.composer-row input:focus { border-color: var(--accent); }
+.composer-row textarea:focus { border-color: var(--accent); }
+/* "New messages" pill: appears only when the user scrolled up. */
+.jump-btn {
+  align-self: center; background: var(--bubble-user); color: #fff; border: 0;
+  border-radius: 999px; padding: 5px 14px; font-size: 11px; font-weight: 700;
+  margin-bottom: 6px; box-shadow: 0 4px 14px rgba(0,0,0,.4);
+}
+.load-more-btn {
+  align-self: center; background: transparent; color: var(--dim);
+  border: 1px solid var(--line); border-radius: 999px; padding: 4px 14px;
+  font-size: 11px; margin-bottom: 4px;
+}
+.load-more-btn:hover { color: var(--text); border-color: var(--dim); }
+/* Markdown tables (AI answers use them constantly). */
+.md-table { border-collapse: collapse; margin: 6px 0; font-size: 12px; max-width: 100%; }
+.md-table th, .md-table td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; }
+.md-table th { background: var(--bg-soft); }
+.md-hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
+.msg-time { font-size: 10px; color: var(--dim); margin-top: 4px; }
+.bubble.user .msg-time { text-align: right; }
 .send-btn {
   background: var(--accent); color: #fff; border: 0; border-radius: 50%;
   width: 38px; height: 38px; font-size: 15px; flex-shrink: 0;

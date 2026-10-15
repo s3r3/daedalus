@@ -95,6 +95,14 @@ export class ConversationStore {
     return conversation;
   }
 
+  /** Replace the turn list (regenerate drops the previous assistant answer). */
+  replaceTurns(root: string, id: string, turns: ConversationTurn[]): Conversation {
+    const conversation = this.ensure(root, id);
+    conversation.turns = [...turns];
+    this.#save(conversation);
+    return conversation;
+  }
+
   #path(id: string): string {
     // Ids are uuids in practice; refuse anything that could escape the dir.
     if (!/^[A-Za-z0-9._-]+$/.test(id) || id.includes("..")) return join(this.dir, "__invalid__.json");

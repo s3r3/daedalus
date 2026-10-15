@@ -40,11 +40,165 @@ export function statusColor(status) {
   return status === "attention" ? "amber" : status === "working" ? "green" : "blue";
 }
 
-/** Compact pill text: "!" when attention needed, else running count. */
+/**
+ * Truthful short label for the pill/working state, derived from real run
+ * data — never a fabricated percentage. Maps the server's last event type
+ * and any pending item onto a plain-language activity word.
+ */
+export function activityLabel(runs, agg) {
+  if (agg.status === "attention") {
+    const approvals = (runs ?? []).flatMap((r) => (r.turns ?? []).flatMap((t) => t.pending_approvals ?? [])).length;
+    const questions = (runs ?? []).flatMap((r) => (r.turns ?? []).flatMap((t) => t.pending_questions ?? [])).length;
+    if (approvals > 0) return approvals > 1 ? approvals + " butuh izin" : "Butuh izin";
+    if (questions > 0) return questions > 1 ? questions + " pertanyaan" : "Ada pertanyaan";
+    return "Butuh perhatian";
+  }
+  if (agg.status === "working") {
+    const last = (runs ?? [])
+      .flatMap((r) => (r.turns ?? []))
+      .filter((t) => t.status === "running")
+      .map((t) => t.last_event ?? "")
+      .sort()
+      .at(-1) ?? "";
+    if (/TOOL_CALL_STARTED/i.test(last)) return "Menjalankan alat";
+    if (/FILE_CHANGED/i.test(last)) return "Mengubah file";
+    if (/COMMAND|TEST/i.test(last)) return "Menjalankan tes";
+    if (/THOUGHT|MODEL|LLM/i.test(last)) return "Berpikir";
+    if (last) return "Bekerja";
+    return agg.running > 1 ? agg.running + " agent berjalan" : "Bekerja";
+  }
+  return "Siap";
+}
+
+/** Status text for a finished run: done/failed/cancelled from real status. */
+export function completionLabel(runs) {
+  let failed = 0;
+  let done = 0;
+  for (const run of runs ?? []) {
+    for (const t of run.turns ?? []) {
+      if (t.status === "failed") failed++;
+      else if (t.status === "done") done++;
+    }
+  }
+  if (failed > 0) return failed > 1 ? failed + " gagal" : "Gagal";
+  if (done > 0) return done > 1 ? done + " selesai" : "Selesai";
+  return "";
+}
+
+/** Stable pill text: status label when active, else empty (idle). */
 export function pillText(agg) {
   if (agg.status === "attention") return "!";
   if (agg.status === "working") return String(agg.running);
   return "";
+}
+
+/**
+ * Options of a pending ask-user question, safe for old server payloads
+ * that only carried { id, task_id }. Never throws, never undefined.
+ */
+export function questionOptions(q) {
+  return Array.isArray(q?.options) ? q.options : [];
+}
+
+/** Question text with a fallback for option-less legacy payloads. */
+export function questionText(q) {
+  return typeof q?.question === "string" && q.question.trim()
+    ? q.question
+    : "Agent meminta masukan:";
+}
+
+/** Format a message timestamp (epoch ms or ISO string) as HH.MM. Empty when unknown. */
+export function fmtTime(ts) {
+  if (ts === null || ts === undefined || ts === "") return "";
+  const d = ts instanceof Date ? ts : new Date(ts);
+  const t = d.getTime();
+  if (!Number.isFinite(t)) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}.${p(d.getMinutes())}`;
+}
+
+/** Whether the card offers a free-text answer next to the option buttons. */
+export function questionAllowsFreeText(q) {
+  return q?.allow_free_text !== false;
+}
+
+/**
+ * Attachment limits shared with the server (server/src/app.ts), which
+ * re-validates every byte — the client check is only for fast feedback.
+ */
+export const CHAT_ATTACH_LIMITS = {
+  maxFiles: 4,
+  imageMaxBytes: 5 * 1024 * 1024,
+  textMaxChars: 100 * 1024,
+  imageMimes: ["image/png", "image/jpeg", "image/gif", "image/webp"],
+  textMimes: [
+    "text/plain", "text/markdown", "text/csv", "application/json",
+    "text/html", "text/css", "text/javascript", "application/javascript",
+    "text/x-python", "application/x-python", "text/yaml", "application/yaml",
+    "application/toml", "text/xml", "application/xml", "text/x-sh",
+  ],
+  imageExts: { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" },
+  textExts: {
+    txt: "text/plain", md: "text/markdown", markdown: "text/markdown", csv: "text/csv",
+    json: "application/json", log: "text/plain", html: "text/html", css: "text/css",
+    js: "text/javascript", ts: "text/javascript", py: "text/x-python", sh: "text/x-sh",
+    yaml: "text/yaml", yml: "text/yaml", toml: "application/toml", xml: "text/xml",
+    java: "text/plain", c: "text/plain", h: "text/plain", rs: "text/plain", go: "text/plain",
+  },
+};
+
+function mimeForPick(name, mime) {
+  const m = String(mime ?? "").toLowerCase();
+  if (m && m !== "application/octet-stream") return m;
+  const ext = String(name ?? "").split(".").pop()?.toLowerCase() ?? "";
+  return CHAT_ATTACH_LIMITS.imageExts[ext] ?? CHAT_ATTACH_LIMITS.textExts[ext] ?? m;
+}
+
+/**
+ * Validate a picked file before reading it. Pure — tested, and the server
+ * enforces the same limits again on the bytes it actually receives.
+ */
+export function validateAttachmentPick({ name, mime, sizeBytes }) {
+  if (!name || /[/\\]/.test(name) || name.includes("..") || name.length > 120) {
+    return { ok: false, reason: "nama file tidak valid" };
+  }
+  const m = mimeForPick(name, mime);
+  if (CHAT_ATTACH_LIMITS.imageMimes.includes(m)) {
+    if ((sizeBytes ?? 0) > CHAT_ATTACH_LIMITS.imageMaxBytes) {
+      return { ok: false, reason: "gambar melebihi 5 MB" };
+    }
+    return { ok: true, kind: "image", mime: m };
+  }
+  if (CHAT_ATTACH_LIMITS.textMimes.includes(m)) {
+    if ((sizeBytes ?? 0) > CHAT_ATTACH_LIMITS.textMaxChars) {
+      return { ok: false, reason: "file teks melebihi 100 KB" };
+    }
+    return { ok: true, kind: "text", mime: m };
+  }
+  return { ok: false, reason: "tipe file belum didukung (gambar atau teks saja)" };
+}
+
+/**
+ * Parse one SSE line from POST /workflow/chat/stream. Returns null for
+ * keep-alives and garbage — the reader skips them, never crashes on them.
+ */
+export function parseStreamLine(line) {
+  const text = String(line ?? "");
+  const at = text.indexOf("data:");
+  if (at < 0) return null;
+  const payload = text.slice(at + 5).trim();
+  if (!payload || payload === "[DONE]") return { done: true };
+  let obj;
+  try {
+    obj = JSON.parse(payload);
+  } catch {
+    return null;
+  }
+  if (!obj || typeof obj !== "object") return null;
+  if (obj.done === true) return { done: true, run_id: obj.run_id, text: obj.text };
+  if (typeof obj.error === "string") return { error: obj.error, partial: obj.partial };
+  if (typeof obj.delta === "string") return { delta: obj.delta };
+  return null;
 }
 
 /** One-line summary for a turn, for the engine pills row. */
@@ -64,13 +218,17 @@ export function formatResolvedArtifacts(resolved) {
   if (!Array.isArray(resolved) || resolved.length === 0) return [];
   return resolved.map((a) => {
     const label = a.label ?? a.kind ?? "artifact";
-    const path = a.path ?? a.export_path ?? null;
+    // absolute_path wins: it is the only form open_file/reveal_in_folder can
+    // actually act on. A bare relative path would silently do nothing.
+    const path = a.absolute_path ?? a.path ?? a.export_path ?? null;
     const url = a.url ?? null;
     const where = path ?? (a.report_id ? `report ${a.report_id}` : url ?? "");
     return {
       label,
-      path, // absolute path for open_file/reveal_in_folder
+      path,
       url,
+      // Relative form (when available) is nicer to read than a long absolute.
+      displayPath: a.path ?? a.absolute_path ?? a.export_path ?? "",
       display: where ? `${label} — ${where}` : label,
     };
   });
@@ -255,10 +413,92 @@ export function summarizeTaskEvents(events) {
       const t = tools.get(p.call.id) ?? { tool: p.call.tool ?? "tool" };
       t.status = p.result?.status ?? "ok";
       if (!t.args) t.args = summarizeArgs(p.call.tool, p.call.args);
+      // Image-producing tools (view_image, screenshot) record their file
+      // here; the chat renders it inline instead of hiding the picture.
+      const meta = p.result?.meta;
+      if (meta?.image_attached === true && typeof meta?.image_path === "string" && meta.image_path) {
+        t.image = { path: meta.image_path };
+      }
       tools.set(p.call.id, t);
     }
   }
   return { thoughts, tools: [...tools.values()] };
+}
+
+/**
+ * Compact token-usage line for one chat answer ("tok 12,4k→3,1k").
+ * Empty string when there is nothing real to show — never a guess.
+ */
+export function formatUsage(usage) {
+  const prompt = Number(usage?.prompt_tokens);
+  const completion = Number(usage?.completion_tokens);
+  if (!Number.isFinite(prompt) && !Number.isFinite(completion)) return "";
+  const short = (n) => {
+    if (!Number.isFinite(n)) return "?";
+    return n >= 1000 ? `${String(Math.round(n / 100) / 10).replace(".", ",")}k` : String(n);
+  };
+  return `tok ${short(prompt)}→${short(completion)}`;
+}
+
+/**
+ * FILE_CHANGED payloads → per-file review rows. Pure — the island renders
+ * path, operation, and +added/-removed counts plus the patch text on demand.
+ */
+export function summarizeChanges(changes) {
+  if (!Array.isArray(changes)) return [];
+  return changes
+    .filter((c) => c && typeof c.path === "string")
+    .map((c) => ({
+      path: c.path,
+      operation: c.operation ?? "modified",
+      added: Number(c.added) || 0,
+      removed: Number(c.removed) || 0,
+      patch: typeof c.patch === "string" ? c.patch : "",
+    }));
+}
+
+/**
+ * Slash commands (local control commands — never sent to the model).
+ * Handlers live in app.js; this table drives /help and the suggestion menu.
+ */
+export const SLASH_COMMANDS = [
+  { name: "help", usage: "/help", description: "Tampilkan daftar perintah." },
+  { name: "clear", usage: "/clear", description: "Mulai percakapan baru (riwayat tersimpan, task jalan terus)." },
+  { name: "new", usage: "/new", description: "Sama seperti /clear — sesi baru yang terisolasi." },
+  { name: "history", usage: "/history", description: "Tampilkan percakapan sebelumnya." },
+  { name: "resume", usage: "/resume <nomor|id>", description: "Buka lagi percakapan sebelumnya." },
+  { name: "status", usage: "/status", description: "Workspace, sesi, dan status task saat ini." },
+  { name: "stop", usage: "/stop", description: "Hentikan task yang berjalan (bukan clear chat)." },
+];
+
+/**
+ * Parse a slash command. Returns null for ordinary messages — including
+ * sentences that merely MENTION a slash ("What does /clear mean?", "a / b").
+ * Only a leading "/name" (after trimming) counts as a command.
+ */
+export function parseSlashCommand(input) {
+  const m = /^\s*\/([A-Za-z]+)(?:\s+([\s\S]*))?\s*$/.exec(input ?? "");
+  if (!m) return null;
+  return { name: m[1].toLowerCase(), args: (m[2] ?? "").trim() };
+}
+
+/** Fresh client conversation: new server run on next message, empty view. */
+export function freshConversation() {
+  return { runId: null, workflowRunId: null, transcript: [] };
+}
+
+/** One-line summary of a workflow run for the /history listing. */
+export function runHistoryLine(run, index) {
+  const turns = run?.turns ?? [];
+  const chatTurns = run?.chat_turns ?? 0;
+  if (turns.length === 0 && chatTurns > 0) {
+    return `${index}. (obrolan) — ${chatTurns} pesan`;
+  }
+  const firstGoal = turns[0]?.goal ?? "(obrolan)";
+  const running = turns.filter((t) => t.status === "running").length;
+  const failed = turns.filter((t) => t.status === "failed").length;
+  const state = running > 0 ? "jalan" : failed > 0 ? "gagal" : turns.length ? "selesai" : "kosong";
+  return `${index}. ${firstGoal} — ${turns.length} task, ${state}`;
 }
 
 /** Short human-readable arg summary for a tool call (mockup: "./", "package.json"). */
@@ -272,48 +512,122 @@ function summarizeArgs(tool, args) {
 
 /**
  * Minimal Markdown renderer (no dependencies).
- * Supports: code blocks (```), inline code, bold, italic, headers,
- * unordered/ordered lists, links, paragraphs. Returns HTML string.
+ * Supports: code blocks (```), inline code, bold, italic, strikethrough,
+ * headers, unordered/ordered lists, pipe tables, horizontal rules, links,
+ * paragraphs. Returns HTML string.
  * Code blocks get a copy button (wired up by the caller).
  */
 export function renderMarkdown(text) {
   if (!text) return "";
   const lines = String(text).split("\n");
+  const isTableRow = (line) => /^\s*\|.*\|\s*$/.test(line);
+  const isDelimiterRow = (line) =>
+    /^\s*\|(\s*:?-+:?\s*\|)+\s*$/.test(line) && line.replace(/[^:-]/g, "").includes("--");
+  const splitRow = (line) =>
+    line.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
   let html = "";
   let inCode = false;
   let codeLang = "";
   let codeBuf = [];
-  let inList = false;
-  let listType = "";
+  let listStack = []; // [{ type: "ul"|"ol", indent }], indent = leading spaces
 
   const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  // Attribute-safe URL: only http(s) and image data URLs ride along.
+  // javascript:/data:text payloads degrade to their visible label.
+  const attrUrl = (url) => {
+    const u = String(url ?? "").trim();
+    if (!/^(https?:\/\/|data:image\/)/i.test(u)) return null;
+    return esc(u).replace(/"/g, "&quot;");
+  };
 
   const inline = (s) => {
     // Inline code first (protect from other replacements)
     const codes = [];
     s = s.replace(/`([^`]+)`/g, (_, c) => {
       codes.push(`<code class="inline-code">${esc(c)}</code>`);
-      return `\u0000${codes.length - 1}\u0000`;
+      return ` ${codes.length - 1} `;
     });
     s = esc(s);
     // Restore inline code
-    s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => codes[Number(i)]);
-    // Bold, italic, links
+    s = s.replace(/ (\d+) /g, (_, i) => codes[Number(i)]);
+    // Images before links (the link pattern would eat the [alt](url) half).
+    s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => {
+      const safe = attrUrl(url);
+      return safe ? `<img src="${safe}" alt="${esc(alt).replace(/"/g, "&quot;")}" loading="lazy" class="md-img">` : esc(alt);
+    });
+    // Bold, italic, strikethrough, links
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
-    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+    s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, url) => {
+      const safe = attrUrl(url);
+      return safe ? `<a href="${safe}" target="_blank" rel="noopener">${label}</a>` : label;
+    });
     return s;
   };
 
   const closeList = () => {
-    if (inList) {
-      html += listType === "ol" ? "</ol>" : "</ul>";
-      inList = false;
-      listType = "";
+    while (listStack.length) {
+      html += listStack.pop().type === "ol" ? "</ol>" : "</ul>";
     }
   };
 
-  for (const line of lines) {
+  // letter-only placeholder tags (digits would trip the number tokenizer)
+  const tagOf = (i) => `QX${i.toString(36).replace(/[0-9]/g, (d) => "ABCDEFGHIJ"[Number(d)])}ZQ`;
+  const CODE_KEYWORDS = [
+    "const", "let", "var", "function", "return", "if", "else", "for", "while",
+    "do", "switch", "case", "break", "continue", "import", "from", "export",
+    "default", "class", "extends", "new", "try", "catch", "finally", "throw",
+    "async", "await", "def", "lambda", "fn", "struct", "impl", "pub", "use",
+    "mod", "match", "elif", "print", "echo", "type", "interface", "enum",
+    "static", "public", "private", "void", "int", "string", "bool", "true",
+    "false", "null", "nil", "then", "end", "select", "where",
+  ];
+
+  /** Tiny generic code highlighter (comments/strings/keywords/numbers). */
+  function highlightCode(src) {
+    const parts = [];
+    const stash = (html) => {
+      parts.push(html);
+      return tagOf(parts.length - 1);
+    };
+    let s = esc(src);
+    // Strings first (comment markers inside strings must survive).
+    s = s.replace(/("(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`)/g, (str) =>
+      stash(`<span class="tok-str">${str}</span>`));
+    // Comments (C/JS, shell/Python, SQL, C-style blocks).
+    s = s.replace(/(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/|--[^\n]*)/g, (com) =>
+      stash(`<span class="tok-com">${com}</span>`));
+    s = s.replace(new RegExp(`\\b(${CODE_KEYWORDS.join("|")})\\b`, "g"), `<span class="tok-kw">$1</span>`);
+    s = s.replace(/\b\d[\d_]*(?:\.\d+)?\b/g, `<span class="tok-num">$&</span>`);
+    parts.forEach((part, i) => {
+      s = s.split(tagOf(i)).join(part);
+    });
+    return s;
+  }
+
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    // Pipe table: header row + delimiter row + body rows.
+    if (isTableRow(line) && li + 1 < lines.length && isDelimiterRow(lines[li + 1])) {
+      closeList();
+      const head = splitRow(line);
+      html += `<table class="md-table"><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>`;
+      li += 2;
+      while (li < lines.length && isTableRow(lines[li]) && !isDelimiterRow(lines[li])) {
+        html += `<tr>${splitRow(lines[li]).map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`;
+        li++;
+      }
+      html += "</tbody></table>";
+      li--;
+      continue;
+    }
+    // Horizontal rule
+    if (/^\s*(---|\*\*\*|___)\s*$/.test(line)) {
+      closeList();
+      html += `<hr class="md-hr">`;
+      continue;
+    }
     // Code block fence
     const fence = line.match(/^```(\w*)\s*$/);
     if (fence) {
@@ -324,7 +638,7 @@ export function renderMarkdown(text) {
         closeList();
       } else {
         inCode = false;
-        const code = esc(codeBuf.join("\n"));
+        const code = highlightCode(codeBuf.join("\n"));
         html += `<div class="code-block"><div class="code-head"><span>${esc(codeLang)}</span><button class="copy-btn" data-code="${encodeURIComponent(codeBuf.join("\n"))}">Salin</button></div><pre><code>${code}</code></pre></div>`;
       }
       continue;
@@ -341,28 +655,28 @@ export function renderMarkdown(text) {
       html += `<h${level + 2} class="md-h">${inline(h[2])}</h${level + 2}>`;
       continue;
     }
-    // Unordered list
-    const ul = line.match(/^\s*[-*]\s+(.*)$/);
-    if (ul) {
-      if (!inList || listType !== "ul") {
-        closeList();
-        html += "<ul class=\"md-list\">";
-        inList = true;
-        listType = "ul";
+    // Unordered / ordered list, indent-aware (two spaces per level).
+    const um = line.match(/^(\s*)[-*]\s+(.*)$/);
+    const om = line.match(/^(\s*)\d+\.\s+(.*)$/);
+    const item = um
+      ? { type: "ul", indent: um[1].replace(/\t/g, "  ").length, text: um[2] }
+      : om
+        ? { type: "ol", indent: om[1].replace(/\t/g, "  ").length, text: om[2] }
+        : null;
+    if (item) {
+      while (listStack.length && listStack[listStack.length - 1].indent > item.indent) {
+        html += listStack.pop().type === "ol" ? "</ol>" : "</ul>";
       }
-      html += `<li>${inline(ul[1])}</li>`;
-      continue;
-    }
-    // Ordered list
-    const ol = line.match(/^\s*\d+\.\s+(.*)$/);
-    if (ol) {
-      if (!inList || listType !== "ol") {
-        closeList();
-        html += "<ol class=\"md-list\">";
-        inList = true;
-        listType = "ol";
+      const top = listStack[listStack.length - 1];
+      if (!top || top.indent < item.indent) {
+        html += `<${item.type} class="md-list${listStack.length ? " sub" : ""}">`;
+        listStack.push({ type: item.type, indent: item.indent });
+      } else if (top.type !== item.type) {
+        listStack.pop();
+        html += `${top.type === "ol" ? "</ol>" : "</ul"}<${item.type} class="md-list${listStack.length ? " sub" : ""}">`;
+        listStack.push({ type: item.type, indent: item.indent });
       }
-      html += `<li>${inline(ol[1])}</li>`;
+      html += `<li>${inline(item.text)}</li>`;
       continue;
     }
     // Blank line
@@ -377,7 +691,7 @@ export function renderMarkdown(text) {
   closeList();
   // Unclosed code block
   if (inCode) {
-    const code = esc(codeBuf.join("\n"));
+    const code = highlightCode(codeBuf.join("\n"));
     html += `<div class="code-block"><div class="code-head"><span>${esc(codeLang)}</span><button class="copy-btn" data-code="${encodeURIComponent(codeBuf.join("\n"))}">Salin</button></div><pre><code>${code}</code></pre></div>`;
   }
   return html;

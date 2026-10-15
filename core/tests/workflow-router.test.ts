@@ -3,6 +3,7 @@ import {
   RULE_CONFIDENCE_THRESHOLD,
   buildLayerBPrompt,
   formatResolvedForGoal,
+  isConversationalMessage,
   parseLayerBResponse,
   resolveReferences,
   routeByRules,
@@ -170,6 +171,46 @@ describe("formatResolvedForGoal", () => {
 
   test("empty refs → empty string", () => {
     expect(formatResolvedForGoal([])).toBe("");
+  });
+});
+
+describe("isConversationalMessage — chat-first guard", () => {
+  const chat = [
+    "1 + 1 berapa?",
+    "Siapa Windah Basudara?",
+    "Apa perbedaan React dan Vue?",
+    "Kenapa langit berwarna biru?",
+    "Bagaimana cara membuat landing page?",
+    "Jelaskan kode ini tanpa mengubahnya.",
+    "how to create a landing page?",
+    "explain this code without modifying it",
+  ];
+  for (const message of chat) {
+    test(`chat: "${message}"`, () => {
+      expect(isConversationalMessage(message)).toBe(true);
+    });
+  }
+
+  const work = [
+    "Buatkan landing page HTML tentang AI di folder huhu.",
+    "Perbaiki bug pada project ini.",
+    "Refactor modul autentikasi.",
+    "Buatkan PPTX tentang kecerdasan buatan.",
+    "Analisis spreadsheet ini dan buat laporan.",
+    "Buatkan dokumen proposal di workspace ini.",
+  ];
+  for (const message of work) {
+    test(`work: "${message}"`, () => {
+      expect(isConversationalMessage(message)).toBe(false);
+    });
+  }
+
+  test("explicit override still wins: guard is bypassed by the caller", () => {
+    const routed = routeByRules("Bagaimana cara membuat landing page?", {
+      engineOverride: "coding",
+    });
+    expect(routed.engine).toBe("coding");
+    expect(routed.matchedRule).toBe("engine_override");
   });
 });
 

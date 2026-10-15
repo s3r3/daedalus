@@ -16,6 +16,7 @@ export { WORKFLOW_ENGINES, isWorkflowEngine } from "./types.ts";
 export type { RuleRouteResult, RouteOptions, LayerBResult } from "./router.ts";
 export {
   RULE_CONFIDENCE_THRESHOLD,
+  isConversationalMessage,
   routeByRules,
   resolveReferences,
   formatResolvedForGoal,

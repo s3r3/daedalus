@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import type { DomainModelSettings, EditFormat, ModelTier, PromptFamilySetting, TaskDomain, ThinkingLevel } from "./contracts.ts";
 import { normalizeModelList, normalizeModelTiers, parseModelStrategy, parseModelTiers, type ModelStrategy } from "./providers/llm/model-pool.ts";
 import { parsePromptFamilySetting } from "./agent/prompt-dialects.ts";
@@ -72,6 +73,36 @@ export type Env = Record<string, string | undefined>;
  * Typed settings loader. Secrets come from environment only and are never logged
  * (PLAN.md §10). Missing values fall back to safe defaults where possible.
  */
+
+/**
+ * Path of the JSON settings file persisted by the UI/server.
+ */
+export function settingsPath(home: string): string {
+  return join(home, "settings.json");
+}
+
+/** Read the persisted JSON settings; missing/invalid file yields an empty object. */
+export function loadSettingsFile(home: string): Record<string, unknown> {
+  try {
+    const raw = readFileSync(settingsPath(home), "utf-8");
+    const parsed: Record<string, unknown> = JSON.parse(raw);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+/** Write the full settings object to the JSON file (never logs keys). */
+export function saveSettingsFile(home: string, settings: Record<string, unknown>): void {
+  try {
+    const dir = dirname(settingsPath(home));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(settingsPath(home), JSON.stringify(settings, null, 2) + "\n");
+  } catch {
+    /* best effort */
+  }
+}
+
 export function loadSettings(env: Env = process.env): Settings {
   const port = Number(env.DAEDALUS_PORT ?? "3080");
   if (!Number.isInteger(port) || port < 1 || port > 65535) {

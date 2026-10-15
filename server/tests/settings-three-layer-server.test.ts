@@ -315,6 +315,13 @@ describe('thinkingLevel on the session', () => {
     expect(res.status).toBe(200)
     expect(sessionOf(res.body).thinkingLevel).toBe('high')
   })
+
+  test('PATCH /settings accepts top-level camelCase thinkingLevel (companion UI)', async () => {
+    const { base } = await listen()
+    const res = await patchSettings(base, { thinkingLevel: 'low' })
+    expect(res.status).toBe(200)
+    expect(sessionOf(res.body).thinkingLevel).toBe('low')
+  })
 })
 
 describe('POST /tasks — token budget and tool rules', () => {

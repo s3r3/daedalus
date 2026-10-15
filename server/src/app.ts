@@ -1,5 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
 import { basename, extname, join, resolve, sep } from "node:path";
@@ -113,7 +113,10 @@ import {
   type ThinkingLevel,
   type ToolRules,
   type ArtifactRef,
+  type ContentBlock,
   type LayerBResult,
+  type Message,
+  type ProviderConfig,
   type RunContext,
   type RunTurn,
   type WorkflowEngine,
@@ -124,6 +127,7 @@ import {
   buildLayerBPrompt,
   createWorkflowRun,
   formatResolvedForGoal,
+  isConversationalMessage,
   isWorkflowEngine,
   lastTurn,
   parseLayerBResponse,
@@ -137,8 +141,11 @@ import { classifyWebIntent, executeFastPath, resolveFastPathProvider } from "./f
 import { gitStatus, revertFileToHead } from "./git-status.ts";
 import {
   ConversationStore,
+  MAX_HISTORY_CHARS,
+  MAX_HISTORY_TURNS,
   historyMessages,
   priorContextSection,
+  recentTurns,
   taskSummaryText,
   type Conversation,
   type ConversationTurn,
@@ -302,7 +309,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
   };
   return {
     bus: overrides.bus ?? new EventBus(),
-    store: overrides.store ?? new TaskStore(resolveDaedalusHome(settings.daedalusHome, cwd)),
+    store: overrides.store ?? new TaskStore(resolveDaedalusHome(settings.daedalusHome, anchoredWorkspace)),
     log: overrides.log ?? createLogger({ base: { service: "daedalus-server" } }),
     startedAt: overrides.startedAt ?? Date.now(),
     cwd,
@@ -310,7 +317,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     approvalMemory: overrides.approvalMemory ?? new Map<string, ApprovalDecision>(),
     terminals: overrides.terminals ?? new TerminalManager(),
     settings,
-    providerStore: overrides.providerStore ?? new ProviderRegistryStore(resolveDaedalusHome(settings.daedalusHome, cwd)),
+    providerStore: overrides.providerStore ?? new ProviderRegistryStore(resolveDaedalusHome(settings.daedalusHome, anchoredWorkspace)),
     session,
     workspaces: overrides.workspaces ?? new Set<string>([resolve(cwd), resolve(session.workspaceRoot)]),
     webDist: overrides.webDist,
@@ -825,7 +832,11 @@ async function handleProviders(ctx: AppContext, req: IncomingMessage, res: Serve
     const registry = ctx.providerStore.registry;
 
     if (method === "GET" && url.pathname === "/providers") {
-      sendJson(res, 200, { providers: registry.list(), presets: PROVIDER_PRESETS });
+      // `home` tells companions WHERE this registry lives: the store is
+      // anchored to the session workspace, so providers added under a
+      // different workspace (or ~/.daedalus directly) legitimately show
+      // up as an empty list here — never silently merged, never guessed.
+      sendJson(res, 200, { providers: registry.list(), presets: PROVIDER_PRESETS, home: ctx.providerStore.filePath });
       return;
     }
 
@@ -835,7 +846,7 @@ async function handleProviders(ctx: AppContext, req: IncomingMessage, res: Serve
         sendJson(res, 400, { error: "invalid_json", request_id: requestId });
         return;
       }
-      const provider = registry.upsert(providerInput(parsed) as never);
+      const provider = registry.upsert(providerInput(mergeProviderInput(registry, parsed)) as never);
       await ctx.providerStore.save();
       sendJson(res, 201, { provider });
       return;
@@ -881,7 +892,7 @@ async function handleProviders(ctx: AppContext, req: IncomingMessage, res: Serve
           sendJson(res, 400, { error: "invalid_json", request_id: requestId });
           return;
         }
-        const provider = registry.upsert(providerInput({ ...parsed, id }) as never);
+        const provider = registry.upsert(providerInput(mergeProviderInput(registry, { ...parsed, id })) as never);
         await ctx.providerStore.save();
         sendJson(res, 200, { provider });
         return;
@@ -902,6 +913,25 @@ async function handleProviders(ctx: AppContext, req: IncomingMessage, res: Serve
   } catch (error) {
     sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
   }
+}
+
+/**
+ * Merge a provider write over the stored record: fields the client omits
+ * are preserved instead of wiped. Without this, a key rotation
+ * (`PUT /providers/:id {apiKey}`) would silently erase the provider's
+ * baseUrl, models, and name. Explicit values (including explicit empty
+ * arrays) still win; an explicitly empty apiKey keeps the stored key.
+ */
+function mergeProviderInput(
+  registry: { get(id: string): ProviderConfig | undefined },
+  parsed: Record<string, unknown>,
+): Record<string, unknown> {
+  const rawId = parsed.id;
+  const id = typeof rawId === "string" && rawId.trim() ? rawId.trim() : undefined;
+  if (!id) return parsed;
+  const prev = registry.get(id);
+  if (!prev) return parsed;
+  return { ...prev, ...parsed, id };
 }
 
 function providerInput(parsed: Record<string, unknown>): Record<string, unknown> {
@@ -1133,7 +1163,7 @@ function taskStores(ctx: AppContext): TaskStore[] {
   return stores;
 }
 
-function findTask(ctx: AppContext, taskId: string): TaskLookup | undefined {
+export function findTask(ctx: AppContext, taskId: string): TaskLookup | undefined {
   for (const store of taskStores(ctx)) {
     const state = store.loadState<Record<string, unknown>>(taskId);
     if (state !== undefined) return { store, state };
@@ -1142,7 +1172,7 @@ function findTask(ctx: AppContext, taskId: string): TaskLookup | undefined {
   return undefined;
 }
 
-function allTaskIds(ctx: AppContext): string[] {
+export function allTaskIds(ctx: AppContext): string[] {
   const ids = new Set<string>();
   for (const store of taskStores(ctx)) {
     for (const id of store.listTasks()) ids.add(id);
@@ -1849,38 +1879,409 @@ async function runWorkflowLayerB(
 }
 
 /**
- * Chat-first: a conversational reply for messages that are not work commands.
- * Used when the router cannot confidently dispatch to an engine — the user
- * gets a normal chat reply, not an "which engine?" picker.
+ * Dae Captain chat-kind turns: memory, attachments, regenerate, streaming.
+ *
+ * Chat exchanges live in the workspace ConversationStore keyed by the
+ * workflow run id — one file per session, next to the run file. Follow-ups
+ * ride the recent turns (plus prior dispatched-task goals) back into the
+ * prompt, so "jelaskan lebih dalam" continues instead of starting cold. A
+ * new run id (/clear, fresh boot) trivially starts cold: nothing is
+ * inherited, nothing is deleted (old sessions stay on disk for /history).
  */
-async function runWorkflowChatReply(
+const CHAT_SYSTEM_PROMPT =
+  "Kamu Dae Captain, asisten AI yang ramah dan membantu. " +
+  "Balas dengan singkat dan natural dalam bahasa Indonesia. " +
+  "Kamu bisa membantu membuat kode, slide presentasi, dokumen, spreadsheet, dan riset — " +
+  "tapi untuk obrolan biasa cukup ngobrol saja, jangan tanya mau pakai engine apa.";
+
+/** No provider configured and the model cannot answer at all. */
+const CHAT_FALLBACK = "Halo! Ada yang bisa dibantu?";
+
+export type ChatAttachmentIn = {
+  name: string;
+  mime: string;
+  /** data: URL — validated images only. */
+  data_url?: string;
+  /** Inline excerpt — validated text files only. */
+  text?: string;
+};
+
+/** Mirrors the companion's CHAT_ATTACH_LIMITS (logic.js) — enforced here, never trusted. */
+const CHAT_IMAGE_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+const CHAT_TEXT_MIMES = new Set([
+  "text/plain", "text/markdown", "text/csv", "application/json",
+  "text/html", "text/css", "text/javascript", "application/javascript",
+  "text/x-python", "application/x-python", "text/yaml", "application/yaml",
+  "application/toml", "text/xml", "application/xml", "text/x-sh",
+]);
+const CHAT_IMAGE_MAX_BYTES = 5 * 1024 * 1024;
+const CHAT_TEXT_MAX_CHARS = 20_000;
+const CHAT_MAX_ATTACHMENTS = 4;
+
+function approxDataUrlBytes(dataUrl: string): number {
+  const comma = dataUrl.indexOf(",");
+  const b64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl;
+  return Math.floor(b64.replace(/[^A-Za-z0-9+/=]/g, "").length * 3 / 4);
+}
+
+/** Validate client-supplied chat attachments. Throws a named 400 on abuse. */
+function parseChatAttachments(raw: unknown): ChatAttachmentIn[] {
+  if (raw === undefined) return [];
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > CHAT_MAX_ATTACHMENTS) {
+    throw new Error("invalid_attachment");
+  }
+  return raw.map((item) => {
+    if (typeof item !== "object" || item === null) throw new Error("invalid_attachment");
+    const record = item as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name : "";
+    const mime = typeof record.mime === "string" ? record.mime.toLowerCase() : "";
+    if (!name || name.length > 120 || name.includes("/") || name.includes("\\") || name.includes("..")) {
+      throw new Error("invalid_attachment");
+    }
+    if (CHAT_IMAGE_MIMES.has(mime)) {
+      const dataUrl = typeof record.data_url === "string" ? record.data_url : "";
+      if (!/^data:image\/(png|jpeg|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(dataUrl)) {
+        throw new Error("invalid_attachment");
+      }
+      if (approxDataUrlBytes(dataUrl) > CHAT_IMAGE_MAX_BYTES) throw new Error("attachment_too_large");
+      return { name, mime, data_url: dataUrl };
+    }
+    if (CHAT_TEXT_MIMES.has(mime)) {
+      const text = typeof record.text === "string" ? record.text : "";
+      if (!text.trim() || text.length > CHAT_TEXT_MAX_CHARS) throw new Error("invalid_attachment");
+      return { name, mime, text };
+    }
+    throw new Error("unsupported_attachment");
+  });
+}
+
+/** Persist chat images under the workspace (record + regenerate can re-read them). */
+function persistChatImages(root: string, runId: string, attachments: ChatAttachmentIn[]): Map<number, string> {
+  const saved = new Map<number, string>();
+  attachments.forEach((attachment, index) => {
+    if (!attachment.data_url) return;
+    try {
+      const safe = attachment.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60) || "image";
+      const dir = join(root, ".daedalus", "attachments", "chat");
+      mkdirSync(dir, { recursive: true });
+      const absolute = join(dir, `${runId.slice(0, 8)}-${index}-${safe}`);
+      writeFileSync(absolute, Buffer.from(attachment.data_url.slice(attachment.data_url.indexOf(",") + 1), "base64"));
+      saved.set(index, absolute);
+    } catch {
+      /* marker falls back to the bare name below */
+    }
+  });
+  return saved;
+}
+
+function chatRecordText(message: string, attachments: ChatAttachmentIn[], saved: Map<number, string>): string {
+  if (attachments.length === 0) return message;
+  const markers = attachments.map((attachment, index) => {
+    const where = saved.get(index);
+    return attachment.data_url
+      ? `[lampiran gambar: ${attachment.name}${where ? ` @ ${where}` : ""}]`
+      : `[lampiran teks ${attachment.name}:]\n${attachment.text}`;
+  });
+  return `${message}\n${markers.join("\n")}`;
+}
+
+/** Prior dispatched-task goals as context, so "jelaskan lebih dalam" can refer to them. */
+function dispatchedGoalsNote(run: RunContext): string | undefined {
+  if (run.turns.length === 0) return undefined;
+  const lines = run.turns.slice(-5).map((turn) => `- ${turn.goal} (${turn.engine}, ${turn.status})`);
+  return ["Tugas sebelumnya di sesi ini (acuan, jangan diulang):", ...lines].join("\n");
+}
+
+function buildChatMessages(input: {
+  history: ConversationTurn[];
+  goalsNote?: string;
+  message: string;
+  attachments: ChatAttachmentIn[];
+}): Message[] {
+  const imageBlocks: ContentBlock[] = [];
+  const notes: string[] = [];
+  for (const attachment of input.attachments) {
+    if (attachment.data_url) {
+      imageBlocks.push({ type: "image_url", image_url: { url: attachment.data_url } });
+      notes.push(`[gambar: ${attachment.name}]`);
+    } else {
+      notes.push(`[teks terlampir ${attachment.name}:]\n${attachment.text}`);
+    }
+  }
+  const userText = notes.length > 0 ? `${input.message}\n${notes.join("\n")}` : input.message;
+  const messages: Message[] = [
+    {
+      role: "system",
+      content: CHAT_SYSTEM_PROMPT + (input.goalsNote ? `\n\n${input.goalsNote}` : ""),
+    },
+    ...historyMessages(input.history),
+  ];
+  messages.push(
+    imageBlocks.length > 0
+      ? { role: "user", content: [{ type: "text", text: userText }, ...imageBlocks] }
+      : { role: "user", content: userText },
+  );
+  return messages;
+}
+
+function isoNow(): string {
+  return new Date().toISOString();
+}
+
+function messageContentText(message: { content: unknown }): string | undefined {
+  const content = message.content;
+  if (typeof content === "string") return content.trim() ? content : undefined;
+  if (Array.isArray(content)) {
+    const text = content
+      .filter((block): block is { type: "text"; text: string } => typeof block === "object" && block !== null && (block as { type?: unknown }).type === "text")
+      .map((block) => block.text)
+      .join("");
+    return text.trim() ? text : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Shared preparation for chat replies (plain + streaming + regenerate):
+ * history baseline, persisted images, and the model-ready messages.
+ * Persisting is idempotent (same filename per run/index/name).
+ */
+/**
+ * True when the model's history window drops older context — mirroring the
+ * caps recentTurns enforces, so the UI can say so instead of silently
+ * forgetting. Evaluated on the exact baseline the prompt is built from.
+ */
+function isHistoryClipped(history: ConversationTurn[]): boolean {
+  let used = 0;
+  let kept = 0;
+  for (let index = history.length - 1; index >= 0 && kept < MAX_HISTORY_TURNS; index--) {
+    const cost = Math.min(history[index]!.text.length, 1200);
+    if (kept > 0 && used + cost > MAX_HISTORY_CHARS) return true;
+    used += cost;
+    kept++;
+  }
+  if (kept < history.length) return true;
+  return history.some((turn) => turn.text.length > 1200);
+}
+
+function prepareChatTurn(
   ctx: AppContext,
-  message: string,
-): Promise<string | undefined> {
+  root: string,
+  run: RunContext,
+  input: { message: string; attachments: ChatAttachmentIn[]; regenerate: boolean },
+): { store: ConversationStore; history: ConversationTurn[]; messages: Message[]; recordText: string; clipped: boolean } {
+  const store = conversationStoreFor(ctx, root);
+  const ensured = store.ensure(root, run.run_id);
+  let history = ensured.turns;
+  if (input.regenerate && history.length > 0 && history[history.length - 1]?.role === "assistant") {
+    // Persist the drop: the previous answer is replaced, not stacked.
+    history = history.slice(0, -1);
+    store.replaceTurns(root, run.run_id, history);
+  }
+  const clipped = isHistoryClipped(history);
+  const saved = persistChatImages(root, run.run_id, input.attachments);
+  const recordText = chatRecordText(input.message, input.attachments, saved);
+  const messages = buildChatMessages({
+    history,
+    goalsNote: dispatchedGoalsNote(run),
+    message: input.message,
+    attachments: input.attachments,
+  });
+  return { store, history, messages, recordText, clipped };
+}
+
+/**
+ * Non-streaming chat reply with memory: the recent turns of THIS run ride
+ * along, then the exchange is appended. Returns undefined only when no
+ * provider is configured (the caller falls back to the greeting).
+ */
+async function runChatReply(
+  ctx: AppContext,
+  root: string,
+  run: RunContext,
+  runs: WorkflowRunStore,
+  input: { message: string; attachments: ChatAttachmentIn[]; regenerate: boolean },
+): Promise<{ text: string; clipped: boolean; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } } | undefined> {
+  const prep = prepareChatTurn(ctx, root, run, input);
   const provider = resolveFastPathProvider(ctx, { poolModels: [] });
   if (!provider) return undefined;
   try {
-    const response = await provider.chat([
-      {
-        role: "system",
-        content:
-          "Kamu Dae Captain, asisten AI yang ramah dan membantu. " +
-          "Balas dengan singkat dan natural dalam bahasa Indonesia. " +
-          "Kamu bisa membantu membuat kode, slide presentasi, dokumen, spreadsheet, dan riset — " +
-          "tapi untuk obrolan biasa cukup ngobrol saja, jangan tanya mau pakai engine apa.",
-      },
-      { role: "user", content: message },
-    ]);
-    const content = response.message.content;
-    return typeof content === "string" && content.trim().length > 0
-      ? content
-      : undefined;
+    const response = await provider.chat(prep.messages);
+    const text = messageContentText(response.message);
+    if (!text) return undefined;
+    if (!input.regenerate) {
+      prep.store.append(root, run.run_id, { role: "user", text: prep.recordText, ts: isoNow() });
+    }
+    prep.store.append(root, run.run_id, { role: "assistant", text, ts: isoNow() });
+    runs.saveRun(run); // touch: active chats sort newest-first in /history
+    return { text, clipped: prep.clipped, ...(response.usage ? { usage: response.usage } : {}) };
   } catch (error) {
-    ctx.log.error("workflow chat reply failed", {
-      error: String(error),
-    });
-    return undefined;
+    ctx.log.error("workflow chat reply failed", { error: String(error) });
+    throw new Error("model_unavailable");
   }
+}
+
+type ChatRoute =
+  | { kind: "chat" }
+  | { kind: "dispatch"; engine: WorkflowEngine; confidence: number; matchedRule: string; routerLayer: string };
+
+/**
+ * Route a chat message, shared by POST /workflow/chat and its streaming
+ * sibling: override > conversational-first > rules > layer B > chat.
+ * A question ABOUT work is never permission to execute it.
+ */
+async function routeChatMessage(
+  ctx: AppContext,
+  message: string,
+  run: RunContext,
+  overrideRaw: unknown,
+): Promise<ChatRoute> {
+  if (!overrideRaw && isConversationalMessage(message)) return { kind: "chat" };
+  const previousEngine = lastTurn(run)?.engine;
+  let routed = routeByRules(message, {
+    ...(overrideRaw ? { engineOverride: overrideRaw as WorkflowEngine } : {}),
+    ...(previousEngine ? { previousEngine } : {}),
+  });
+  let routerLayer = "rules";
+  if (!overrideRaw && routed.confidence < RULE_CONFIDENCE_THRESHOLD) {
+    const lb = await runWorkflowLayerB(ctx, message);
+    if (lb && !lb.needs_clarify && lb.confidence >= RULE_CONFIDENCE_THRESHOLD) {
+      routed = { engine: lb.engine, confidence: lb.confidence, matchedRule: "llm_fallback" };
+      routerLayer = "llm";
+    } else {
+      // Chat-first: the router cannot confidently dispatch — reply
+      // conversationally instead of asking "which engine?".
+      return { kind: "chat" };
+    }
+  }
+  return { kind: "dispatch", engine: routed.engine, confidence: routed.confidence, matchedRule: routed.matchedRule, routerLayer };
+}
+
+/** Load an existing run or start a fresh one (a fresh id = cold context). */
+function loadOrCreateChatRun(
+  runs: WorkflowRunStore,
+  root: string,
+  runIdRaw: string | undefined,
+): { run: RunContext } | { missing: true } {
+  const run = runIdRaw ? runs.loadRun(runIdRaw) : undefined;
+  if (runIdRaw && !run) return { missing: true };
+  if (run) return { run };
+  const fresh = createWorkflowRun(root);
+  runs.saveRun(fresh);
+  return { run: fresh };
+}
+
+/**
+ * The dispatch half of POST /workflow/chat, shared with the stream route
+ * (which returns this identical JSON when the message turns out to be
+ * work). Returns { status, body } — the caller sends the HTTP response.
+ */
+async function dispatchChatTurn(
+  ctx: AppContext,
+  input: {
+    root: string;
+    run: RunContext;
+    runs: WorkflowRunStore;
+    engine: WorkflowEngine;
+    confidence: number;
+    matchedRule: string;
+    routerLayer: string;
+    message: string;
+    overrideRaw: unknown;
+    explicitWorkspace: string;
+    providerId?: string;
+    model?: string;
+    requestId: string;
+  },
+): Promise<{ status: number; body: unknown }> {
+  const { root, run, runs, engine, confidence, matchedRule, routerLayer, message, overrideRaw, explicitWorkspace, providerId, model, requestId } = input;
+
+  // Disabled engines (Dae Captain "Agentic Systems" toggles) are
+  // never dispatched to. An explicit override is a client error;
+  // an auto-route becomes an honest message over enabled engines.
+  const disabledEngines = ctx.session.disabledEngines ?? [];
+  if (disabledEngines.includes(engine)) {
+    if (overrideRaw) {
+      return { status: 400, body: { error: "engine_disabled", engine, request_id: requestId } };
+    }
+    const enabled = WORKFLOW_ENGINES.filter((e) => !disabledEngines.includes(e));
+    return {
+      status: 200,
+      body: {
+        run_id: run.run_id,
+        kind: "chat",
+        text: `Engine ${engine} sedang nonaktif. Aktifkan dulu di Pengaturan, atau pilih salah satu yang aktif: ${enabled.join(", ")}.`,
+        request_id: requestId,
+      },
+    };
+  }
+
+  // Workspace on-demand: work commands need an explicit workspace.
+  // Chat replies don't. If the client hasn't picked one (and the
+  // session doesn't remember one), ask instead of silently using cwd.
+  if (!explicitWorkspace && !ctx.session.workspaceRoot) {
+    return {
+      status: 200,
+      body: {
+        run_id: run.run_id,
+        kind: "need_workspace",
+        message: "Pilih folder workspace dulu — file yang dibuat akan ditulis di sana.",
+        request_id: requestId,
+      },
+    };
+  }
+
+  const resolved = resolveReferences(message, run);
+  const goal = message + formatResolvedForGoal(resolved);
+  const routerInfo = { layer: routerLayer, confidence, rule: matchedRule };
+
+  if (engine === "research") {
+    const staged = await stageResearchPlanCore(
+      ctx,
+      { question: goal, root, ...(providerId ? { provider_id: providerId } : {}), ...(model ? { model } : {}) },
+      requestId,
+    );
+    if (staged.status !== 200 || !staged.planId) return { status: staged.status, body: staged.body };
+    const turn = appendTurn(run, {
+      engine: "research",
+      task_id: staged.planId,
+      goal: message,
+      status: "running",
+      note: "rencana riset staged — menunggu 'Jalankan riset'",
+    });
+    runs.saveRun(run);
+    return {
+      status: 200,
+      body: {
+        run_id: run.run_id, turn_id: turn.turn_id, engine: "research",
+        plan_id: staged.planId, staged: true, resolved_artifacts: resolved,
+        router: routerInfo, request_id: requestId,
+      },
+    };
+  }
+
+  const created = await createTaskCore(
+    ctx,
+    {
+      goal,
+      repo_path: root,
+      ...(engine === "coding" ? {} : { domain: engine }),
+      ...(providerId ? { provider_id: providerId } : {}),
+      ...(model ? { model } : {}),
+    },
+    requestId,
+  );
+  if (created.status !== 201 || !created.taskId) return { status: created.status, body: created.body };
+  const turn = appendTurn(run, { engine, task_id: created.taskId, goal: message, status: "running" });
+  runs.saveRun(run);
+  return {
+    status: 201,
+    body: {
+      run_id: run.run_id, turn_id: turn.turn_id, engine,
+      task_id: created.taskId, resolved_artifacts: resolved,
+      router: routerInfo, request_id: requestId,
+    },
+  };
 }
 
 /**
@@ -1923,7 +2324,7 @@ function reconcileWorkflowRun(ctx: AppContext, run: RunContext): boolean {
       continue;
     }
     if (ctx.activeRunners.has(turn.task_id)) continue;
-    const state = tasks.loadState<{ status?: string }>(turn.task_id);
+    const state = tasks.loadState<{ status?: string; last_error?: unknown }>(turn.task_id);
     if (state?.status === "done") {
       const report = tasks.loadReport<FinalReport>(turn.task_id);
       updateTurn(run, turn.turn_id, {
@@ -2005,15 +2406,42 @@ function presentWorkflowTurn(
     ...(stats.lastType ? { last_event: stats.lastType } : {}),
     ...(stats.lastTs ? { last_event_ts: stats.lastTs } : {}),
     pending_approvals: runner.approvals.pending().map((entry) => ({
+      // `id` first: the companion resolves approvals by id
+      // (`POST /tasks/:id/approvals/:approvalId`), which searches every
+      // active runner. The key-addressed route needs the task's own runner
+      // and 404s `runner_not_found` once the server restarted mid-run.
+      id: entry.info.id,
       key: entry.key,
       tool: entry.info.tool,
       policy: entry.policy,
     })),
+    // Full card data: the companion renders the question text plus its
+    // 2-4 option buttons (and free text when allowed) — an id alone left
+    // the user guessing what to type.
     pending_questions: runner.questions.pending().map((entry) => ({
       id: entry.info.id,
       task_id: turn.task_id,
+      question: entry.info.question,
+      options: entry.info.options,
+      allow_free_text: entry.info.allowFreeText,
     })),
   };
+}
+
+/** Chat exchanges of one run (bounded, oldest first) for /history + /resume. */
+function chatExcerpt(
+  ctx: AppContext,
+  run: RunContext,
+): { count: number; messages: Array<{ role: string; text: string; ts: string }> } {
+  try {
+    const turns = conversationStoreFor(ctx, run.workspace_root).load(run.run_id)?.turns ?? [];
+    return {
+      count: turns.length,
+      messages: recentTurns(turns).map((turn) => ({ role: turn.role, text: turn.text, ts: turn.ts })),
+    };
+  } catch {
+    return { count: 0, messages: [] };
+  }
 }
 
 function presentWorkflowRun(
@@ -2022,12 +2450,17 @@ function presentWorkflowRun(
 ): Record<string, unknown> {
   const home = resolveDaedalusHome(ctx.settings.daedalusHome, run.workspace_root);
   const tasks = new TaskStore(home);
+  const chat = chatExcerpt(ctx, run);
   return {
     run_id: run.run_id,
     workspace_root: run.workspace_root,
     created_at: run.created_at,
     updated_at: run.updated_at,
     turns: run.turns.map((turn) => presentWorkflowTurn(ctx, tasks, turn)),
+    // Chat-kind exchanges (not engine turns): count for /history labels,
+    // messages so /resume restores the visible conversation.
+    chat_turns: chat.count,
+    chat: chat.messages,
   };
 }
 /**
@@ -2038,9 +2471,11 @@ function presentWorkflowRun(
  */
 export function ensureDaemonToken(daedalusHome: string): string {
   const path = join(daedalusHome, "daemon.json");
+  let previous: Record<string, unknown> = {};
   try {
     const raw = readFileSync(path, "utf-8");
-    const parsed = JSON.parse(raw) as { token?: unknown };
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed && typeof parsed === "object") previous = parsed;
     if (typeof parsed.token === "string" && parsed.token.length >= 32) {
       return parsed.token;
     }
@@ -2049,8 +2484,10 @@ export function ensureDaemonToken(daedalusHome: string): string {
   }
   const token = randomBytes(32).toString("hex");
   try {
-    mkdir(daedalusHome, { recursive: true });
-    writeFile(path, JSON.stringify({ token }, null, 2) + "\n");
+    mkdirSync(daedalusHome, { recursive: true });
+    // Preserve sidecar fields (pid/host/port/started_at/...) when present:
+    // overwriting daemon.json with only {token} breaks `daedalus status`.
+    writeFileSync(path, JSON.stringify({ ...previous, token }, null, 2) + "\n");
   } catch {
     /* best effort — token still returned for this process */
   }
@@ -2067,10 +2504,13 @@ function bearerToken(req: IncomingMessage): string | undefined {
 
 export function createApp(ctx: AppContext) {
   reconcileInterruptedTasks(ctx);
-  // Local daemon token for sensitive endpoints (approve/cancel).
+  // Local daemon token for sensitive endpoints (approve/cancel). Anchored to
+  // the session workspace so DAEDALUS_WORKSPACE sidecars, the Tauri
+  // `daemon_token(workspace)` command, and the CLI read the same file —
+  // the old cwd-anchored path broke approvals whenever cwd != workspace.
   if (!ctx.daemonToken) {
     ctx.daemonToken = ensureDaemonToken(
-      resolveDaedalusHome(ctx.settings.daedalusHome, ctx.cwd),
+      resolveDaedalusHome(ctx.settings.daedalusHome, ctx.session.workspaceRoot || ctx.cwd),
     );
   }
   // Permanent bundled skills: make sure the starter set is installed in the
@@ -2384,83 +2824,14 @@ export function createApp(ctx: AppContext) {
             typeof parsed.run_id === "string" && parsed.run_id
               ? parsed.run_id
               : undefined;
-          let run = runIdRaw ? runs.loadRun(runIdRaw) : undefined;
-          if (runIdRaw && !run) {
+          const loaded = loadOrCreateChatRun(runs, root, runIdRaw);
+          if ("missing" in loaded) {
             sendJson(res, 404, { error: "run_not_found", request_id: requestId });
             return;
           }
-          if (!run) {
-            run = createWorkflowRun(root);
-            runs.saveRun(run);
-          }
-
-          // Route: override > rules > layer B > clarify.
-          const previousEngine = lastTurn(run)?.engine;
-          let routed = routeByRules(message, {
-            ...(overrideRaw
-              ? { engineOverride: overrideRaw as WorkflowEngine }
-              : {}),
-            ...(previousEngine ? { previousEngine } : {}),
-          });
-          let routerLayer = "rules";
-          if (!overrideRaw && routed.confidence < RULE_CONFIDENCE_THRESHOLD) {
-            const lb = await runWorkflowLayerB(ctx, message);
-            if (
-              lb &&
-              !lb.needs_clarify &&
-              lb.confidence >= RULE_CONFIDENCE_THRESHOLD
-            ) {
-              routed = {
-                engine: lb.engine,
-                confidence: lb.confidence,
-                matchedRule: "llm_fallback",
-              };
-              routerLayer = "llm";
-            } else {
-              // Chat-first: when the router cannot confidently dispatch to an
-              // engine, reply conversationally instead of asking "which
-              // engine?". An explicit engineOverride still forces a dispatch.
-              const chatText =
-                (await runWorkflowChatReply(ctx, message)) ??
-                "Halo! Ada yang bisa dibantu?";
-              sendJson(res, 200, {
-                run_id: run.run_id,
-                kind: "chat",
-                text: chatText,
-                request_id: requestId,
-              });
-              return;
-            }
-          }
-
-          // Disabled engines (Dae Captain "Agentic Systems" toggles) are
-          // never dispatched to. An explicit override is a client error;
-          // an auto-route becomes an honest message over enabled engines.
-          const disabledEngines = ctx.session.disabledEngines ?? [];
-          if (disabledEngines.includes(routed.engine)) {
-            if (overrideRaw) {
-              sendJson(res, 400, {
-                error: "engine_disabled",
-                engine: routed.engine,
-                request_id: requestId,
-              });
-              return;
-            }
-            const enabled = WORKFLOW_ENGINES.filter(
-              (e) => !disabledEngines.includes(e),
-            );
-            sendJson(res, 200, {
-              run_id: run.run_id,
-              kind: "chat",
-              text: `Engine ${routed.engine} sedang nonaktif. Aktifkan dulu di Pengaturan, atau pilih salah satu yang aktif: ${enabled.join(", ")}.`,
-              request_id: requestId,
-            });
-            return;
-          }
-
-          // Workspace on-demand: work commands need an explicit workspace.
-          // Chat replies don't. If the client hasn't picked one (and the
-          // session doesn't remember one), ask instead of silently using cwd.
+          const run = loaded.run;
+          const attachments = parseChatAttachments(parsed.attachments);
+          const regenerate = parsed.regenerate === true;
           const explicitWorkspace =
             (typeof parsed.workspace_root === "string" &&
               parsed.workspace_root.length > 0 &&
@@ -2469,103 +2840,283 @@ export function createApp(ctx: AppContext) {
               parsed.workspaceRoot.length > 0 &&
               parsed.workspaceRoot) ||
             "";
-          if (!explicitWorkspace && !ctx.session.workspaceRoot) {
-            sendJson(res, 200, {
-              run_id: run.run_id,
-              kind: "need_workspace",
-              message:
-                "Pilih folder workspace dulu — file yang dibuat akan ditulis di sana.",
-              request_id: requestId,
-            });
-            return;
-          }
-
-          const resolved = resolveReferences(message, run);
-          const goal = message + formatResolvedForGoal(resolved);
           const providerId =
             typeof parsed.provider_id === "string" ? parsed.provider_id : undefined;
           const model =
             typeof parsed.model === "string" ? parsed.model : undefined;
-          const routerInfo = {
-            layer: routerLayer,
-            confidence: routed.confidence,
-            rule: routed.matchedRule,
-          };
 
-          if (routed.engine === "research") {
-            const staged = await stageResearchPlanCore(
-              ctx,
-              {
-                question: goal,
-                root,
-                ...(providerId ? { provider_id: providerId } : {}),
-                ...(model ? { model } : {}),
-              },
-              requestId,
-            );
-            if (staged.status !== 200 || !staged.planId) {
-              sendJson(res, staged.status, staged.body);
-              return;
+          const route = await routeChatMessage(ctx, message, run, overrideRaw);
+          if (route.kind === "chat") {
+            try {
+              const reply = await runChatReply(ctx, root, run, runs, { message, attachments, regenerate });
+              sendJson(res, 200, {
+                run_id: run.run_id,
+                kind: "chat",
+                text: reply?.text ?? CHAT_FALLBACK,
+                clipped: reply?.clipped === true,
+                ...(reply?.usage ? { usage: reply.usage } : {}),
+                request_id: requestId,
+              });
+            } catch (error) {
+              if (errorMessage(error) === "model_unavailable") {
+                sendJson(res, 200, {
+                  run_id: run.run_id,
+                  kind: "chat",
+                  text: "Maaf, model sedang tidak bisa menjawab. Coba lagi sebentar lagi atau ganti model di Pengaturan.",
+                  request_id: requestId,
+                });
+                return;
+              }
+              throw error;
             }
-            const turn = appendTurn(run, {
-              engine: "research",
-              task_id: staged.planId,
-              goal: message,
-              status: "running",
-              note: "rencana riset staged — menunggu 'Jalankan riset'",
-            });
-            runs.saveRun(run);
-            sendJson(res, 200, {
-              run_id: run.run_id,
-              turn_id: turn.turn_id,
-              engine: "research",
-              plan_id: staged.planId,
-              staged: true,
-              resolved_artifacts: resolved,
-              router: routerInfo,
-              request_id: requestId,
-            });
             return;
           }
-
-          const created = await createTaskCore(
-            ctx,
-            {
-              goal,
-              repo_path: root,
-              ...(routed.engine === "coding"
-                ? {}
-                : { domain: routed.engine }),
-              ...(providerId ? { provider_id: providerId } : {}),
-              ...(model ? { model } : {}),
-            },
+          const out = await dispatchChatTurn(ctx, {
+            root, run, runs,
+            engine: route.engine,
+            confidence: route.confidence,
+            matchedRule: route.matchedRule,
+            routerLayer: route.routerLayer,
+            message, overrideRaw, explicitWorkspace,
+            ...(providerId ? { providerId } : {}),
+            ...(model ? { model } : {}),
             requestId,
-          );
-          if (created.status !== 201 || !created.taskId) {
-            sendJson(res, created.status, created.body);
-            return;
-          }
-          const turn = appendTurn(run, {
-            engine: routed.engine,
-            task_id: created.taskId,
-            goal: message,
-            status: "running",
           });
-          runs.saveRun(run);
-          sendJson(res, 201, {
-            run_id: run.run_id,
-            turn_id: turn.turn_id,
-            engine: routed.engine,
-            task_id: created.taskId,
-            resolved_artifacts: resolved,
-            router: routerInfo,
-            request_id: requestId,
-          });
+          sendJson(res, out.status, out.body);
         } catch (error) {
           sendJson(res, errorStatus(error), {
             error: errorMessage(error),
             request_id: requestId,
           });
+        }
+      })();
+      return;
+    }
+
+    // ---- Dae Captain streaming chat (true token streaming over SSE) ----
+    // Same routing as POST /workflow/chat: when the message turns out to be
+    // work, this returns the identical JSON dispatch shape (the client
+    // handles it as usual). Only chat-kind turns stream — and every delta
+    // comes from provider.stream(), never synthesized locally.
+    if (method === "POST" && url.pathname === "/workflow/chat/stream") {
+      void (async () => {
+        try {
+          const parsed = await readJson(req);
+          if (!parsed) {
+            sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+            return;
+          }
+          const message =
+            typeof parsed.message === "string" ? parsed.message.trim() : "";
+          if (!message) {
+            sendJson(res, 400, { error: "message_required", request_id: requestId });
+            return;
+          }
+          const overrideRaw = parsed.engine_override ?? parsed.engineOverride;
+          if (overrideRaw !== undefined && !isWorkflowEngine(overrideRaw)) {
+            sendJson(res, 400, {
+              error: "invalid_engine",
+              engines: WORKFLOW_ENGINES,
+              request_id: requestId,
+            });
+            return;
+          }
+          const root = resolveAllowedRoot(
+            ctx,
+            parsed.workspace_root ?? parsed.workspaceRoot,
+          );
+          const runs = new WorkflowRunStore(
+            resolveDaedalusHome(ctx.settings.daedalusHome, root),
+          );
+          const runIdRaw =
+            typeof parsed.run_id === "string" && parsed.run_id
+              ? parsed.run_id
+              : undefined;
+          const loaded = loadOrCreateChatRun(runs, root, runIdRaw);
+          if ("missing" in loaded) {
+            sendJson(res, 404, { error: "run_not_found", request_id: requestId });
+            return;
+          }
+          const run = loaded.run;
+          const attachments = parseChatAttachments(parsed.attachments);
+          const regenerate = parsed.regenerate === true;
+          const explicitWorkspace =
+            (typeof parsed.workspace_root === "string" &&
+              parsed.workspace_root.length > 0 &&
+              parsed.workspace_root) ||
+            (typeof parsed.workspaceRoot === "string" &&
+              parsed.workspaceRoot.length > 0 &&
+              parsed.workspaceRoot) ||
+            "";
+          const providerId =
+            typeof parsed.provider_id === "string" ? parsed.provider_id : undefined;
+          const model =
+            typeof parsed.model === "string" ? parsed.model : undefined;
+
+          const route = await routeChatMessage(ctx, message, run, overrideRaw);
+          if (route.kind === "dispatch") {
+            const out = await dispatchChatTurn(ctx, {
+              root, run, runs,
+              engine: route.engine,
+              confidence: route.confidence,
+              matchedRule: route.matchedRule,
+              routerLayer: route.routerLayer,
+              message, overrideRaw, explicitWorkspace,
+              ...(providerId ? { providerId } : {}),
+              ...(model ? { model } : {}),
+              requestId,
+            });
+            sendJson(res, out.status, out.body);
+            return;
+          }
+
+          const prep = prepareChatTurn(ctx, root, run, { message, attachments, regenerate });
+          if (!regenerate) {
+            prep.store.append(root, run.run_id, { role: "user", text: prep.recordText, ts: isoNow() });
+          }
+          const provider = resolveFastPathProvider(ctx, { poolModels: [] });
+          res.writeHead(200, {
+            "content-type": "text/event-stream; charset=utf-8",
+            "cache-control": "no-cache",
+            connection: "keep-alive",
+            ...CORS_HEADERS,
+          });
+          const send = (obj: unknown): boolean => {
+            try {
+              res.write(`data: ${JSON.stringify(obj)}\n\n`);
+              return true;
+            } catch {
+              return false;
+            }
+          };
+          if (!provider) {
+            prep.store.append(root, run.run_id, { role: "assistant", text: CHAT_FALLBACK, ts: isoNow() });
+            runs.saveRun(run);
+            send({ delta: CHAT_FALLBACK });
+            send({ done: true, run_id: run.run_id, text: CHAT_FALLBACK });
+            res.end();
+            return;
+          }
+          // Client disconnect (/stop, closing the app) aborts the model call.
+          const controller = new AbortController();
+          const onClose = (): void => {
+            try {
+              controller.abort();
+            } catch {
+              /* already settled */
+            }
+          };
+          req.on("close", onClose);
+          let text = "";
+          let failed = false;
+          let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
+          try {
+            for await (const chunk of provider.stream(prep.messages, undefined, { signal: controller.signal })) {
+              if (chunk.type === "delta" && chunk.content) {
+                text += chunk.content;
+                if (!send({ delta: chunk.content })) break;
+              } else if (chunk.type === "usage" && chunk.usage) {
+                usage = chunk.usage;
+              }
+            }
+          } catch (error) {
+            ctx.log.error("workflow chat stream failed", { error: String(error) });
+            failed = true;
+          } finally {
+            req.removeListener("close", onClose);
+          }
+          if (failed || !text.trim()) {
+            // What-you-see-is-what-history-gets: a partial answer is still
+            // recorded (the client shows it with an error note), but an
+            // empty stream is reported honestly instead of as blank success.
+            if (text) prep.store.append(root, run.run_id, { role: "assistant", text, ts: isoNow() });
+            runs.saveRun(run);
+            send({ error: "model_unavailable", ...(text ? { partial: text } : {}) });
+            res.end();
+            return;
+          }
+          prep.store.append(root, run.run_id, { role: "assistant", text, ts: isoNow() });
+          runs.saveRun(run);
+          send({ done: true, run_id: run.run_id, text, clipped: prep.clipped, ...(usage ? { usage } : {}) });
+          res.end();
+        } catch (error) {
+          try {
+            if (!res.headersSent) {
+              sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+            } else {
+              res.end();
+            }
+          } catch {
+            /* socket already gone */
+          }
+        }
+      })();
+      return;
+    }
+
+    // ---- Dae Captain export: one session → one Markdown file ----
+    // Rendered server-side from the run record plus its stored chat
+    // exchanges (the full history, not the client's 30-message window),
+    // written under the workspace so Open/Reveal work on a real path.
+    if (method === "POST" && url.pathname === "/workflow/export") {
+      void (async () => {
+        try {
+          const parsed = await readJson(req);
+          if (!parsed) {
+            sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+            return;
+          }
+          const root = resolveAllowedRoot(ctx, parsed.workspace_root ?? parsed.workspaceRoot);
+          const runId = typeof parsed.run_id === "string" ? parsed.run_id : "";
+          if (!runId) {
+            sendJson(res, 400, { error: "run_id_required", request_id: requestId });
+            return;
+          }
+          const runs = new WorkflowRunStore(
+            resolveDaedalusHome(ctx.settings.daedalusHome, root),
+          );
+          const run = runs.loadRun(runId);
+          if (!run) {
+            sendJson(res, 404, { error: "run_not_found", request_id: requestId });
+            return;
+          }
+          if (reconcileWorkflowRun(ctx, run)) runs.saveRun(run);
+          const present = presentWorkflowRun(ctx, run);
+          const chat = (present.chat ?? []) as Array<{ role?: unknown; text?: unknown }>;
+          const lines = [
+            "# Percakapan Dae Captain",
+            "",
+            `- Sesi: \`${run.run_id}\``,
+            `- Workspace: \`${run.workspace_root}\``,
+            `- Dibuat: ${run.created_at} · Diperbarui: ${run.updated_at}`,
+            "",
+          ];
+          if (run.turns.length > 0) {
+            lines.push("## Tugas", "");
+            run.turns.forEach((turn, index) => {
+              lines.push(`### ${index + 1}. [${turn.engine}] ${turn.goal} (${turn.status})`);
+              if (turn.note) lines.push(`> ${turn.note}`);
+              lines.push("");
+            });
+          }
+          if (chat.length > 0) {
+            lines.push("## Obrolan", "");
+            for (const message of chat) {
+              const who = message.role === "user" ? "User" : "Dae Captain";
+              lines.push(`**${who}:** ${typeof message.text === "string" ? message.text : ""}`, "");
+            }
+          }
+          if (run.turns.length === 0 && chat.length === 0) {
+            lines.push("_Sesi kosong._", "");
+          }
+          const dir = join(root, ".daedalus", "exports");
+          mkdirSync(dir, { recursive: true });
+          const file = `chat-${run.run_id}.md`;
+          writeFileSync(join(dir, file), lines.join("\n"));
+          const rel = join(".daedalus", "exports", file);
+          sendJson(res, 200, { path: rel, absolute_path: join(root, rel), request_id: requestId });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
       })();
       return;

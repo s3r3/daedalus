@@ -19,12 +19,26 @@ import {
   spawnServerArgs,
   engineLabel,
   enabledEngines,
+  fmtTime,
+  formatUsage,
+  summarizeChanges,
+  validateAttachmentPick,
+  parseStreamLine,
+  questionOptions,
+  questionText,
+  questionAllowsFreeText,
+  parseSlashCommand,
+  freshConversation,
+  runHistoryLine,
+  SLASH_COMMANDS,
   canDisableEngine,
   trustToAutoApprove,
   autoApproveToTrust,
   queueRow,
   queueRows,
   THINKING_LEVELS,
+  activityLabel,
+  completionLabel,
 } from "../ui/logic.js";
 
 const turn = (over = {}) => ({
@@ -93,8 +107,15 @@ describe("formatResolvedArtifacts", () => {
   it("formats path artifacts", () => {
     assert.deepEqual(
       formatResolvedArtifacts([{ kind: "deck", label: "deck bisnis", path: "deck.json" }]),
-      [{ label: "deck bisnis", path: "deck.json", url: null, display: "deck bisnis — deck.json" }]
+      [{ label: "deck bisnis", path: "deck.json", url: null, displayPath: "deck.json", display: "deck bisnis — deck.json" }]
     );
+  });
+  it("prefers absolute_path for the open/reveal action", () => {
+    const [out] = formatResolvedArtifacts([
+      { kind: "deck", label: "deck bisnis", path: "deck.json", absolute_path: "/ws/deck/deck.json" },
+    ]);
+    assert.equal(out.path, "/ws/deck/deck.json");
+    assert.equal(out.displayPath, "deck.json");
   });
   it("handles empty", () => {
     assert.deepEqual(formatResolvedArtifacts([]), []);
@@ -255,6 +276,206 @@ describe("queueRow", () => {
   });
 });
 
+describe("queueRows approval filter (regression: r.turn crash)", () => {
+  it("rows expose approvals/questions directly for the Antrean filter", () => {
+    const rows = queueRows({ turns: [
+      { engine: "coding", status: "running", goal: "a", task_id: "t1", pending_approvals: [{ key: "k" }] },
+      { engine: "slide", status: "done", goal: "b", task_id: "t2" },
+    ]});
+    const approval = rows.filter((r) => (r.approvals?.length ?? 0) > 0 || (r.questions?.length ?? 0) > 0);
+    assert.equal(approval.length, 1);
+    assert.equal(approval[0].taskId, "t1");
+  });
+});
+
+describe("parseSlashCommand", () => {
+  it("parses leading commands with args", () => {
+    assert.deepEqual(parseSlashCommand("/clear"), { name: "clear", args: "" });
+    assert.deepEqual(parseSlashCommand("  /status  "), { name: "status", args: "" });
+    assert.deepEqual(parseSlashCommand("/resume 2"), { name: "resume", args: "2" });
+    assert.deepEqual(parseSlashCommand("/HISTORY"), { name: "history", args: "" });
+    assert.deepEqual(parseSlashCommand("/stop now please"), { name: "stop", args: "now please" });
+  });
+  it("ignores slashes mid-sentence (ordinary chat)", () => {
+    assert.equal(parseSlashCommand("What does /clear mean?"), null);
+    assert.equal(parseSlashCommand("a / b"), null);
+    assert.equal(parseSlashCommand("50/50 chance"), null);
+    assert.equal(parseSlashCommand("/"), null);
+    assert.equal(parseSlashCommand(""), null);
+    assert.equal(parseSlashCommand(null), null);
+  });
+  it("covers all seven commands in /help order", () => {
+    assert.deepEqual(SLASH_COMMANDS.map((c) => c.name), ["help", "clear", "new", "history", "resume", "status", "stop"]);
+  });
+});
+
+describe("freshConversation", () => {
+  it("yields a null run id and empty transcript (new server run, no history leak)", () => {
+    assert.deepEqual(freshConversation(), { runId: null, workflowRunId: null, transcript: [] });
+    // A null runId is omitted from the chat body, so the server starts a
+    // run with zero turns — the old transcript can never ride along.
+    assert.deepEqual(chatRequestBody({ message: "halo", workspaceRoot: "/w", runId: null }), {
+      message: "halo", workspace_root: "/w",
+    });
+  });
+});
+
+describe("runHistoryLine", () => {
+  it("summarizes runs for /history", () => {
+    const line = runHistoryLine({ run_id: "r1", turns: [
+      { goal: "buat landing page", status: "done" },
+      { goal: "slide", status: "running" },
+    ] }, 1);
+    assert.ok(line.startsWith("1. buat landing page"));
+    assert.ok(line.includes("2 task"));
+    assert.ok(line.includes("jalan"));
+  });
+  it("handles empty runs", () => {
+    assert.ok(runHistoryLine({ run_id: "r1", turns: [] }, 3).includes("kosong"));
+  });
+});
+
+describe("ask-user question helpers", () => {
+  it("reads options safely (old payloads had none)", () => {
+    assert.deepEqual(questionOptions({ options: [{ label: "A" }, { label: "B" }] }).length, 2);
+    assert.deepEqual(questionOptions({ id: "q1" }), []);
+    assert.deepEqual(questionOptions(null), []);
+  });
+  it("falls back when the question text is missing", () => {
+    assert.equal(questionText({ question: "Pilih tema?" }), "Pilih tema?");
+    assert.ok(questionText({ id: "q1" }).length > 0);
+  });
+  it("free text is on unless explicitly disabled", () => {
+    assert.equal(questionAllowsFreeText({}), true);
+    assert.equal(questionAllowsFreeText({ allow_free_text: true }), true);
+    assert.equal(questionAllowsFreeText({ allow_free_text: false }), false);
+  });
+});
+
+describe("validateAttachmentPick", () => {
+  it("accepts images and text within limits", () => {
+    assert.deepEqual(validateAttachmentPick({ name: "a.png", mime: "image/png", sizeBytes: 1000 }), { ok: true, kind: "image", mime: "image/png" });
+    assert.deepEqual(validateAttachmentPick({ name: "b.txt", mime: "text/plain", sizeBytes: 1000 }), { ok: true, kind: "text", mime: "text/plain" });
+  });
+  it("falls back to extension when the browser sends no mime", () => {
+    assert.equal(validateAttachmentPick({ name: "a.jpg", mime: "", sizeBytes: 10 }).kind, "image");
+    assert.equal(validateAttachmentPick({ name: "b.md", mime: "application/octet-stream", sizeBytes: 10 }).kind, "text");
+  });
+  it("rejects oversize and unsupported files", () => {
+    assert.equal(validateAttachmentPick({ name: "big.png", mime: "image/png", sizeBytes: 6 * 1024 * 1024 }).ok, false);
+    assert.equal(validateAttachmentPick({ name: "x.exe", mime: "application/x-msdownload", sizeBytes: 10 }).ok, false);
+    assert.equal(validateAttachmentPick({ name: "../evil.png", mime: "image/png", sizeBytes: 10 }).ok, false);
+  });
+});
+
+describe("parseStreamLine", () => {
+  it("parses deltas, done frames, and errors", () => {
+    assert.deepEqual(parseStreamLine('data: {"delta":"Hel"}'), { delta: "Hel" });
+    assert.deepEqual(parseStreamLine('data: {"done":true,"run_id":"r1","text":"Hi"}'), { done: true, run_id: "r1", text: "Hi" });
+    assert.deepEqual(parseStreamLine("data: [DONE]"), { done: true });
+    assert.deepEqual(parseStreamLine('data: {"error":"model_unavailable"}'), { error: "model_unavailable", partial: undefined });
+  });
+  it("ignores keep-alives and garbage without throwing", () => {
+    assert.equal(parseStreamLine(": ping"), null);
+    assert.equal(parseStreamLine(""), null);
+    assert.equal(parseStreamLine("data: {oops"), null);
+    assert.equal(parseStreamLine(null), null);
+  });
+});
+
+describe("runHistoryLine chat sessions", () => {
+  it("labels chat-only runs by message count", async () => {
+    const { runHistoryLine } = await import("../ui/logic.js");
+    assert.ok(runHistoryLine({ run_id: "r1", turns: [], chat_turns: 4 }, 2).includes("4 pesan"));
+  });
+});
+
+describe("fmtTime", () => {
+  it("formats epoch and ISO timestamps as HH.MM", () => {
+    assert.match(fmtTime(new Date(2026, 0, 2, 3, 4).getTime()), /^\d{2}\.\d{2}$/);
+    assert.match(fmtTime("2026-10-15T08:56:03.831Z"), /^\d{2}\.\d{2}$/);
+  });
+  it("stays empty for missing or garbage input", () => {
+    assert.equal(fmtTime(null), "");
+    assert.equal(fmtTime(undefined), "");
+    assert.equal(fmtTime("bukan-tanggal"), "");
+  });
+});
+
+describe("renderMarkdown tables and extras", () => {
+  it("renders pipe tables with header and rows", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const html = renderMarkdown("| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |");
+    assert.ok(html.includes("<table"));
+    assert.ok(html.includes("<th>A</th>"));
+    assert.ok(html.includes("<td>4</td>"));
+  });
+  it("ignores a header-looking row without a delimiter", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const html = renderMarkdown("| A | B |\n| 1 | 2 |");
+    assert.ok(!html.includes("<table"));
+  });
+  it("renders strikethrough and horizontal rules", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    assert.ok(renderMarkdown("~~lama~~").includes("<del>lama</del>"));
+    assert.ok(renderMarkdown("---").includes("<hr"));
+  });
+});
+
+describe("renderMarkdown images, safe links, nested lists, highlight", () => {
+  it("renders images and blocks javascript: URLs", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const img = renderMarkdown("![denah](https://contoh.id/a.png)");
+    assert.ok(img.includes("<img"));
+    assert.ok(img.includes('src="https://contoh.id/a.png"'));
+    const evil = renderMarkdown("[klik](javascript:alert(1))");
+    assert.ok(!evil.includes("<a "));
+    assert.ok(evil.includes("klik"));
+    const evilImg = renderMarkdown("![x](javascript:alert(1))");
+    assert.ok(!evilImg.includes("<img"));
+  });
+  it("nests sub-lists with an indent class", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const html = renderMarkdown("- induk\n  - anak\n  - anak2\n- induk2");
+    assert.ok(html.includes("md-list sub"));
+    assert.ok(html.indexOf("induk2") > html.indexOf("anak2"));
+  });
+  it("highlights code without breaking structure", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const html = renderMarkdown("```js\nconst x = 1; // satu\n```");
+    assert.ok(html.includes("tok-kw"));
+    assert.ok(html.includes("tok-num"));
+    assert.ok(html.includes("tok-com"));
+    assert.ok(html.includes("const x = 1;".slice(0, 5)));
+  });
+});
+
+describe("task activity extras", () => {
+  it("captures tool-result images from finish meta", async () => {
+    const { summarizeTaskEvents } = await import("../ui/logic.js");
+    const s = summarizeTaskEvents([
+      { type: "TOOL_CALL_STARTED", payload: { call: { id: "c1", tool: "screenshot" } } },
+      { type: "TOOL_CALL_FINISHED", payload: { call: { id: "c1", tool: "screenshot" }, result: { status: "ok", meta: { image_attached: true, image_path: ".daedalus/shots/a.png" } } } },
+      { type: "TOOL_CALL_FINISHED", payload: { call: { id: "c2", tool: "read_file" }, result: { status: "ok", meta: {} } } },
+    ]);
+    assert.equal(s.tools[0].image.path, ".daedalus/shots/a.png");
+    assert.equal(s.tools[1].image, undefined);
+  });
+  it("formats token usage compactly, empty when absent", () => {
+    assert.equal(formatUsage({ prompt_tokens: 12400, completion_tokens: 3100 }), "tok 12,4k→3,1k");
+    assert.equal(formatUsage({ prompt_tokens: 800, completion_tokens: 12 }), "tok 800→12");
+    assert.equal(formatUsage(null), "");
+    assert.equal(formatUsage({}), "");
+  });
+  it("summarizes file changes for review rows", () => {
+    assert.deepEqual(summarizeChanges([
+      { path: "a.ts", operation: "modified", added: 3, removed: 1, patch: "diff" },
+      { nope: true },
+    ]), [{ path: "a.ts", operation: "modified", added: 3, removed: 1, patch: "diff" }]);
+    assert.deepEqual(summarizeChanges(null), []);
+  });
+});
+
 describe("spawnServerArgs", () => {
   it("uses camelCase keys (Tauri command default)", () => {
     assert.deepEqual(Object.keys(spawnServerArgs("/r", "/w")), ["repoRoot", "workspace"]);
@@ -277,6 +498,56 @@ describe("spawn_server JS/Rust arg contract", () => {
     const expected = params.map(toCamel).sort();
     const actual = Object.keys(spawnServerArgs("/r", "/w")).sort();
     assert.deepEqual(actual, expected);
+  });
+});
+
+describe("activityLabel", () => {
+  const agg = (status, running = 0, attention = 0) => ({ status, running, attention });
+  it("approval wording beats question wording", () => {
+    const runs = [{ turns: [
+      { status: "running", engine: "coding", pending_approvals: [{ key: "k" }], pending_questions: [{ id: "q" }] },
+    ] }];
+    assert.equal(activityLabel(runs, agg("attention", 1, 2)), "Butuh izin");
+  });
+  it("pluralises approvals", () => {
+    const runs = [{ turns: [
+      { status: "running", pending_approvals: [{ key: "a" }, { key: "b" }] },
+    ] }];
+    assert.equal(activityLabel(runs, agg("attention")), "2 butuh izin");
+  });
+  it("questions when no approvals pending", () => {
+    const runs = [{ turns: [{ status: "done", pending_questions: [{ id: "q1" }] }] }];
+    assert.equal(activityLabel(runs, agg("attention", 0, 1)), "Ada pertanyaan");
+  });
+  it("maps real last_event types to activity words", () => {
+    const mk = (last) => [{ turns: [{ status: "running", last_event: last }] }];
+    assert.equal(activityLabel(mk("TOOL_CALL_STARTED"), agg("working", 1)), "Menjalankan alat");
+    assert.equal(activityLabel(mk("FILE_CHANGED"), agg("working", 1)), "Mengubah file");
+    assert.equal(activityLabel(mk("COMMAND_FINISHED"), agg("working", 1)), "Menjalankan tes");
+    assert.equal(activityLabel(mk("THOUGHT"), agg("working", 1)), "Berpikir");
+    assert.equal(activityLabel(mk("SOMETHING_NEW"), agg("working", 1)), "Bekerja");
+  });
+  it("falls back to running count when no events yet", () => {
+    assert.equal(activityLabel([{ turns: [{ status: "running" }] }], agg("working", 2)), "2 agent berjalan");
+    assert.equal(activityLabel([{ turns: [{ status: "running" }] }], agg("working", 1)), "Bekerja");
+  });
+  it("idle is Siap", () => {
+    assert.equal(activityLabel([], agg("idle")), "Siap");
+  });
+});
+
+describe("completionLabel", () => {
+  it("reports failures first", () => {
+    assert.equal(completionLabel([{ turns: [{ status: "done" }, { status: "failed" }] }]), "Gagal");
+    assert.equal(completionLabel([{ turns: [{ status: "failed" }, { status: "failed" }] }]), "2 gagal");
+  });
+  it("reports done count", () => {
+    assert.equal(completionLabel([{ turns: [{ status: "done" }] }]), "Selesai");
+    assert.equal(completionLabel([{ turns: [{ status: "done" }, { status: "done" }] }]), "2 selesai");
+  });
+  it("empty when nothing finished", () => {
+    assert.equal(completionLabel([{ turns: [{ status: "running" }] }]), "");
+    assert.equal(completionLabel(null), "");
   });
 });
 
@@ -320,8 +591,9 @@ describe("renderMarkdown", () => {
   it("renders code blocks with copy button", async () => {
     const { renderMarkdown } = await import("../ui/logic.js");
     const html = renderMarkdown("```js\nconst x = 1;\n```");
+    const plain = html.replace(/<[^>]+>/g, "");
     assert.ok(html.includes('class="code-block"'));
-    assert.ok(html.includes("const x = 1;"));
+    assert.ok(plain.includes("const x = 1;"));
     assert.ok(html.includes("Salin"));
   });
 
