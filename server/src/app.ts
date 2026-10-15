@@ -2015,9 +2015,15 @@ function presentWorkflowTurn(
       tool: entry.info.tool,
       policy: entry.policy,
     })),
+    // Full card data: the companion renders the question text plus its
+    // 2-4 option buttons (and free text when allowed) — an id alone left
+    // the user guessing what to type.
     pending_questions: runner.questions.pending().map((entry) => ({
       id: entry.info.id,
       task_id: turn.task_id,
+      question: entry.info.question,
+      options: entry.info.options,
+      allow_free_text: entry.info.allowFreeText,
     })),
   };
 }

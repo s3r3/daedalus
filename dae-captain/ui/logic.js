@@ -92,6 +92,26 @@ export function pillText(agg) {
   return "";
 }
 
+/**
+ * Options of a pending ask-user question, safe for old server payloads
+ * that only carried { id, task_id }. Never throws, never undefined.
+ */
+export function questionOptions(q) {
+  return Array.isArray(q?.options) ? q.options : [];
+}
+
+/** Question text with a fallback for option-less legacy payloads. */
+export function questionText(q) {
+  return typeof q?.question === "string" && q.question.trim()
+    ? q.question
+    : "Agent meminta masukan:";
+}
+
+/** Whether the card offers a free-text answer next to the option buttons. */
+export function questionAllowsFreeText(q) {
+  return q?.allow_free_text !== false;
+}
+
 /** One-line summary for a turn, for the engine pills row. */
 export function turnSummary(turn) {
   const label = engineLabel(turn.engine);

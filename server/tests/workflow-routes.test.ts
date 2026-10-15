@@ -27,7 +27,7 @@ afterEach(async () => {
   workspace = undefined
 })
 
-async function listen(): Promise<{ base: string; home: string }> {
+async function listen(): Promise<{ base: string; home: string; ctx: ReturnType<typeof createContext> }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-workflow-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-workflow-ws-'))
   mkdirSync(join(workspace, 'src'), { recursive: true })
@@ -60,7 +60,7 @@ async function listen(): Promise<{ base: string; home: string }> {
   server = createApp(ctx)
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
-  return { base: `http://127.0.0.1:${port}`, home: join(workspace!, '.daedalus-test-home') }
+  return { base: `http://127.0.0.1:${port}`, home: join(workspace!, '.daedalus-test-home'), ctx }
 }
 
 async function postChat(base: string, body: Record<string, unknown>) {
@@ -228,6 +228,40 @@ describe('GET /workflow/runs', () => {
       expect(turn.status).toBe('failed')
       expect(typeof turn.note).toBe('string')
     }
+  })
+
+  test('pending questions carry text + options for the companion card', async () => {
+    const { base, home, ctx } = await listen()
+    const { TaskRunner } = await import('@daedalus/core')
+    const runs = new WorkflowRunStore(home)
+    const run = createWorkflowRun(workspace!)
+    appendTurn(run, { engine: 'coding', task_id: 'tq-card', goal: 'buat web', status: 'running' })
+    runs.saveRun(run)
+    const runner = new TaskRunner({ workspaceRoot: workspace!, bus: ctx.bus, store: ctx.store })
+    ctx.activeRunners.set('tq-card', runner)
+    // Leave pending (do not await): the card must show while the agent waits.
+    void runner.questions.ask({
+      id: 'q-card-1',
+      taskId: 'tq-card',
+      question: 'Pakai stack apa?',
+      options: [{ label: 'Vue' }, { label: 'React', description: 'ekosistem besar' }],
+      allowFreeText: true,
+      createdAt: new Date().toISOString(),
+    })
+
+    const res = await fetch(new URL(`/workflow/runs/${run.run_id}?workspace_root=${encodeURIComponent(workspace!)}`, base))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      run: { turns: Array<{ pending_questions?: Array<{ id: string; question: string; options: Array<{ label: string }>; allow_free_text: boolean }> }> }
+    }
+    const pending = body.run.turns[0]!.pending_questions ?? []
+    expect(pending).toHaveLength(1)
+    expect(pending[0]).toMatchObject({
+      id: 'q-card-1',
+      question: 'Pakai stack apa?',
+      allow_free_text: true,
+    })
+    expect(pending[0]!.options.map((o) => o.label)).toEqual(['Vue', 'React'])
   })
 
   test('unknown run id → 404', async () => {

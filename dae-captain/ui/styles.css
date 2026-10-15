@@ -210,6 +210,14 @@ h3 { font-size: 12px; color: var(--dim); margin: 12px 0 6px; }
 .slash-item + .slash-item { border-top: 1px solid var(--line); }
 .slash-item.active { background: var(--bubble-user); }
 .slash-name { font-weight: 700; color: var(--accent); white-space: nowrap; }
+/* ---- Ask-user question card: numbered option buttons ---- */
+.opt-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.opt-btn { display: flex; gap: 8px; align-items: baseline; text-align: left; }
+.opt-num {
+  flex-shrink: 0; width: 18px; height: 18px; border: 1px solid var(--line);
+  border-radius: 50%; font-size: 10px; font-weight: 700; color: var(--dim);
+  display: inline-flex; align-items: center; justify-content: center;
+}
 .engine-chips { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
 .engine-chips button {
   background: transparent; border: 1px solid var(--line); color: var(--dim);

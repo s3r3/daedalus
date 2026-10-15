@@ -30,6 +30,9 @@ import {
   parseSlashCommand,
   freshConversation,
   runHistoryLine,
+  questionOptions,
+  questionText,
+  questionAllowsFreeText,
   SLASH_COMMANDS,
   THINKING_LEVELS,
 } from "./logic.js";
@@ -179,17 +182,30 @@ function renderApprovals() {
         const card = document.createElement("div");
         card.className = "approval-card";
         card.innerHTML = `
-          <div class="approval-header">Butuh jawaban</div>
-          <div class="title">${escapeHtml(engineLabel(turn.engine))} bertanya — jawab di sini:</div>
-          <div class="row">
-            <input class="answer-input" type="text" placeholder="Tulis jawaban…" style="flex:1">
+          <div class="approval-header">Agent bertanya</div>
+          <div class="title">${escapeHtml(questionText(q))}</div>
+          <div class="opt-list"></div>
+          ${questionAllowsFreeText(q) ? `<div class="row">
+            <input class="answer-input" type="text" placeholder="Atau tulis jawaban sendiri…" style="flex:1">
             <button class="primary-btn">Kirim</button>
-          </div>`;
-        const send = () => answerCardQuestion(turn.task_id, q, card);
-        card.querySelector("button").onclick = send;
-        card.querySelector(".answer-input").addEventListener("keydown", (e) => {
-          if (e.key === "Enter") send();
+          </div>` : `<div class="hint">Pilih salah satu jawaban di atas.</div>`}`;
+        // Numbered option buttons (1, 2, 3…): clicking answers with the
+        // option's label verbatim — the server maps it back to the option.
+        const list = card.querySelector(".opt-list");
+        questionOptions(q).forEach((opt, i) => {
+          const b = document.createElement("button");
+          b.className = "ghost-btn opt-btn";
+          b.innerHTML = `<span class="opt-num">${i + 1}</span> <span>${escapeHtml(opt.label ?? "")}${opt.description ? ` <small>${escapeHtml(opt.description)}</small>` : ""}</span>`;
+          b.onclick = () => answerCardQuestion(turn.taskId, q, card, opt.label);
+          list.appendChild(b);
         });
+        if (questionAllowsFreeText(q)) {
+          const send = () => answerCardQuestion(turn.taskId, q, card);
+          card.querySelector(".primary-btn").onclick = send;
+          card.querySelector(".answer-input").addEventListener("keydown", (e) => {
+            if (e.key === "Enter") send();
+          });
+        }
         box.appendChild(card);
       }
     }
@@ -206,10 +222,13 @@ async function decideApproval(taskId, approval, decision) {
   await state.api.approve(taskId, approvalPayload(approval, decision));
 }
 
-/** Answer a pending question inline — no more dead-end "open the Web UI". */
-async function answerCardQuestion(taskId, question, card) {
+/**
+ * Answer a pending question inline. `answerOverride` is an option label
+ * (from the 1-4 buttons); otherwise the free-text input is read.
+ */
+async function answerCardQuestion(taskId, question, card, answerOverride) {
   const input = card.querySelector(".answer-input");
-  const answer = (input?.value ?? "").trim();
+  const answer = (answerOverride ?? input?.value ?? "").trim();
   if (!answer) return;
   const btns = card.querySelectorAll("button, input");
   btns.forEach((b) => (b.disabled = true));

@@ -19,6 +19,9 @@ import {
   spawnServerArgs,
   engineLabel,
   enabledEngines,
+  questionOptions,
+  questionText,
+  questionAllowsFreeText,
   parseSlashCommand,
   freshConversation,
   runHistoryLine,
@@ -324,6 +327,23 @@ describe("runHistoryLine", () => {
   });
   it("handles empty runs", () => {
     assert.ok(runHistoryLine({ run_id: "r1", turns: [] }, 3).includes("kosong"));
+  });
+});
+
+describe("ask-user question helpers", () => {
+  it("reads options safely (old payloads had none)", () => {
+    assert.deepEqual(questionOptions({ options: [{ label: "A" }, { label: "B" }] }).length, 2);
+    assert.deepEqual(questionOptions({ id: "q1" }), []);
+    assert.deepEqual(questionOptions(null), []);
+  });
+  it("falls back when the question text is missing", () => {
+    assert.equal(questionText({ question: "Pilih tema?" }), "Pilih tema?");
+    assert.ok(questionText({ id: "q1" }).length > 0);
+  });
+  it("free text is on unless explicitly disabled", () => {
+    assert.equal(questionAllowsFreeText({}), true);
+    assert.equal(questionAllowsFreeText({ allow_free_text: true }), true);
+    assert.equal(questionAllowsFreeText({ allow_free_text: false }), false);
   });
 });
 
