@@ -96,14 +96,18 @@ fn get_prefs(app: AppHandle) -> Result<Prefs, String> {    let path = prefs_path
 /// Open a native folder picker dialog. Returns the selected path, or None
 /// if the user cancelled.
 #[tauri::command]
-fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
+async fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let path = app
-        .dialog()
+    // Use the async callback version — blocking_pick_folder() deadlocks on
+    // Wayland because the native dialog needs the main event loop.
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
         .file()
         .set_title("Pilih folder workspace")
-        .blocking_pick_folder();
-    Ok(path.map(|p| p.to_string()))
+        .pick_folder(move |p| {
+            let _ = tx.send(p.map(|p| p.to_string()));
+        });
+    rx.await.map_err(|e| format!("dialog cancelled: {e}"))
 }
 
 #[tauri::command]
