@@ -2,6 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
+import { homedir } from "node:os";
 import { basename, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -318,7 +319,13 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     approvalMemory: overrides.approvalMemory ?? new Map<string, ApprovalDecision>(),
     terminals: overrides.terminals ?? new TerminalManager(),
     settings,
-    providerStore: overrides.providerStore ?? new ProviderRegistryStore(resolveDaedalusHome(settings.daedalusHome, anchoredWorkspace)),
+    providerStore: overrides.providerStore ?? new ProviderRegistryStore(
+      // Providers hold user-level API keys — they live in the user's global
+      // ~/.daedalus, not per-workspace. A provider added in one workspace
+      // must be visible in every workspace; otherwise the Settings dropdown
+      // is mysteriously empty after switching folders.
+      join(homedir(), ".daedalus")
+    ),
     session,
     workspaces: overrides.workspaces ?? new Set<string>([resolve(cwd), resolve(session.workspaceRoot)]),
     webDist: overrides.webDist,
@@ -834,9 +841,7 @@ async function handleProviders(ctx: AppContext, req: IncomingMessage, res: Serve
 
     if (method === "GET" && url.pathname === "/providers") {
       // `home` tells companions WHERE this registry lives: the store is
-      // anchored to the session workspace, so providers added under a
-      // different workspace (or ~/.daedalus directly) legitimately show
-      // up as an empty list here — never silently merged, never guessed.
+      // global (~/.daedalus), so providers are visible in every workspace.
       sendJson(res, 200, { providers: registry.list(), presets: PROVIDER_PRESETS, home: ctx.providerStore.filePath });
       return;
     }
