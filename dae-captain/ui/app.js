@@ -2,6 +2,7 @@
 // All server communication goes through api.js; all decisions through logic.js.
 
 import { createApiClient } from "./api.js";
+import { createEventStream } from "./events.js";
 import { createInvoker, WINDOW_SET_SIZE_CMD, setSizePayload } from "./bridge.js";
 import {
   ENGINES,
@@ -25,6 +26,7 @@ import {
   autoApproveToTrust,
   queueRows,
   summarizeTaskEvents,
+  renderMarkdown,
   THINKING_LEVELS,
 } from "./logic.js";
 
@@ -52,6 +54,7 @@ async function setWindowSize(w, h) {
 
 const state = {
   api: null,
+  eventStream: null, // WebSocket event stream for live task updates
   prefs: null,
   workspaceRoot: "",
   runId: null,
@@ -71,10 +74,9 @@ const state = {
 // ---------------------------------------------------------------------------
 
 function showView(name) {
-  for (const v of ["main", "status", "workflow", "settings", "workspace", "setup", "boot"]) {
+  for (const v of ["main", "workflow", "settings", "workspace", "setup", "boot"]) {
     $("view-" + v).classList.toggle("hidden", v !== name);
   }
-  if (name === "status") renderStatusView();
   if (name === "workflow") renderWorkflowView();
   if (name === "settings") loadSettingsView();
   if (name === "workspace") { renderWorkspaceStatus(); renderPresets(); }
@@ -267,11 +269,61 @@ function renderTranscript() {  const box = $("transcript");
       el.className = "bubble assistant";
       const who = m.kind === "assistant" ? "Dae Captain" : engineLabel(m.engine);
       const arts = formatResolvedArtifacts(m.resolved);
+      // Assistant chat messages render Markdown; turn goals stay plain.
+      const bodyHtml = m.kind === "assistant" ? renderMarkdown(m.text) : escapeHtml(m.goal);
       el.innerHTML = `
         <div class="who">${escapeHtml(who)}</div>
-        <div class="body">${escapeHtml(m.kind === "assistant" ? m.text : m.goal)}</div>
+        <div class="body">${bodyHtml}</div>
         ${m.staged ? `<div class="note">Staged — menunggu gate di Web UI / aplikasi.</div>` : ""}
-        ${arts.length ? `<div class="artifacts">Mengambil:<br>${arts.map((a) => "• " + escapeHtml(a)).join("<br>")}</div>` : ""}`;
+        ${arts.length ? `<div class="artifacts"></div>` : ""}`;
+      // Render artifact cards with Open/Reveal actions
+      if (arts.length) {
+        const artBox = el.querySelector(".artifacts");
+        for (const art of arts) {
+          const card = document.createElement("div");
+          card.className = "artifact-card";
+          const icon = art.path?.endsWith(".pptx") ? "📊" : art.path?.endsWith(".docx") ? "📄" : art.path?.endsWith(".xlsx") ? "📈" : "📁";
+          card.innerHTML = `
+            <span class="artifact-icon">${icon}</span>
+            <span class="artifact-name">${escapeHtml(art.label)}</span>
+            <span class="artifact-path">${escapeHtml(art.display.split(" — ")[1] ?? "")}</span>
+            <div class="artifact-actions"></div>`;
+          const actions = card.querySelector(".artifact-actions");
+          if (art.path) {
+            const openBtn = document.createElement("button");
+            openBtn.className = "ghost-btn small";
+            openBtn.textContent = "Buka";
+            openBtn.onclick = () => invoke("open_file", { path: art.path }).catch((e) => {
+              console.error("open_file failed:", errText(e));
+            });
+            actions.appendChild(openBtn);
+            const revealBtn = document.createElement("button");
+            revealBtn.className = "ghost-btn small";
+            revealBtn.textContent = "Lihat di folder";
+            revealBtn.onclick = () => invoke("reveal_in_folder", { path: art.path }).catch((e) => {
+              console.error("reveal_in_folder failed:", errText(e));
+            });
+            actions.appendChild(revealBtn);
+          } else if (art.url) {
+            const openBtn = document.createElement("button");
+            openBtn.className = "ghost-btn small";
+            openBtn.textContent = "Buka";
+            openBtn.onclick = () => invoke("open_web", { url: art.url }).catch(() => {});
+            actions.appendChild(openBtn);
+          }
+          artBox.appendChild(card);
+        }
+      }
+      // Wire up copy buttons in code blocks
+      for (const btn of el.querySelectorAll(".copy-btn")) {
+        btn.onclick = async () => {
+          try {
+            await navigator.clipboard.writeText(decodeURIComponent(btn.dataset.code));
+            btn.textContent = "Disalin!";
+            setTimeout(() => { btn.textContent = "Salin"; }, 1500);
+          } catch {}
+        };
+      }
       const act = renderTurnActivity(m.activity);
       if (act) el.appendChild(act);
     } else if (m.kind === "clarify") {
@@ -404,44 +456,6 @@ function renderHeaderStatus() {
 }
 
 /** Status view: live engine pills + per-run cards. All data from polling. */
-function renderStatusView() {
-  renderEnginePills();
-  const box = $("runs-list");
-  box.innerHTML = "";
-  if (!state.runs.length) {
-    box.innerHTML = `<span class="hint">Belum ada run di workspace ini.</span>`;
-    return;
-  }
-  for (const run of state.runs.slice(-10).reverse()) {
-    const card = document.createElement("div");
-    card.className = "run-card";
-    const turns = run.turns ?? [];
-    const head = document.createElement("div");
-    head.className = "run-head";
-    head.innerHTML = `<span class="dot ${turns.some((t) => t.status === "running") ? "green" : "blue"}"></span>
-      run <span class="mono">${escapeHtml(String(run.run_id ?? "").slice(0, 8))}</span>
-      <span class="hint">${turns.length} turn</span>`;
-    const openBtn = document.createElement("button");
-    openBtn.className = "ghost-btn";
-    openBtn.textContent = "Detail →";
-    openBtn.onclick = () => { state.workflowRunId = run.run_id; showView("workflow"); };
-    head.appendChild(openBtn);
-    card.appendChild(head);
-    for (const t of turns.slice(-6)) {
-      const attn = (t.pending_approvals ?? []).length + (t.pending_questions ?? []).length;
-      const row = document.createElement("div");
-      row.className = "run-turn";
-      const dot = t.status === "running" ? (attn ? "amber" : "green") : "blue";
-      row.innerHTML = `<span class="dot ${dot}"></span>
-        <div><div class="goal"><b>${escapeHtml(engineLabel(t.engine))}</b> — ${escapeHtml(turnSummary(t).goal)}</div>
-        <div class="detail">${escapeHtml(turnSummary(t).detail)}</div>
-        ${attn ? `<div class="attn">${attn} menunggu keputusanmu</div>` : ""}</div>`;
-      card.appendChild(row);
-    }
-    box.appendChild(card);
-  }
-}
-
 const WF_BADGES = {
   progress: ["In Progress", "blue"],
   approval: ["Butuh persetujuan", "amber"],
@@ -617,8 +631,8 @@ async function refreshRuns() {
   if (pendingApprovals(state.runs).length > 0) expand(); // approval baru → island mekar
   await refreshTurnActivity();
   if (!state.expanded) return;
-  if (!$("view-status").classList.contains("hidden")) {
-    renderStatusView();
+  if (!$("view-workflow").classList.contains("hidden")) {
+    renderWorkflowView();
   } else {
     renderApprovals();
   }
@@ -689,37 +703,59 @@ async function refreshTurnActivity() {
     (m) => m.kind === "turn" && m.taskId && !m.activityDone
   );
   if (!turn) return;
+  // Subscribe to live events via WebSocket (replaces polling).
+  if (state.eventStream) {
+    state.eventStream.subscribe(turn.taskId);
+  }
   const runTurn = findRunTurn(turn.taskId);
-  try {
-    const data = await state.api.taskEvents(turn.taskId);
-    const summary = summarizeTaskEvents(data.events ?? []);
+  if (runTurn && runTurn.status !== "running") {
+    turn.activityDone = true;
+    updateStopButton();
+  }
+}
+
+/** Handle live task events from WebSocket (or polling fallback). */
+function handleTaskEvents(events) {
+  if (!events?.length) return;
+  const taskIds = new Set(events.map((e) => e.task_id ?? e.taskId).filter(Boolean));
+  for (const taskId of taskIds) {
+    const turn = [...state.transcript].reverse().find(
+      (m) => m.kind === "turn" && m.taskId === taskId && !m.activityDone
+    );
+    if (!turn) continue;
+    turn.eventBuffer = turn.eventBuffer ?? [];
+    turn.eventBuffer.push(...events.filter((e) => (e.task_id ?? e.taskId) === taskId));
+    const summary = summarizeTaskEvents(turn.eventBuffer);
     const key = JSON.stringify(summary);
     if (key !== turn.activityKey) {
       turn.activityKey = key;
       turn.activity = summary;
       if (isChatViewVisible()) renderTranscript();
     }
-  } catch {
-    /* events unavailable — keep last activity */
-  }
-  if (runTurn && runTurn.status !== "running") {
-    turn.activityDone = true;
-    updateStopButton();
-    if (runTurn.note && !turn.noteShown) {
-      turn.noteShown = true;
-      // Surface the failure reason in chat as a TASK BERHENTI card.
-      state.transcript.push({
-        kind: "error",
-        taskStopped: true,
-        text: runTurn.note,
-        suggestion: "coba model yang lebih kuat, atau sebutkan nama file yang harus dibuat.",
-        retryMessage: turn.goal,
-        retryOverride: null,
-      });
-      if (isChatViewVisible()) renderTranscript();
+    const lastEvent = events[events.length - 1];
+    if (lastEvent?.type === "TASK_COMPLETED" || lastEvent?.type === "TASK_FAILED") {
+      turn.activityDone = true;
+      updateStopButton();
     }
   }
+  refreshRunsQuiet();
 }
+
+/** Refresh runs without triggering activity refresh (for event-driven updates). */
+async function refreshRunsQuiet() {
+  if (!state.api) return;
+  try {
+    const data = await state.api.runs();
+    state.runs = data.runs ?? [];
+  } catch {
+    state.runs = [];
+  }
+  renderPill();
+  renderHeaderStatus();
+  renderChatEnginePills();
+  if (pendingApprovals(state.runs).length > 0) expand();
+}
+
 
 // ---------------------------------------------------------------------------
 // Settings
@@ -1179,6 +1215,24 @@ async function boot() {
     baseUrl: state.serverUrl,
     getToken: () => invoke("daemon_token").catch(() => null),
   });
+  // WebSocket event stream for live task updates (replaces polling).
+  state.eventStream = createEventStream({
+    getWsUrl: () => state.serverUrl.replace(/^http/, "ws") + "/tasks/events",
+    onEvents: handleTaskEvents,
+    onConnect: () => console.log("[events] connected"),
+    onDisconnect: () => console.log("[events] disconnected"),
+  });
+  // HTTP polling fallback if WebSocket unavailable.
+  state.eventStream.setPollFn(async (taskId, sinceSeq) => {
+    if (!taskId || taskId === "*") return [];
+    try {
+      const data = await state.api.taskEvents(taskId);
+      const events = data.events ?? [];
+      return sinceSeq ? events.filter((e) => (e.seq ?? 0) > sinceSeq) : events;
+    } catch {
+      return [];
+    }
+  });
   try {
     await state.api.health();
   } catch (e) {
@@ -1201,7 +1255,9 @@ async function boot() {
   renderTranscript();
   renderHeaderStatus();
   await refreshRuns();
-  setInterval(refreshRuns, 2500);
+  // Runs list: WebSocket events are primary (via refreshRunsQuiet);
+  // this is a 10s safety net for missed events.
+  setInterval(refreshRuns, 10000);
 }
 
 // ---------------------------------------------------------------------------
@@ -1230,7 +1286,20 @@ function bindEvents() {
   $("set-pick-workspace").onclick = () => showView("workspace");
   $("btn-workspace").onclick = () => { $("ws-path").value = state.workspaceRoot; $("ws-status").textContent = ""; showView("workspace"); };
   $("ws-back").onclick = () => showView("main");
-  $("ws-use").onclick = () => setWorkspace($("ws-path").value.trim());
+  $("ws-use").onclick = async () => {
+    // Native folder picker (Tauri dialog)
+    try {
+      const picked = await invoke("pick_folder");
+      if (picked) {
+        $("ws-path").value = picked;
+        await setWorkspace(picked);
+      }
+    } catch (e) {
+      // Fallback to manual path input
+      const path = $("ws-path").value.trim();
+      if (path) await setWorkspace(path);
+    }
+  };
   $("ws-create").onclick = () => {
     const name = $("ws-new-name").value.trim();
     if (name) createWorkspace(name);
@@ -1256,10 +1325,10 @@ function bindEvents() {
 
   $("btn-approve-all").onclick = approveAll;
   $("btn-goto-chat").onclick = () => { showView("main"); $("chat-input").focus(); };
-  $("btn-goto-status").onclick = () => showView("status");
+  $("btn-goto-workflow").onclick = () => showView("workflow");
   $("status-back").onclick = () => showView("main");
   $("status-open-web").onclick = openWebUI;
-  $("wf-back").onclick = () => showView("status");
+  $("wf-back").onclick = () => showView("main");
   for (const b of document.querySelectorAll("#wf-filters .filter-chip")) {
     b.onclick = () => { state.wfFilter = b.dataset.filter; renderWorkflowView(); };
   }

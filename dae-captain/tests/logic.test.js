@@ -93,7 +93,7 @@ describe("formatResolvedArtifacts", () => {
   it("formats path artifacts", () => {
     assert.deepEqual(
       formatResolvedArtifacts([{ kind: "deck", label: "deck bisnis", path: "deck.json" }]),
-      ["deck bisnis — deck.json"]
+      [{ label: "deck bisnis", path: "deck.json", url: null, display: "deck bisnis — deck.json" }]
     );
   });
   it("handles empty", () => {
@@ -313,5 +313,38 @@ describe("summarizeTaskEvents", () => {
     ]);
     assert.deepEqual(s.thoughts, []);
     assert.deepEqual(s.tools, []);
+  });
+});
+
+describe("renderMarkdown", () => {
+  it("renders code blocks with copy button", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const html = renderMarkdown("```js\nconst x = 1;\n```");
+    assert.ok(html.includes('class="code-block"'));
+    assert.ok(html.includes("const x = 1;"));
+    assert.ok(html.includes("Salin"));
+  });
+
+  it("renders inline code, bold, italic", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const html = renderMarkdown("Use `npm install` for **bold** and *italic*");
+    assert.ok(html.includes('<code class="inline-code">npm install</code>'));
+    assert.ok(html.includes("<strong>bold</strong>"));
+    assert.ok(html.includes("<em>italic</em>"));
+  });
+
+  it("renders headers and lists", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const html = renderMarkdown("# Title\n- item1\n- item2\n1. first\n2. second");
+    assert.ok(html.includes("<h3"));
+    assert.ok(html.includes("<ul"));
+    assert.ok(html.includes("<ol"));
+  });
+
+  it("escapes HTML", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const html = renderMarkdown("<script>alert(1)</script>");
+    assert.ok(!html.includes("<script>"));
+    assert.ok(html.includes("&lt;script&gt;"));
   });
 });
