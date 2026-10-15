@@ -128,6 +128,7 @@ import {
   appendTurn,
   buildLayerBPrompt,
   createWorkflowRun,
+  DAE_CAPTAIN_PERSONA,
   formatResolvedForGoal,
   isConversationalMessage,
   isWorkflowEngine,
@@ -1923,14 +1924,9 @@ async function runWorkflowLayerB(
  * inherited, nothing is deleted (old sessions stay on disk for /history).
  */
 const CHAT_SYSTEM_PROMPT =
-  "Kamu Dae Captain, asisten AI yang ramah dan membantu. " +
-  "Balas dengan singkat dan natural dalam bahasa Indonesia. " +
-  "Kamu bisa membantu membuat kode, slide presentasi, dokumen, spreadsheet, dan riset — " +
-  "tapi untuk obrolan biasa cukup ngobrol saja, jangan tanya mau pakai engine apa. " +
-  "PENTING: Jika kamu tidak tahu fakta tentang seseorang atau sesuatu, katakan terus terang " +
-  "'saya tidak tahu' — JANGAN mengarang informasi. " +
-  "Selalu perhatikan konteks percakapan terakhir; jika user bertanya 'kenapa?' atau " +
-  "'gimana?' setelah membahas sesuatu, jawab tentang topik terakhir itu, bukan topik lama.";
+  DAE_CAPTAIN_PERSONA +
+  " Kamu bisa membantu membuat kode, slide presentasi, dokumen, spreadsheet, dan riset — " +
+  "tapi untuk obrolan biasa cukup ngobrol saja, jangan tanya mau pakai engine apa.";
 
 /** No provider configured and the model cannot answer at all. */
 const CHAT_FALLBACK = "Halo! Ada yang bisa dibantu?";
