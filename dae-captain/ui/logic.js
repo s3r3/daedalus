@@ -413,10 +413,48 @@ export function summarizeTaskEvents(events) {
       const t = tools.get(p.call.id) ?? { tool: p.call.tool ?? "tool" };
       t.status = p.result?.status ?? "ok";
       if (!t.args) t.args = summarizeArgs(p.call.tool, p.call.args);
+      // Image-producing tools (view_image, screenshot) record their file
+      // here; the chat renders it inline instead of hiding the picture.
+      const meta = p.result?.meta;
+      if (meta?.image_attached === true && typeof meta?.image_path === "string" && meta.image_path) {
+        t.image = { path: meta.image_path };
+      }
       tools.set(p.call.id, t);
     }
   }
   return { thoughts, tools: [...tools.values()] };
+}
+
+/**
+ * Compact token-usage line for one chat answer ("tok 12,4k→3,1k").
+ * Empty string when there is nothing real to show — never a guess.
+ */
+export function formatUsage(usage) {
+  const prompt = Number(usage?.prompt_tokens);
+  const completion = Number(usage?.completion_tokens);
+  if (!Number.isFinite(prompt) && !Number.isFinite(completion)) return "";
+  const short = (n) => {
+    if (!Number.isFinite(n)) return "?";
+    return n >= 1000 ? `${String(Math.round(n / 100) / 10).replace(".", ",")}k` : String(n);
+  };
+  return `tok ${short(prompt)}→${short(completion)}`;
+}
+
+/**
+ * FILE_CHANGED payloads → per-file review rows. Pure — the island renders
+ * path, operation, and +added/-removed counts plus the patch text on demand.
+ */
+export function summarizeChanges(changes) {
+  if (!Array.isArray(changes)) return [];
+  return changes
+    .filter((c) => c && typeof c.path === "string")
+    .map((c) => ({
+      path: c.path,
+      operation: c.operation ?? "modified",
+      added: Number(c.added) || 0,
+      removed: Number(c.removed) || 0,
+      patch: typeof c.patch === "string" ? c.patch : "",
+    }));
 }
 
 /**

@@ -173,6 +173,21 @@ describe("createApiClient", () => {
     assert.deepEqual(JSON.parse(calls[0].init.body), { apiKey: "secret" });
   });
 
+  it("crew, changes, file, and export routes hit the right endpoints", async () => {
+    const { fetchImpl, calls } = mockFetch((url) => ok({ ok: true }));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await api.taskChanges("t-1");
+    await api.workspaceFile("/ws", ".daedalus/shots/a.png");
+    await api.extensionsStatus("/ws");
+    await api.exportConversation("r-1", "/ws");
+    const urls = calls.map((c) => c.url);
+    assert.ok(urls[0].startsWith("http://127.0.0.1:3080/tasks/t-1/changes"));
+    assert.ok(urls[1].includes("/workspace/file?") && urls[1].includes("path="));
+    assert.ok(urls[2].includes("/extensions/status?"));
+    assert.equal(calls[3].url, "http://127.0.0.1:3080/workflow/export");
+    assert.deepEqual(JSON.parse(calls[3].init.body), { run_id: "r-1", workspace_root: "/ws" });
+  });
+
   it("decideApproval resolves by id (survives runner restart)", async () => {
     const { fetchImpl, calls } = mockFetch(() => ok({ success: true, decision: "grant" }));
     const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });

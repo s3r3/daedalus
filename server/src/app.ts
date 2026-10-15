@@ -2101,7 +2101,7 @@ async function runChatReply(
   run: RunContext,
   runs: WorkflowRunStore,
   input: { message: string; attachments: ChatAttachmentIn[]; regenerate: boolean },
-): Promise<{ text: string; clipped: boolean } | undefined> {
+): Promise<{ text: string; clipped: boolean; usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number } } | undefined> {
   const prep = prepareChatTurn(ctx, root, run, input);
   const provider = resolveFastPathProvider(ctx, { poolModels: [] });
   if (!provider) return undefined;
@@ -2114,7 +2114,7 @@ async function runChatReply(
     }
     prep.store.append(root, run.run_id, { role: "assistant", text, ts: isoNow() });
     runs.saveRun(run); // touch: active chats sort newest-first in /history
-    return { text, clipped: prep.clipped };
+    return { text, clipped: prep.clipped, ...(response.usage ? { usage: response.usage } : {}) };
   } catch (error) {
     ctx.log.error("workflow chat reply failed", { error: String(error) });
     throw new Error("model_unavailable");
@@ -2854,6 +2854,7 @@ export function createApp(ctx: AppContext) {
                 kind: "chat",
                 text: reply?.text ?? CHAT_FALLBACK,
                 clipped: reply?.clipped === true,
+                ...(reply?.usage ? { usage: reply.usage } : {}),
                 request_id: requestId,
               });
             } catch (error) {
@@ -3008,11 +3009,14 @@ export function createApp(ctx: AppContext) {
           req.on("close", onClose);
           let text = "";
           let failed = false;
+          let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
           try {
             for await (const chunk of provider.stream(prep.messages, undefined, { signal: controller.signal })) {
               if (chunk.type === "delta" && chunk.content) {
                 text += chunk.content;
                 if (!send({ delta: chunk.content })) break;
+              } else if (chunk.type === "usage" && chunk.usage) {
+                usage = chunk.usage;
               }
             }
           } catch (error) {
@@ -3033,7 +3037,7 @@ export function createApp(ctx: AppContext) {
           }
           prep.store.append(root, run.run_id, { role: "assistant", text, ts: isoNow() });
           runs.saveRun(run);
-          send({ done: true, run_id: run.run_id, text, clipped: prep.clipped });
+          send({ done: true, run_id: run.run_id, text, clipped: prep.clipped, ...(usage ? { usage } : {}) });
           res.end();
         } catch (error) {
           try {
@@ -3045,6 +3049,74 @@ export function createApp(ctx: AppContext) {
           } catch {
             /* socket already gone */
           }
+        }
+      })();
+      return;
+    }
+
+    // ---- Dae Captain export: one session → one Markdown file ----
+    // Rendered server-side from the run record plus its stored chat
+    // exchanges (the full history, not the client's 30-message window),
+    // written under the workspace so Open/Reveal work on a real path.
+    if (method === "POST" && url.pathname === "/workflow/export") {
+      void (async () => {
+        try {
+          const parsed = await readJson(req);
+          if (!parsed) {
+            sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+            return;
+          }
+          const root = resolveAllowedRoot(ctx, parsed.workspace_root ?? parsed.workspaceRoot);
+          const runId = typeof parsed.run_id === "string" ? parsed.run_id : "";
+          if (!runId) {
+            sendJson(res, 400, { error: "run_id_required", request_id: requestId });
+            return;
+          }
+          const runs = new WorkflowRunStore(
+            resolveDaedalusHome(ctx.settings.daedalusHome, root),
+          );
+          const run = runs.loadRun(runId);
+          if (!run) {
+            sendJson(res, 404, { error: "run_not_found", request_id: requestId });
+            return;
+          }
+          if (reconcileWorkflowRun(ctx, run)) runs.saveRun(run);
+          const present = presentWorkflowRun(ctx, run);
+          const chat = (present.chat ?? []) as Array<{ role?: unknown; text?: unknown }>;
+          const lines = [
+            "# Percakapan Dae Captain",
+            "",
+            `- Sesi: \`${run.run_id}\``,
+            `- Workspace: \`${run.workspace_root}\``,
+            `- Dibuat: ${run.created_at} · Diperbarui: ${run.updated_at}`,
+            "",
+          ];
+          if (run.turns.length > 0) {
+            lines.push("## Tugas", "");
+            run.turns.forEach((turn, index) => {
+              lines.push(`### ${index + 1}. [${turn.engine}] ${turn.goal} (${turn.status})`);
+              if (turn.note) lines.push(`> ${turn.note}`);
+              lines.push("");
+            });
+          }
+          if (chat.length > 0) {
+            lines.push("## Obrolan", "");
+            for (const message of chat) {
+              const who = message.role === "user" ? "User" : "Dae Captain";
+              lines.push(`**${who}:** ${typeof message.text === "string" ? message.text : ""}`, "");
+            }
+          }
+          if (run.turns.length === 0 && chat.length === 0) {
+            lines.push("_Sesi kosong._", "");
+          }
+          const dir = join(root, ".daedalus", "exports");
+          mkdirSync(dir, { recursive: true });
+          const file = `chat-${run.run_id}.md`;
+          writeFileSync(join(dir, file), lines.join("\n"));
+          const rel = join(".daedalus", "exports", file);
+          sendJson(res, 200, { path: rel, absolute_path: join(root, rel), request_id: requestId });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
       })();
       return;

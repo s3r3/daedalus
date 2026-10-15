@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from 'vitest'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -67,18 +67,20 @@ async function startFakeProvider(): Promise<string> {
         const firstUser = messages.find((m) => m.role === 'user')
         const firstText = typeof firstUser?.content === 'string' ? firstUser.content : '[blocks]'
         const echo = `seen:${messages.length} first:${firstText}`
+        const usage = { prompt_tokens: 12400, completion_tokens: 310, total_tokens: 12710 }
         if (body.stream) {
           res.writeHead(200, { 'content-type': 'text/event-stream' })
           const mid = Math.ceil(echo.length / 2)
           for (const part of [echo.slice(0, mid), echo.slice(mid)]) {
             res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: part } }] })}\n\n`)
           }
+          res.write(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage })}\n\n`)
           res.write('data: [DONE]\n\n')
           res.end()
           return
         }
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: echo }, finish_reason: 'stop' }] }))
+        res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: echo }, finish_reason: 'stop' }], usage }))
       })
       return
     }
@@ -231,6 +233,56 @@ describe('history clipping', () => {
     expect(clipped).toBe(true)
     const run = await getRun(base, runId!)
     expect(run.run.chat_turns).toBe(16)
+  })
+})
+
+describe('token usage', () => {
+  test('plain and streamed replies surface provider usage', async () => {
+    const { base } = await listenWithFake()
+    const plain = await postChat(base, { message: 'Siapa nama kucing saya?' })
+    expect(plain.body.usage).toMatchObject({ prompt_tokens: 12400, completion_tokens: 310 })
+
+    const stream = await fetch(new URL('/workflow/chat/stream', base), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'Apa lelucon favoritmu?' }),
+    })
+    const done = (await stream.text()).split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => JSON.parse(line.slice(5)) as { done?: boolean; usage?: unknown })
+      .find((obj) => obj.done === true)
+    expect(done!.usage).toMatchObject({ total_tokens: 12710 })
+  })
+})
+
+describe('export', () => {
+  test('one session renders to a Markdown file with tasks and chat', async () => {
+    const { base } = await listenWithFake()
+    const first = await postChat(base, { message: 'Siapa nama kucing saya? Kucing saya bernama Tomo.' })
+    const runId = first.body.run_id as string
+    const work = await postChat(base, { message: 'buatkan landing page pakai vue', run_id: runId })
+    expect(work.status).toBe(201)
+
+    const res = await fetch(new URL('/workflow/export', base), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ run_id: runId }),
+    })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { path: string; absolute_path: string }
+    expect(body.path).toMatch(/\.daedalus.*exports.*\.md$/)
+    expect(existsSync(body.absolute_path)).toBe(true)
+    const md = readFileSync(body.absolute_path, 'utf8')
+    expect(md).toContain('buatkan landing page pakai vue')
+    expect(md).toContain('Tomo')
+
+    const missing = await fetch(new URL('/workflow/export', base), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    expect(missing.status).toBe(400)
   })
 })
 

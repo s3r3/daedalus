@@ -20,6 +20,8 @@ import {
   engineLabel,
   enabledEngines,
   fmtTime,
+  formatUsage,
+  summarizeChanges,
   validateAttachmentPick,
   parseStreamLine,
   questionOptions,
@@ -445,6 +447,32 @@ describe("renderMarkdown images, safe links, nested lists, highlight", () => {
     assert.ok(html.includes("tok-num"));
     assert.ok(html.includes("tok-com"));
     assert.ok(html.includes("const x = 1;".slice(0, 5)));
+  });
+});
+
+describe("task activity extras", () => {
+  it("captures tool-result images from finish meta", async () => {
+    const { summarizeTaskEvents } = await import("../ui/logic.js");
+    const s = summarizeTaskEvents([
+      { type: "TOOL_CALL_STARTED", payload: { call: { id: "c1", tool: "screenshot" } } },
+      { type: "TOOL_CALL_FINISHED", payload: { call: { id: "c1", tool: "screenshot" }, result: { status: "ok", meta: { image_attached: true, image_path: ".daedalus/shots/a.png" } } } },
+      { type: "TOOL_CALL_FINISHED", payload: { call: { id: "c2", tool: "read_file" }, result: { status: "ok", meta: {} } } },
+    ]);
+    assert.equal(s.tools[0].image.path, ".daedalus/shots/a.png");
+    assert.equal(s.tools[1].image, undefined);
+  });
+  it("formats token usage compactly, empty when absent", () => {
+    assert.equal(formatUsage({ prompt_tokens: 12400, completion_tokens: 3100 }), "tok 12,4k→3,1k");
+    assert.equal(formatUsage({ prompt_tokens: 800, completion_tokens: 12 }), "tok 800→12");
+    assert.equal(formatUsage(null), "");
+    assert.equal(formatUsage({}), "");
+  });
+  it("summarizes file changes for review rows", () => {
+    assert.deepEqual(summarizeChanges([
+      { path: "a.ts", operation: "modified", added: 3, removed: 1, patch: "diff" },
+      { nope: true },
+    ]), [{ path: "a.ts", operation: "modified", added: 3, removed: 1, patch: "diff" }]);
+    assert.deepEqual(summarizeChanges(null), []);
   });
 });
 

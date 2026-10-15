@@ -76,6 +76,14 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
       req("POST", `/tasks/${encodeURIComponent(taskId)}/cancel`),
     taskEvents: (taskId) =>
       req("GET", `/tasks/${encodeURIComponent(taskId)}/events`),
+    taskChanges: (taskId) =>
+      req("GET", `/tasks/${encodeURIComponent(taskId)}/changes`),
+    workspaceFile: (root, path) =>
+      req("GET", "/workspace/file", undefined, { root, path }),
+    extensionsStatus: (root) =>
+      req("GET", "/extensions/status", undefined, { root }),
+    exportConversation: (runId, workspaceRoot) =>
+      req("POST", "/workflow/export", { run_id: runId, workspace_root: workspaceRoot }),
     getSettings: () => req("GET", "/settings"),
     updateSettings: (patch) => req("PUT", "/settings", patch),
     getProviders: () => req("GET", "/providers"),

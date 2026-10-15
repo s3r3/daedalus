@@ -34,6 +34,8 @@ import {
   questionAllowsFreeText,
   validateAttachmentPick,
   CHAT_ATTACH_LIMITS,
+  formatUsage,
+  summarizeChanges,
   fmtTime,
   SLASH_COMMANDS,
   THINKING_LEVELS,
@@ -93,12 +95,98 @@ const state = {
 // ---------------------------------------------------------------------------
 
 function showView(name) {
-  for (const v of ["main", "workflow", "settings", "workspace", "setup", "boot"]) {
+  for (const v of ["main", "workflow", "crew", "settings", "workspace", "setup", "boot"]) {
     $("view-" + v).classList.toggle("hidden", v !== name);
   }
   if (name === "workflow") renderWorkflowView();
+  if (name === "crew") loadCrewView();
   if (name === "settings") loadSettingsView();
   if (name === "workspace") { renderWorkspaceStatus(); }
+}
+
+/**
+ * Crew view: agents, skills, and connections the captain commands.
+ * Strictly read-only — the same live inventory the Web UI renders.
+ */
+async function loadCrewView() {
+  const box = $("crew-box");
+  const status = $("crew-status");
+  if (!box) return;
+  box.innerHTML = "";
+  if (status) {
+    status.className = "status-line";
+    status.textContent = "Memuat…";
+  }
+  try {
+    const data = await state.api.extensionsStatus(state.workspaceRoot);
+    const groups = [
+      ["Agen", (data.agents ?? []).map((a) => ({ title: a.name, sub: a.description ?? "" }))],
+      ["Skills", (data.skills ?? []).map((s) => ({ title: s.name, sub: `${s.origin ?? ""}${s.disabled ? " · nonaktif" : ""}` }))],
+      ["MCP", (data.mcp ?? []).map((m) => ({ title: m.name, sub: `${m.connected ? "terhubung" : "terputus"} · ${m.toolCount ?? 0} tools${m.error ? ` · ${m.error}` : ""}` }))],
+      ["LSP", (data.lsp ?? []).map((l) => ({ title: l.name, sub: (l.extensions ?? []).join(", ") }))],
+    ];
+    let empty = true;
+    for (const [heading, rows] of groups) {
+      if (!rows.length) continue;
+      empty = false;
+      const h = document.createElement("h3");
+      h.className = "section-header";
+      h.textContent = `${heading} (${rows.length})`;
+      box.appendChild(h);
+      for (const row of rows.slice(0, 30)) {
+        const el = document.createElement("div");
+        el.className = "crew-row";
+        el.innerHTML = `<span class="wf-engine">${escapeHtml(row.title)}</span> <span class="hint">${escapeHtml(row.sub)}</span>`;
+        box.appendChild(el);
+      }
+    }
+    if (empty) box.innerHTML = `<span class="hint">Tidak ada agen/skill/koneksi terdaftar di workspace ini.</span>`;
+    if ((data.problems ?? []).length) {
+      const warn = document.createElement("div");
+      warn.className = "hint";
+      warn.textContent = "Masalah: " + data.problems.join("; ");
+      box.appendChild(warn);
+    }
+    if (status) {
+      status.className = "status-line ok";
+      status.textContent = "Aktif — " + (data.root ?? state.workspaceRoot);
+    }
+  } catch (e) {
+    if (status) {
+      status.className = "status-line error";
+      status.textContent = "Gagal memuat kru: " + errText(e);
+    }
+  }
+}
+
+/** Export the active session to a Markdown file in the workspace. */
+async function exportCurrentSession() {
+  const status = $("action-status");
+  const runId = state.runId ?? state.workflowRunId;
+  if (!runId) {
+    if (status) status.textContent = "Belum ada sesi untuk diekspor.";
+    return;
+  }
+  if (status) status.textContent = "Mengekspor…";
+  try {
+    const out = await state.api.exportConversation(runId, state.workspaceRoot);
+    state.transcript.push({
+      kind: "assistant",
+      text: "Percakapan diekspor — file tersimpan di workspace.",
+      ts: Date.now(),
+      resolved: [{ kind: "export", label: "Ekspor percakapan", path: out.path, absolute_path: out.absolute_path }],
+    });
+    if (status) {
+      status.className = "action-status ok";
+      status.textContent = "Ekspor selesai ✓";
+    }
+  } catch (e) {
+    if (status) {
+      status.className = "action-status error";
+      status.textContent = "Gagal mengekspor: " + errText(e);
+    }
+  }
+  renderTranscript();
 }
 
 function expand() {
@@ -297,11 +385,20 @@ function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+/** Resolve a tool-result image (workspace-relative) to a data URL for inline view. */
+async function loadToolImage(path) {
+  const data = await state.api.workspaceFile(state.workspaceRoot, path);
+  if (data?.kind === "image" && typeof data?.src === "string" && data.src) return data.src;
+  throw new Error("bukan gambar");
+}
+
 /**
  * Live activity block for a chat turn: thinking (collapsible) + tool-call
  * chips, mirroring the web panel's THINKING view. Returns null when empty.
+ * `imageLoader(path)` resolves a tool-result image to a data URL on demand —
+ * pictures the agent saw (screenshot/view_image) render inline here.
  */
-function renderTurnActivity(activity) {
+function renderTurnActivity(activity, imageLoader) {
   if (!activity) return null;
   const thoughts = activity.thoughts ?? [];
   const tools = activity.tools ?? [];
@@ -336,6 +433,29 @@ function renderTurnActivity(activity) {
       const badge = t.status === "ok" ? "OK" : t.status === "running" ? "…" : t.status.toUpperCase();
       const badgeClass = t.status === "ok" ? "ok" : t.status === "running" ? "running" : "bad";
       row.innerHTML = `<span class="tool-name">${escapeHtml(t.tool)}</span> <span class="tool-badge ${badgeClass}">${escapeHtml(badge)}</span> <span class="tool-args">${escapeHtml(t.args ?? "")}</span>`;
+      if (t.image?.path && imageLoader) {
+        const viewBtn = document.createElement("button");
+        viewBtn.className = "ghost-btn small";
+        viewBtn.textContent = "Lihat gambar";
+        viewBtn.onclick = async () => {
+          viewBtn.disabled = true;
+          viewBtn.textContent = "Memuat…";
+          try {
+            const src = await imageLoader(t.image.path);
+            const img = document.createElement("img");
+            img.className = "tool-image";
+            img.src = src;
+            img.alt = t.image.path;
+            img.loading = "lazy";
+            row.appendChild(img);
+            viewBtn.remove();
+          } catch {
+            viewBtn.textContent = "Gagal memuat";
+            viewBtn.disabled = false;
+          }
+        };
+        row.appendChild(viewBtn);
+      }
       list.appendChild(row);
     }
     wrap.appendChild(list);
@@ -450,6 +570,74 @@ function renderTranscript() {  const box = $("transcript");
         }
         el.appendChild(actions);
       }
+      if (m.kind === "assistant" && m.usage && !m.streaming) {
+        const usage = document.createElement("div");
+        usage.className = "hint";
+        usage.textContent = formatUsage(m.usage);
+        el.appendChild(usage);
+      }
+      if (m.kind === "turn" && m.taskId) {
+        const row = document.createElement("div");
+        row.className = "msg-actions";
+        // Retry: re-dispatch the same goal as a brand-new turn (new task
+        // id, honest history) — only for turns the backend marked failed.
+        if (findRunTurn(m.taskId)?.status === "failed") {
+          const retry = document.createElement("button");
+          retry.className = "ghost-btn small";
+          retry.textContent = "↻ Coba lagi";
+          retry.title = "Jalankan lagi sebagai task baru";
+          retry.onclick = () => {
+            retry.disabled = true;
+            sendChat(m.goal);
+          };
+          row.appendChild(retry);
+        }
+        // In-place review: which files changed, with counts and patches.
+        const changesBtn = document.createElement("button");
+        changesBtn.className = "ghost-btn small";
+        changesBtn.textContent = "Lihat perubahan";
+        const changesBox = document.createElement("div");
+        changesBox.className = "changes-box hidden";
+        let changesLoaded = false;
+        changesBtn.onclick = async () => {
+          changesBox.classList.toggle("hidden");
+          if (changesBox.classList.contains("hidden") || changesLoaded) return;
+          changesBox.textContent = "Memuat…";
+          try {
+            const data = await state.api.taskChanges(m.taskId);
+            const fileRows = summarizeChanges(data.changes);
+            changesBox.innerHTML = fileRows.length ? "" : "Tidak ada perubahan file tercatat.";
+            for (const fileRow of fileRows.slice(0, 20)) {
+              const entry = document.createElement("div");
+              entry.className = "change-row";
+              const head = document.createElement("div");
+              head.className = "change-head";
+              head.innerHTML = `<span class="mono">${escapeHtml(fileRow.path)}</span> <span class="hint">${escapeHtml(fileRow.operation)} +${fileRow.added}/-${fileRow.removed}</span>`;
+              entry.appendChild(head);
+              if (fileRow.patch) {
+                const details = document.createElement("details");
+                details.className = "patch-details";
+                const summary = document.createElement("summary");
+                summary.textContent = "Patch";
+                details.appendChild(summary);
+                const pre = document.createElement("pre");
+                pre.className = "patch-box";
+                const lines = fileRow.patch.split("\n");
+                pre.textContent = (lines.length > 80 ? lines.slice(0, 80).join("\n") + `\n… (${lines.length - 80} baris disembunyikan)` : fileRow.patch);
+                details.appendChild(pre);
+                entry.appendChild(details);
+              }
+              changesBox.appendChild(entry);
+            }
+            changesLoaded = true;
+          } catch (e) {
+            changesBox.textContent = "Gagal memuat: " + errText(e);
+          }
+        };
+        row.appendChild(changesBtn);
+        el.appendChild(row);
+        el.appendChild(changesBox);
+      }
       // Render artifact cards with Open/Reveal actions. Only entries that
       // carry a real path or URL get a card — no fake download cards.
       if (arts.length) {
@@ -503,7 +691,7 @@ function renderTranscript() {  const box = $("transcript");
           } catch {}
         };
       }
-      const act = renderTurnActivity(m.activity);
+      const act = renderTurnActivity(m.activity, loadToolImage);
       if (act) el.appendChild(act);
     } else if (m.kind === "error") {
       el.className = "bubble assistant error";
@@ -575,7 +763,7 @@ async function handleChatResponse(res, { text, override, attachments }) {
   if (res.kind === "chat") {
     // Chat-first: a conversational reply, no engine, no task.
     state.runId = res.run_id ?? state.runId;
-    state.transcript.push({ kind: "assistant", text: res.text, session: true, ts: Date.now(), clipped: res.clipped === true });
+    state.transcript.push({ kind: "assistant", text: res.text, session: true, ts: Date.now(), clipped: res.clipped === true, usage: res.usage });
   } else if (res.kind === "need_workspace") {
     // Workspace on-demand: the command needs a folder. Remember the
     // original message, show the picker, retry after the user picks.
@@ -738,6 +926,7 @@ async function regenerateAssistant(entry) {
       state.runId = res.run_id ?? state.runId;
       entry.text = res.text;
       entry.clipped = res.clipped === true;
+      entry.usage = res.usage;
     } else {
       // Same words re-routed to work (e.g. toggled engine): restore the
       // old answer and say so instead of swapping in a task silently.
@@ -760,6 +949,7 @@ async function regenerateAssistant(entry) {
         state.runId = res.run_id ?? state.runId;
         entry.text = res.text;
         entry.clipped = res.clipped === true;
+        entry.usage = res.usage;
       } else {
         entry.text = oldText;
         entry.clipped = oldClipped;
@@ -2171,6 +2361,9 @@ function bindEvents() {
   bindGuarded("btn-approve-all", "click", approveAll);
   bindGuarded("btn-goto-chat", "click", () => { showView("main"); const ci = $("chat-input"); if (ci) ci.focus(); });
   bindGuarded("btn-goto-workflow", "click", () => showView("workflow"));
+  bindGuarded("btn-goto-crew", "click", () => showView("crew"));
+  bindGuarded("btn-export", "click", exportCurrentSession);
+  bindGuarded("crew-back", "click", () => showView("main"));
   bindGuarded("wf-back", "click", () => showView("main"));
   for (const b of document.querySelectorAll("#wf-filters .filter-chip")) {
     b.onclick = () => { state.wfFilter = b.dataset.filter; renderWorkflowView(); };
