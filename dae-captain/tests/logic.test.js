@@ -19,6 +19,7 @@ import {
   spawnServerArgs,
   engineLabel,
   enabledEngines,
+  fmtTime,
   validateAttachmentPick,
   parseStreamLine,
   questionOptions,
@@ -384,6 +385,38 @@ describe("runHistoryLine chat sessions", () => {
   it("labels chat-only runs by message count", async () => {
     const { runHistoryLine } = await import("../ui/logic.js");
     assert.ok(runHistoryLine({ run_id: "r1", turns: [], chat_turns: 4 }, 2).includes("4 pesan"));
+  });
+});
+
+describe("fmtTime", () => {
+  it("formats epoch and ISO timestamps as HH.MM", () => {
+    assert.match(fmtTime(new Date(2026, 0, 2, 3, 4).getTime()), /^\d{2}\.\d{2}$/);
+    assert.match(fmtTime("2026-10-15T08:56:03.831Z"), /^\d{2}\.\d{2}$/);
+  });
+  it("stays empty for missing or garbage input", () => {
+    assert.equal(fmtTime(null), "");
+    assert.equal(fmtTime(undefined), "");
+    assert.equal(fmtTime("bukan-tanggal"), "");
+  });
+});
+
+describe("renderMarkdown tables and extras", () => {
+  it("renders pipe tables with header and rows", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const html = renderMarkdown("| A | B |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |");
+    assert.ok(html.includes("<table"));
+    assert.ok(html.includes("<th>A</th>"));
+    assert.ok(html.includes("<td>4</td>"));
+  });
+  it("ignores a header-looking row without a delimiter", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    const html = renderMarkdown("| A | B |\n| 1 | 2 |");
+    assert.ok(!html.includes("<table"));
+  });
+  it("renders strikethrough and horizontal rules", async () => {
+    const { renderMarkdown } = await import("../ui/logic.js");
+    assert.ok(renderMarkdown("~~lama~~").includes("<del>lama</del>"));
+    assert.ok(renderMarkdown("---").includes("<hr"));
   });
 });
 

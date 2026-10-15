@@ -107,6 +107,16 @@ export function questionText(q) {
     : "Agent meminta masukan:";
 }
 
+/** Format a message timestamp (epoch ms or ISO string) as HH.MM. Empty when unknown. */
+export function fmtTime(ts) {
+  if (ts === null || ts === undefined || ts === "") return "";
+  const d = ts instanceof Date ? ts : new Date(ts);
+  const t = d.getTime();
+  if (!Number.isFinite(t)) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}.${p(d.getMinutes())}`;
+}
+
 /** Whether the card offers a free-text answer next to the option buttons. */
 export function questionAllowsFreeText(q) {
   return q?.allow_free_text !== false;
@@ -464,13 +474,19 @@ function summarizeArgs(tool, args) {
 
 /**
  * Minimal Markdown renderer (no dependencies).
- * Supports: code blocks (```), inline code, bold, italic, headers,
- * unordered/ordered lists, links, paragraphs. Returns HTML string.
+ * Supports: code blocks (```), inline code, bold, italic, strikethrough,
+ * headers, unordered/ordered lists, pipe tables, horizontal rules, links,
+ * paragraphs. Returns HTML string.
  * Code blocks get a copy button (wired up by the caller).
  */
 export function renderMarkdown(text) {
   if (!text) return "";
   const lines = String(text).split("\n");
+  const isTableRow = (line) => /^\s*\|.*\|\s*$/.test(line);
+  const isDelimiterRow = (line) =>
+    /^\s*\|(\s*:?-+:?\s*\|)+\s*$/.test(line) && line.replace(/[^:-]/g, "").includes("--");
+  const splitRow = (line) =>
+    line.trim().replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim());
   let html = "";
   let inCode = false;
   let codeLang = "";
@@ -490,9 +506,10 @@ export function renderMarkdown(text) {
     s = esc(s);
     // Restore inline code
     s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => codes[Number(i)]);
-    // Bold, italic, links
+    // Bold, italic, strikethrough, links
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+    s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
     s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
     return s;
   };
@@ -505,7 +522,28 @@ export function renderMarkdown(text) {
     }
   };
 
-  for (const line of lines) {
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    // Pipe table: header row + delimiter row + body rows.
+    if (isTableRow(line) && li + 1 < lines.length && isDelimiterRow(lines[li + 1])) {
+      closeList();
+      const head = splitRow(line);
+      html += `<table class="md-table"><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>`;
+      li += 2;
+      while (li < lines.length && isTableRow(lines[li]) && !isDelimiterRow(lines[li])) {
+        html += `<tr>${splitRow(lines[li]).map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`;
+        li++;
+      }
+      html += "</tbody></table>";
+      li--;
+      continue;
+    }
+    // Horizontal rule
+    if (/^\s*(---|\*\*\*|___)\s*$/.test(line)) {
+      closeList();
+      html += `<hr class="md-hr">`;
+      continue;
+    }
     // Code block fence
     const fence = line.match(/^```(\w*)\s*$/);
     if (fence) {

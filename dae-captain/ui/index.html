@@ -66,6 +66,7 @@
     <section id="view-main">
       <div id="chat-engine-pills" class="chat-engine-pills"></div>
       <div id="transcript" class="transcript"></div>
+      <button id="chat-jump" class="jump-btn hidden">↓ pesan baru</button>
       <div id="approvals" class="approvals"></div>
       <div class="action-row">
         <button id="btn-approve-all" class="action-btn">Approve All</button>
@@ -80,7 +81,7 @@
         <div class="composer-row">
           <button id="chat-attach" class="icon-btn" title="Lampirkan gambar/teks">+</button>
           <input id="chat-file" class="hidden" type="file" multiple>
-          <input id="chat-input" type="text" placeholder="Tanya Dae Captain sesuatu…" autocomplete="off">
+          <textarea id="chat-input" rows="1" placeholder="Tanya Dae Captain sesuatu… (Enter kirim, Shift+Enter baris baru)" autocomplete="off"></textarea>
           <button id="chat-stop" class="stop-btn hidden" title="Hentikan task">■</button>
           <button id="chat-send" class="send-btn" title="Kirim">➤</button>
         </div>

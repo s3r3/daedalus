@@ -14,7 +14,6 @@ import {
   approvalPayload,
   approvalTitle,
   chatRequestBody,
-  isClarifyResponse,
   sameWorkspace,
   pendingApprovals,
   errText,
@@ -35,6 +34,7 @@ import {
   questionAllowsFreeText,
   validateAttachmentPick,
   CHAT_ATTACH_LIMITS,
+  fmtTime,
   SLASH_COMMANDS,
   THINKING_LEVELS,
 } from "./logic.js";
@@ -71,7 +71,7 @@ const state = {
   engineOverride: null, // null = auto
   expanded: false,
   runs: [],
-  transcript: [], // {kind: 'user'|'turn'|'clarify'|'error', ...}
+  transcript: [], // {kind: 'user'|'turn'|'assistant'|'error', ...}
   serverUrl: "http://127.0.0.1:3080",
   pendingMessage: null, // work command waiting for a workspace pick
   pendingOverride: null,
@@ -83,6 +83,8 @@ const state = {
   approvalOpen: false, // latch: auto-expand once per approval batch
   historyList: [], // run_ids from the last /history listing (for /resume index)
   slashIndex: -1, // suggestion-menu selection (-1 = none)
+  stick: true, // auto-scroll pinned to bottom (false while reading history)
+  viewLimit: 30, // rendered transcript window (grows via "load more")
 };
 
 // ---------------------------------------------------------------------------
@@ -340,9 +342,38 @@ function renderTurnActivity(activity) {
   return wrap;
 }
 
+/** Streaming fast path: touch only the live bubble, never rebuild the list. */
+function renderLive() {
+  const box = $("transcript");
+  const turn = [...state.transcript].reverse().find((m) => m.streaming);
+  const body = box?.querySelector(".bubble.live .body");
+  if (!box || !body || !turn) {
+    renderTranscript();
+    return;
+  }
+  body.innerHTML = escapeHtml(turn.text) + `<span class="stream-caret">▍</span>`;
+  if (state.stick) box.scrollTop = box.scrollHeight;
+}
+
 function renderTranscript() {  const box = $("transcript");
+  if (!box) return;
   box.innerHTML = "";
-  const visible = state.transcript.slice(-30);
+  // Older messages stay out of the DOM until asked for (long resumed
+  // sessions must not silently truncate, but must not freeze either).
+  const hidden = Math.max(0, state.transcript.length - state.viewLimit);
+  if (hidden > 0) {
+    const more = document.createElement("button");
+    more.className = "load-more-btn";
+    more.textContent = `Muat ${hidden} pesan sebelumnya`;
+    more.onclick = () => {
+      const oldHeight = box.scrollHeight;
+      state.viewLimit += 50;
+      renderTranscript();
+      box.scrollTop = box.scrollHeight - oldHeight;
+    };
+    box.appendChild(more);
+  }
+  const visible = state.transcript.slice(-state.viewLimit);
   // Regenerate is offered on the latest in-session chat answer only —
   // resumed history has no attachment bytes and tasks have their own flow.
   let lastAssistantIdx = -1;
@@ -353,7 +384,8 @@ function renderTranscript() {  const box = $("transcript");
     const el = document.createElement("div");
     if (m.kind === "user") {
       el.className = "bubble user";
-      el.innerHTML = `<div class="body">${escapeHtml(m.text)}</div>`;
+      const when = fmtTime(m.ts);
+      el.innerHTML = `<div class="body">${escapeHtml(m.text)}</div>${when ? `<div class="msg-time">${escapeHtml(when)}</div>` : ""}`;
       if (m.attachments?.length) {
         const chips = document.createElement("div");
         chips.className = "msg-attachments";
@@ -366,8 +398,9 @@ function renderTranscript() {  const box = $("transcript");
         el.appendChild(chips);
       }
     } else if (m.kind === "turn" || m.kind === "assistant") {
-      el.className = "bubble assistant";
+      el.className = "bubble assistant" + (m.streaming ? " live" : "");
       const who = m.kind === "assistant" ? "Dae Captain" : engineLabel(m.engine);
+      const when = fmtTime(m.ts);
       const arts = formatResolvedArtifacts(m.resolved);
       // Streaming answers render as plain text with a caret (cheap per
       // delta); the Markdown pass runs once the stream finishes.
@@ -376,7 +409,7 @@ function renderTranscript() {  const box = $("transcript");
         ? (m.streaming ? escapeHtml(m.text) + `<span class="stream-caret">▍</span>` : renderMarkdown(m.text))
         : escapeHtml(m.goal);
       el.innerHTML = `
-        <div class="who">${escapeHtml(who)}</div>
+        <div class="who">${escapeHtml(who)}${when ? ` <span class="msg-time">${escapeHtml(when)}</span>` : ""}</div>
         <div class="body">${bodyHtml}</div>
         ${m.staged ? `<div class="note">Staged — menunggu gate di Web UI / aplikasi.</div>` : ""}
         ${arts.length ? `<div class="artifacts"></div>` : ""}`;
@@ -443,17 +476,6 @@ function renderTranscript() {  const box = $("transcript");
       }
       const act = renderTurnActivity(m.activity);
       if (act) el.appendChild(act);
-    } else if (m.kind === "clarify") {
-      el.className = "bubble assistant clarify";
-      el.innerHTML = `<div class="who">Dae Captain</div><div class="body">${escapeHtml(m.text)}</div><div class="opt-row"></div>`;
-      const btnBox = el.querySelector(".opt-row");
-      for (const opt of m.options) {
-        const b = document.createElement("button");
-        b.className = "ghost-btn";
-        b.textContent = engineLabel(opt);
-        b.onclick = () => sendChat(m.original, opt);
-        btnBox.appendChild(b);
-      }
     } else if (m.kind === "error") {
       el.className = "bubble assistant error";
       if (m.taskStopped) {
@@ -474,11 +496,26 @@ function renderTranscript() {  const box = $("transcript");
         if (modelBtn) modelBtn.onclick = () => showView("settings");
       } else {
         el.innerHTML = `<div class="who">Dae Captain</div><div class="body">Gagal: ${escapeHtml(m.text)}</div>`;
+        if (m.retryMessage) {
+          const retry = document.createElement("button");
+          retry.className = "ghost-btn small";
+          retry.textContent = "Kirim ulang";
+          retry.onclick = () => sendChat(m.retryMessage, m.retryOverride ?? null);
+          el.appendChild(retry);
+        }
       }
     }
     box.appendChild(el);
   });
-  box.scrollTop = box.scrollHeight;
+  // Sticky scroll: follow the bottom only while the user is already there.
+  // Reading history during a stream must not yank the view on every delta.
+  const jump = $("chat-jump");
+  if (state.stick) {
+    box.scrollTop = box.scrollHeight;
+    jump?.classList.add("hidden");
+  } else {
+    jump?.classList.remove("hidden");
+  }
 }
 
 function renderEngineChips() {
@@ -501,13 +538,10 @@ function renderEngineChips() {
 
 /** Map one chat-route response onto transcript entries (shared by send/regenerate). */
 async function handleChatResponse(res, { text, override, attachments }) {
-  if (isClarifyResponse(res)) {
-    state.runId = res.run_id ?? state.runId;
-    state.transcript.push({ kind: "clarify", text: res.message, options: res.options, original: text });
-  } else if (res.kind === "chat") {
+  if (res.kind === "chat") {
     // Chat-first: a conversational reply, no engine, no task.
     state.runId = res.run_id ?? state.runId;
-    state.transcript.push({ kind: "assistant", text: res.text, session: true });
+    state.transcript.push({ kind: "assistant", text: res.text, session: true, ts: Date.now() });
   } else if (res.kind === "need_workspace") {
     // Workspace on-demand: the command needs a folder. Remember the
     // original message, show the picker, retry after the user picks.
@@ -523,6 +557,7 @@ async function handleChatResponse(res, { text, override, attachments }) {
     state.runId = res.run_id ?? state.runId;
     state.transcript.push({
       kind: "turn",
+      ts: Date.now(),
       engine: res.engine,
       goal: text,
       router: res.router,
@@ -559,7 +594,7 @@ function chatBody(text, override, attachments, extra) {
 async function sendChat(message, override) {
   const text = (message ?? $("chat-input").value).trim();
   if (!text) return;
-  $("chat-input").value = "";
+  resetComposer();
   hideSlashMenu();
   // Local control commands never reach the model as user messages.
   const cmd = parseSlashCommand(text);
@@ -569,7 +604,7 @@ async function sendChat(message, override) {
     return;
   }
   const attachments = takeQueuedAttachments();
-  state.transcript.push({ kind: "user", text, attachments });
+  state.transcript.push({ kind: "user", text, attachments, ts: Date.now() });
   renderTranscript();
   // Live placeholder: fills token-by-token while the server streams, then
   // becomes the final message (or is dropped for dispatch outcomes).
@@ -585,7 +620,7 @@ async function sendChat(message, override) {
       chatBody(text, override, attachments),
       (delta) => {
         live.text += delta;
-        renderTranscript();
+        renderLive();
       },
     );
     dropLive();
@@ -595,7 +630,7 @@ async function sendChat(message, override) {
     if (e?.partial) {
       // The server streamed half an answer, then failed: keep what the
       // user already saw, labelled honestly, instead of failing blank.
-      state.transcript.push({ kind: "assistant", text: e.partial, session: true });
+      state.transcript.push({ kind: "assistant", text: e.partial, session: true, ts: Date.now() });
       state.transcript.push({ kind: "error", text: "Respons terputus: " + errText(e) });
       renderTranscript();
       await refreshRuns();
@@ -606,7 +641,8 @@ async function sendChat(message, override) {
       const res = await state.api.workflowChat(chatBody(text, override, attachments));
       await handleChatResponse(res, { text, override, attachments });
     } catch (e2) {
-      state.transcript.push({ kind: "error", text: errText(e2) });
+      // Keep the failed message one click away from resending.
+      state.transcript.push({ kind: "error", text: errText(e2), retryMessage: text, retryOverride: override ?? null });
     }
   }
   renderTranscript();
@@ -630,7 +666,7 @@ async function regenerateAssistant(entry) {
   try {
     const res = await state.api.workflowChatStream(body, (delta) => {
       entry.text += delta;
-      renderTranscript();
+      renderLive();
     });
     entry.streaming = false;
     if (res?.kind === "chat") {
@@ -668,7 +704,23 @@ async function regenerateAssistant(entry) {
 // ---------------------------------------------------------------------------
 
 function pushAssistant(text) {
-  state.transcript.push({ kind: "assistant", text });
+  state.transcript.push({ kind: "assistant", text, ts: Date.now() });
+}
+
+/** Reset the composer box (text + auto-grown height). */
+function resetComposer() {
+  const input = $("chat-input");
+  if (!input) return;
+  input.value = "";
+  input.style.height = "auto";
+}
+
+/** Grow the composer textarea with its content, up to the CSS cap. */
+function autogrowComposer() {
+  const input = $("chat-input");
+  if (!input) return;
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 110) + "px";
 }
 
 async function handleSlashCommand({ name, args }) {
@@ -722,6 +774,8 @@ function clearConversation() {
   state.pendingAttachments = [];
   renderAttachChips();
   state.historyList = [];
+  state.stick = true;
+  state.viewLimit = 30;
   let text = "Percakapan baru dimulai. Workspace dan pengaturan tetap sama; riwayat lama tersimpan dan bisa dibuka via /history.";
   if (running.length) {
     text += ` ${running.length} task masih berjalan di latar dan TIDAK dibatalkan — pantau di Antrean atau hentikan via /stop.`;
@@ -778,9 +832,10 @@ async function resumeConversation(args) {
     const items = [];
     for (const t of full.turns ?? []) {
       items.push({
-        ts: t.created_at ?? "",
+        ts: t.created_at ?? t.updated_at ?? "",
         entry: {
           kind: "turn",
+          ts: t.created_at ? Date.parse(t.created_at) : undefined,
           engine: t.engine,
           goal: t.goal,
           resolved: t.artifacts,
@@ -800,6 +855,7 @@ async function resumeConversation(args) {
         entry: {
           kind: c.role === "user" ? "user" : "assistant",
           text: c.text,
+          ts: c.ts ? Date.parse(c.ts) : undefined,
           ...(c.role === "user" ? {} : { resumed: true }),
         },
       });
@@ -1913,6 +1969,8 @@ function bindEvents() {
     });
   }
   bindGuarded("chat-input", "keydown", (e) => {
+    // Shift+Enter is always a newline — never a send, never a completion.
+    if (e.key === "Enter" && e.shiftKey) return;
     if (slashMenuOpen()) {
       if (e.key === "ArrowDown") { e.preventDefault(); stepSlashMenu(1); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); stepSlashMenu(-1); return; }
@@ -1930,15 +1988,37 @@ function bindEvents() {
         }
       }
     }
-    if (e.key === "Enter") sendChat();
+    // Plain Enter sends; Shift+Enter keeps its newline (multi-line composer).
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendChat();
+    }
   });
   // Slash suggestion menu (separate listener so it never clobbers keydown).
   {
     const ci = $("chat-input");
-    ci?.addEventListener("input", renderSlashMenu);
+    ci?.addEventListener("input", () => {
+      autogrowComposer();
+      renderSlashMenu();
+    });
     ci?.addEventListener("blur", () => setTimeout(hideSlashMenu, 120));
     ci?.addEventListener("focus", renderSlashMenu);
   }
+  // Sticky scroll: track whether the user sits at the bottom. New renders
+  // (including stream deltas) only follow when pinned.
+  {
+    const box = $("transcript");
+    box?.addEventListener("scroll", () => {
+      state.stick = box.scrollHeight - box.scrollTop - box.clientHeight < 60;
+      if (state.stick) $("chat-jump")?.classList.add("hidden");
+    });
+  }
+  bindGuarded("chat-jump", "click", () => {
+    state.stick = true;
+    const box = $("transcript");
+    if (box) box.scrollTop = box.scrollHeight;
+    $("chat-jump")?.classList.add("hidden");
+  });
   bindGuarded("chat-stop", "click", async () => {
     const turn = [...state.transcript].reverse().find(
       (m) => m.kind === "turn" && m.taskId && !m.activityDone
