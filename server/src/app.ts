@@ -2170,6 +2170,26 @@ type ChatRoute =
  * sibling: override > conversational-first > rules > layer B > chat.
  * A question ABOUT work is never permission to execute it.
  */
+/**
+ * Is this a follow-up question ABOUT the previous task (not new work)?
+ * Catches: "kenapa?", "kok gk jadi?", "bukan itu...", "itu salah",
+ * "gimana tadi?" — the user refers back to what just happened.
+ * Does NOT match exec verbs ("buatkan X", "perbaiki Y") — those are new work.
+ */
+function isFollowUpQuestion(message: string): boolean {
+  const text = message.toLowerCase().trim();
+  if (!text) return false;
+  // Exec verbs at the start mean new work, not a follow-up question.
+  if (/^\s*(buat|buatkan|buatin|tolong|perbaiki|betulkan|tambah|tambahkan|ubah|ganti|lanjutkan|lanjut)\b/.test(text)) {
+    return false;
+  }
+  // Question words anywhere + reference to previous ("itu", "tadi", "kok", "salah", "bukan")
+  const hasQuestionWord = /\b(kenapa|mengapa|kok|gimana|bagaimana|apa|siapa)\b/.test(text);
+  const hasReference = /\b(itu|tadi|tersebut|salah|bukan|kok|gitu|gini)\b/.test(text) || text.endsWith("?");
+  const isShort = text.split(/\s+/).length <= 8;
+  return (hasQuestionWord && hasReference) || (isShort && hasReference && hasQuestionWord);
+}
+
 async function routeChatMessage(
   ctx: AppContext,
   message: string,
@@ -2178,6 +2198,13 @@ async function routeChatMessage(
 ): Promise<ChatRoute> {
   if (!overrideRaw && isConversationalMessage(message)) return { kind: "chat" };
   const previousEngine = lastTurn(run)?.engine;
+  // Follow-up question about the previous task ("kenapa?", "kok gk jadi?",
+  // "bukan itu...") — the user is asking ABOUT the work, not starting new
+  // work. Route to chat (which has the task history), not to the engine
+  // as a new dispatch. Only when there's a previous engine task to refer to.
+  if (!overrideRaw && previousEngine && isFollowUpQuestion(message)) {
+    return { kind: "chat" };
+  }
   let routed = routeByRules(message, {
     ...(overrideRaw ? { engineOverride: overrideRaw as WorkflowEngine } : {}),
     ...(previousEngine ? { previousEngine } : {}),
