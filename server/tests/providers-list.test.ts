@@ -55,7 +55,11 @@ describe('GET /providers registry location', () => {
     const body = (await res.json()) as { providers: unknown[]; presets: Array<{ id: string }>; home: string }
     expect(body.providers).toEqual([])
     expect(body.home).toMatch(/providers\.json$/)
-    expect(body.presets.map((p) => p.id)).toContain('nine-router')
+    expect(body.presets.map((p) => p.id).sort()).toEqual(
+      expect.arrayContaining(['nine-router', 'nine-router-local']),
+    )
+    const local = body.presets.find((p) => p.id === 'nine-router-local') as { baseUrl: string }
+    expect(local.baseUrl).toBe('http://localhost:20128/v1')
   })
 
   test('partial updates merge instead of wiping the record', async () => {

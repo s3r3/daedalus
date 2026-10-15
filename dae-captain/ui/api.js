@@ -87,6 +87,8 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
     getSettings: () => req("GET", "/settings"),
     updateSettings: (patch) => req("PUT", "/settings", patch),
     getProviders: () => req("GET", "/providers"),
+    getProvider: (id) =>
+      req("GET", `/providers/${encodeURIComponent(id)}`),
     createProvider: (input) => req("POST", "/providers", input),
     updateProvider: (id, patch) =>
       req("PUT", `/providers/${encodeURIComponent(id)}`, patch),

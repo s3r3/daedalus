@@ -1826,14 +1826,18 @@ async function runDiagnostics() {
 }
 
 /**
- * One-click preset fill: ID/name/URL from the server's real preset list.
- * The key is still typed by hand, then Test koneksi proves it for real.
+ * Preset shortcuts from the server's real preset list. Clicking the name
+ * fills the form (the key is still typed by hand); the "+" creates the
+ * entry immediately without a key, so an empty registry stops being a
+ * dead end — Test koneksi then proves the key for real.
  */
 function renderProviderPresets(presets) {
   const box = $("prov-presets");
   if (!box) return;
   box.innerHTML = "";
   for (const preset of presets.filter((p) => p.id !== "custom")) {
+    const wrap = document.createElement("span");
+    wrap.className = "preset-wrap";
     const b = document.createElement("button");
     b.className = "ghost-btn small";
     b.textContent = preset.name ?? preset.id;
@@ -1844,7 +1848,33 @@ function renderProviderPresets(presets) {
       $("prov-url").value = preset.baseUrl ?? "";
       $("prov-key").focus?.();
     };
-    box.appendChild(b);
+    const add = document.createElement("button");
+    add.className = "ghost-btn small";
+    add.textContent = "+";
+    add.title = `Langsung tambah ${preset.name ?? preset.id} (tanpa kunci)`;
+    add.onclick = () => addPresetProvider(preset);
+    wrap.append(b, add);
+    box.appendChild(wrap);
+  }
+}
+
+/** Direct-add a preset as a keyless entry, then reload the real list. */
+async function addPresetProvider(preset) {
+  const status = $("set-status");
+  try {
+    await state.api.createProvider({
+      id: preset.id,
+      name: preset.name ?? preset.id,
+      baseUrl: preset.baseUrl ?? "",
+    });
+    const saved = await confirmProviderSaved(preset.id);
+    await loadSettingsView();
+    // Reload wipes the status line — restore the confirmation after it.
+    status.className = "status-line ok";
+    status.textContent = `${saved} Isi key, Test koneksi, lalu Simpan.`;
+  } catch (e) {
+    status.className = "status-line error";
+    status.textContent = "Gagal: " + errText(e);
   }
 }
 
@@ -1886,9 +1916,10 @@ async function toggleSelectedProvider() {
     const found = (state.providersCache ?? []).find((p) => p.id === id);
     const next = !(found?.enabled !== false);
     await state.api.setProviderEnabled(id, next);
-    status.className = "status-line ok";
-    status.textContent = next ? "Provider diaktifkan." : "Provider dinonaktifkan.";
+    const done = next ? "Provider diaktifkan." : "Provider dinonaktifkan.";
     await loadSettingsView();
+    status.className = "status-line ok";
+    status.textContent = done;
   } catch (e) {
     status.className = "status-line error";
     status.textContent = "Gagal: " + errText(e);
@@ -1924,9 +1955,9 @@ async function deleteSelectedProvider() {
   }
   try {
     await state.api.deleteProvider(id);
+    await loadSettingsView();
     status.className = "status-line ok";
     status.textContent = "Provider dihapus.";
-    await loadSettingsView();
   } catch (e) {
     status.className = "status-line error";
     status.textContent = "Gagal: " + errText(e);
@@ -2543,12 +2574,45 @@ function bindEvents() {
       status.textContent = "Gagal: " + errText(e);
     }
   });
+  /** Validate the add-provider form before any round trip. Returns null when valid. */
+  function validateProviderForm() {
+    const id = ($("prov-id").value ?? "").trim();
+    const baseUrl = ($("prov-url").value ?? "").trim();
+    if (!id) return "Isi ID dulu (mis. nine-router-local).";
+    if (/[\s/]/.test(id)) return "ID tidak boleh mengandung spasi atau /.";
+    if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
+      return "Base URL harus diawali http:// atau https://.";
+    }
+    return null;
+  }
+
+  /**
+   * Read the saved entry back and say exactly what landed in the registry —
+   * a save the list cannot see is reported as a failure, never as success.
+   */
+  async function confirmProviderSaved(id) {
+    const data = await state.api.getProvider(id);
+    const saved = data?.provider;
+    if (!saved || saved.id !== id) {
+      throw new Error(`tersimpan tapi tidak terbaca kembali (id: ${id})`);
+    }
+    const total = (await state.api.getProviders()).providers?.length ?? "?";
+    return `Provider "${id}" tersimpan (${total} terdaftar). Kunci tidak pernah ditampilkan kembali.`;
+  }
+
   bindGuarded("prov-test", "click", async () => {
     const status = $("set-status");
+    const problem = validateProviderForm();
+    if (problem) {
+      status.className = "status-line error";
+      status.textContent = problem;
+      return;
+    }
     const id = $("prov-id").value.trim();
-    if (!id) { status.textContent = "Isi ID dulu."; return; }
     try {
-      // simpan dulu (upsert), lalu test — pola yang sama dipakai Web UI
+      // simpan dulu (upsert), lalu test — pola yang sama dipakai Web UI.
+      // List selalu dimuat ulang akhirnya: entry yang tersimpan harus
+      // terlihat bahkan ketika tes koneksinya gagal.
       await state.api.createProvider({
         id,
         name: $("prov-name").value.trim() || id,
@@ -2556,27 +2620,40 @@ function bindEvents() {
         apiKey: $("prov-key").value,
       });
       const res = await state.api.testProvider(id);
-      status.className = "status-line " + (res.ok ? "ok" : "error");
-      status.textContent = res.message ?? (res.ok ? "Koneksi OK." : "Koneksi gagal.");
-      if (res.ok) { $("prov-key").value = ""; loadSettingsView(); }
+      const outcome = res.message ?? (res.ok ? "Koneksi OK." : "Koneksi gagal.");
+      const cls = "status-line " + (res.ok ? "ok" : "error");
+      if (res.ok) $("prov-key").value = "";
+      await loadSettingsView();
+      status.className = cls;
+      status.textContent = outcome;
     } catch (e) {
       status.className = "status-line error";
       status.textContent = "Gagal: " + errText(e);
+      await loadSettingsView();
     }
   });
   bindGuarded("prov-save", "click", async () => {
     const status = $("set-status");
+    const problem = validateProviderForm();
+    if (problem) {
+      status.className = "status-line error";
+      status.textContent = problem;
+      return;
+    }
+    const id = $("prov-id").value.trim();
     try {
       await state.api.createProvider({
-        id: $("prov-id").value.trim(),
-        name: $("prov-name").value.trim() || $("prov-id").value.trim(),
+        id,
+        name: $("prov-name").value.trim() || id,
         baseUrl: $("prov-url").value.trim(),
         apiKey: $("prov-key").value,
       });
       $("prov-key").value = "";
+      const saved = await confirmProviderSaved(id);
+      await loadSettingsView();
+      // Reload wipes the status line — restore the confirmation after it.
       status.className = "status-line ok";
-      status.textContent = "Provider tersimpan. Kunci tidak pernah ditampilkan kembali.";
-      loadSettingsView();
+      status.textContent = saved;
     } catch (e) {
       status.className = "status-line error";
       status.textContent = "Gagal: " + errText(e);
