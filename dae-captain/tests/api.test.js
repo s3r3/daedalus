@@ -200,6 +200,14 @@ describe("createApiClient", () => {
     assert.equal(calls[1].init.method, "DELETE");
   });
 
+  it("getProvider reads one entry back for save confirmation", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({ provider: { id: "nine-router-local", name: "9Router (lokal)" } }));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    const res = await api.getProvider("nine-router-local");
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/providers/nine-router-local");
+    assert.equal(res.provider.id, "nine-router-local");
+  });
+
   it("decideApproval resolves by id (survives runner restart)", async () => {
     const { fetchImpl, calls } = mockFetch(() => ok({ success: true, decision: "grant" }));
     const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
