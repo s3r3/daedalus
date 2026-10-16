@@ -511,21 +511,22 @@ function renderTurnActivity(activity, imageLoader) {
   wrap.className = "turn-activity";
   // THINKING header (mockup style): "THINKING · N langkah"
   const steps = thoughts.length + tools.length;
+  // Everything (thoughts + tool rows) goes inside one collapsed <details>.
+  // Chat-first: internal activity hidden by default, expandable if curious.
+  const det = document.createElement("details");
+  det.className = "thinking";
+  det.open = false;
+  const sum = document.createElement("summary");
+  sum.className = "thinking-header";
+  sum.textContent = `Aktivitas · ${steps} langkah`;
+  det.appendChild(sum);
   if (thoughts.length) {
-    const det = document.createElement("details");
-    det.className = "thinking";
-    det.open = true;
-    const sum = document.createElement("summary");
-    sum.className = "thinking-header";
-    sum.textContent = `THINKING · ${steps} langkah`;
-    det.appendChild(sum);
     for (const t of thoughts.slice(-3)) {
       const p = document.createElement("div");
       p.className = "thought";
       p.textContent = t;
       det.appendChild(p);
     }
-    wrap.appendChild(det);
   }
   // Tool rows (mockup style): card per tool with status badge
   if (tools.length) {
@@ -562,8 +563,9 @@ function renderTurnActivity(activity, imageLoader) {
       }
       list.appendChild(row);
     }
-    wrap.appendChild(list);
+    det.appendChild(list);
   }
+  wrap.appendChild(det);
   return wrap;
 }
 
