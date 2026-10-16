@@ -724,8 +724,61 @@ function renderResearchReport(data, ctx) {
     btn("🔍 Telusur klaim", "", () => {
       traceBox.classList.toggle("dc-hidden");
     }),
+    btn("📚 Daftar pustaka", "", () => {
+      biblioBox.classList.toggle("dc-hidden");
+    }),
   );
   body.appendChild(actions);
+
+  // A3: Bibliography viewer — all sources with citation format selector.
+  const biblioBox = h("div", "dc-biblio dc-hidden");
+  const formatRow = h("div", "dc-row-actions");
+  const biblioContent = h("div", "dc-biblio-list");
+  let biblioFormat = "apa";
+  const formats = [
+    ["apa", "APA"],
+    ["ieee", "IEEE"],
+    ["bibtex", "BibTeX"],
+    ["ris", "RIS"],
+  ];
+  const renderBiblio = () => {
+    biblioContent.innerHTML = "";
+    const sources = Array.isArray(report?.sources) ? report.sources : [];
+    if (!sources.length) {
+      biblioContent.appendChild(h("p", "dc-hint", "Belum ada sumber."));
+      return;
+    }
+    let text = "";
+    if (biblioFormat === "apa") text = buildApa(report);
+    else if (biblioFormat === "ieee") text = buildIeee(report);
+    else if (biblioFormat === "bibtex") text = buildBibtex(report);
+    else if (biblioFormat === "ris") text = buildRis(report);
+    // Split into individual entries for readable display.
+    const entries = biblioFormat === "bibtex" || biblioFormat === "ris"
+      ? text.split(/\n\n+/).filter((e) => e.trim())
+      : text.split(/\n\n+/).filter((e) => e.trim());
+    entries.forEach((entry, i) => {
+      const item = h("div", "dc-biblio-item");
+      item.appendChild(h("div", "dc-biblio-num", `[${i + 1}]`));
+      const pre = h("pre", "dc-biblio-text", entry.trim());
+      item.appendChild(pre);
+      biblioContent.appendChild(item);
+    });
+  };
+  formats.forEach(([key, label]) => {
+    const b = btn(label, biblioFormat === key ? "dc-primary" : "", () => {
+      biblioFormat = key;
+      // Update button styles.
+      formatRow.querySelectorAll("button").forEach((el, i) => {
+        el.classList.toggle("dc-primary", formats[i][0] === key);
+      });
+      renderBiblio();
+    });
+    formatRow.appendChild(b);
+  });
+  biblioBox.append(formatRow, biblioContent);
+  renderBiblio();
+  body.appendChild(biblioBox);
 
   // Claim-trace: tiap klaim -> sumber + kutipan + confidence.
   const traceBox = h("div", "dc-trace dc-hidden");
