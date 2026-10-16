@@ -400,6 +400,26 @@ function renderDokumenExtraction(data, ctx) {
         ctx.notify("Gagal menyalin — clipboard tidak tersedia.");
       }
     }),
+    btn("👁️ Lihat sumber", "", () => {
+      // Toggle provenance display under each field.
+      const provRows = table.querySelectorAll(".dc-provenance");
+      if (provRows.length) {
+        provRows.forEach((r) => r.remove());
+        return;
+      }
+      for (const [name, fv] of Object.entries(fields)) {
+        const prov = fv?.provenance;
+        if (!prov) continue;
+        const p = h("div", "dc-provenance dc-hint");
+        const quote = prov.quote ?? prov.text ?? "";
+        const page = prov.page ? ` (hal. ${prov.page})` : "";
+        p.textContent = `↳ ${name}: "${quote}"${page}`;
+        table.appendChild(p);
+      }
+      if (!table.querySelector(".dc-provenance")) {
+        ctx.notify("Tidak ada info sumber untuk field ini.");
+      }
+    }),
   );
   body.appendChild(actions);
   return card;
@@ -576,6 +596,52 @@ export function buildBibtex(report) {
   return lines.join("\n");
 }
 
+/** APA 7th edition bibliography. */
+export function buildApa(report) {
+  const sources = Array.isArray(report?.sources) ? report.sources : [];
+  return sources.map((s) => {
+    const authors = Array.isArray(s.authors) && s.authors.length
+      ? s.authors.join(", ")
+      : "Anonim";
+    const year = s.year ? `(${s.year}).` : "(n.d.).";
+    const title = s.title ?? "Tanpa judul";
+    const url = s.url ? ` ${s.url}` : "";
+    return `${authors} ${year} ${title}.${url}`;
+  }).join("\n\n");
+}
+
+/** IEEE bibliography format. */
+export function buildIeee(report) {
+  const sources = Array.isArray(report?.sources) ? report.sources : [];
+  return sources.map((s, i) => {
+    const authors = Array.isArray(s.authors) && s.authors.length
+      ? s.authors.join(", ")
+      : "Anonim";
+    const title = s.title ?? "Tanpa judul";
+    const year = s.year ? `, ${s.year}` : "";
+    const url = s.url ? ` [Online]. Available: ${s.url}` : "";
+    return `[${i + 1}] ${authors}, "${title}"${year}.${url}`;
+  }).join("\n\n");
+}
+
+/** RIS format for reference managers. */
+export function buildRis(report) {
+  const lines = [];
+  const sources = Array.isArray(report?.sources) ? report.sources : [];
+  for (const s of sources) {
+    lines.push("TY  - WEB");
+    const authors = Array.isArray(s.authors) ? s.authors : [];
+    for (const a of authors) lines.push(`AU  - ${a}`);
+    if (s.title) lines.push(`TI  - ${s.title}`);
+    if (s.year) lines.push(`PY  - ${s.year}`);
+    if (s.url) lines.push(`UR  - ${s.url}`);
+    if (s.doi) lines.push(`DO  - ${s.doi}`);
+    lines.push("ER  - ");
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
 function downloadTextFile(filename, text, mime) {
   const blob = new Blob([text], { type: mime ?? "text/plain" });
   const url = URL.createObjectURL(blob);
@@ -629,6 +695,30 @@ function renderResearchReport(data, ctx) {
         "text/plain",
       );
       ctx.notify("BibTeX diunduh.");
+    }),
+    btn("📚 APA", "", () => {
+      downloadTextFile(
+        `laporan-riset-${String(report.reportId ?? "x").slice(0, 8)}-apa.txt`,
+        buildApa(report),
+        "text/plain",
+      );
+      ctx.notify("Bibliografi APA diunduh.");
+    }),
+    btn("📚 IEEE", "", () => {
+      downloadTextFile(
+        `laporan-riset-${String(report.reportId ?? "x").slice(0, 8)}-ieee.txt`,
+        buildIeee(report),
+        "text/plain",
+      );
+      ctx.notify("Bibliografi IEEE diunduh.");
+    }),
+    btn("📚 RIS", "", () => {
+      downloadTextFile(
+        `laporan-riset-${String(report.reportId ?? "x").slice(0, 8)}.ris`,
+        buildRis(report),
+        "text/plain",
+      );
+      ctx.notify("RIS diunduh.");
     }),
     btn("🔍 Telusur klaim", "", () => {
       traceBox.classList.toggle("dc-hidden");
