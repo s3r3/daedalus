@@ -58,6 +58,12 @@ export type {
   ModelRolesSource,
 } from "./model-roles.ts";
 export {
+  PERSONA_CONDENSED,
+  getFullPersona,
+  getPersonaForTier,
+  buildCaptainSystemPrompt,
+} from "./persona.ts";
+export {
   MODEL_TIERS,
   MODEL_TIER_LABELS,
   CODING_ROLES,

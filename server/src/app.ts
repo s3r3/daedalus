@@ -13,6 +13,7 @@ import { getEvents, type AnyTimelineEvent } from "@daedalus/core/workflow/timeli
 import { UserMemory } from "@daedalus/core/workflow/memory.ts";
 import { ReminderStore, startScheduler, type Reminder } from "@daedalus/core/workflow/reminder.ts";
 import { listRoles, MODEL_TIER_LABELS, MODEL_TIERS, type ModelTier } from "@daedalus/core/workflow/model-roles.ts";
+import { buildCaptainSystemPrompt, getPersonaForTier } from "@daedalus/core/workflow/persona.ts";
 import { exportDocumentMarkdown } from "@daedalus/core/dokumen/export-md.ts";
 import { slideVariants } from "@daedalus/core/slides/variants.ts";
 import { recommendTemplate } from "@daedalus/core/slides/template-recommend.ts";
@@ -2455,19 +2456,17 @@ async function runWorkflowLayerB(
  * new run id (/clear, fresh boot) trivially starts cold: nothing is
  * inherited, nothing is deleted (old sessions stay on disk for /history).
  */
-const CHAT_SYSTEM_PROMPT =
-  "Kamu Dae Captain, asisten AI yang ramah dan membantu. " +
-  "Balas dengan singkat dan natural dalam bahasa Indonesia, seperti ngobrol dengan manusia — bukan seperti panel robot. " +
-  "Kamu bisa membantu membuat kode, slide presentasi, dokumen, spreadsheet, dan riset — " +
-  "tapi untuk obrolan biasa cukup ngobrol saja, jangan tanya mau pakai engine apa.\n\n" +
-  "ATURAN PERILAKU (wajib):\n" +
-  "1. Saat user meminta dibuatkan sesuatu, LANGSUNG KERJAKAN. Jangan tanya klarifikasi yang jawabannya sudah jelas dari konteks atau bisa pakai default yang wajar.\n" +
-  "2. Jangan panggil ask_user untuk hal sepele (warna, gaya, jumlah) — pakai pilihan terbaik menurutmu, user bisa minta ubah nanti.\n" +
-  "3. Awali task dengan kalimat natural seperti 'Siap. Aku cek workspace dulu ya.' — bukan diam.\n" +
-  "4. Saat task selesai dan terverifikasi, katakan 'Jadi.' + ringkasan singkat apa yang dibuat.\n" +
-  "5. Jangan pernah klaim selesai sebelum verifikasi deterministik lolos.\n" +
-  "6. Pesan lanjutan user = kelanjutan task sebelumnya, kecuali topiknya jelas berbeda.\n" +
-  "7. Jika user bilang 'stop' atau 'ganti', hentikan dan ikuti instruksi baru — jangan lanjutkan yang lama.";
+/**
+ * Dae Captain persona — model-agnostic. Setiap model LLM yang dicolok
+ * (lemah/kuat, provider apapun) mendapat identitas Dae Captain.
+ * Tier "light" dapat versi penuh (~8000 kata), default versi ringkas.
+ */
+function captainSystemPrompt(tier?: string | null): string {
+  return buildCaptainSystemPrompt(tier ?? null);
+}
+
+/** Default untuk chat: persona ringkas (cocok semua tier). */
+const CHAT_SYSTEM_PROMPT = captainSystemPrompt(null);
 
 /** No provider configured and the model cannot answer at all. */
 const CHAT_FALLBACK = "Halo! Ada yang bisa dibantu?";
