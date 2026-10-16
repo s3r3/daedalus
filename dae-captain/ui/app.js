@@ -3149,7 +3149,8 @@ async function loadModelSection(settingsData) {
   const strongSel = $("set-model-strong");
   const lightSel = $("set-model-light");
   const list = $("set-model-list");
-  for (const el of [strongSel, lightSel]) el.innerHTML = "";
+  // Inputs: clear value (datalist options rebuilt below).
+  for (const el of [strongSel, lightSel]) if (el) el.value = "";
   if (list) list.innerHTML = "";
   state.modelsVision = { loaded: false, set: new Set() };
   if (providerId) {
@@ -3168,30 +3169,11 @@ async function loadModelSection(settingsData) {
       /* suggestions are best-effort; the inputs stay usable regardless */
     }
   }
-  const fillTier = (sel, value, emptyLabel) => {
-    const empty = document.createElement("option");
-    empty.value = "";
-    empty.textContent = emptyLabel;
-    sel.appendChild(empty);
-    const seen = new Set([""]);
-    const cur = (value ?? "").trim();
-    if (cur && !seen.has(cur)) {
-      const o = document.createElement("option");
-      o.value = cur;
-      o.textContent = `${cur} (saat ini)`;
-      sel.appendChild(o);
-      seen.add(cur);
-    }
-    for (const opt of (list?.children ?? [])) {
-      if (!seen.has(opt.value)) {
-        sel.appendChild(opt.cloneNode());
-        seen.add(opt.value);
-      }
-    }
-    sel.value = cur;
-  };
-  fillTier(strongSel, stored.strong, "— sama dengan global —");
-  fillTier(lightSel, stored.light, "— sama dengan global —");
+  // Tier inputs: text + datalist (bisa ketik manual jika daftar kosong).
+  const strongVal = (stored.strong ?? "").trim();
+  const lightVal = (stored.light ?? "").trim();
+  strongSel.value = strongVal;
+  lightSel.value = lightVal;
   updateAttachVisionWarn();
 }
 
