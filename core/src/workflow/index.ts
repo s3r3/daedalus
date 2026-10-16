@@ -151,3 +151,34 @@ export {
   UndoStore,
   recordUndo,
 } from "./approval.ts";
+// Long-term memory (v2, Fase 4A): per-user preferences, facts, correction
+// patterns. Privacy: sensitive keys (password/token/secret/api_key/
+// credential) are rejected with a clear error — never persisted.
+export type {
+  CorrectionPattern,
+  UserMemoryData,
+  CorrectionInput,
+} from "./memory.ts";
+export { SENSITIVE_KEY_PATTERNS, UserMemory } from "./memory.ts";
+// Reminders & scheduler (v2, Fase 4B): schedule/cancel/list/due reminders,
+// deterministic Indonesian request parsing, and an in-process scheduler.
+// Delivery to pill/chat UI is a later phase; this module exposes the
+// `onDue` callback and timeline event helpers (`agent` events with a
+// `kind` marker — the 8-type schema is unchanged).
+export type {
+  RepeatKind,
+  Reminder,
+  ReminderInput,
+  ParsedReminderRequest,
+  SchedulerOptions,
+  ReminderScheduler,
+} from "./reminder.ts";
+export {
+  REPEAT_INTERVAL_MS,
+  isRepeatKind,
+  ReminderStore,
+  parseReminderRequest,
+  startScheduler,
+  emitReminderCreated,
+  emitReminderDue,
+} from "./reminder.ts";

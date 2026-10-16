@@ -58,7 +58,18 @@ export type TimelineApprovalDecision = "requested" | "granted" | "denied";
 
 export type TimelineEventPayload = {
   user: { text: string };
-  agent: { text: string };
+  agent: {
+    text: string;
+    /**
+     * Optional machine-readable marker. Fase 4 reminders reuse the `agent`
+     * type so the 8-type schema stays fixed: `reminder_created` when a
+     * reminder is scheduled, `reminder_due` when it fires. Unset for
+     * ordinary agent messages.
+     */
+    kind?: "reminder_created" | "reminder_due";
+    /** Reminder id this event refers to (set when `kind` is set). */
+    reminderId?: string;
+  };
   task_start: {
     engine: WorkflowEngine;
     task_id: string;
