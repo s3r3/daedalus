@@ -965,3 +965,53 @@ describe("FASE C — dokumen-batch card", () => {
     assert.match(card.textContent, /Belum ada dokumen/);
   });
 });
+
+describe("FASE C — dokumen-qa card", () => {
+  it("is registered and renders the question form", () => {
+    const { api } = mockApi();
+    const { ctx } = mockCtx(api);
+    assert.ok(CARD_KINDS.includes("dokumen-qa"));
+    const card = renderCard("dokumen-qa", {}, ctx);
+    assert.ok(card.querySelector(".dc-qa-input"), "input exists");
+    assert.match(card.textContent, /berapa total/);
+  });
+
+  it("asks via the real API and shows the answer with its source", async () => {
+    const { api, calls } = mockApi({
+      dokumenQa: async (body) => {
+        calls.push({ name: "dokumenQa", args: [body] });
+        return { found: true, answer: "Total: 1.110.000.", confidence: 0.9, source: { recordId: "r1", field: "total", quote: "Total: Rp 1.110.000" } };
+      },
+    });
+    const { ctx } = mockCtx(api);
+    const card = renderCard("dokumen-qa", {}, ctx);
+    card.querySelector(".dc-qa-input").value = "berapa total di invoice ini?";
+    await clickBtn(card, "Tanya");
+    const call = calls.find((c) => c.name === "dokumenQa");
+    assert.ok(call, "dokumenQa called");
+    assert.deepEqual(call.args[0], { root: "/ws", question: "berapa total di invoice ini?" });
+    assert.match(card.textContent, /Total: 1\.110\.000/);
+    assert.match(card.textContent, /Sumber: field "total"/);
+  });
+
+  it("honestly shows 'tidak menemukan' when the answer is not in the data", async () => {
+    const { api } = mockApi({
+      dokumenQa: async () => ({ found: false, confidence: 0, answer: "Saya tidak menemukan jawabannya di data hasil ekstraksi dokumen ini." }),
+    });
+    const { ctx } = mockCtx(api);
+    const card = renderCard("dokumen-qa", {}, ctx);
+    card.querySelector(".dc-qa-input").value = "apa warna mobilnya?";
+    await clickBtn(card, "Tanya");
+    assert.match(card.textContent, /tidak menemukan/);
+    assert.ok(card.querySelector(".dc-qa-nofound"), "no-found styling applied");
+  });
+
+  it("does nothing on empty questions", async () => {
+    const { api, calls } = mockApi({ dokumenQa: async () => ({}) });
+    const { ctx } = mockCtx(api);
+    const card = renderCard("dokumen-qa", {}, ctx);
+    card.querySelector(".dc-qa-input").value = "   ";
+    await clickBtn(card, "Tanya");
+    assert.ok(!calls.some((c) => c.name === "dokumenQa"), "API not called");
+  });
+});

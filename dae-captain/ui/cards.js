@@ -1972,3 +1972,65 @@ function renderDokumenBatch(data, ctx) {
 
 if (!CARD_KINDS.includes("dokumen-batch")) CARD_KINDS.push("dokumen-batch");
 RENDERERS["dokumen-batch"] = renderDokumenBatch;
+
+// C4 (Q&A dokumen): tanya jawab dari HASIL EKSTRAKSI.
+// Input bebas → POST /dokumen/qa → jawaban deterministik dari records.
+// Tidak ada di data → kartu menampilkan "tidak menemukan" dengan jujur.
+function renderDokumenQa(data, ctx) {
+  const { card, body } = cardShell(
+    "dokumen-qa",
+    `❓ Tanya jawab dokumen`,
+  );
+  body.appendChild(h("p", "dc-hint", "Tanya tentang dokumen yang sudah diekstrak — mis. \"berapa total di invoice ini?\" atau \"siapa nama di kontrak?\". Jawaban hanya dari data hasil ekstraksi."));
+
+  const form = h("div", "dc-qa-form");
+  const input = document.createElement("input");
+  input.className = "dc-qa-input";
+  input.type = "text";
+  input.placeholder = "Tulis pertanyaan…";
+  input.setAttribute("aria-label", "Pertanyaan tentang dokumen");
+  form.appendChild(input);
+  const answers = h("div", "dc-qa-answers");
+  body.append(form, answers);
+
+  const ask = async () => {
+    const question = input.value.trim();
+    if (!question) return;
+    const bubble = h("div", "dc-qa-item");
+    bubble.appendChild(h("div", "dc-qa-q", `Anda: ${question}`));
+    const aEl = h("div", "dc-qa-a", "…");
+    bubble.appendChild(aEl);
+    answers.prepend(bubble);
+    input.value = "";
+    try {
+      const res = await ctx.api.dokumenQa({ root: ctx.workspaceRoot, question });
+      if (res?.found) {
+        aEl.textContent = res.answer;
+        if (res.source?.field) {
+          const src = h("div", "dc-hint");
+          src.textContent = `Sumber: field "${res.source.field}"${res.source.quote ? ` — "${String(res.source.quote).slice(0, 80)}"` : ""}`;
+          bubble.appendChild(src);
+        }
+      } else {
+        aEl.textContent = res?.answer ?? "Saya tidak menemukan jawabannya di data dokumen ini.";
+        aEl.classList.add("dc-qa-nofound");
+      }
+    } catch (e) {
+      aEl.textContent = `Gagal bertanya: ${e?.message ?? e}`;
+      aEl.classList.add("dc-qa-nofound");
+    }
+  };
+
+  const askBtn = btn("Tanya", "dc-primary", ask);
+  form.appendChild(askBtn);
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      askBtn.click();
+    }
+  });
+  return card;
+}
+
+if (!CARD_KINDS.includes("dokumen-qa")) CARD_KINDS.push("dokumen-qa");
+RENDERERS["dokumen-qa"] = renderDokumenQa;

@@ -162,6 +162,8 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
      */
     dokumenBatchExtract: (body, onProgress) =>
       batchExtractNdjson({ baseUrl, fetchImpl, getToken }, body, onProgress),
+    /** Q&A dokumen: jawab dari hasil ekstraksi (tak pernah halusinasi). */
+    dokumenQa: (body) => req("POST", "/dokumen/qa", body),
     // Spreadsheet
     sheetsWorkbook: (root) =>
       req("GET", "/sheets/workbook", undefined, { root }),

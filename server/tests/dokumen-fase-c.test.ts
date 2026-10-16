@@ -194,3 +194,56 @@ describe('Fase C3 — POST /dokumen/batch-extract (desain 4.3)', () => {
     expect(status).toBe(400)
   })
 })
+
+describe('Fase C4 — POST /dokumen/qa (Q&A dokumen)', () => {
+  async function seedInvoice(root: string): Promise<void> {
+    const { createActiveDocument, writeDocument } = await import('@daedalus/core')
+    const doc = await createActiveDocument(root, 'extract', 'Invoice')
+    doc.sources.push({
+      id: 'src-1', filename: 'inv.pdf', sha256: 'x', bytes: 10, pages: 1,
+      parseMode: 'native', status: 'parsed',
+    })
+    doc.schema = {
+      version: 1, approved: true, extractionTarget: 'per_doc',
+      fields: [
+        { name: 'vendor', type: 'string', required: true },
+        { name: 'total', type: 'money', required: true },
+      ],
+    }
+    doc.records.push({
+      id: 'rec-1', sourceId: 'src-1',
+      fields: {
+        vendor: { value: 'CV Sinar Abadi', confidence: 0.97, status: 'auto' },
+        total: { value: 1110000, confidence: 0.95, status: 'auto' },
+      },
+      checks: [], decision: 'auto-clear',
+    })
+    await writeDocument(root, doc)
+  }
+
+  test('answers from extracted fields', async () => {
+    const { base, root } = await listen()
+    await seedInvoice(root)
+    const got = await req(base, 'POST', '/dokumen/qa', { root, question: 'berapa total di invoice ini?' })
+    expect(got.status).toBe(200)
+    expect(got.body.found).toBe(true)
+    expect(String(got.body.answer)).toContain('1.110.000')
+    expect((got.body.source as { field: string }).field).toBe('total')
+  })
+
+  test('honestly reports when the answer is not in the data', async () => {
+    const { base, root } = await listen()
+    await seedInvoice(root)
+    const got = await req(base, 'POST', '/dokumen/qa', { root, question: 'apa warna mobil direktur?' })
+    expect(got.status).toBe(200)
+    expect(got.body.found).toBe(false)
+    expect(String(got.body.answer)).toMatch(/tidak menemukan/)
+  })
+
+  test('empty question is rejected', async () => {
+    const { base, root } = await listen()
+    await seedInvoice(root)
+    const got = await req(base, 'POST', '/dokumen/qa', { root, question: '   ' })
+    expect(got.status).toBe(400)
+  })
+})

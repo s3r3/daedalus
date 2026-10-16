@@ -982,6 +982,13 @@ export {
   type ReviewItem,
 } from "./dokumen/batch.ts";
 
+/** Fase C: tanya jawab dokumen — jawab dari hasil ekstraksi, jangan halusinasi. */
+export {
+  answerDocumentQuestion,
+  type QaAnswer,
+  type QaSource,
+} from "./dokumen/qa.ts";
+
 export {
   inspectDocxStyles,
   proposeStyleOps,

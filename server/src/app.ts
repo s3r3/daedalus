@@ -92,6 +92,7 @@ import {
   mergeBatchToCsv,
   writeBatchCsv,
   type BatchDocInput,
+  answerDocumentQuestion,
   exportDocumentDocx,
   exportDocumentPdf,
   inspectDocxStyles,
@@ -5847,6 +5848,22 @@ export function createApp(ctx: AppContext) {
               send({ type: "error", message: errorMessage(error) });
             }
             res.end();
+            return;
+          }
+
+          // Fase C: tanya jawab dokumen — jawab dari HASIL EKSTRAKSI
+          // (records), deterministik via answerDocumentQuestion. Tidak ada
+          // di data → found:false, tidak pernah halusinasi.
+          if (url.pathname === "/dokumen/qa") {
+            const question = typeof parsed.question === "string" ? parsed.question.trim() : "";
+            if (!question) {
+              sendJson(res, 400, { error: "missing_question", message: "Pertanyaan kosong.", request_id: requestId });
+              return;
+            }
+            const document = await needDocument();
+            if (!document) return;
+            const qa = answerDocumentQuestion(document, question);
+            sendJson(res, 200, { root, question, ...qa });
             return;
           }
 
