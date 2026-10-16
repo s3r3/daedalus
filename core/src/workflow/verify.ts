@@ -325,6 +325,11 @@ export type CompositePart = {
  * Combine sub-task verify results for cross-engine work. Fails when ANY
  * part fails; check names are prefixed with the part label so failures stay
  * attributable (e.g. "slide/slide-pptx-exists").
+ *
+ * A part whose `ok` is false but that contributed no failure entries (e.g.
+ * the executor crashed before the gate ran) still fails the composite: a
+ * synthetic "<label>/task" failure is added so `ok` never claims success
+ * for a part that did not pass.
  */
 export function verifyComposite(parts: CompositePart[]): VerifyGateResult {
   const out: VerifyGateResult = { ok: true, passed: [], skipped: [], failures: [] };
@@ -337,6 +342,12 @@ export function verifyComposite(parts: CompositePart[]): VerifyGateResult {
         reason: f.reason,
       })),
     );
+    if (!part.result.ok && part.result.failures.length === 0) {
+      out.failures.push({
+        check: `${part.label}/task`,
+        reason: "sub-task gagal sebelum verifikasi selesai",
+      });
+    }
   }
   out.ok = out.failures.length === 0;
   return out;

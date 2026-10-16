@@ -1,14 +1,6 @@
-import type { ArtifactKind, ArtifactRef, RunContext, RunTurn, WorkflowEngine } from "./types.ts";
+import type { ArtifactRef, RunContext, WorkflowEngine } from "./types.ts";
 import { isWorkflowEngine, WORKFLOW_ENGINES } from "./types.ts";
-
-/** Pending (still-running) turn → artifact kind, for "tadi" references. */
-const PENDING_KIND: Record<WorkflowEngine, ArtifactKind> = {
-  coding: "files",
-  slide: "deck",
-  dokumen: "document",
-  spreadsheet: "workbook",
-  research: "research_report",
-};
+import { resolveReferents } from "./continuation.ts";
 
 /**
  * Dae Captain router — chat message → engine (layer A: deterministic rules).
@@ -198,45 +190,20 @@ export function routeByRules(
 }
 
 /**
- * Resolve "tadi" / "itu" style references against the run's turns.
+ * Resolve "tadi" / "itu" style references against the run's event timeline
+ * (v2, Fase 3: migrated off the deprecated `run.turns` view — the timeline
+ * is the single source; `run.turns` is derived from it anyway).
+ *
  * Returns the artifact refs the user most likely means; the caller shows
  * them before dispatch ("Mengambil: ...") so a wrong guess is visible.
- *
- * Artifact-carrying turns win; when the referenced turn is still running
- * (no artifacts yet) a pending ref synthesized from its goal is returned
- * instead of nothing — the client can show "landing page (masih jalan)".
+ * Ambiguity never blocks: the top scorer wins and runner-ups ride along
+ * as alternatives (see `resolveReferents`).
  */
 export function resolveReferences(
   message: string,
   run: RunContext | undefined,
 ): ArtifactRef[] {
-  if (!run || run.turns.length === 0) return [];
-  const text = lower(message);
-  if (!CONTINUATION_RE.test(text)) return [];
-
-  const pendingRef = (turn: RunTurn): ArtifactRef => ({
-    kind: PENDING_KIND[turn.engine],
-    label: `${turn.goal} (masih berjalan)`,
-    task_id: turn.task_id,
-  });
-
-  // "dari <engine> tadi" → that engine's latest turn, artifacts preferred.
-  for (const mention of ENGINE_MENTION) {
-    if (mention.re.test(text)) {
-      const turns = [...run.turns]
-        .reverse()
-        .filter((t) => t.engine === mention.engine);
-      const done = turns.find((t) => t.artifacts.length > 0);
-      if (done) return done.artifacts;
-      if (turns[0]) return [pendingRef(turns[0])];
-    }
-  }
-
-  // Bare "tadi" → latest turn with artifacts, else the latest turn outright.
-  const done = [...run.turns].reverse().find((t) => t.artifacts.length > 0);
-  if (done) return done.artifacts;
-  const latest = run.turns[run.turns.length - 1];
-  return latest ? [pendingRef(latest)] : [];
+  return resolveReferents(message, run).referents;
 }
 
 /** Render resolved refs as context appended to the dispatched goal. */

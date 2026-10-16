@@ -84,3 +84,70 @@ export {
   spreadsheetChecks,
   researchChecks,
 } from "./verify-checks.ts";
+// Continuation (v2, Fase 3A): classify new messages vs the run timeline,
+// resolve "itu"/"tadi"/"slide 3" referents. Never blocks on ambiguity.
+export type {
+  ContinuationKind,
+  TaskEntry,
+  ReferentCandidate,
+  ReferentResolution,
+  ResumeTarget,
+} from "./continuation.ts";
+export {
+  INTERRUPT_RE,
+  RESUME_RE,
+  REFERENCE_RE,
+  AMBIGUITY_MARGIN,
+  getTaskEntries,
+  tokenize,
+  classify,
+  scoreReferents,
+  resolveResumeTarget,
+  resolveReferents,
+} from "./continuation.ts";
+// Decomposition (v2, Fase 3B): multi-engine task plans + parallel execution.
+export type {
+  SubTask,
+  TaskPlan,
+  SubTaskExecution,
+  SubTaskExecutor,
+  SubTaskResult,
+  PlanProgress,
+  PlanExecutionOptions,
+  PlanExecution,
+} from "./decompose.ts";
+export {
+  MAX_PARALLEL,
+  splitGoalFragments,
+  planTask,
+  getPlanProgress,
+  executePlan,
+} from "./decompose.ts";
+// Unified approval (v2, Fase 3C): destructive=ask, reversible=auto+Undo,
+// explicit=button. Timeline-backed request/grant/deny + bounded UndoStore.
+export type {
+  ActionKind,
+  ApprovalTreatment,
+  ApprovalPolicy,
+  Action,
+  ActionClassification,
+  PendingApproval,
+  UndoSnapshot,
+  UndoEntry,
+  UndoData,
+  UndoStoreOptions,
+} from "./approval.ts";
+export {
+  DEFAULT_APPROVAL_POLICY,
+  STRICT_APPROVAL_POLICY,
+  MAX_UNDO_SNAPSHOT_BYTES,
+  classifyAction,
+  requestApproval,
+  grantApproval,
+  denyApproval,
+  getPendingApproval,
+  listPendingApprovals,
+  clearPendingApprovals,
+  UndoStore,
+  recordUndo,
+} from "./approval.ts";
