@@ -5,6 +5,7 @@ import { createApiClient } from "./api.js";
 import { createEventStream } from "./events.js";
 import { createInvoker, listenEvent, WINDOW_SET_SIZE_CMD, setSizePayload } from "./bridge.js";
 import { PillController } from "./pill.js";
+import { renderCard, renderVerifyFail, slideTitle } from "./cards.js";
 import {
   ENGINES,
   aggregateStatus,
@@ -38,6 +39,8 @@ import {
   formatUsage,
   summarizeChanges,
   fmtTime,
+  parseProgressFraction,
+  turnPhaseText,
   SLASH_COMMANDS,
   THINKING_LEVELS,
 } from "./logic.js";
@@ -92,6 +95,12 @@ const state = {
   viewLimit: 30, // rendered transcript window (grows via "load more")
   streamAbort: null, // AbortController for the active chat stream, if any
   pill: null, // PillController (Fase 6) — owns the dynamic-island pill
+  // ---- Dae Captain v2 Fase 7: chat cards ----
+  seenTimelineEvents: new Set(), // v2 timeline event ids already applied (verify bubbles)
+  lastTimelineEventId: "", // pagination cursor for GET /captain/runs/:id/timeline
+  timelinePolling: false, // re-entrancy guard for the timeline poll
+  cardWatchers: new Map(), // taskId -> { stop() } staged-artifact watchers
+  turnDoneCache: new Map(), // taskId -> last known status (deliverable cards)
 };
 
 // ---------------------------------------------------------------------------
@@ -580,7 +589,24 @@ function renderTranscript() {  const box = $("transcript");
   });
   visible.forEach((m, i) => {
     const el = document.createElement("div");
-    if (m.kind === "user") {
+    if (m.kind === "card") {
+      // Dae Captain v2 Fase 7: structured action card from server data.
+      el.className = "bubble assistant card-bubble";
+      el.innerHTML = `<div class="who">Dae Captain</div>`;
+      try {
+        el.appendChild(renderCard(m.cardKind, m.cardData, cardCtx({ taskId: m.taskId, retryGoal: m.retryGoal })));
+      } catch (e) {
+        const err = document.createElement("p");
+        err.className = "dc-error";
+        err.textContent = "Gagal merender kartu: " + errText(e);
+        el.appendChild(err);
+      }
+    } else if (m.kind === "verify-fail") {
+      // Verify gate failed: a chat bubble ("…saya perbaiki dulu…").
+      // Success stays silent — no bubble at all.
+      el.appendChild(renderVerifyFail(m.text));
+      el.className = "verify-fail-wrap";
+    } else if (m.kind === "user") {
       el.className = "bubble user";
       const when = fmtTime(m.ts);
       el.innerHTML = `<div class="body">${escapeHtml(m.text)}</div>${when ? `<div class="msg-time">${escapeHtml(when)}</div>` : ""}`;
@@ -590,7 +616,18 @@ function renderTranscript() {  const box = $("transcript");
         for (const a of m.attachments) {
           const chip = document.createElement("span");
           chip.className = "attach-chip static";
-          chip.textContent = `${a.kind === "image" ? "🖼" : "📄"} ${a.name}`;
+          chip.textContent = `${a.kind === "image" ? "🖼" : a.kind === "file" ? "📊" : "📄"} ${a.name}`;
+          if (/\.(csv|xlsx)$/i.test(a.name ?? "")) {
+            const ds = document.createElement("button");
+            ds.className = "chip-dataset";
+            ds.textContent = "Jadikan dataset";
+            ds.title = "Jadikan dataset spreadsheet";
+            ds.onclick = (ev) => {
+              ev.stopPropagation();
+              void makeAttachmentDataset(a);
+            };
+            chip.appendChild(ds);
+          }
           chips.appendChild(chip);
         }
         el.appendChild(chips);
@@ -770,6 +807,23 @@ function renderTranscript() {  const box = $("transcript");
       }
       const act = renderTurnActivity(m.activity, loadToolImage);
       if (act) el.appendChild(act);
+      // Dae Captain v2 Fase 7: live progress card for running turns
+      // (mockup: progress bar + 8/12 + ✕ ⏸), fed by the run's own
+      // last_event_text — never a fabricated number.
+      if (m.kind === "turn" && m.taskId && !m.activityDone) {
+        try {
+          const runTurn = findRunTurn(m.taskId);
+          const prog = renderCard("progress", {
+            taskId: m.taskId,
+            phase: runTurn ? turnPhaseText(runTurn) : "Bekerja…",
+            fraction: runTurn ? parseProgressFraction(runTurn.last_event_text) : null,
+            status: runTurn?.paused ? "paused" : "running",
+          }, cardCtx({ taskId: m.taskId }));
+          el.appendChild(prog);
+        } catch {
+          /* progress is a nicety — the turn bubble still stands */
+        }
+      }
     } else if (m.kind === "error") {
       el.className = "bubble assistant error";
       if (m.taskStopped) {
@@ -854,7 +908,7 @@ async function handleChatResponse(res, { text, override, attachments }) {
     renderRecentWorkspaces();
   } else {
     state.runId = res.run_id ?? state.runId;
-    state.transcript.push({
+    const turnEntry = {
       kind: "turn",
       ts: Date.now(),
       engine: res.engine,
@@ -867,9 +921,590 @@ async function handleChatResponse(res, { text, override, attachments }) {
       activity: null,
       activityKey: "",
       activityDone: false,
-    });
+    };
+    state.transcript.push(turnEntry);
     updateStopButton();
+    onDispatchResponse(res, turnEntry);
   }
+}
+
+/**
+ * Dae Captain v2 Fase 7: map a dispatch response onto chat cards.
+ * - plan staged (multi-engine) → task-plan card (decompose.ts via server).
+ * - research staged → research-plan card (depth + [Mulai Riset]).
+ * - slide/dokumen/spreadsheet → watch staged artifacts → outline/
+ *   blueprint/extraction cards; turn-done → deliverable card.
+ */
+async function onDispatchResponse(res, turnEntry) {
+  const taskId = res.task_id ?? null;
+  // Multi-engine plan card (staged by the server via planTask).
+  if (res.plan_id && res.plan) {
+    turnEntry.activityDone = true;
+    updateStopButton();
+    pushCard("task-plan", { plan_id: res.plan_id, plan: res.plan }, { taskId: res.plan_id });
+    renderTranscript();
+    return;
+  }
+  // Research: staged plan → card with depth + [Mulai Riset].
+  if (res.engine === "research" && res.staged === true && res.plan_id) {
+    turnEntry.activityDone = true;
+    updateStopButton();
+    try {
+      const staged = await state.api.researchPlanGet(res.plan_id);
+      pushCard("research-plan", {
+        planId: res.plan_id,
+        plan: staged?.plan,
+        question: staged?.question,
+        depth: staged?.depth ?? "standar",
+      }, { taskId: res.plan_id });
+    } catch (e) {
+      pushAssistant("Rencana riset siap, tapi gagal dimuat: " + errText(e));
+    }
+    renderTranscript();
+    return;
+  }
+  if (!taskId) return;
+  // Staged-artifact watchers → outline/blueprint/extraction cards.
+  if (res.engine === "slide") watchSlideOutline(taskId);
+  else if (res.engine === "dokumen") watchDokumenState(taskId);
+  else if (res.engine === "spreadsheet") watchSheetsState(taskId);
+  // Turn-done → deliverable card.
+  if (["slide", "dokumen", "spreadsheet", "research"].includes(res.engine)) {
+    state.cardWatchers.set("gen:" + taskId, { stop: watchTurnDone(taskId, res.engine) });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Dae Captain v2 Fase 7 — chat cards
+// ---------------------------------------------------------------------------
+
+/** Transient status line under the action row (cards' notify channel). */
+function actionStatus(text) {
+  const el = $("action-status");
+  if (!el) return;
+  el.textContent = text;
+  clearTimeout(actionStatus._t);
+  actionStatus._t = setTimeout(() => {
+    if (el.textContent === text) el.textContent = "";
+  }, 6000);
+}
+
+/** Build the ctx object cards need. extra: { taskId, retryGoal }. */
+function cardCtx(extra = {}) {
+  return {
+    api: state.api,
+    invoke,
+    workspaceRoot: state.workspaceRoot,
+    taskId: extra.taskId ?? null,
+    runId: state.runId,
+    notify: actionStatus,
+    say: (text) => pushAssistant(text),
+    sendChat: (text) => sendChat(text),
+    openPreview: (info) => openPreviewOverlay(info),
+    onDeliverable: (info) => pushDeliverableCard(info),
+    onGenerated: (engine, ref) => onCardGenerated(engine, ref, extra.taskId),
+    retryGoal: extra.retryGoal ?? null,
+  };
+}
+
+/** Push a structured card into the transcript. */
+function pushCard(kind, data, extra = {}) {
+  const entry = {
+    kind: "card",
+    cardKind: kind,
+    cardData: data,
+    taskId: extra.taskId ?? null,
+    retryGoal: extra.retryGoal ?? null,
+    ts: Date.now(),
+  };
+  state.transcript.push(entry);
+  if (isChatViewVisible()) renderTranscript();
+  return entry;
+}
+
+/** A card produced a file → render the deliverable card. */
+function pushDeliverableCard(info) {
+  pushCard("deliverable", info, { taskId: info.taskId ?? null, retryGoal: info.retryGoal ?? null });
+}
+
+/** A card started generation → the turn watcher/progress takes over. */
+function onCardGenerated(engine, ref, taskId) {
+  // The existing turn machinery (events + refreshRuns) drives progress;
+  // ensure a watcher exists so the deliverable card appears on completion.
+  if (taskId && !state.cardWatchers.has("gen:" + taskId)) {
+    const stop = watchTurnDone(taskId, engine);
+    state.cardWatchers.set("gen:" + taskId, { stop });
+  }
+  refreshRuns();
+}
+
+/**
+ * Watch one task until it leaves "running", then push the right card.
+ * Returns a stop function. The watch ends on completion, failure, or
+ * after ~30 minutes.
+ */
+function watchTurnDone(taskId, engine) {
+  let stopped = false;
+  const deadline = Date.now() + 30 * 60 * 1000;
+  const timer = setInterval(async () => {
+    if (stopped || Date.now() > deadline) {
+      clearInterval(timer);
+      return;
+    }
+    try {
+      await refreshRunsQuiet();
+      const turn = findRunTurn(taskId);
+      if (!turn || turn.status !== "running") {
+        clearInterval(timer);
+        if (turn) await maybePushDeliverableCard(turn);
+      }
+    } catch {
+      /* keep watching; the next tick retries */
+    }
+  }, 4000);
+  return () => {
+    stopped = true;
+    clearInterval(timer);
+  };
+}
+
+/**
+ * A turn just finished → push the engine's deliverable card (slide pptx,
+ * dokumen export, spreadsheet xlsx, research report). Coding keeps its
+ * existing "Lihat perubahan" flow; failures stay silent here (the error
+ * bubble already explains).
+ */
+async function maybePushDeliverableCard(runTurn) {
+  const taskId = String(runTurn.task_id ?? "");
+  if (!taskId || state.turnDoneCache.get(taskId) === "carded") return;
+  state.turnDoneCache.set(taskId, "carded");
+  const engine = runTurn.engine;
+  const ctx = cardCtx({ taskId, retryGoal: runTurn.goal });
+  try {
+    if (engine === "slide") {
+      let label = "Presentasi";
+      try {
+        const deck = (await state.api.slideDeck(state.workspaceRoot))?.deck;
+        if (deck?.title) label = deck.title;
+      } catch {
+        /* label fallback */
+      }
+      pushCard("deliverable", {
+        name: label + ".pptx",
+        label,
+        kind: "pptx",
+        engine: "slide",
+        taskId,
+        url: state.api.slideDownloadUrl(state.workspaceRoot),
+        preview: { kind: "pptx" },
+      }, { taskId, retryGoal: runTurn.goal });
+    } else if (engine === "dokumen") {
+      const doc = (await state.api.dokumenDocument(state.workspaceRoot))?.document;
+      const exports = Array.isArray(doc?.exports) ? doc.exports : [];
+      const latest = exports[exports.length - 1];
+      if (latest?.path) {
+        pushCard("deliverable", {
+          name: latest.path.split("/").pop(),
+          label: doc?.title ?? "Dokumen",
+          path: latest.path,
+          kind: latest.format ?? "docx",
+          engine: "dokumen",
+          taskId,
+        }, { taskId, retryGoal: runTurn.goal });
+      }
+    } else if (engine === "spreadsheet") {
+      pushCard("deliverable", {
+        name: "workbook.xlsx",
+        label: "Workbook",
+        kind: "xlsx",
+        engine: "spreadsheet",
+        taskId,
+        url: state.api.sheetsExportUrl(state.workspaceRoot),
+        preview: { kind: "xlsx" },
+      }, { taskId, retryGoal: runTurn.goal });
+    } else if (engine === "research") {
+      const artifacts = runTurn.artifacts ?? [];
+      const rep = artifacts.find((a) => a.kind === "research_report" && a.report_id);
+      if (rep?.report_id) {
+        const report = (await state.api.researchReport(rep.report_id))?.report;
+        if (report) pushCard("research-report", { report }, { taskId });
+      }
+    }
+  } catch (e) {
+    // A failed card fetch must never hide the completion itself.
+    state.turnDoneCache.delete(taskId);
+    actionStatus("Gagal memuat kartu hasil: " + errText(e));
+  }
+}
+
+// ---- Staged-artifact watchers: outline/blueprint cards ----
+
+/** Poll until the slide engine stages its outline skeleton, then card it. */
+function watchSlideOutline(taskId) {
+  if (state.cardWatchers.has(taskId)) return;
+  let stopped = false;
+  const deadline = Date.now() + 10 * 60 * 1000;
+  const timer = setInterval(async () => {
+    if (stopped || Date.now() > deadline) {
+      clearInterval(timer);
+      state.cardWatchers.delete(taskId);
+      return;
+    }
+    try {
+      const deck = (await state.api.slideDeck(state.workspaceRoot))?.deck;
+      const slides = deck?.slides ?? [];
+      const skeleton = slides.filter((s) => s.status === "skeleton");
+      if (deck && slides.length > 0 && skeleton.length > 0) {
+        clearInterval(timer);
+        state.cardWatchers.delete(taskId);
+        const [templates, imported] = await Promise.all([
+          state.api.builtinTemplates().catch(() => ({ templates: [] })),
+          state.api.pptTemplates(state.workspaceRoot).catch(() => ({ templates: [] })),
+        ]);
+        pushCard("slide-outline", {
+          deck,
+          templates: templates?.templates ?? [],
+          importedTemplates: imported?.templates ?? [],
+        }, { taskId });
+      } else if (deck && slides.length > 0 && skeleton.length === 0) {
+        // Already filled (fast path / resumed): stop watching, the
+        // deliverable card comes from the turn-done path.
+        clearInterval(timer);
+        state.cardWatchers.delete(taskId);
+      }
+    } catch {
+      /* deck not staged yet — keep polling */
+    }
+  }, 3000);
+  state.cardWatchers.set(taskId, { stop: () => { stopped = true; clearInterval(timer); } });
+}
+
+/** Poll the dokumen document: staged kerangka → outline card; records → extraction card. */
+function watchDokumenState(taskId) {
+  if (state.cardWatchers.has(taskId)) return;
+  let stopped = false;
+  let carded = null;
+  const deadline = Date.now() + 10 * 60 * 1000;
+  const timer = setInterval(async () => {
+    if (stopped || Date.now() > deadline) {
+      clearInterval(timer);
+      state.cardWatchers.delete(taskId);
+      return;
+    }
+    try {
+      const doc = (await state.api.dokumenDocument(state.workspaceRoot))?.document;
+      if (!doc) return;
+      const stagedSections = (doc.sections ?? []).some((s) => s.status === "staged");
+      if (stagedSections && carded !== "outline") {
+        carded = "outline";
+        pushCard("dokumen-outline", { document: doc }, { taskId });
+      } else if ((doc.records ?? []).length > 0 && carded !== "extraction") {
+        carded = "extraction";
+        pushCard("dokumen-extraction", { document: doc }, { taskId });
+        clearInterval(timer);
+        state.cardWatchers.delete(taskId);
+      }
+    } catch {
+      /* not ready yet */
+    }
+  }, 3000);
+  state.cardWatchers.set(taskId, { stop: () => { stopped = true; clearInterval(timer); } });
+}
+
+/** Poll the workbook: staged blueprint → blueprint card. */
+function watchSheetsState(taskId) {
+  if (state.cardWatchers.has(taskId)) return;
+  let stopped = false;
+  const deadline = Date.now() + 10 * 60 * 1000;
+  const timer = setInterval(async () => {
+    if (stopped || Date.now() > deadline) {
+      clearInterval(timer);
+      state.cardWatchers.delete(taskId);
+      return;
+    }
+    try {
+      const wb = (await state.api.sheetsWorkbook(state.workspaceRoot))?.workbook;
+      if (wb?.stage === "blueprint" && wb?.blueprint) {
+        clearInterval(timer);
+        state.cardWatchers.delete(taskId);
+        pushCard("sheets-blueprint", { workbook: wb }, { taskId });
+      } else if (wb?.stage === "ready") {
+        clearInterval(timer);
+        state.cardWatchers.delete(taskId);
+      }
+    } catch {
+      /* not ready yet */
+    }
+  }, 3000);
+  state.cardWatchers.set(taskId, { stop: () => { stopped = true; clearInterval(timer); } });
+}
+
+/** Stop every card watcher (new conversation / workspace switch). */
+function stopCardWatchers() {
+  for (const [, w] of state.cardWatchers) {
+    try {
+      w.stop();
+    } catch {
+      /* ignore */
+    }
+  }
+  state.cardWatchers.clear();
+}
+
+// ---- v2 timeline poll: verify-fail bubbles (success stays silent) ----
+
+/**
+ * Poll GET /captain/runs/:id/timeline for new v2 events. A `verify` event
+ * with result=fail becomes a chat bubble ("…saya perbaiki dulu…");
+ * successes stay silent per the design. Runs on the existing 10s
+ * refresh cycle plus after task events.
+ */
+async function pollCaptainTimeline() {
+  if (!state.api || state.timelinePolling || !state.runId) return;
+  state.timelinePolling = true;
+  try {
+    const res = await state.api.captainTimeline(state.runId, state.workspaceRoot, state.lastTimelineEventId);
+    const events = res?.events ?? [];
+    if (events.length) {
+      state.lastTimelineEventId = events[events.length - 1].id ?? state.lastTimelineEventId;
+    }
+    let changed = false;
+    for (const e of events) {
+      if (!e?.id || state.seenTimelineEvents.has(e.id)) continue;
+      state.seenTimelineEvents.add(e.id);
+      if (e.type === "verify" && e.payload?.result === "fail") {
+        const reason = e.payload?.reason ?? "verifikasi gagal";
+        state.transcript.push({ kind: "verify-fail", text: reason, ts: Date.now() });
+        changed = true;
+      }
+    }
+    if (changed && isChatViewVisible()) renderTranscript();
+  } catch {
+    /* timeline unavailable (older server) — cards still work */
+  } finally {
+    state.timelinePolling = false;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Preview overlay (Dae Captain v2 Fase 7 — [👁️ Preview])
+// ---------------------------------------------------------------------------
+
+function closePreviewOverlay() {
+  $("preview-overlay")?.remove();
+}
+
+/**
+ * Preview a deliverable in an overlay (never a new page/window).
+ * - pptx/xlsx/docx: server-rendered page images (Pratinjau Asli pipeline).
+ * - pdf: embedded viewer. csv/md/txt/json: rendered inline.
+ * - research-report: HTML report + print → PDF.
+ */
+function openPreviewOverlay(info) {
+  closePreviewOverlay();
+  const overlay = document.createElement("div");
+  overlay.id = "preview-overlay";
+  overlay.className = "preview-overlay";
+  const head = document.createElement("div");
+  head.className = "preview-head";
+  const title = document.createElement("span");
+  title.textContent = info?.name ?? "Preview";
+  const headBtns = document.createElement("span");
+  const printBtn = document.createElement("button");
+  printBtn.className = "icon-btn";
+  printBtn.textContent = "🖨";
+  printBtn.title = "Cetak / simpan PDF";
+  printBtn.onclick = () => window.print();
+  const closeBtn = document.createElement("button");
+  closeBtn.className = "icon-btn";
+  closeBtn.textContent = "✕";
+  closeBtn.title = "Tutup";
+  closeBtn.onclick = closePreviewOverlay;
+  headBtns.append(printBtn, closeBtn);
+  head.append(title, headBtns);
+  const box = document.createElement("div");
+  box.className = "preview-box";
+  const body = document.createElement("div");
+  body.className = "preview-body";
+  body.innerHTML = `<p class="hint">Memuat…</p>`;
+  box.append(head, body);
+  overlay.appendChild(box);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closePreviewOverlay();
+  });
+  document.body.appendChild(overlay);
+  void renderPreviewBody(body, info ?? {}).catch((e) => {
+    body.innerHTML = `<p class="dc-error">Preview gagal: ${escapeHtml(errText(e))}</p>`;
+  });
+}
+
+function previewImg(src, alt) {
+  const img = document.createElement("img");
+  img.className = "preview-page";
+  img.loading = "lazy";
+  img.alt = alt ?? "";
+  img.src = src;
+  return img;
+}
+
+/** Poll a page-image preview until ready, then append the pages. */
+async function renderPagePreview(body, getStatus, doRender, label) {
+  for (let i = 0; i < 20; i++) {
+    const st = await getStatus();
+    if (st?.status === "ready" && Array.isArray(st?.pageUrls) && st.pageUrls.length) {
+      body.innerHTML = "";
+      for (const [n, u] of st.pageUrls.entries()) {
+        body.appendChild(previewImg(state.api.baseUrl + u, `${label} ${n + 1}`));
+      }
+      return;
+    }
+    if (st?.status === "error") throw new Error(st.error ?? "render gagal");
+    if (st?.status === "unavailable") throw new Error("preview tidak tersedia di mesin ini");
+    if ((st?.status === "idle" || st?.status === "stale") && doRender) {
+      await doRender().catch(() => {});
+    }
+    body.innerHTML = `<p class="hint">Merender ${escapeHtml(label)}…</p>`;
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  throw new Error("render terlalu lama — coba lagi nanti");
+}
+
+async function renderPreviewBody(body, info) {
+  const kind = info.kind ?? "";
+  const root = state.workspaceRoot;
+  if (kind === "pptx") {
+    await renderPagePreview(
+      body,
+      () => state.api.slidePreview(root),
+      () => state.api.slidePreviewRender({ root }),
+      "slide",
+    );
+    return;
+  }
+  if (kind === "xlsx") {
+    await renderPagePreview(
+      body,
+      () => state.api.sheetsPreview(root),
+      () => state.api.sheetsPreviewRender({ root }),
+      "sheet",
+    );
+    return;
+  }
+  if (kind === "docx") {
+    await renderPagePreview(
+      body,
+      () => state.api.dokumenPreview(root),
+      null,
+      "halaman",
+    );
+    return;
+  }
+  if (kind === "research-report" && info.report) {
+    body.innerHTML = "";
+    body.appendChild(renderReportHtml(info.report));
+    return;
+  }
+  if (kind === "pdf" || kind === "png" || kind === "jpg" || kind === "jpeg" || kind === "gif" || kind === "webp") {
+    const url = info.url ?? (info.path ? state.api.captainDownloadUrl(root, info.path) : null);
+    if (!url) throw new Error("tidak ada sumber preview");
+    body.innerHTML = "";
+    if (kind === "pdf") {
+      const emb = document.createElement("embed");
+      emb.className = "preview-embed";
+      emb.type = "application/pdf";
+      emb.src = url;
+      body.appendChild(emb);
+    } else {
+      body.appendChild(previewImg(url, info.name));
+    }
+    return;
+  }
+  if (info.path && ["csv", "md", "txt", "json", "bib"].includes(kind)) {
+    const file = await state.api.workspaceFile(root, info.path);
+    const text = typeof file?.content === "string" ? file.content : "";
+    body.innerHTML = "";
+    if (kind === "csv") {
+      body.appendChild(renderCsvTable(text));
+    } else if (kind === "md") {
+      const div = document.createElement("div");
+      div.className = "preview-md";
+      div.innerHTML = renderMarkdown(text);
+      body.appendChild(div);
+    } else {
+      const pre = document.createElement("pre");
+      pre.className = "preview-pre";
+      pre.textContent = text.slice(0, 20000);
+      body.appendChild(pre);
+    }
+    return;
+  }
+  // Fallback: honest download button instead of a fake preview.
+  body.innerHTML = "";
+  const p = document.createElement("p");
+  p.className = "hint";
+  p.textContent = "Preview tidak tersedia untuk tipe ini — unduh untuk melihat.";
+  const dl = document.createElement("button");
+  dl.className = "card-btn";
+  dl.textContent = "📥 Download";
+  dl.onclick = async () => {
+    const url = info.url ?? (info.path ? state.api.captainDownloadUrl(root, info.path) : null);
+    if (!url) return;
+    await state.api.downloadFile(url, info.name ?? "download");
+  };
+  body.append(p, dl);
+}
+
+/** Simple CSV → table (first 50 rows). */
+function renderCsvTable(text) {
+  const table = document.createElement("table");
+  table.className = "md-table preview-table";
+  const rows = String(text).split("\n").slice(0, 50);
+  rows.forEach((line, i) => {
+    if (!line.trim()) return;
+    const tr = document.createElement("tr");
+    for (const cell of line.split(",")) {
+      const td = document.createElement(i === 0 ? "th" : "td");
+      td.textContent = cell.trim().replace(/^"|"$/g, "");
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  });
+  return table;
+}
+
+/** Research report → printable HTML for the preview overlay. */
+function renderReportHtml(report) {
+  const wrap = document.createElement("div");
+  wrap.className = "preview-report";
+  const h1 = document.createElement("h2");
+  h1.textContent = report.question ?? "Laporan riset";
+  wrap.appendChild(h1);
+  if (report.summary) {
+    const p = document.createElement("p");
+    p.textContent = report.summary;
+    wrap.appendChild(p);
+  }
+  for (const section of report.sections ?? []) {
+    const h2 = document.createElement("h3");
+    h2.textContent = section.title ?? "";
+    wrap.appendChild(h2);
+    for (const claim of (report.claims ?? []).filter((c) => (section.claimIds ?? []).includes(c.id))) {
+      const p = document.createElement("p");
+      p.textContent = "• " + claim.text;
+      wrap.appendChild(p);
+    }
+  }
+  const h2 = document.createElement("h3");
+  h2.textContent = "Sumber";
+  wrap.appendChild(h2);
+  const ol = document.createElement("ol");
+  for (const s of report.sources ?? []) {
+    const li = document.createElement("li");
+    li.textContent = `${s.title ?? s.url} — ${s.url}`;
+    ol.appendChild(li);
+  }
+  wrap.appendChild(ol);
+  return wrap;
 }
 
 function chatBody(text, override, attachments, extra) {
@@ -880,14 +1515,83 @@ function chatBody(text, override, attachments, extra) {
     engineOverride: override ?? state.engineOverride,
   });
   if (attachments?.length) {
-    body.attachments = attachments.map((a) => ({
-      name: a.name,
-      mime: a.mime,
-      ...(a.data_url ? { data_url: a.data_url } : {}),
-      ...(a.text ? { text: a.text } : {}),
-    }));
+    // kind "file" (xlsx) never rides the chat payload — the server only
+    // accepts image/text. Dataset flows go through /uploads +
+    // /sheets/workbook/open or the analyze-plan API ([Jadikan dataset]).
+    body.attachments = attachments
+      .filter((a) => a.kind !== "file")
+      .map((a) => ({
+        name: a.name,
+        mime: a.mime,
+        ...(a.data_url ? { data_url: a.data_url } : {}),
+        ...(a.text ? { text: a.text } : {}),
+      }));
+    if (!body.attachments.length) delete body.attachments;
   }
   return { ...body, ...(extra ?? {}) };
+}
+
+/**
+ * Dae Captain v2 Fase 7 — route analysis requests with a dataset to the
+ * Analis plan card. Returns true when it handled the message (caller must
+ * not dispatch it as a chat turn). The plan card's [Setujui & Jalankan]
+ * runs the real analysis pipeline.
+ */
+const ANALYSIS_INTENT_RE = /\b(analisis|analisa|analisislah|analyze|tren|trend|rata-rata|rata2|average|total|jumlah|sum\b|bandingkan|perbandingan|statistik|statistic|insight|pola|pattern|korelasi|grafik|chart|visualisasi|ringkas)/i;
+
+async function maybeAnalyzeFromChat(text, attachments) {
+  if (!state.api || !ANALYSIS_INTENT_RE.test(text)) return false;
+  let dataset = null;
+  const dataFile = (attachments ?? []).find((a) => /\.(csv|xlsx)$/i.test(a.name ?? ""));
+  if (dataFile) {
+    if (/\.csv$/i.test(dataFile.name)) {
+      if (!dataFile.text) return false;
+      dataset = { kind: "csv", text: dataFile.text, name: dataFile.name };
+    } else {
+      const comma = String(dataFile.data_url ?? "").indexOf(",");
+      const base64 = comma >= 0 ? String(dataFile.data_url).slice(comma + 1) : "";
+      if (!base64) return false;
+      dataset = { kind: "xlsx", base64, name: dataFile.name };
+    }
+  } else {
+    // No attachment: the ready workbook (from [Jadikan dataset]) is the dataset.
+    try {
+      const wb = (await state.api.sheetsWorkbook(state.workspaceRoot))?.workbook;
+      if (!wb || wb.stage !== "ready") return false;
+      dataset = { kind: "workbook", key: state.workspaceRoot };
+    } catch {
+      return false;
+    }
+  }
+  if (!dataset) return false;
+  state.transcript.push({ kind: "user", text, attachments, ts: Date.now() });
+  const thinking = { kind: "assistant", text: "Menyiapkan rencana analisis…", streaming: true };
+  state.transcript.push(thinking);
+  renderTranscript();
+  try {
+    const staged = await state.api.sheetsAnalyzePlan({
+      question: text,
+      dataset,
+      root: state.workspaceRoot,
+    });
+    const i = state.transcript.indexOf(thinking);
+    if (i >= 0) state.transcript.splice(i, 1);
+    if (!staged?.planId) throw new Error("server tidak mengembalikan plan");
+    pushCard("sheets-analyze-plan", {
+      planId: staged.planId,
+      plan: staged.plan,
+      profiles: staged.profiles,
+      question: text,
+      complexity: staged.complexity,
+    });
+  } catch (e) {
+    const i = state.transcript.indexOf(thinking);
+    if (i >= 0) state.transcript.splice(i, 1);
+    state.transcript.push({ kind: "error", text: "Gagal menyiapkan rencana analisis: " + errText(e) });
+  }
+  renderTranscript();
+  await refreshRuns();
+  return true;
 }
 
 async function sendChat(message, override) {
@@ -904,6 +1608,10 @@ async function sendChat(message, override) {
   }
   if (isStreaming()) return; // one answer at a time — typed text stays put
   const attachments = takeQueuedAttachments();
+  // Dae Captain v2 Fase 7: analysis requests with a dataset go straight to
+  // the Analis plan card (the card IS the analysis UX) instead of a Susun
+  // engine task that would do the wrong thing.
+  if (await maybeAnalyzeFromChat(text, attachments)) return;
   state.transcript.push({ kind: "user", text, attachments, ts: Date.now() });
   renderTranscript();
   // Live placeholder: fills token-by-token while the server streams, then
@@ -1119,6 +1827,12 @@ function clearConversation() {
   state.historyList = [];
   state.stick = true;
   state.viewLimit = 30;
+  // Dae Captain v2 Fase 7: staged-artifact watchers belong to the old
+  // conversation; timeline cursors reset with the new run.
+  stopCardWatchers();
+  state.seenTimelineEvents.clear();
+  state.lastTimelineEventId = "";
+  state.turnDoneCache.clear();
   let text = "Percakapan baru dimulai. Workspace dan pengaturan tetap sama; riwayat lama tersimpan dan bisa dibuka via /history.";
   if (running.length) {
     text += ` ${running.length} task masih berjalan di latar dan TIDAK dibatalkan — pantau di Antrean atau hentikan via /stop.`;
@@ -1323,7 +2037,19 @@ function renderAttachChips() {
   state.pendingAttachments.forEach((a, i) => {
     const chip = document.createElement("span");
     chip.className = "attach-chip";
-    chip.innerHTML = `<span>${escapeHtml(a.kind === "image" ? "🖼" : "📄")} ${escapeHtml(a.name)}</span>`;
+    chip.innerHTML = `<span>${escapeHtml(a.kind === "image" ? "🖼" : a.kind === "file" ? "📊" : "📄")} ${escapeHtml(a.name)}</span>`;
+    // Dae Captain v2 Fase 7: [Jadikan dataset] on csv/xlsx attachments.
+    if (/\.(csv|xlsx)$/i.test(a.name ?? "")) {
+      const ds = document.createElement("button");
+      ds.className = "chip-dataset";
+      ds.textContent = "Jadikan dataset";
+      ds.title = "Jadikan dataset spreadsheet";
+      ds.onclick = (ev) => {
+        ev.stopPropagation();
+        void makeAttachmentDataset(a);
+      };
+      chip.appendChild(ds);
+    }
     const x = document.createElement("button");
     x.className = "chip-x";
     x.textContent = "✕";
@@ -1335,6 +2061,43 @@ function renderAttachChips() {
     chip.appendChild(x);
     box.appendChild(chip);
   });
+}
+
+/**
+ * Dae Captain v2 Fase 7 — [Jadikan dataset]: upload the attachment bytes
+ * to the workspace, then import as the editable workbook
+ * (POST /sheets/workbook/open). Real API calls, honest row counts.
+ */
+async function makeAttachmentDataset(a) {
+  if (!state.api) return;
+  actionStatus("Menjadikan dataset…");
+  try {
+    let contentBase64 = "";
+    if (a.kind === "text" && typeof a.text === "string") {
+      contentBase64 = btoa(unescape(encodeURIComponent(a.text)));
+    } else if (typeof a.data_url === "string") {
+      const comma = a.data_url.indexOf(",");
+      contentBase64 = comma >= 0 ? a.data_url.slice(comma + 1) : "";
+    }
+    if (!contentBase64) throw new Error("lampiran kosong");
+    const up = await state.api.uploadJson({
+      root: state.workspaceRoot,
+      files: [{ name: a.name, contentBase64, mimeType: a.mime }],
+    });
+    const stored = up?.files?.[0]?.path ?? up?.attachments?.[0]?.workspacePath;
+    if (!stored) throw new Error("upload tidak mengembalikan path");
+    const opened = await state.api.sheetsWorkbookOpen({
+      root: state.workspaceRoot,
+      path: stored,
+    });
+    const wb = opened?.workbook;
+    const sheets = Array.isArray(wb?.sheets) ? wb.sheets.length : 0;
+    pushAssistant(`Dataset siap: **${a.name}** → workbook (${sheets} sheet). Tanya apa saja soal datanya — mis. "analisis tren penjualan".`);
+    renderTranscript();
+    actionStatus("Dataset siap.");
+  } catch (e) {
+    actionStatus("Jadikan dataset gagal: " + errText(e));
+  }
 }
 
 /** Take (and clear) the queued attachments for one send. */
@@ -1352,7 +2115,7 @@ function readFileAs(kind, file) {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("gagal membaca file"));
     reader.onload = () => resolve(reader.result);
-    if (kind === "image") reader.readAsDataURL(file);
+    if (kind === "image" || kind === "file") reader.readAsDataURL(file);
     else reader.readAsText(file);
   });
 }
@@ -1373,8 +2136,8 @@ async function queuePickedFiles(files) {
     try {
       const raw = await readFileAs(check.kind, file);
       state.pendingAttachments.push(
-        check.kind === "image"
-          ? { name: file.name, mime: check.mime, kind: "image", data_url: String(raw) }
+        check.kind === "image" || check.kind === "file"
+          ? { name: file.name, mime: check.mime, kind: check.kind, data_url: String(raw) }
           : { name: file.name, mime: check.mime, kind: "text", text: String(raw).slice(0, CHAT_ATTACH_LIMITS.textMaxChars) },
       );
     } catch (e) {
@@ -1609,6 +2372,8 @@ async function refreshRuns() {
     state.approvalOpen = false;
   }
   await refreshTurnActivity();
+  // Dae Captain v2 Fase 7: v2 timeline → verify-fail bubbles in chat.
+  void pollCaptainTimeline();
   if (!state.expanded) return;
   const wf = $("view-workflow");
   if (wf && !wf.classList.contains("hidden")) {
@@ -1743,6 +2508,9 @@ function handleTaskEvents(events) {
       updateStopButton();
     }
   }
+  // Dae Captain v2 Fase 7: task events may coincide with v2 timeline
+  // verify events — poll for the fail bubbles.
+  void pollCaptainTimeline();
   refreshRunsQuiet();
 }
 

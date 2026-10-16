@@ -787,6 +787,8 @@ export type StagedResearchPlan = {
   question: string;
   workspaceRoot: string;
   plan: ResearchPlan;
+  /** Dae Captain v2 Fase 7 — kedalaman yang dipilih di kartu [Cepat][Standar][Mendalam]. */
+  depth?: string;
   createdAt: number;
 };
 

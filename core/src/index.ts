@@ -941,6 +941,7 @@ export {
 
 export { exportData, type DataExportResult } from "./dokumen/export-data.ts";
 export { buildDocumentDocxBytes, exportDocumentDocx, exportDocumentPdf, type DocumentExportResult } from "./dokumen/export-docx.ts";
+export { buildDocumentMarkdown, exportDocumentMarkdown, type MarkdownExportResult } from "./dokumen/export-md.ts";
 
 export {
   inspectDocxStyles,

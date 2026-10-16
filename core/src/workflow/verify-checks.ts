@@ -6,7 +6,6 @@ import type {
   DokumenVerifyData,
   ResearchVerifyData,
   SlideVerifyData,
-  SpreadsheetVerifyData,
   VerifyCheck,
   VerifyCheckResult,
   VerifyContext,

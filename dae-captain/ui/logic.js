@@ -137,7 +137,14 @@ export const CHAT_ATTACH_LIMITS = {
     "text/x-python", "application/x-python", "text/yaml", "application/yaml",
     "application/toml", "text/xml", "application/xml", "text/x-sh",
   ],
+  // Dae Captain v2 Fase 7: spreadsheet files attachable for [Jadikan dataset].
+  // They never ride the chat payload (the server only takes image/text);
+  // the dataset flows go through /uploads + /sheets/workbook/open or the
+  // analyze-plan API directly.
+  fileMimes: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+  fileMaxBytes: 5 * 1024 * 1024,
   imageExts: { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" },
+  fileExts: { xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
   textExts: {
     txt: "text/plain", md: "text/markdown", markdown: "text/markdown", csv: "text/csv",
     json: "application/json", log: "text/plain", html: "text/html", css: "text/css",
@@ -151,7 +158,7 @@ function mimeForPick(name, mime) {
   const m = String(mime ?? "").toLowerCase();
   if (m && m !== "application/octet-stream") return m;
   const ext = String(name ?? "").split(".").pop()?.toLowerCase() ?? "";
-  return CHAT_ATTACH_LIMITS.imageExts[ext] ?? CHAT_ATTACH_LIMITS.textExts[ext] ?? m;
+  return CHAT_ATTACH_LIMITS.imageExts[ext] ?? CHAT_ATTACH_LIMITS.textExts[ext] ?? CHAT_ATTACH_LIMITS.fileExts[ext] ?? m;
 }
 
 /**
@@ -175,7 +182,13 @@ export function validateAttachmentPick({ name, mime, sizeBytes }) {
     }
     return { ok: true, kind: "text", mime: m };
   }
-  return { ok: false, reason: "tipe file belum didukung (gambar atau teks saja)" };
+  if (CHAT_ATTACH_LIMITS.fileMimes.includes(m)) {
+    if ((sizeBytes ?? 0) > CHAT_ATTACH_LIMITS.fileMaxBytes) {
+      return { ok: false, reason: "file melebihi 5 MB" };
+    }
+    return { ok: true, kind: "file", mime: m };
+  }
+  return { ok: false, reason: "tipe file belum didukung (gambar, teks, atau xlsx)" };
 }
 
 /**

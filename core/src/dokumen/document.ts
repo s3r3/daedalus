@@ -117,7 +117,7 @@ export type StyleOp = {
 };
 
 export type ExportRecord = {
-  format: 'json' | 'csv' | 'xlsx' | 'docx' | 'pdf';
+  format: 'json' | 'csv' | 'xlsx' | 'docx' | 'pdf' | 'md';
   /** Workspace-relative path of the rendered file. */
   path: string;
   recordCount: number;

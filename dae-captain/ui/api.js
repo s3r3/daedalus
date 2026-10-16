@@ -104,7 +104,166 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
       req("DELETE", `/providers/${encodeURIComponent(id)}`),
     testProvider: (id) => req("POST", `/providers/${encodeURIComponent(id)}/test`),
     getModels: (providerId) => req("GET", "/models", undefined, { provider_id: providerId }),
+
+    // ---- Dae Captain v2 Fase 7: chat cards ----
+    // Slide
+    slideDeck: (root) =>
+      req("GET", "/slides/deck", undefined, { root }),
+    slideUpdate: (body) => req("POST", "/slides/deck/slide/update", body),
+    slideTheme: (body) => req("POST", "/slides/deck/theme", body),
+    slideGenerate: (body) => req("POST", "/slides/deck/generate", body),
+    slideRegenerate: (body) => req("POST", "/slides/deck/regenerate", body),
+    slideDownloadUrl: (root) =>
+      baseUrl.replace(/\/+$/, "") + "/slides/deck/download?root=" + encodeURIComponent(root),
+    slidePreview: (root) =>
+      req("GET", "/slides/deck/preview", undefined, { root }),
+    slidePreviewRender: (body) => req("POST", "/slides/deck/preview", body),
+    sheetsPreview: (root) =>
+      req("GET", "/sheets/workbook/preview", undefined, { root }),
+    sheetsPreviewRender: (body) => req("POST", "/sheets/workbook/preview", body),
+    dokumenPreview: (root) =>
+      req("GET", "/dokumen/preview", undefined, { root }),
+    builtinTemplates: () => req("GET", "/slides/builtin-templates"),
+    pptTemplates: (root) =>
+      req("GET", "/slides/ppt-templates", undefined, { root }),
+    importPptTemplate: (root, file) =>
+      uploadMultipart("/slides/ppt-templates", { root }, file),
+    slideArchive: (root) =>
+      req("GET", "/slides/deck/archive", undefined, { root }),
+    slideArchiveRestore: (body) =>
+      req("POST", "/slides/deck/archive/restore", body),
+    // Dokumen
+    dokumenDocument: (root) =>
+      req("GET", "/dokumen/document", undefined, { root }),
+    dokumenOutline: (body) => req("POST", "/dokumen/outline", body),
+    dokumenSection: (body) => req("POST", "/dokumen/section", body),
+    dokumenExportData: (body) => req("POST", "/dokumen/export-data", body),
+    dokumenExportDocument: (body) => req("POST", "/dokumen/export-document", body),
+    // Spreadsheet
+    sheetsWorkbook: (root) =>
+      req("GET", "/sheets/workbook", undefined, { root }),
+    sheetsWorkbookSave: (body) => req("POST", "/sheets/workbook", body),
+    sheetsGenerate: (body) => req("POST", "/sheets/workbook/generate", body),
+    sheetsCheckpoints: (root) =>
+      req("GET", "/sheets/workbook/checkpoints", undefined, { root }),
+    sheetsRestore: (body) => req("POST", "/sheets/workbook/restore", body),
+    sheetsExportUrl: (root) =>
+      baseUrl.replace(/\/+$/, "") + "/sheets/workbook/download?root=" + encodeURIComponent(root),
+    sheetsAnalyzePlan: (body) => req("POST", "/sheets/analyze/plan", body),
+    sheetsAnalyzePlanGet: (planId) =>
+      req("GET", `/sheets/analyze/plan/${encodeURIComponent(planId)}`),
+    sheetsAnalyzeRun: (body) => req("POST", "/sheets/analyze/run", body),
+    sheetsWorkbookOpen: (body) => req("POST", "/sheets/workbook/open", body),
+    uploadJson: (body) => req("POST", "/uploads", body),
+    // Research
+    researchPlan: (body) => req("POST", "/research/plan", body),
+    researchPlanGet: (planId) =>
+      req("GET", `/research/plan/${encodeURIComponent(planId)}`),
+    researchRun: (body) => req("POST", "/research/run", body),
+    researchRunStatus: (planId) =>
+      req("GET", `/research/run-status/${encodeURIComponent(planId)}`),
+    researchProgress: (planId) =>
+      req("GET", `/research/progress/${encodeURIComponent(planId)}`),
+    researchReport: (reportId) =>
+      req("GET", `/research/report/${encodeURIComponent(reportId)}`),
+    researchReportDocxUrl: (reportId) =>
+      baseUrl.replace(/\/+$/, "") +
+      `/captain/research/report/${encodeURIComponent(reportId)}/export?format=docx`,
+    // Task plans (decompose.ts via server)
+    captainPlan: (body) => req("POST", "/captain/plans", body),
+    captainPlanGet: (planId) =>
+      req("GET", `/captain/plans/${encodeURIComponent(planId)}`),
+    captainPlanExecute: (planId) =>
+      req("POST", `/captain/plans/${encodeURIComponent(planId)}/execute`),
+    // Approval UndoStore
+    captainUndoList: (runId, workspaceRoot) =>
+      req("GET", "/captain/undo", undefined, { run_id: runId, workspace_root: workspaceRoot }),
+    captainUndoApply: (body) => req("POST", "/captain/undo/apply", body),
+    // v2 run timeline (verify/agent events for the chat)
+    captainTimeline: (runId, workspaceRoot, after) =>
+      req("GET", `/captain/runs/${encodeURIComponent(runId)}/timeline`, undefined, {
+        workspace_root: workspaceRoot,
+        ...(after ? { after } : {}),
+      }),
+    /** Raw-bytes download URL for any workspace-relative file. */
+    captainDownloadUrl: (root, path) =>
+      baseUrl.replace(/\/+$/, "") +
+      "/captain/download?root=" + encodeURIComponent(root) +
+      "&path=" + encodeURIComponent(path),
+    /**
+     * Download a file URL to the user's downloads: fetch bytes (with the
+     * daemon token when present), then trigger a real browser download.
+     * Throws with a clear message when the server refuses.
+     */
+    downloadFile: async (url, filename) => {
+      const headers = {};
+      if (getToken) {
+        try {
+          const token = await getToken();
+          if (token) headers["authorization"] = "Bearer " + token;
+        } catch {
+          /* no token */
+        }
+      }
+      const res = await fetchFn(url, { headers });
+      if (!res.ok) {
+        let detail = "";
+        try {
+          const data = await res.json();
+          detail = data?.message ?? data?.error ?? "";
+        } catch {
+          /* not json */
+        }
+        throw new Error(`Download gagal (HTTP ${res.status})${detail ? ": " + detail : ""}`);
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      try {
+        const a = document.createElement("a");
+        a.href = objectUrl;
+        a.download = filename || "download";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } finally {
+        setTimeout(() => URL.revokeObjectURL(objectUrl), 5000);
+      }
+      return true;
+    },
   };
+
+  /** Multipart upload for endpoints that require it (template import). */
+  async function uploadMultipart(path, fields, file) {
+    const url = baseUrl.replace(/\/+$/, "") + path;
+    const form = new FormData();
+    for (const [k, v] of Object.entries(fields ?? {})) {
+      if (v !== undefined && v !== null) form.set(k, String(v));
+    }
+    form.set("file", file, file?.name ?? "upload.bin");
+    const headers = {};
+    if (getToken) {
+      try {
+        const token = await getToken();
+        if (token) headers["authorization"] = "Bearer " + token;
+      } catch {
+        /* no token */
+      }
+    }
+    const res = await fetchFn(url, { method: "POST", headers, body: form });
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    if (!res.ok) {
+      const err = new Error(`HTTP ${res.status} POST ${path}`);
+      err.status = res.status;
+      err.data = data;
+      throw err;
+    }
+    return data;
+  }
 }
 
 async function streamChat({ baseUrl, fetchImpl, getToken }, body, onDelta, signal) {

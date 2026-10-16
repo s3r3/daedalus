@@ -29,7 +29,11 @@
     "./research/plan.ts": "./src/research/plan.ts",
     "./research/verify.ts": "./src/research/verify.ts",
     "./research/credibility.ts": "./src/research/credibility.ts",
-    "./research/bibliography.ts": "./src/research/bibliography.ts"
+    "./research/bibliography.ts": "./src/research/bibliography.ts",
+    "./workflow/decompose.ts": "./src/workflow/decompose.ts",
+    "./workflow/approval.ts": "./src/workflow/approval.ts",
+    "./workflow/timeline.ts": "./src/workflow/timeline.ts",
+    "./dokumen/export-md.ts": "./src/dokumen/export-md.ts"
   },
   "engines": {
     "node": ">=22"
