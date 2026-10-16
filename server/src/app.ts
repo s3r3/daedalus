@@ -2884,6 +2884,9 @@ async function dispatchChatTurn(
     };
   }
 
+  // Dae Captain: paksa session ke "auto" juga — ModeController runtime
+  // bersifat global, jadi mode per-task saja tidak cukup.
+  ctx.session.mode = "auto";
   const created = await createTaskCore(
     ctx,
     {
