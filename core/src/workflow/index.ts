@@ -24,5 +24,29 @@ export {
   parseLayerBResponse,
 } from "./router.ts";
 export { WorkflowRunStore, createWorkflowRun, appendTurn, updateTurn, lastTurn } from "./store.ts";
+export type {
+  TimelineEvent,
+  AnyTimelineEvent,
+  TimelineEventType,
+  TimelineEventPayload,
+  FileAction,
+  VerifyResult,
+  TimelineApprovalDecision,
+  ModelContext,
+} from "./timeline.ts";
+export {
+  TIMELINE_EVENT_TYPES,
+  MODEL_CONTEXT_RECENT_DEFAULT,
+  isTimelineEventType,
+  isTimelineEvent,
+  createEvent,
+  appendEvent,
+  getEvents,
+  getRecentEvents,
+  buildModelContext,
+  persist as persistTimeline,
+  load as loadTimeline,
+  syncTurns,
+} from "./timeline.ts";
 export type { EngineCompletionInput } from "./artifacts.ts";
 export { translateArtifacts } from "./artifacts.ts";

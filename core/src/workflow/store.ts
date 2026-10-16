@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import type {
   RunContext,
@@ -7,13 +7,26 @@ import type {
   RunTurnStatus,
   WorkflowEngine,
 } from "./types.ts";
+import {
+  appendEvent,
+  load as loadTimelineRun,
+  persist as persistTimelineRun,
+  syncTurns,
+} from "./timeline.ts";
+import type { TimelineEventPayload } from "./timeline.ts";
 
 /**
- * Dae Captain run persistence (PR1).
+ * Dae Captain run persistence (PR1, migrated to the v2 event timeline).
  *
- * Follows the ADR-0003 pattern from TaskStore:
+ * Same file pattern as ADR-0003 TaskStore:
  *   <daedalus-home>/workflow/runs/<run_id>.json   one file per run
  * No database dependency. Synchronous fs like TaskStore.
+ *
+ * The timeline (`run.events`) is the single source of history. `run.turns`
+ * is a deprecated view derived from the task_start/task_end event pairs —
+ * `syncTurns()` is the only writer, called on every mutation, save, and
+ * load. Legacy run files saved with only `turns` are backfilled into events
+ * on load (see timeline.ts).
  */
 export class WorkflowRunStore {
   readonly root: string;
@@ -26,31 +39,16 @@ export class WorkflowRunStore {
     return join(this.root, "workflow", "runs");
   }
 
-  private file(runId: string): string {
-    return join(this.dir(), `${runId}.json`);
-  }
-
   saveRun(run: RunContext): void {
-    mkdirSync(this.dir(), { recursive: true });
-    writeFileSync(
-      this.file(run.run_id),
-      JSON.stringify({ ...run, updated_at: new Date().toISOString() }, null, 2),
-      "utf8",
-    );
+    syncTurns(run);
+    persistTimelineRun(this.root, run);
   }
 
   loadRun(runId: string): RunContext | undefined {
-    try {
-      const raw = JSON.parse(
-        readFileSync(this.file(runId), "utf8"),
-      ) as RunContext;
-      if (!raw || raw.run_id !== runId || !Array.isArray(raw.turns)) {
-        return undefined;
-      }
-      return raw;
-    } catch {
-      return undefined;
-    }
+    const run = loadTimelineRun(this.root, runId);
+    if (!run) return undefined;
+    syncTurns(run);
+    return run;
   }
 
   /** All runs, newest first. Corrupt files are skipped, never thrown. */
@@ -84,12 +82,17 @@ export function createWorkflowRun(workspaceRoot: string): RunContext {
   return {
     run_id: randomUUID(),
     workspace_root: workspaceRoot,
+    events: [],
     turns: [],
     created_at: now,
     updated_at: now,
   };
 }
 
+/**
+ * Start a task: appends a `task_start` event and returns the derived turn.
+ * The turn's `turn_id` is the start event's id (stable across save/load).
+ */
 export function appendTurn(
   run: RunContext,
   turn: {
@@ -100,36 +103,57 @@ export function appendTurn(
     note?: string;
   },
 ): RunTurn {
-  const now = new Date().toISOString();
-  const full: RunTurn = {
-    turn_id: randomUUID(),
+  const start = appendEvent(run, "task_start", {
     engine: turn.engine,
     task_id: turn.task_id,
     goal: turn.goal,
-    status: turn.status,
-    artifacts: [],
     ...(turn.note ? { note: turn.note } : {}),
-    created_at: now,
-    updated_at: now,
-  };
-  run.turns.push(full);
-  run.updated_at = now;
-  return full;
+  });
+  // A freshly started task is "running" unless the caller says otherwise.
+  if (turn.status !== "running") {
+    updateTurn(run, start.id, { status: turn.status });
+  }
+  const derived = run.turns.find((t) => t.turn_id === start.id);
+  if (!derived) throw new Error("timeline: turn missing after appendTurn");
+  return derived;
 }
 
+/**
+ * Record a task update: appends a `task_end` event carrying the merged state
+ * (status / artifacts / note; anything not patched keeps its previous
+ * value) and returns the derived turn. Append-only — the timeline never
+ * mutates past events. Returns undefined when no task matches `turnId`.
+ */
 export function updateTurn(
   run: RunContext,
   turnId: string,
   patch: Partial<Pick<RunTurn, "status" | "artifacts" | "note">>,
 ): RunTurn | undefined {
-  const turn = run.turns.find((t) => t.turn_id === turnId);
-  if (!turn) return undefined;
-  if (patch.status !== undefined) turn.status = patch.status;
-  if (patch.artifacts !== undefined) turn.artifacts = patch.artifacts;
-  if (patch.note !== undefined) turn.note = patch.note;
-  turn.updated_at = new Date().toISOString();
-  run.updated_at = turn.updated_at;
-  return turn;
+  const start = run.events.find(
+    (e) => e.type === "task_start" && e.id === turnId,
+  );
+  if (!start) return undefined;
+  const sp = start.payload as TimelineEventPayload["task_start"];
+  const prev = [...run.events]
+    .reverse()
+    .find(
+      (e) =>
+        e.type === "task_end" &&
+        (e.payload as TimelineEventPayload["task_end"]).task_id === sp.task_id,
+    );
+  const prevPayload = prev?.payload as
+    | TimelineEventPayload["task_end"]
+    | undefined;
+  const note = patch.note ?? prevPayload?.note ?? sp.note;
+  appendEvent(run, "task_end", {
+    engine: sp.engine,
+    task_id: sp.task_id,
+    goal: sp.goal,
+    status: patch.status ?? prevPayload?.status ?? "running",
+    artifacts: patch.artifacts ?? prevPayload?.artifacts ?? [],
+    ...(note ? { note } : {}),
+  });
+  return run.turns.find((t) => t.turn_id === start.id);
 }
 
 /** Most recent turn (any status), or undefined for an empty run. */
