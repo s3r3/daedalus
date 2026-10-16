@@ -1873,3 +1873,102 @@ function renderDokumenCompare(data, ctx) {
 
 if (!CARD_KINDS.includes("dokumen-compare")) CARD_KINDS.push("dokumen-compare");
 RENDERERS["dokumen-compare"] = renderDokumenCompare;
+
+// C3 (desain 4.3): batch ekstrak → 1 CSV gabungan.
+// Data: { documents: [{ docId, filename }] } — dokumen yang SUDAH diekstrak
+// (ekstraksi per dokumen tetap lewat alur task normal). Tombol [▶️ Mulai batch]
+// memanggil POST /dokumen/batch-extract yang me-stream progress NDJSON nyata
+// (X/Y file diproses); hasil: "Jadi. N invoice → 1 CSV gabungan, M field."
+// + [📥 CSV gabungan] + [⚠️ N field perlu review].
+function renderDokumenBatch(data, ctx) {
+  const docs = Array.isArray(data?.documents) ? data.documents : [];
+  const { card, body } = cardShell(
+    "dokumen-batch",
+    `📦 Batch ekstrak — ${docs.length} dokumen`,
+  );
+  if (!docs.length) {
+    body.appendChild(h("p", "dc-hint", "Belum ada dokumen untuk di-batch. Ekstrak dulu tiap dokumen, lalu gabungkan di sini."));
+    return card;
+  }
+
+  const list = h("div", "dc-list");
+  const rowByDoc = new Map();
+  for (const d of docs) {
+    const row = h("div", "dc-row");
+    const status = h("span", "dc-batch-status", "⏳");
+    row.appendChild(status);
+    row.appendChild(h("span", "dc-row-main", d.filename ?? d.docId));
+    list.appendChild(row);
+    rowByDoc.set(d.docId, { row, status, doc: d });
+  }
+  body.appendChild(list);
+
+  const barWrap = h("div", "dc-progress-wrap");
+  const bar = h("div", "dc-progress-bar");
+  barWrap.appendChild(bar);
+  const meta = h("p", "dc-hint", `0/${docs.length} file diproses`);
+  body.appendChild(barWrap);
+  body.appendChild(meta);
+
+  const setProgress = (done, total, file) => {
+    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    bar.style.width = pct + "%";
+    meta.textContent = `${done}/${total} file diproses${file ? ` — ${file}` : ""}`;
+    for (const [, entry] of rowByDoc) {
+      if (entry.doc.filename === file) entry.status.textContent = "🔄";
+    }
+  };
+
+  const go = btn("▶️ Mulai batch", "dc-primary dc-block", async () => {
+    const res = await ctx.api.dokumenBatchExtract(
+      { root: ctx.workspaceRoot, docIds: docs.map((d) => d.docId) },
+      (done, total, file) => setProgress(done, total, file),
+    );
+    setProgress(docs.length, docs.length, null);
+    const failedFiles = new Set((res.failed ?? []).map((f) => f.file));
+    const reviewFiles = new Set((res.review ?? []).map((r) => r.file));
+    for (const [, entry] of rowByDoc) {
+      entry.status.textContent = failedFiles.has(entry.doc.filename) ? "❌" : reviewFiles.has(entry.doc.filename) ? "⚠️" : "✅";
+    }
+
+    const done = h("p", "dc-batch-done");
+    done.textContent = `Jadi. ${res.fileCount} invoice → 1 CSV gabungan, ${res.fieldCount} field.`;
+    body.appendChild(done);
+
+    const actions = h("div", "dc-row-actions");
+    actions.appendChild(btn("📥 CSV gabungan", "dc-primary", async () => {
+      const url = ctx.api.captainDownloadUrl(ctx.workspaceRoot, res.csvPath);
+      await ctx.api.downloadFile(url, res.csvFilename ?? "batch.csv");
+      ctx.notify("CSV gabungan diunduh.");
+    }));
+    if ((res.reviewCount ?? 0) > 0) {
+      actions.appendChild(btn(`⚠️ ${res.reviewCount} field perlu review`, "", (el) => {
+        let pane = body.querySelector(".dc-review-list");
+        if (pane) {
+          pane.remove();
+          return;
+        }
+        pane = h("div", "dc-review-list");
+        for (const r of res.review ?? []) {
+          const item = h("div", "dc-row");
+          item.appendChild(h("span", "dc-row-main", `${r.file} · ${r.field}: ${r.reason}`));
+          pane.appendChild(item);
+        }
+        el.after(pane);
+      }));
+    }
+    if ((res.failed ?? []).length > 0) {
+      const failP = h("p", "dc-hint");
+      failP.textContent = `Gagal: ${(res.failed ?? []).map((f) => `${f.file} (${f.error})`).join("; ")}`;
+      body.appendChild(failP);
+    }
+    body.appendChild(actions);
+    go.remove();
+    ctx.notify(`Batch selesai: ${res.fileCount} dokumen → 1 CSV (${res.fieldCount} field).`);
+  });
+  body.appendChild(go);
+  return card;
+}
+
+if (!CARD_KINDS.includes("dokumen-batch")) CARD_KINDS.push("dokumen-batch");
+RENDERERS["dokumen-batch"] = renderDokumenBatch;

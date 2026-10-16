@@ -40,6 +40,7 @@
     "./dokumen/export-md.ts": "./src/dokumen/export-md.ts",
     "./dokumen/templates.ts": "./src/dokumen/templates.ts",
     "./dokumen/compare.ts": "./src/dokumen/compare.ts",
+    "./dokumen/batch.ts": "./src/dokumen/batch.ts",
     "./research/followup.ts": "./src/research/followup.ts",
     "./sheets/qa": "./src/sheets/qa.ts",
     "./sheets/quick-dashboard": "./src/sheets/quick-dashboard.ts",

@@ -156,6 +156,12 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
     dokumenDocTemplates: () => req("GET", "/dokumen/doc-templates"),
     /** 4.2 Bandingkan dua dokumen: { root, pathA, pathB } -> diff per paragraf. */
     dokumenCompare: (body) => req("POST", "/dokumen/compare", body),
+    /**
+     * 4.3 Batch ekstrak: { root, docIds } -> NDJSON progress + result.
+     * onProgress(done, total, file) dipanggil per dokumen — progress X/Y nyata.
+     */
+    dokumenBatchExtract: (body, onProgress) =>
+      batchExtractNdjson({ baseUrl, fetchImpl, getToken }, body, onProgress),
     // Spreadsheet
     sheetsWorkbook: (root) =>
       req("GET", "/sheets/workbook", undefined, { root }),
@@ -396,4 +402,72 @@ async function streamChat({ baseUrl, fetchImpl, getToken }, body, onDelta, signa
   // The socket closed without a done frame: return what arrived rather
   // than failing an answer the user already read.
   return { kind: "chat", text, run_id: runId };
+}
+
+/**
+ * FASE C (4.3): batch ekstrak dengan progress NDJSON nyata.
+ * Server mengirim {"type":"progress","done":N,"total":M,"file":...} per
+ * dokumen lalu {"type":"result",...} di akhir. onProgress(done, total, file)
+ * dipanggil untuk tiap frame progress; resolve = objek result.
+ */
+async function batchExtractNdjson({ baseUrl, fetchImpl, getToken }, body, onProgress) {
+  const fetchFn = fetchImpl ?? globalThis.fetch?.bind(globalThis);
+  if (!fetchFn) throw new Error("no fetch implementation available");
+  const headers = { "content-type": "application/json" };
+  if (getToken) {
+    try {
+      const token = await getToken();
+      if (token) headers["authorization"] = "Bearer " + token;
+    } catch {
+      /* no token — server may still allow */
+    }
+  }
+  const url = baseUrl.replace(/\/+$/, "") + "/dokumen/batch-extract";
+  const res = await fetchFn(url, { method: "POST", headers, body: JSON.stringify(body) });
+  if (!res.ok || !res.body?.getReader) {
+    let data = null;
+    try {
+      data = await res.json();
+    } catch {
+      data = null;
+    }
+    const err = new Error(data?.message ?? `HTTP ${res.status} POST /dokumen/batch-extract`);
+    err.status = res.status;
+    err.data = data;
+    throw err;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t) continue;
+      let ev;
+      try {
+        ev = JSON.parse(t);
+      } catch {
+        continue;
+      }
+      if (ev?.type === "progress") {
+        try {
+          onProgress?.(ev.done, ev.total, ev.file);
+        } catch {
+          /* caller rendering must never break the stream */
+        }
+      } else if (ev?.type === "result") {
+        result = ev;
+      } else if (ev?.type === "error") {
+        throw new Error(ev.message ?? "batch-extract gagal");
+      }
+    }
+  }
+  if (!result) throw new Error("batch-extract selesai tanpa hasil");
+  return result;
 }

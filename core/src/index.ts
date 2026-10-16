@@ -969,6 +969,19 @@ export {
   type WordToken,
 } from "./dokumen/compare.ts";
 
+/** Fase C (desain 4.3): batch ekstrak — gabung record banyak dokumen jadi 1 CSV. */
+export {
+  BATCH_REVIEW_CONFIDENCE,
+  mergeBatchToCsv,
+  writeBatchCsv,
+  type BatchDocFailed,
+  type BatchDocInput,
+  type BatchDocOk,
+  type BatchFailedFile,
+  type BatchMergeResult,
+  type ReviewItem,
+} from "./dokumen/batch.ts";
+
 export {
   inspectDocxStyles,
   proposeStyleOps,

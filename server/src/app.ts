@@ -84,10 +84,14 @@ import {
   listSavedSchemas,
   archiveActiveDocument,
   createActiveDocument,
+  readDocument,
   exportData,
   listDocumentTemplates,
   compareTexts,
   splitParagraphs,
+  mergeBatchToCsv,
+  writeBatchCsv,
+  type BatchDocInput,
   exportDocumentDocx,
   exportDocumentPdf,
   inspectDocxStyles,
@@ -5790,6 +5794,59 @@ export function createApp(ctx: AppContext) {
             } catch (error) {
               sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
             }
+            return;
+          }
+
+          // Fase C (desain 4.3): batch ekstrak → 1 CSV gabungan. Body:
+          // { root, docIds: string[] } (id dokumen yang SUDAH diekstrak —
+          // ekstraksi per dokumen tetap lewat alur task normal). Respons
+          // NDJSON: {"type":"progress","done":N,"total":M,"file":...}
+          // per dokumen, lalu {"type":"result",...} di akhir.
+          if (url.pathname === "/dokumen/batch-extract") {
+            const docIds = Array.isArray(parsed.docIds) ? parsed.docIds.filter((x): x is string => typeof x === "string" && x.length > 0) : [];
+            if (docIds.length === 0 || docIds.length > 50) {
+              sendJson(res, 400, { error: "invalid_doc_ids", message: "Butuh 1–50 id dokumen.", request_id: requestId });
+              return;
+            }
+            res.writeHead(200, { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-cache" });
+            const send = (obj: unknown) => res.write(`${JSON.stringify(obj)}\n`);
+            try {
+              const inputs: BatchDocInput[] = [];
+              for (let i = 0; i < docIds.length; i++) {
+                const docId = docIds[i]!;
+                const doc = await readDocument(root, docId);
+                if (!doc) {
+                  inputs.push({ ok: false, docId, filename: docId, error: "dokumen tidak ditemukan" });
+                } else {
+                  const filename = doc.sources[0]?.filename ?? doc.title ?? docId;
+                  if (!doc.schema) {
+                    inputs.push({ ok: false, docId, filename, error: "belum ada skema ekstraksi" });
+                  } else if (doc.records.length === 0) {
+                    inputs.push({ ok: false, docId, filename, error: "belum ada hasil ekstraksi" });
+                  } else {
+                    inputs.push({ ok: true, docId, filename, schema: doc.schema, records: doc.records });
+                  }
+                }
+                send({ type: "progress", done: i + 1, total: docIds.length, file: inputs[inputs.length - 1]!.filename });
+              }
+              const merged = mergeBatchToCsv(inputs);
+              const { relPath, filename } = await writeBatchCsv(root, merged.csv);
+              send({
+                type: "result",
+                root,
+                fileCount: merged.fileCount,
+                recordCount: merged.recordCount,
+                fieldCount: merged.fieldCount,
+                csvPath: relPath,
+                csvFilename: filename,
+                reviewCount: merged.review.length,
+                review: merged.review,
+                failed: merged.failed,
+              });
+            } catch (error) {
+              send({ type: "error", message: errorMessage(error) });
+            }
+            res.end();
             return;
           }
 

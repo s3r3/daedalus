@@ -875,3 +875,93 @@ describe("FASE D — quick bar on existing spreadsheet cards", () => {
     assert.match(card.textContent, /Buat Dashboard/);
   });
 });
+
+describe("FASE C — dokumen-batch card", () => {
+  const docs = () => ({
+    documents: [
+      { docId: "d1", filename: "inv-001.pdf" },
+      { docId: "d2", filename: "inv-002.pdf" },
+    ],
+  });
+  const batchResult = () => ({
+    type: "result",
+    fileCount: 2,
+    recordCount: 3,
+    fieldCount: 9,
+    csvPath: ".daedalus/documents/batch/exports/batch-x.csv",
+    csvFilename: "batch-x.csv",
+    reviewCount: 1,
+    review: [{ file: "inv-002.pdf", recordId: "r2", field: "vendor", confidence: 0.4, status: "auto", reason: "confidence rendah (40%)" }],
+    failed: [],
+  });
+
+  it("is registered and lists the documents with a start button", () => {
+    const { api } = mockApi();
+    const { ctx } = mockCtx(api);
+    assert.ok(CARD_KINDS.includes("dokumen-batch"));
+    const card = renderCard("dokumen-batch", docs(), ctx);
+    assert.match(card.textContent, /inv-001\.pdf/);
+    assert.match(card.textContent, /inv-002\.pdf/);
+    assert.match(card.textContent, /0\/2 file diproses/);
+  });
+
+  it("[▶️ Mulai batch] streams progress then shows Jadi + CSV + review buttons", async () => {
+    const progressCalls = [];
+    const { api, calls } = mockApi({
+      dokumenBatchExtract: async (body, onProgress) => {
+        calls.push({ name: "dokumenBatchExtract", args: [body] });
+        onProgress(1, 2, "inv-001.pdf");
+        onProgress(2, 2, "inv-002.pdf");
+        progressCalls.push([1, 2], [2, 2]);
+        return batchResult();
+      },
+    });
+    const { ctx } = mockCtx(api);
+    const card = renderCard("dokumen-batch", docs(), ctx);
+    await clickBtn(card, "Mulai batch");
+    const call = calls.find((c) => c.name === "dokumenBatchExtract");
+    assert.ok(call, "dokumenBatchExtract called");
+    assert.deepEqual(call.args[0], { root: "/ws", docIds: ["d1", "d2"] });
+    assert.deepEqual(progressCalls, [[1, 2], [2, 2]], "progress X/Y streamed");
+    assert.match(card.textContent, /2\/2 file diproses/);
+    assert.match(card.textContent, /Jadi\. 2 invoice → 1 CSV gabungan, 9 field\./);
+    assert.ok([...card.querySelectorAll("button")].some((b) => b.textContent.includes("CSV gabungan")), "download button");
+    assert.ok([...card.querySelectorAll("button")].some((b) => b.textContent.includes("1 field perlu review")), "review button");
+  });
+
+  it("[📥 CSV gabungan] downloads via the captain download URL", async () => {
+    const { api, calls } = mockApi({
+      dokumenBatchExtract: async () => batchResult(),
+    });
+    const { ctx } = mockCtx(api);
+    const card = renderCard("dokumen-batch", docs(), ctx);
+    await clickBtn(card, "Mulai batch");
+    await clickBtn(card, "CSV gabungan");
+    const dl = calls.find((c) => c.name === "downloadFile");
+    assert.ok(dl, "downloadFile called");
+    assert.match(dl.args[0], /batch\/exports\/batch-x\.csv/);
+    assert.equal(dl.args[1], "batch-x.csv");
+  });
+
+  it("[⚠️ N field perlu review] toggles the review list", async () => {
+    const { api } = mockApi({
+      dokumenBatchExtract: async () => batchResult(),
+    });
+    const { ctx } = mockCtx(api);
+    const card = renderCard("dokumen-batch", docs(), ctx);
+    await clickBtn(card, "Mulai batch");
+    assert.equal(card.querySelectorAll(".dc-review-list").length, 0);
+    await clickBtn(card, "perlu review");
+    const panes = card.querySelectorAll(".dc-review-list");
+    assert.equal(panes.length, 1);
+    assert.match(panes[0].textContent, /inv-002\.pdf/);
+    assert.match(panes[0].textContent, /confidence rendah/);
+  });
+
+  it("shows a hint when there is nothing to batch", () => {
+    const { api } = mockApi();
+    const { ctx } = mockCtx(api);
+    const card = renderCard("dokumen-batch", { documents: [] }, ctx);
+    assert.match(card.textContent, /Belum ada dokumen/);
+  });
+});

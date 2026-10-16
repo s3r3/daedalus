@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'vitest'
 import type { Server as HttpServer } from 'node:http'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EventBus, TaskStore } from '@daedalus/core'
@@ -108,5 +108,89 @@ describe('Fase C2 — POST /dokumen/compare (desain 4.2)', () => {
     writeFileSync(join(root, 'a.txt'), 'x')
     const outside = await req(base, 'POST', '/dokumen/compare', { root, pathA: 'a.txt', pathB: '../evil.txt' })
     expect(outside.status).toBe(400)
+  })
+})
+
+describe('Fase C3 — POST /dokumen/batch-extract (desain 4.3)', () => {
+  async function seedExtractedDoc(root: string, filename: string, lowConf: boolean): Promise<string> {
+    const { newDocument, writeDocument } = await import('@daedalus/core')
+    const doc = newDocument('extract', filename)
+    doc.sources.push({
+      id: 'src-1', filename, sha256: 'x', bytes: 10, pages: 1,
+      parseMode: 'native', status: 'parsed',
+    })
+    doc.schema = {
+      version: 1, approved: true, extractionTarget: 'per_doc',
+      fields: [
+        { name: 'vendor', type: 'string', required: true },
+        { name: 'total', type: 'money', required: true },
+      ],
+    }
+    doc.records.push({
+      id: 'rec-1', sourceId: 'src-1',
+      fields: {
+        vendor: { value: 'CV Sinar', confidence: lowConf ? 0.4 : 0.95, status: 'auto' },
+        total: { value: 555000, confidence: 0.95, status: 'auto' },
+      },
+      checks: [], decision: 'auto-clear',
+    })
+    await writeDocument(root, doc)
+    return doc.id
+  }
+
+  async function postBatch(base: string, root: string, docIds: string[]): Promise<{ status: number; events: Array<Record<string, unknown>> }> {
+    const res = await fetch(new URL('/dokumen/batch-extract', base), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ root, docIds }),
+    })
+    const text = await res.text()
+    const events = text.split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l) as Record<string, unknown>)
+    return { status: res.status, events }
+  }
+
+  test('streams progress per file then merges into one CSV with review flags', async () => {
+    const { base, root } = await listen()
+    const id1 = await seedExtractedDoc(root, 'inv-001.pdf', false)
+    const id2 = await seedExtractedDoc(root, 'inv-002.pdf', true)
+    const { status, events } = await postBatch(base, root, [id1, id2])
+    expect(status).toBe(200)
+    const progress = events.filter((e) => e.type === 'progress')
+    expect(progress).toHaveLength(2)
+    expect(progress[0]).toMatchObject({ done: 1, total: 2 })
+    expect(progress[1]).toMatchObject({ done: 2, total: 2 })
+    const result = events.find((e) => e.type === 'result') as unknown as {
+      fileCount: number; recordCount: number; fieldCount: number
+      csvPath: string; reviewCount: number; failed: unknown[]
+    }
+    expect(result).toBeDefined()
+    expect(result.fileCount).toBe(2)
+    expect(result.recordCount).toBe(2)
+    expect(result.fieldCount).toBe(4)
+    expect(result.reviewCount).toBe(1) // inv-002 vendor confidence 0.4
+    expect(result.failed).toEqual([])
+    expect(result.csvPath).toMatch(/\.daedalus\/documents\/batch\/exports\/batch-.*\.csv/)
+    expect(existsSync(join(root, result.csvPath))).toBe(true)
+    const csv = readFileSync(join(root, result.csvPath), 'utf8')
+    expect(csv.split('\n')[0]).toBe('_file,vendor,total,_decision,_review')
+    expect(csv).toContain('inv-001.pdf')
+    expect(csv).toContain('perlu review')
+  })
+
+  test('documents without extraction results are reported as failed, not merged silently', async () => {
+    const { base, root } = await listen()
+    const id1 = await seedExtractedDoc(root, 'ok.pdf', false)
+    const { status, events } = await postBatch(base, root, [id1, 'tidak-ada'])
+    expect(status).toBe(200)
+    const result = events.find((e) => e.type === 'result') as unknown as { fileCount: number; failed: Array<{ file: string; error: string }> }
+    expect(result.fileCount).toBe(1)
+    expect(result.failed).toHaveLength(1)
+    expect(result.failed[0]!.error).toMatch(/tidak ditemukan/)
+  })
+
+  test('empty docIds are rejected', async () => {
+    const { base, root } = await listen()
+    const { status } = await postBatch(base, root, [])
+    expect(status).toBe(400)
   })
 })
