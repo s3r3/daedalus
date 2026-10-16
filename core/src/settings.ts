@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { DomainModelSettings, EditFormat, ModelTier, PromptFamilySetting, TaskDomain, ThinkingLevel } from "./contracts.ts";
+import type { RoleModelConfig } from "./workflow/model-roles.ts";
 import { normalizeModelList, normalizeModelTiers, parseModelStrategy, parseModelTiers, type ModelStrategy } from "./providers/llm/model-pool.ts";
 import { parsePromptFamilySetting } from "./agent/prompt-dialects.ts";
 import { parsePromptCacheMechanism, type PromptCacheMechanism } from "./providers/llm/prompt-cache.ts";
@@ -64,6 +65,14 @@ export type Settings = {
    * exactly what the runtime resolves.
    */
   maxIterations?: number;
+  /**
+   * Model per peran — 2 tier (Dae Captain v2, Fase 5). Opsional dan
+   * additive: unset = semua peran pakai `llm.model` (smart default, 1
+   * model = semua peran). `strong`/`light` override per tier; string
+   * kosong = unset. Baca via `roleModelConfigFrom(settings)` dari
+   * `core/src/workflow/model-roles.ts`.
+   */
+  modelRoles?: RoleModelConfig;
   daedalusHome: string;
 };
 

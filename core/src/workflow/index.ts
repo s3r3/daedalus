@@ -48,6 +48,31 @@ export {
   load as loadTimeline,
   syncTurns,
 } from "./timeline.ts";
+// Model per peran — 2 tier (Fase 5, Dae Captain v2): 🧠 kuat / ⚡ ringan.
+// Mapping + resolver + config saja; wiring ke pemanggilan LLM menyusul.
+export type {
+  ModelTier,
+  RoleModelConfig,
+  ModelRole,
+  ModelRoleInfo,
+  ModelRolesSource,
+} from "./model-roles.ts";
+export {
+  MODEL_TIERS,
+  MODEL_TIER_LABELS,
+  CODING_ROLES,
+  SLIDE_ROLES,
+  DOKUMEN_ROLES,
+  SPREADSHEET_ROLES,
+  RESEARCH_ROLES,
+  ROLE_TIER_MAP,
+  roleTier,
+  listRoles,
+  normalizeRoleModelConfig,
+  roleModelConfigFrom,
+  resolveModel,
+  getModelFor,
+} from "./model-roles.ts";
 export type { EngineCompletionInput } from "./artifacts.ts";
 export { translateArtifacts } from "./artifacts.ts";
 // Verify gate framework (v2, Fase 2): deterministic code-checked verify per

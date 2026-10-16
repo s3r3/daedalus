@@ -26,6 +26,7 @@ import {
   setSkillDisabled,
   parseModelStrategy,
   normalizeModelList,
+  normalizeRoleModelConfig,
   redactSettings,
   resolveDaedalusHome,
   reviewDiff,
@@ -660,9 +661,31 @@ function applySettingsUpdate(ctx: AppContext, parsed: Record<string, unknown>): 
       throw new Error("invalid_max_iterations");
     } else ctx.settings.maxIterations = maxIterationsRaw;
   }
+  // Model per peran — 2 tier (Dae Captain v2, Fase 5): additive; string kosong
+  // = unset (ikut default). Non-object 400s.
+  const modelRolesRaw = parsed.modelRoles !== undefined ? parsed.modelRoles : parsed.model_roles;
+  if (modelRolesRaw !== undefined) {
+    ctx.settings.modelRoles = parseModelRoles(modelRolesRaw);
+  }
   if (typeof parsed.model === "string") ctx.session.model = parsed.model;
   if (typeof parsed.providerId === "string") ctx.session.providerId = parsed.providerId;
   if (typeof parsed.provider_id === "string") ctx.session.providerId = parsed.provider_id;
+}
+
+/**
+ * `modelRoles` / `model_roles`: object `{ default?, strong?, light? }` dengan
+ * string model ID; string kosong = unset. Non-object → named 400.
+ */
+function parseModelRoles(value: unknown): { default: string; strong?: string; light?: string } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid_model_roles");
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (key !== "default" && key !== "strong" && key !== "light") throw new Error("invalid_model_roles");
+    if (record[key] !== undefined && typeof record[key] !== "string") throw new Error("invalid_model_roles");
+  }
+  return normalizeRoleModelConfig(record);
 }
 
 /** `llm.temperature`: a finite number in 0..2, else a named 400. */
