@@ -13,6 +13,8 @@ export type ProfiledColumnType = 'text' | 'number' | 'currency' | 'percent' | 'd
 export interface ProfiledColumn {
   name: string;
   type: ProfiledColumnType;
+  /** 0-based sheet column index (for exact cell addressing). */
+  index: number;
   /** Fraction of data rows with no value in this column (0–1). */
   nullRate: number;
   /** Distinct non-null values. */
@@ -87,6 +89,7 @@ export function profileSheet(sheet: SheetSpec): DatasetProfile {
     const name = headers.get(col) ?? indexToCol(col);
     return {
       name,
+      index: col,
       type: inferColumnType(values),
       nullRate: rowCount > 0 ? nulls / rowCount : 0,
       cardinality: seen.size,
