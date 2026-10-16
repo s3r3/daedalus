@@ -117,4 +117,24 @@ describe('Fase B slide endpoints', () => {
     const deck = (upd.body.deck ?? {}) as { slides: Array<{ positions?: unknown }> }
     expect(deck.slides[0]?.positions).toEqual(variant.positions)
   })
+
+  test('GET /slides/recommend-template recommends Cendekia for a sidang deck', async () => {
+    const { base, root } = await listen()
+    await seedDeck(root)
+
+    const res = await fetch(new URL(`/slides/recommend-template?root=${encodeURIComponent(root)}`, base))
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { template_id: string; name: string; reason: string }
+    expect(body.template_id).toBe('cendekia')
+    expect(body.name).toBe('Naskah Cendekia')
+    expect(body.reason).toContain('sidang')
+  })
+
+  test('GET /slides/recommend-template 404s when there is no deck', async () => {
+    const { base, root } = await listen()
+    const res = await fetch(new URL(`/slides/recommend-template?root=${encodeURIComponent(root)}`, base))
+    expect(res.status).toBe(404)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toBe('deck_not_found')
+  })
 })

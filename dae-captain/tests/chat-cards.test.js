@@ -42,6 +42,11 @@ function mockApi(overrides = {}) {
     slideGenerate: mk("slideGenerate", { task_id: "t-gen" }),
     slideRegenerate: mk("slideRegenerate", {}),
     slideDeck: mk("slideDeck", { deck: { title: "D", slides: [] } }),
+    slideRecommendTemplate: mk("slideRecommendTemplate", {
+      template_id: "cendekia",
+      name: "Naskah Cendekia",
+      reason: "Cocok untuk sidang skripsi — formal dan bersih.",
+    }),
     builtinTemplates: mk("builtinTemplates", { templates: [] }),
     pptTemplates: mk("pptTemplates", { templates: [] }),
     importPptTemplate: mk("importPptTemplate", { template: { name: "Impor" } }),
@@ -200,14 +205,35 @@ describe("slide-outline card", () => {
     assert.match(card2.textContent, /🗒️/);
   });
 
-  it("template button calls slideTheme", async () => {
+  it("template button calls slideTheme with design_id (builtin design templates)", async () => {
     const { api, calls } = mockApi();
     const { ctx } = mockCtx(api);
     const card = renderCard("slide-outline", deckData(), ctx);
     await clickBtn(card, "Elegan");
     const call = calls.find((c) => c.name === "slideTheme");
     assert.ok(call, "slideTheme called");
-    assert.deepEqual(call.args[0], { root: "/ws", template_id: "elegan", run_id: "task-1" });
+    assert.deepEqual(call.args[0], { root: "/ws", design_id: "elegan", run_id: "task-1" });
+  });
+
+  it("⭐ rekomendasi: badge + alasan + chip terapkan via design_id", async () => {
+    const { api, calls } = mockApi();
+    const { ctx } = mockCtx(api);
+    const data = deckData();
+    data.templates = [
+      { id: "standar", name: "Daedalus Standar" },
+      { id: "cendekia", name: "Naskah Cendekia" },
+    ];
+    const card = renderCard("slide-outline", data, ctx);
+    await tick(); await tick(); await tick();
+    assert.match(card.textContent, /⭐ Direkomendasikan: Naskah Cendekia/);
+    assert.match(card.textContent, /formal dan bersih/);
+    const recBtn = [...card.querySelectorAll("button")].find((b) => b.textContent.startsWith("⭐"));
+    assert.ok(recBtn, "recommended chip carries the star");
+    recBtn.click();
+    await tick(); await tick();
+    const call = calls.find((c) => c.name === "slideTheme");
+    assert.ok(call, "slideTheme called");
+    assert.deepEqual(call.args[0], { root: "/ws", design_id: "cendekia", run_id: "task-1" });
   });
 
   it("🎨 varian per slide: tampilkan 3 opsi, Pilih terapkan positions", async () => {
@@ -678,5 +704,174 @@ describe("FASE C — dokumen-doc-templates card", () => {
     const { ctx } = mockCtx(api);
     const card = renderCard("dokumen-doc-templates", { templates: [] }, ctx);
     assert.match(card.textContent, /tidak tersedia/);
+  });
+});
+
+describe("FASE C — dokumen-compare card", () => {
+  const comparison = () => ({
+    blocks: [
+      { kind: "same", oldIndex: 0, newIndex: 0, oldText: "KONTRAK", newText: "KONTRAK" },
+      { kind: "changed", oldIndex: 1, newIndex: 1, oldText: "Denda 2% per hari.", newText: "Denda 5% per hari.", detail: "«2%» → «5%»" },
+      { kind: "removed", oldIndex: 2, oldText: "Pasal lama dihapus." },
+      { kind: "added", newIndex: 2, newText: "Pasal baru ditambah." },
+    ],
+    counts: { added: 1, removed: 1, changed: 1, same: 1 },
+    summary: ["~ Denda 2%: «2%» → «5%»"],
+  });
+
+  it("is registered and renders the change list with markers", () => {
+    const { api } = mockApi();
+    const { ctx } = mockCtx(api);
+    assert.ok(CARD_KINDS.includes("dokumen-compare"));
+    const card = renderCard("dokumen-compare", { fileA: "v1.txt", fileB: "v2.txt", comparison: comparison() }, ctx);
+    assert.match(card.textContent, /1 diubah/);
+    assert.match(card.textContent, /Denda 2% per hari/);
+    assert.ok(card.querySelectorAll("button").length >= 3, "each change has a detail button");
+  });
+
+  it("[👁️ Lihat detail] toggles a side-by-side word-highlighted pane", async () => {
+    const { api } = mockApi();
+    const { ctx } = mockCtx(api);
+    const card = renderCard("dokumen-compare", { fileA: "v1.txt", fileB: "v2.txt", comparison: comparison() }, ctx);
+    assert.equal(card.querySelectorAll(".dc-diff-detail").length, 0);
+    await clickBtn(card, "Lihat detail");
+    const panes = card.querySelectorAll(".dc-diff-detail");
+    assert.equal(panes.length, 1);
+    assert.match(panes[0].textContent, /Denda/);
+    assert.ok(panes[0].querySelector(".dc-wdel") || panes[0].querySelector(".dc-wins"), "word highlight spans exist");
+    await clickBtn(card, "Tutup detail");
+    assert.equal(card.querySelectorAll(".dc-diff-detail").length, 0);
+  });
+
+  it("without comparison data, [⚖️ Bandingkan] calls the API and renders results", async () => {
+    const { api, calls } = mockApi({
+      dokumenCompare: async (body) => {
+        calls.push({ name: "dokumenCompare", args: [body] });
+        return { fileA: "v1.txt", fileB: "v2.txt", comparison: comparison() };
+      },
+    });
+    const { ctx } = mockCtx(api);
+    const card = renderCard("dokumen-compare", { fileA: "v1.txt", fileB: "v2.txt" }, ctx);
+    await clickBtn(card, "Bandingkan sekarang");
+    const call = calls.find((c) => c.name === "dokumenCompare");
+    assert.ok(call, "dokumenCompare called");
+    assert.deepEqual(call.args[0], { root: "/ws", pathA: "v1.txt", pathB: "v2.txt" });
+    assert.match(card.textContent, /1 diubah/);
+  });
+
+  it("identical documents show the no-difference hint", () => {
+    const { api } = mockApi();
+    const { ctx } = mockCtx(api);
+    const card = renderCard(
+      "dokumen-compare",
+      { fileA: "a.txt", fileB: "b.txt", comparison: { blocks: [], counts: { added: 0, removed: 0, changed: 0, same: 3 }, summary: [] } },
+      ctx,
+    );
+    assert.match(card.textContent, /identik/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FASE D: Spreadsheet — Dashboard 1 perintah + Tanya jawab data.
+// ---------------------------------------------------------------------------
+
+const faseDBlueprintData = () => ({
+  workbook: {
+    title: "Penjualan",
+    stage: "ready",
+    blueprint: { goal: "rekap penjualan", sheets: [{ name: "Data", columns: [] }], assumptions: [] },
+  },
+});
+
+const faseDDashboardResponse = () => ({
+  summary: "Dashboard dibuat dari sheet \"Data\" (24 baris).",
+  dashboardSheet: "Dashboard",
+  measureColumn: "Total",
+  groupColumn: "Produk",
+  kpis: [
+    { label: "Total Total", formula: "=SUM(Data!E$2:E$25)", column: "Total" },
+    { label: "Rata-rata Total", formula: "=AVERAGE(Data!E$2:E$25)", column: "Total" },
+  ],
+  categories: ["Kopi Tubruk"],
+  downloadPath: "workbook/penjualan.xlsx",
+  notes: [],
+});
+
+describe("FASE D — sheets-quick-tools card", () => {
+  it("is a registered card kind and renders the dashboard button + QA input", () => {
+    const { api } = mockApi();
+    const { ctx } = mockCtx(api);
+    assert.ok(CARD_KINDS.includes("sheets-quick-tools"));
+    const card = renderCard("sheets-quick-tools", {}, ctx);
+    assert.match(card.textContent, /Buat Dashboard/);
+    assert.ok(card.querySelector("input[aria-label='Tanya jawab data']"), "QA input exists");
+  });
+
+  it("📊 Buat Dashboard calls the real API and renders KPIs + a working [📥 XLSX] link", async () => {
+    const { api, calls } = mockApi({
+      sheetsQuickDashboard: async (body) => {
+        calls.push({ name: "sheetsQuickDashboard", args: [body] });
+        return faseDDashboardResponse();
+      },
+      sheetsDownloadUrlFor: (root, rel) => `http://localhost/sheets/workbook/download?root=${root}&path=${rel}`,
+    });
+    const { ctx, events } = mockCtx(api);
+    const card = renderCard("sheets-quick-tools", {}, ctx);
+    await clickBtn(card, "Buat Dashboard");
+    const call = calls.find((c) => c.name === "sheetsQuickDashboard");
+    assert.ok(call, "sheetsQuickDashboard called");
+    assert.deepEqual(call.args[0], { root: "/ws" });
+    assert.match(card.textContent, /Total Total/);
+    const dl = [...card.querySelectorAll("a")].find((a) => a.textContent.includes("XLSX"));
+    assert.ok(dl, "[📥 XLSX] link exists");
+    assert.match(dl.getAttribute("href"), /workbook\/penjualan\.xlsx/);
+    assert.ok(events.some(([k, e]) => k === "onGenerated" && e === "spreadsheet"), "onGenerated(spreadsheet) fired");
+  });
+
+  it("❓ Tanya calls /sheets/qa and shows the answer with its method", async () => {
+    const { api, calls } = mockApi({
+      sheetsQa: async (body) => {
+        calls.push({ name: "sheetsQa", args: [body] });
+        return {
+          ok: true,
+          answer: "Total \"Total\": Rp 1.900.000.",
+          method: "Dihitung dari 24 baris, kolom \"Total\" di sheet \"Data\".",
+        };
+      },
+    });
+    const { ctx } = mockCtx(api);
+    const card = renderCard("sheets-quick-tools", {}, ctx);
+    const input = card.querySelector("input[aria-label='Tanya jawab data']");
+    input.value = "Berapa total penjualan?";
+    await clickBtn(card, "Tanya");
+    const call = calls.find((c) => c.name === "sheetsQa");
+    assert.ok(call, "sheetsQa called");
+    assert.deepEqual(call.args[0], { root: "/ws", question: "Berapa total penjualan?" });
+    assert.match(card.textContent, /Rp 1\.900\.000/);
+    assert.match(card.textContent, /Dihitung dari 24 baris/);
+  });
+
+  it("shows the server error honestly when the dashboard cannot be built", async () => {
+    const { api } = mockApi({
+      sheetsQuickDashboard: async () => {
+        const err = new Error("HTTP 400 POST /sheets/dashboard/quick");
+        err.data = { message: "Sheet \"Data\" tidak punya kolom numerik" };
+        throw err;
+      },
+    });
+    const { ctx } = mockCtx(api);
+    const card = renderCard("sheets-quick-tools", {}, ctx);
+    await clickBtn(card, "Buat Dashboard");
+    assert.match(card.textContent, /tidak punya kolom numerik/);
+  });
+});
+
+describe("FASE D — quick bar on existing spreadsheet cards", () => {
+  it("sheets-blueprint card carries the 📊 Buat Dashboard action", () => {
+    const { api } = mockApi();
+    const { ctx } = mockCtx(api);
+    const card = renderCard("sheets-blueprint", faseDBlueprintData(), ctx);
+    assert.match(card.textContent, /Aksi cepat/);
+    assert.match(card.textContent, /Buat Dashboard/);
   });
 });

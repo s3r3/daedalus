@@ -1072,6 +1072,24 @@ export {
   DEFAULT_TILE_ACCENT,
 } from "./sheets/dashboard.ts";
 export {
+  answerDataQuestion,
+  qaCapabilities,
+  pickDatasetSheet,
+  datasetTable,
+  mainNumericColumn,
+  numericColumns,
+  toNumber,
+  type QaAnswer,
+  type QaIntent,
+  type QaFilter,
+  type DatasetTable,
+} from "./sheets/qa.ts";
+export {
+  buildQuickDashboard,
+  type QuickDashboardKpi,
+  type QuickDashboardResult,
+} from "./sheets/quick-dashboard.ts";
+export {
   buildExcelJsWorkbook,
   exportWorkbookToXlsx,
   dashboardComposition,

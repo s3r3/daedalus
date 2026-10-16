@@ -15,6 +15,7 @@ import { ReminderStore, startScheduler, type Reminder } from "@daedalus/core/wor
 import { listRoles, MODEL_TIER_LABELS, MODEL_TIERS, type ModelTier } from "@daedalus/core/workflow/model-roles.ts";
 import { exportDocumentMarkdown } from "@daedalus/core/dokumen/export-md.ts";
 import { slideVariants } from "@daedalus/core/slides/variants.ts";
+import { recommendTemplate } from "@daedalus/core/slides/template-recommend.ts";
 import {
   EventBus,
   McpManager,
@@ -22,6 +23,8 @@ import {
   ProviderRegistryStore,
   TaskStore,
   TaskRunner,
+  answerDataQuestion,
+  buildQuickDashboard,
   createLogger,
   createProviderForConfig,
   emitEvent,
@@ -4735,6 +4738,37 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
+    // Smart template recommendation (Dae Captain 9.4): one opinionated
+    // pick from the outline's own signals — text volume, image/data ratio,
+    // presentation register from keywords — with a one-line reason.
+    // Deterministic, no LLM; the UI renders it with a ⭐ badge.
+    if (method === "GET" && url.pathname === "/slides/recommend-template") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          const deck = await readDeck(root);
+          if (!deck) {
+            sendJson(res, 404, { error: "deck_not_found", request_id: requestId });
+            return;
+          }
+          const rec = recommendTemplate({
+            title: deck.title,
+            slides: deck.slides.map((s) => ({ layout: s.layout, content: s.content ?? {} })),
+          });
+          const tpl = getBuiltinTemplate(rec.templateId);
+          sendJson(res, 200, {
+            root,
+            template_id: rec.templateId,
+            name: tpl?.name ?? rec.templateId,
+            reason: rec.reason,
+          });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
     // Imported PPT templates ("Template dari PPT"): designs extracted
     // from uploaded .pptx files, stored per workspace under
     // .daedalus/slide-templates/ by core. The bundled templates above
@@ -6467,6 +6501,79 @@ export function createApp(ctx: AppContext) {
           const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
           const checkpoints = await listWorkbookCheckpoints(root);
           sendJson(res, 200, { checkpoints, count: checkpoints.length, request_id: requestId });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Dae Captain v2 Fase D — Dashboard 1 perintah: deterministic
+    // dashboard composition from the workbook's dataset sheet (no
+    // LLM; every KPI is a live formula the Verify gate can check).
+    // Exports .xlsx immediately so the card's [📥 XLSX] button
+    // downloads the real file with the Dashboard sheet inside.
+    if (method === "POST" && url.pathname === "/sheets/dashboard/quick") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const workbook = await readWorkbook(root);
+          if (!workbook) {
+            sendJson(res, 404, { error: "workbook_not_found", request_id: requestId });
+            return;
+          }
+          const built = buildQuickDashboard(workbook);
+          if (!built.ok) {
+            sendJson(res, 400, { error: "dashboard_not_possible", message: built.reason, request_id: requestId });
+            return;
+          }
+          const record = await exportWorkbookToXlsx(built.workbook, root);
+          built.workbook.exports = [record, ...(built.workbook.exports ?? [])].slice(0, 10);
+          await writeWorkbook(root, built.workbook);
+          sendJson(res, 200, {
+            root,
+            summary: built.summary,
+            dashboardSheet: built.dashboardSheet,
+            measureColumn: built.measureColumn,
+            groupColumn: built.groupColumn,
+            kpis: built.kpis,
+            categories: built.categories,
+            record,
+            downloadPath: `workbook/${basename(record.path)}`,
+            request_id: requestId,
+          });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Dae Captain v2 Fase D — Tanya jawab data: deterministic Q&A
+    // over the dataset sheet. Read-only (no workbook writes); every
+    // number is computed in code from the sheet's cells.
+    if (method === "POST" && url.pathname === "/sheets/qa") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.root);
+          const question = typeof parsed.question === "string" ? parsed.question : "";
+          const workbook = await readWorkbook(root);
+          if (!workbook) {
+            sendJson(res, 404, { error: "workbook_not_found", request_id: requestId });
+            return;
+          }
+          const answer = answerDataQuestion(workbook, question);
+          sendJson(res, 200, { root, question, ...answer, request_id: requestId });
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }

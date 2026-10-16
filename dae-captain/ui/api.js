@@ -118,6 +118,8 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
     // Slide
     slideDeck: (root) =>
       req("GET", "/slides/deck", undefined, { root }),
+    slideRecommendTemplate: (root) =>
+      req("GET", "/slides/recommend-template", undefined, { root }),
     slideUpdate: (body) => req("POST", "/slides/deck/slide/update", body),
     slideVariants: (body) => req("POST", "/slides/deck/slide/variants", body),
     slideTheme: (body) => req("POST", "/slides/deck/theme", body),
@@ -167,6 +169,16 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
       req("GET", `/sheets/analyze/plan/${encodeURIComponent(planId)}`),
     sheetsAnalyzeRun: (body) => req("POST", "/sheets/analyze/run", body),
     sheetsWorkbookOpen: (body) => req("POST", "/sheets/workbook/open", body),
+    // Dae Captain v2 Fase D — Dashboard 1 perintah + Tanya jawab data.
+    sheetsQuickDashboard: (body) => req("POST", "/sheets/dashboard/quick", body),
+    sheetsQa: (body) => req("POST", "/sheets/qa", body),
+    /** Download URL for a workbook/-relative export path (from quick-dashboard's downloadPath). */
+    sheetsDownloadUrlFor: (root, relPath) =>
+      baseUrl.replace(/\/+$/, "") +
+      "/sheets/workbook/download?root=" +
+      encodeURIComponent(root) +
+      "&path=" +
+      encodeURIComponent(relPath),
     uploadJson: (body) => req("POST", "/uploads", body),
     // Research
     researchPlan: (body) => req("POST", "/research/plan", body),

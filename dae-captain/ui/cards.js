@@ -265,21 +265,39 @@ function renderSlideOutline(data, ctx) {
   const tBox = h("div", "dc-templates");
   body.appendChild(tBox);
   let selectedId = data?.selectedTemplateId ?? deck?.theme?.templateId ?? null;
+  /** Smart pick (Dae Captain 9.4): { template_id, name, reason } or null. */
+  let recommendation = null;
+
+  async function loadRecommendation() {
+    try {
+      const res = await ctx.api.slideRecommendTemplate(ctx.workspaceRoot);
+      recommendation = res && res.template_id ? res : null;
+    } catch {
+      recommendation = null; // the badge is a bonus; the chips work regardless
+    }
+  }
 
   function renderTemplates() {
     tBox.innerHTML = "";
+    if (recommendation) {
+      const recLine = h("p", "dc-hint", `⭐ Direkomendasikan: ${recommendation.name} — ${recommendation.reason}`);
+      tBox.appendChild(recLine);
+    }
     for (const t of templates) {
-      const b = btn(esc(t.name ?? t.id), "dc-chip" + (selectedId === t.id ? " selected" : ""), async () => {
+      const isRec = !!recommendation && recommendation.template_id === t.id;
+      const b = btn((isRec ? "⭐ " : "") + esc(t.name ?? t.id), "dc-chip" + (selectedId === t.id ? " selected" : ""), async () => {
+        // Built-in design templates apply via design_id (verified against
+        // the server: template_id is for Warna & Font skins and 400s here).
         await ctx.api.slideTheme({
           root: ctx.workspaceRoot,
-          template_id: t.id,
+          design_id: t.id,
           ...(ctx.taskId ? { run_id: ctx.taskId } : {}),
         });
         selectedId = t.id;
         renderTemplates();
         ctx.notify(`Template “${t.name ?? t.id}” dipakai.`);
       });
-      b.title = t.id;
+      b.title = t.id + (isRec && recommendation ? ` — ⭐ Direkomendasikan: ${recommendation.reason}` : "");
       tBox.appendChild(b);
     }
     for (const t of imported) {
@@ -320,6 +338,9 @@ function renderSlideOutline(data, ctx) {
   };
   body.appendChild(fileInput);
   renderTemplates();
+  // The recommendation arrives async; chips render first, the ⭐ badge
+  // is painted on when it lands.
+  loadRecommendation().then(renderTemplates);
 
   const gen = btn("Buat Slide", "dc-primary dc-block", async () => {
     await ctx.api.slideGenerate({
