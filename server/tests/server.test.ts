@@ -205,6 +205,33 @@ describe('server', () => {
     expect(ctx.store.isCancelRequested('t4')).toBe(true)
   })
 
+  // Dae Captain pill ⏸ (Fase 6): cooperative pause — the marker is recorded
+  // and cleared; engines poll it at their checkpoints.
+  test('POST /tasks/{id}/pause and /resume manage the pause marker', async () => {
+    const { base, ctx } = await listen()
+    ctx.store.saveState('t6', { status: 'active' })
+    // First request mints the daemon token; reuse it like the UI does.
+    await fetch(new URL('/health', base))
+    const auth = { authorization: `Bearer ${ctx.daemonToken ?? ''}` }
+    const pauseRes = await fetch(new URL('/tasks/t6/pause', base), { method: 'POST', headers: auth })
+    const pauseBody = (await pauseRes.json()) as { paused: boolean; pause_requested: boolean; task_id: string }
+    expect(pauseRes.status).toBe(200)
+    expect(pauseBody).toMatchObject({ paused: true, pause_requested: true, task_id: 't6' })
+    expect(ctx.store.isPauseRequested('t6')).toBe(true)
+    const resumeRes = await fetch(new URL('/tasks/t6/resume', base), { method: 'POST', headers: auth })
+    const resumeBody = (await resumeRes.json()) as { paused: boolean; task_id: string }
+    expect(resumeRes.status).toBe(200)
+    expect(resumeBody).toEqual({ paused: false, task_id: 't6' })
+    expect(ctx.store.isPauseRequested('t6')).toBe(false)
+  })
+
+  test('POST /tasks/{id}/pause requires the daemon token', async () => {
+    const { base } = await listen()
+    await fetch(new URL('/health', base))
+    const res = await fetch(new URL('/tasks/t7/pause', base), { method: 'POST' })
+    expect(res.status).toBe(401)
+  })
+
   test('POST /tasks/{id}/approve decides a pending approval', async () => {
     const { base, ctx } = await listen()
     ctx.store.saveState('t5', { status: 'active' })

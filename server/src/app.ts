@@ -2443,22 +2443,49 @@ function presentWorkflowTurn(
     updated_at: turn.updated_at,
   };
   if (turn.status !== "running") return base;
+  // Cooperative pause (Dae Captain pill ⏸): the marker survives even
+  // without a live runner, so the pill can show "paused" honestly.
+  const paused = tasks.isPauseRequested(turn.task_id);
   if (turn.engine === "research") {
     return {
       ...base,
       live: peekStagedResearchPlan(turn.task_id)
         ? "staged_awaiting_gate"
         : "running",
+      ...(paused ? { paused: true } : {}),
     };
   }
   const runner = ctx.activeRunners.get(turn.task_id);
-  if (!runner) return base;
+  if (!runner) {
+    // No live runner: either queued (task created/pending, not picked up
+    // yet) or orphaned (reconcile() will settle it). The pill shows
+    // "queued" only for the former — never for a dead task.
+    const taskState = tasks.loadState<{ status?: string }>(turn.task_id);
+    const taskStatus = typeof taskState?.status === "string" ? taskState.status : "";
+    const queued = taskStatus === "created" || taskStatus === "pending" || taskStatus === "";
+    return {
+      ...base,
+      ...(paused ? { paused: true } : {}),
+      ...(queued ? { queued: true } : {}),
+    };
+  }
   const stats = tasks.eventStats(turn.task_id);
+  const lastText = tasks.lastEventText(turn.task_id);
   return {
     ...base,
     live: "running",
     ...(stats.lastType ? { last_event: stats.lastType } : {}),
     ...(stats.lastTs ? { last_event_ts: stats.lastTs } : {}),
+    // Engine's own latest narration ("Mengisi slide 8/12…") — the pill's
+    // phase line and progress ring read this, never a fabricated number.
+    ...(lastText ? { last_event_text: lastText } : {}),
+    ...(paused ? { paused: true } : {}),
+    // Consecutive validation failures → the pill's "Memperbaiki (n/2)".
+    // Only meaningful while the engine is still retrying (last event
+    // is the failure itself); otherwise the field is omitted.
+    ...(stats.lastType === "VALIDATION_FAILED"
+      ? { validation_failures: tasks.countEventType(turn.task_id, "VALIDATION_FAILED") }
+      : {}),
     pending_approvals: runner.approvals.pending().map((entry) => ({
       // `id` first: the companion resolves approvals by id
       // (`POST /tasks/:id/approvals/:approvalId`), which searches every
@@ -3450,6 +3477,39 @@ export function createApp(ctx: AppContext) {
       // stops at its next checkpoint. `cancelled` only claims an in-process
       // runner was signalled directly.
       sendJson(res, 200, { cancelled: runner !== undefined, cancel_requested: true, task_id: taskId });
+      return;
+    }
+
+    // Dae Captain pill ⏸ — cooperative pause. The marker is always recorded;
+    // every engine suspends at its next safe checkpoint (loop-top / stage
+    // boundary) and resumes from the same checkpoint on /resume. Unlike
+    // cancel, no state is lost. Sensitive: same daemon token as cancel.
+    const pauseMatch = /^\/tasks\/([^/]+)\/pause$/.exec(url.pathname);
+    if (method === "POST" && pauseMatch?.[1] !== undefined) {
+      if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
+        sendJson(res, 401, { error: "unauthorized" });
+        return;
+      }
+      const taskId = pauseMatch[1] as string;
+      const lookup = findTask(ctx, taskId);
+      (lookup?.store ?? ctx.store).requestPause(taskId);
+      const runner = ctx.activeRunners.get(taskId);
+      // `pause_requested` is the honest half: the marker is recorded and any
+      // engine polls it. `live` says whether a runner is currently attached.
+      sendJson(res, 200, { paused: true, pause_requested: true, live: runner !== undefined, task_id: taskId });
+      return;
+    }
+
+    const resumeMatch = /^\/tasks\/([^/]+)\/resume$/.exec(url.pathname);
+    if (method === "POST" && resumeMatch?.[1] !== undefined) {
+      if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
+        sendJson(res, 401, { error: "unauthorized" });
+        return;
+      }
+      const taskId = resumeMatch[1] as string;
+      const lookup = findTask(ctx, taskId);
+      (lookup?.store ?? ctx.store).clearPause(taskId);
+      sendJson(res, 200, { paused: false, task_id: taskId });
       return;
     }
 
@@ -5702,6 +5762,9 @@ export function createApp(ctx: AppContext) {
             fetch: { searchWeb: hooks.searchWeb, fetchPage: hooks.fetchPage },
             elsevierApiKey: process.env.ELSEVIER_API_KEY || undefined,
             onProgress: (stage, detail) => appendResearchProgress(planId, stage, detail),
+            // Cooperative pause (Dae Captain pill ⏸): POST /tasks/:planId/pause
+            // suspends the pipeline at the next stage boundary.
+            waitWhilePaused: () => ctx.store.waitWhilePaused(planId),
           });
           let result;
           try {

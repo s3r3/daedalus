@@ -19,6 +19,11 @@ export interface ResearchEngineOptions {
   elsevierApiKey?: string;
   signal?: AbortSignal;
   onProgress?: (stage: ResearchStageId, detail: string) => void;
+  /**
+   * Cooperative pause (Dae Captain pill ⏸): awaited at every pipeline
+   * stage boundary; suspends until the pause marker is cleared.
+   */
+  waitWhilePaused?: () => Promise<void>;
 }
 
 export class ResearchEngine {
@@ -27,6 +32,7 @@ export class ResearchEngine {
   private readonly elsevierApiKey?: string;
   private readonly signal?: AbortSignal;
   private readonly onProgress?: (stage: ResearchStageId, detail: string) => void;
+  private readonly waitWhilePaused?: () => Promise<void>;
 
   constructor(options: ResearchEngineOptions) {
     this.provider = options.provider;
@@ -34,6 +40,7 @@ export class ResearchEngine {
     this.elsevierApiKey = options.elsevierApiKey;
     this.signal = options.signal;
     this.onProgress = options.onProgress;
+    this.waitWhilePaused = options.waitWhilePaused;
   }
 
   /**
@@ -65,6 +72,7 @@ export class ResearchEngine {
       elsevierApiKey: this.elsevierApiKey,
       signal: this.signal,
       onProgress: this.onProgress,
+      ...(this.waitWhilePaused ? { waitWhilePaused: this.waitWhilePaused } : {}),
     });
   }
 }

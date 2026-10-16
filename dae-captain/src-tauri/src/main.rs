@@ -17,7 +17,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
+use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 // ---------------------------------------------------------------------------
 // State
@@ -591,6 +592,22 @@ fn quit_app(app: AppHandle) {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(
+            // Global hotkey Ctrl+Shift+D (Fase 6): summon the island from
+            // anywhere. The handler shows + focuses the window and emits
+            // `dae-captain-hotkey`; the frontend toggles pill <-> chat.
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    if event.state == ShortcutState::Pressed {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            let _ = window.emit("dae-captain-hotkey", ());
+                        }
+                    }
+                })
+                .build(),
+        )
         .manage(AppState {
             server_child: Mutex::new(None),
             server_managed: Mutex::new(false),
@@ -617,6 +634,12 @@ fn main() {
             quit_app,
         ])
         .setup(|app| {
+            // Global hotkey: Ctrl+Shift+D summons the island from anywhere.
+            // Registration failure (e.g. another app grabbed it) is logged,
+            // never fatal — the pill and chat keep working without it.
+            if let Err(e) = app.global_shortcut().register("Control+Shift+D") {
+                eprintln!("global hotkey Ctrl+Shift+D not registered: {e}");
+            }
             // Position the island top-center of the primary monitor.
             // NOTE (honest): this is a borderless always-on-top panel, NOT a
             // true zwlr_layer_shell surface. True compositor pinning needs

@@ -269,6 +269,7 @@ export class SpreadsheetEngine {
     this.#emit('PLAN_CREATED', { plan });
     try {
       this.#throwIfAborted();
+      await this.#waitIfPaused();
       if (readError) throw readError;
       const result = route === 'edit'
         ? await this.#runEdit(spec, existing as WorkbookSpec, ctx)
@@ -323,6 +324,7 @@ export class SpreadsheetEngine {
       existingSummary: existing ? JSON.stringify(summarizeWorkbook(existing)) : undefined,
     }, signal);
     this.#throwIfAborted();
+    await this.#waitIfPaused();
 
     // Persist the staged blueprint: imported sheets ride along, new
     // blueprint sheets appear as header-only skeletons the panel shows.
@@ -820,6 +822,15 @@ export class SpreadsheetEngine {
 
   #throwIfAborted(): void {
     if (this.#abort.signal.aborted || (this.#taskId && this.#deps.store.isCancelRequested(this.#taskId))) throw new EngineAborted();
+  }
+
+  /**
+   * Cooperative pause (Dae Captain pill ⏸): suspend at this safe
+   * checkpoint until the pause marker is cleared. Workbook state is
+   * untouched — resume continues from here.
+   */
+  async #waitIfPaused(): Promise<void> {
+    if (this.#taskId) await this.#deps.store.waitWhilePaused(this.#taskId);
   }
 }
 

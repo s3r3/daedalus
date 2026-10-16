@@ -3,7 +3,8 @@
 
 import { createApiClient } from "./api.js";
 import { createEventStream } from "./events.js";
-import { createInvoker, WINDOW_SET_SIZE_CMD, setSizePayload } from "./bridge.js";
+import { createInvoker, listenEvent, WINDOW_SET_SIZE_CMD, setSizePayload } from "./bridge.js";
+import { PillController } from "./pill.js";
 import {
   ENGINES,
   aggregateStatus,
@@ -90,6 +91,7 @@ const state = {
   stick: true, // auto-scroll pinned to bottom (false while reading history)
   viewLimit: 30, // rendered transcript window (grows via "load more")
   streamAbort: null, // AbortController for the active chat stream, if any
+  pill: null, // PillController (Fase 6) — owns the dynamic-island pill
 };
 
 // ---------------------------------------------------------------------------
@@ -211,26 +213,99 @@ function collapse() {
 // Pill + engine pills + approvals rendering
 // ---------------------------------------------------------------------------
 
-function renderPill() {
-  const agg = aggregateStatus(state.runs);
-  const pill = $("pill");
-  if (!pill) return;
-  pill.className = "pill status-" + statusColor(agg.status);
-  const label = $("pill-text");
-  if (!label) return;
-  // Pill and main window share the SAME state.runs (one task state).
-  // Connection is explicit — never a fake idle pill while disconnected.
-  if (!state.connected && agg.status === "idle") {
-    label.textContent = "offline";
-    pill.setAttribute("aria-label", "Dae Captain — terputus, klik untuk membuka");
-  } else {
-    label.textContent = activityLabel(state.runs, agg);
-    pill.setAttribute("aria-label", agg.status === "attention"
-      ? "Dae Captain — butuh persetujuan, klik untuk membuka"
-      : agg.status === "working"
-        ? "Dae Captain — " + activityLabel(state.runs, agg) + ", klik untuk membuka"
-        : "Dae Captain — klik untuk membuka");
+/**
+ * Create the PillController (Fase 6) and wire every control to a real
+ * operation. Called once during boot, before the first refreshRuns().
+ */
+function initPill() {
+  if (state.pill) return;
+  const root = $("pill");
+  if (!root) return;
+  state.pill = new PillController({
+    root,
+    onAction: (action, payload) => handlePillAction(action, payload),
+  });
+}
+
+/**
+ * Every pill control does something real:
+ * - cancel → POST /tasks/:id/cancel (the existing cancel API)
+ * - pause → POST /tasks/:id/pause (cooperative engine pause)
+ * - resume → POST /tasks/:id/resume
+ * - view/click → smart navigation (approval card / progress / chat)
+ */
+async function handlePillAction(action, payload = {}) {
+  const status = $("action-status");
+  const say = (text, cls) => {
+    if (!status) return;
+    status.className = "action-status" + (cls ? " " + cls : "");
+    status.textContent = text;
+  };
+  if ((action === "cancel" || action === "pause" || action === "resume") && !state.api) {
+    say("Belum terhubung ke server.", "error");
+    return;
   }
+  try {
+    if (action === "cancel" && payload.taskId) {
+      const res = await state.api.cancelTask(payload.taskId);
+      say(res?.cancelled ? "Task dibatalkan." : "Permintaan batal tercatat.", res?.cancelled ? "ok" : "");
+      await refreshRuns();
+    } else if (action === "pause" && payload.taskId) {
+      await state.api.pauseTask(payload.taskId);
+      say("Task dijeda — klik pill untuk lanjut.", "ok");
+      await refreshRuns();
+    } else if (action === "resume" && payload.taskId) {
+      await state.api.resumeTask(payload.taskId);
+      say("Task dilanjutkan.", "ok");
+      await refreshRuns();
+    } else if (action === "view" || action === "click") {
+      smartPillClick(payload.status);
+    }
+  } catch (e) {
+    say("Gagal: " + errText(e), "error");
+  }
+}
+
+/**
+ * Smart click: jump to the relevant context.
+ * - waiting_approval → expand + scroll to the approval card
+ * - error → expand (chat shows what failed)
+ * - working/verifying/fixing → expand (progress is visible in chat)
+ * - paused → resume is handled by the controller; expand to chat
+ * - idle/queued/done → expand to chat
+ */
+function smartPillClick(status) {
+  const wasCollapsed = !state.expanded;
+  expand();
+  showView("main");
+  if (!wasCollapsed && status !== "waiting_approval") return;
+  // Jump to the approval card when one is pending.
+  requestAnimationFrame(() => {
+    const card = document.querySelector("#approvals .approval-card");
+    if (card) {
+      card.scrollIntoView({ behavior: "smooth", block: "center" });
+      card.classList.add("flash");
+      setTimeout(() => card.classList.remove("flash"), 1600);
+    } else {
+      const box = $("transcript");
+      if (box) box.scrollTop = box.scrollHeight;
+    }
+  });
+}
+
+function renderPill() {
+  // The PillController owns the pill DOM (9 statuses, ring, buttons).
+  // Connection honesty stays here: never show a fake idle pill while
+  // disconnected.
+  if (!state.pill) initPill();
+  if (!state.connected) {
+    state.pill.setStatus("idle", "offline");
+    const pill = $("pill");
+    pill?.classList.add("pill-offline");
+    return;
+  }
+  $("pill")?.classList.remove("pill-offline");
+  state.pill.update(state.runs);
 }
 
 function renderEnginePills() {
@@ -1523,7 +1598,11 @@ async function refreshRuns() {
   renderHeaderStatus();
   renderChatEnginePills();
   const pending = pendingApprovals(state.runs);
-  if (pending.length > 0 && !state.approvalOpen) {
+  // Do-not-disturb: approvals stay queued, the pill stays quiet — no
+  // auto-expand, no pulse. (Fase 8 adds the settings toggle; the
+  // controller already exposes setDoNotDisturb().)
+  const dnd = state.pill?.isDoNotDisturb() === true;
+  if (pending.length > 0 && !state.approvalOpen && !dnd) {
     state.approvalOpen = true;
     expand(); // approval baru → island mekar (once per batch)
   } else if (pending.length === 0) {
@@ -1684,7 +1763,8 @@ async function refreshRunsQuiet() {
   renderHeaderStatus();
   renderChatEnginePills();
   const pending = pendingApprovals(state.runs);
-  if (pending.length > 0 && !state.approvalOpen) {
+  const dnd = state.pill?.isDoNotDisturb() === true;
+  if (pending.length > 0 && !state.approvalOpen && !dnd) {
     state.approvalOpen = true;
     expand();
   } else if (pending.length === 0) {
@@ -2390,8 +2470,30 @@ function bindEvents() {
     else el.onclick = fn;
   };
 
-  bindGuarded("pill", "click", expand);
-  bindGuarded("pill", "keydown", (e) => { if (e.key === "Enter" || e.key === " ") expand(); });
+  // Global hotkey Ctrl+Shift+D (registered in Rust via
+  // tauri-plugin-global-shortcut): the backend shows + focuses the window
+  // and emits "dae-captain-hotkey"; here we toggle pill <-> chat.
+  // A local keydown fallback covers plain-browser dev (non-global).
+  const toggleIsland = () => {
+    if (state.expanded) collapse();
+    else { expand(); showView("main"); }
+  };
+  listenEvent(window, "dae-captain-hotkey", toggleIsland).catch(() => {
+    /* non-Tauri context: the keydown fallback below still works */
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && e.shiftKey && (e.key === "D" || e.key === "d") && !e.altKey && !e.metaKey) {
+      // In the Tauri app the Rust global shortcut already toggles (via the
+      // event above) — the local fallback is for plain-browser dev only.
+      if (typeof window.__TAURI_INTERNALS__?.invoke === "function") return;
+      // Don't hijack typing in inputs.
+      const tag = (e.target?.tagName ?? "").toLowerCase();
+      if (tag === "input" || tag === "textarea") return;
+      e.preventDefault();
+      toggleIsland();
+    }
+  });
+
   bindGuarded("btn-collapse", "click", collapse);
   bindGuarded("btn-settings", "click", () => { loadSettingsView(); showView("settings"); });
   bindGuarded("set-back", "click", () => showView("main"));

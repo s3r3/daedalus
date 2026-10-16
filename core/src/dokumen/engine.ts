@@ -66,6 +66,12 @@ export type DokumenEngineOptions = {
    * run through the normal partial-completion path.
    */
   tokenBudget?: TokenBudget;
+  /**
+   * Cooperative pause (Dae Captain pill ⏸): awaited at stage
+   * boundaries; suspends until the pause marker is cleared. Wired by
+   * the TaskRunner to the task's TaskStore.
+   */
+  waitWhilePaused?: () => Promise<void>;
 };
 
 export type DokumenRunOptions = {
@@ -177,6 +183,7 @@ export class DokumenEngine {
   /* ------------------------------------------------------------ extract */
 
   async #runExtract(root: string, doc: DocumentState, prompt: string, run: DokumenRunOptions): Promise<string> {
+    await this.#waitIfPaused();
     this.#stage(doc, 'Menyiapkan dokumen');
 
     // Ingest: copy bytes in, hash for dedupe (an already-present file
@@ -297,6 +304,7 @@ export class DokumenEngine {
   /* ------------------------------------------------------------ compose */
 
   async #runCompose(root: string, doc: DocumentState, prompt: string): Promise<string> {
+    await this.#waitIfPaused();
     this.#stage(doc, 'Menyusun kerangka');
     if (doc.sections.length === 0) {
       doc = (await readActiveDocument(root)) ?? doc;
@@ -367,6 +375,7 @@ export class DokumenEngine {
       // never re-drafted — Lanjutkan writes only the remaining staged
       // sections, so re-running never duplicates or clobbers.
       if (section.status !== 'staged') continue;
+      await this.#waitIfPaused();
       this.#stage(doc, `Menulis bab "${section.title}"`);
       const materials: CitationMaterial[] = [];
 
@@ -577,6 +586,16 @@ export class DokumenEngine {
   #stage(doc: DocumentState, label: string): void {
     this.#options.setStage?.(label);
     this.#options.onEvent?.({ type: 'stage', docId: doc.id, stage: label });
+  }
+
+  /**
+   * Cooperative pause (Dae Captain pill ⏸): suspend at this safe
+   * checkpoint until the pause marker is cleared. document.json is the
+   * source of truth and already persists every finished stage — resume
+   * continues from here.
+   */
+  async #waitIfPaused(): Promise<void> {
+    await this.#options.waitWhilePaused?.();
   }
 
   #emitFileChanged(doc: DocumentState): void {
