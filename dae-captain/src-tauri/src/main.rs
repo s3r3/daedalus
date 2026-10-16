@@ -47,6 +47,22 @@ struct Prefs {
     server_port: u16,
     /// "ask" | "keep" | "stop" — what to do with our sidecar on quit.
     keep_alive: String,
+    /// Dae Captain v2 Fase 8: pill resting corner — "top-center" (default),
+    /// "top-left", "top-right", "bottom-left" or "bottom-right".
+    #[serde(default = "default_island_corner")]
+    island_corner: String,
+    /// Dae Captain v2 Fase 8: pill notification mode — "pulse" (default),
+    /// "sound" or "off".
+    #[serde(default = "default_notify_mode")]
+    notify_mode: String,
+}
+
+fn default_island_corner() -> String {
+    "top-center".to_string()
+}
+
+fn default_notify_mode() -> String {
+    "pulse".to_string()
 }
 
 impl Default for Prefs {
@@ -58,6 +74,8 @@ impl Default for Prefs {
             server_host: "127.0.0.1".to_string(),
             server_port: 3080,
             keep_alive: "ask".to_string(),
+            island_corner: default_island_corner(),
+            notify_mode: default_notify_mode(),
         }
     }
 }
@@ -91,9 +109,61 @@ fn get_prefs(app: AppHandle) -> Result<Prefs, String> {    let path = prefs_path
     Ok(prefs)
 }
 
+/// Position the island window at a screen corner (Dae Captain v2 Fase 8,
+/// Settings → Pill → Posisi). `corner` is one of "top-center" (default),
+/// "top-left", "top-right", "bottom-left", "bottom-right"; `expanded`
+/// tells which window size is currently live (pill 480x76 vs panel
+/// 480x640) so a bottom corner anchors the right edge. The choice is
+/// persisted in prefs.json so the pill rests there across restarts.
+/// NOTE: args are single words — the tauri macro maps multi-word arg
+/// names to camelCase, which bit us before (see AGENTS.md).
+#[tauri::command]
+fn position_island(app: AppHandle, corner: String, expanded: bool) -> Result<String, String> {
+    let corner = corner.trim().to_lowercase();
+    const CORNERS: &[&str] = &["top-center", "top-left", "top-right", "bottom-left", "bottom-right"];
+    if !CORNERS.contains(&corner.as_str()) {
+        return Err(format!("unknown corner: {corner} (expected one of {})", CORNERS.join("|")));
+    }
+    // Persist the preference (validated above).
+    {
+        let mut prefs = get_prefs(app.clone())?;
+        prefs.island_corner = corner.clone();
+        set_prefs(app.clone(), prefs)?;
+    }
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let monitor = window
+        .primary_monitor()
+        .map_err(|e| format!("primary_monitor: {e}"))?
+        .ok_or_else(|| "no primary monitor".to_string())?;
+    let msize = monitor.size();
+    let mpos = monitor.position();
+    let scale = monitor.scale_factor();
+    // Logical window sizes mirror ui/app.js COMPACT/EXPANDED.
+    let (lw, lh): (f64, f64) = if expanded { (480.0, 640.0) } else { (480.0, 76.0) };
+    let win_w = (lw * scale) as i32;
+    let win_h = (lh * scale) as i32;
+    let margin = (8.0 * scale) as i32;
+    let x = match corner.as_str() {
+        "top-left" | "bottom-left" => mpos.x + margin,
+        "top-right" | "bottom-right" => mpos.x + msize.width as i32 - win_w - margin,
+        _ => mpos.x + ((msize.width as i32 - win_w) / 2),
+    };
+    let y = match corner.as_str() {
+        "top-center" | "top-left" | "top-right" => mpos.y + margin,
+        _ => mpos.y + msize.height as i32 - win_h - margin,
+    };
+    window
+        .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }))
+        .map_err(|e| format!("set_position: {e}"))?;
+    Ok(corner)
+}
+
 /// Read the local daemon token from ~/.daedalus/daemon.json.
 /// The server generates this on first start; sensitive endpoints (approve,
 /// cancel) require it as `Authorization: Bearer <token>`.
+
 /// Open a native folder picker dialog. Returns the selected path, or None
 /// if the user cancelled.
 #[tauri::command]
@@ -618,6 +688,7 @@ fn main() {
             set_prefs,
             daemon_token,
             pick_folder,
+            position_island,
             server_health,
             server_managed,
             node_available,
@@ -657,6 +728,13 @@ fn main() {
                     let _ = window.set_position(tauri::Position::Physical(
                         tauri::PhysicalPosition { x, y: mpos.y + 8 },
                     ));
+                }
+                // Dae Captain v2 Fase 8: restore the saved pill corner
+                // (top-center is the default above; anything else moves now).
+                if let Ok(prefs) = get_prefs(app.app_handle().clone()) {
+                    if prefs.island_corner != "top-center" {
+                        let _ = position_island(app.app_handle().clone(), prefs.island_corner, false);
+                    }
                 }
                 let info = {
                     let wayland = std::env::var("WAYLAND_DISPLAY").is_ok();

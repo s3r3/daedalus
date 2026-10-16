@@ -240,3 +240,65 @@ describe("createApiClient", () => {
     assert.equal(pendingApprovals(runs)[0].taskId, "t-9");
   });
 });
+
+describe("Fase 8: Workspace + Settings API", () => {
+  it("workspaceRecent hits GET /workspace/recent with root+hours", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({ files: [] }));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await api.workspaceRecent("/my/ws", 24);
+    assert.equal(calls[0].init.method, "GET");
+    assert.ok(calls[0].url.startsWith("http://127.0.0.1:3080/workspace/recent?"));
+    assert.ok(calls[0].url.includes("hours=24"));
+  });
+
+  it("workspaceGitStatus hits GET /workspace/git-status", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({ isRepo: true, files: [] }));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await api.workspaceGitStatus("/my/ws");
+    assert.ok(calls[0].url.startsWith("http://127.0.0.1:3080/workspace/git-status?"));
+  });
+
+  it("captainModelRoles hits GET /captain/model-roles", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({ tiers: [], roles: [] }));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await api.captainModelRoles();
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/captain/model-roles");
+  });
+
+  it("captainMemory reads and captainForgetMemory deletes", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({}));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await api.captainMemory();
+    assert.equal(calls[0].init.method, "GET");
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/captain/memory");
+    await api.captainForgetMemory();
+    assert.equal(calls[1].init.method, "DELETE");
+    assert.equal(calls[1].url, "http://127.0.0.1:3080/captain/memory");
+  });
+
+  it("captainReminders lists and captainCancelReminder cancels by id", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({}));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await api.captainReminders();
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/captain/reminders");
+    await api.captainCancelReminder("r/1");
+    assert.equal(calls[1].init.method, "POST");
+    assert.equal(calls[1].url, "http://127.0.0.1:3080/captain/reminders/r%2F1/cancel");
+  });
+
+  it("testProviderInput posts the unsaved config to /providers/test-input", async () => {
+    const { fetchImpl, calls } = mockFetch(() => ok({ ok: true, models: ["m1"] }));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    const res = await api.testProviderInput({ baseUrl: "http://x/v1", apiKey: "k" });
+    assert.equal(calls[0].url, "http://127.0.0.1:3080/providers/test-input");
+    assert.equal(calls[0].init.method, "POST");
+    assert.deepEqual(JSON.parse(calls[0].init.body), { baseUrl: "http://x/v1", apiKey: "k" });
+    assert.equal(res.ok, true);
+  });
+
+  it("a 404 on cancel surfaces status + data (no silent success)", async () => {
+    const { fetchImpl } = mockFetch(() => err(404, { error: "reminder_not_found" }));
+    const api = createApiClient({ baseUrl: "http://127.0.0.1:3080", fetchImpl });
+    await assert.rejects(() => api.captainCancelReminder("nope"), /HTTP 404/);
+  });
+});

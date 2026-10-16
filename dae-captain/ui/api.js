@@ -86,6 +86,15 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
       req("GET", `/tasks/${encodeURIComponent(taskId)}/changes`),
     workspaceFile: (root, path) =>
       req("GET", "/workspace/file", undefined, { root, path }),
+    /** Flat file index for the Workspace page tree. */
+    workspaceFiles: (root) =>
+      req("GET", "/workspace/files", undefined, { root }),
+    /** Files modified within the last `hours` hours, newest first (Workspace "Terbaru"). */
+    workspaceRecent: (root, hours = 24) =>
+      req("GET", "/workspace/recent", undefined, { root, hours }),
+    /** git status: ● modified, + untracked (Workspace page). */
+    workspaceGitStatus: (root) =>
+      req("GET", "/workspace/git-status", undefined, { root }),
     extensionsStatus: (root) =>
       req("GET", "/extensions/status", undefined, { root }),
     exportConversation: (runId, workspaceRoot) =>
@@ -190,6 +199,25 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
       baseUrl.replace(/\/+$/, "") +
       "/captain/download?root=" + encodeURIComponent(root) +
       "&path=" + encodeURIComponent(path),
+    // ---- Dae Captain v2 Fase 8: Workspace + Settings ----
+    /** Tier labels + role list (labels Indonesia) from core listRoles(). */
+    captainModelRoles: () => req("GET", "/captain/model-roles"),
+    /** "Apa yang kamu ingat tentang saya?" — everything remembered. */
+    captainMemory: () => req("GET", "/captain/memory"),
+    /** Wipe all long-term memory (confirmed in the UI first). */
+    captainForgetMemory: () => req("DELETE", "/captain/memory"),
+    /** Active reminders, soonest first. */
+    captainReminders: () => req("GET", "/captain/reminders"),
+    /** Cancel one reminder by id. */
+    captainCancelReminder: (id) =>
+      req("POST", `/captain/reminders/${encodeURIComponent(id)}/cancel`),
+    /**
+     * Test an UNSAVED provider config (the add-provider form): fetches
+     * /models against the given base URL + key without persisting.
+     * Returns { ok, models, message } — the form's Simpan stays disabled
+     * until ok is true. Never logs or stores the key.
+     */
+    testProviderInput: (input) => req("POST", "/providers/test-input", input),
     /**
      * Download a file URL to the user's downloads: fetch bytes (with the
      * daemon token when present), then trigger a real browser download.

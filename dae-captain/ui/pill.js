@@ -13,7 +13,11 @@
 import { derivePillState, acknowledgePillErrors, PILL_STATUSES } from "./logic.js";
 
 const DND_KEY = "dae-captain:pill-dnd";
+const NOTIFY_KEY = "dae-captain:pill-notify";
 const DONE_FLASH_MS = 4200;
+
+/** Statuses that deserve an audible ping when notify mode is "sound". */
+const ALERT_STATUSES = new Set(["waiting_approval", "done", "error"]);
 
 const RING_C = 2 * Math.PI * 15.5;
 
@@ -29,13 +33,18 @@ export class PillController {
     this.onAction = onAction ?? (() => {});
     this.memory = {}; // turn ledger for derivePillState (done flash, error ack)
     this.dnd = false;
+    /** Notification mode: "pulse" (default), "sound", or "off" — Settings → Pill. */
+    this.notifyMode = "pulse";
     this.manual = null; // setStatus() override; cleared by update()
     this.lastRuns = [];
     this.doneTimer = null;
+    this.lastNotifiedStatus = null;
     try {
       this.dnd = localStorage.getItem(DND_KEY) === "1";
+      const nm = localStorage.getItem(NOTIFY_KEY);
+      if (nm === "pulse" || nm === "sound" || nm === "off") this.notifyMode = nm;
     } catch {
-      /* storage unavailable — default off */
+      /* storage unavailable — defaults */
     }
     this.dot = root.querySelector(".pill-dot");
     this.text = root.querySelector("#pill-text");
@@ -106,6 +115,18 @@ export class PillController {
     this.manual = null;
     const state = derivePillState(this.lastRuns, this.memory, { dnd: this.dnd });
     this._render(state);
+    // Sound mode: one ping per transition into an alert status (never in
+    // do-not-disturb).
+    if (
+      this.notifyMode === "sound" &&
+      !this.dnd &&
+      ALERT_STATUSES.has(state.status) &&
+      state.status !== this.lastNotifiedStatus
+    ) {
+      this._beep();
+    }
+    if (ALERT_STATUSES.has(state.status)) this.lastNotifiedStatus = state.status;
+    else if (state.status === "idle" || state.status === "working") this.lastNotifiedStatus = null;
     // The done flash is transient: re-derive after it expires so the pill
     // falls back to idle (or whatever is actually current).
     clearTimeout(this.doneTimer);
@@ -141,11 +162,62 @@ export class PillController {
     return this.dnd;
   }
 
+  /**
+   * Notification mode (Settings → Pill → Notifikasi), persisted in
+   * localStorage and mirrored to the Rust prefs by app.js:
+   * - "pulse": the pill throbs on alerts (default, no sound);
+   * - "sound": one soft ping per alert-status transition, no throb;
+   * - "off": quiet entirely (DND-equivalent silence for alerts).
+   */
+  setNotificationMode(mode) {
+    if (mode !== "pulse" && mode !== "sound" && mode !== "off") {
+      throw new Error(`unknown notify mode: ${mode}`);
+    }
+    this.notifyMode = mode;
+    try {
+      localStorage.setItem(NOTIFY_KEY, mode);
+    } catch {
+      /* ignore */
+    }
+    if (!this.manual) this.update(this.lastRuns);
+  }
+
+  getNotificationMode() {
+    return this.notifyMode;
+  }
+
+  /** Soft two-tone ping via WebAudio — no audio files, no dependencies. */
+  _beep() {
+    try {
+      const AC = globalThis.AudioContext ?? globalThis.webkitAudioContext;
+      if (!AC) return;
+      this._ac = this._ac ?? new AC();
+      const ac = this._ac;
+      if (ac.state === "suspended") void ac.resume().catch(() => {});
+      const t0 = ac.currentTime;
+      for (const [dt, freq] of [[0, 880], [0.12, 660]]) {
+        const osc = ac.createOscillator();
+        const gain = ac.createGain();
+        osc.type = "sine";
+        osc.frequency.value = freq;
+        gain.gain.setValueAtTime(0.0001, t0 + dt);
+        gain.gain.exponentialRampToValueAtTime(0.12, t0 + dt + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.18);
+        osc.connect(gain).connect(ac.destination);
+        osc.start(t0 + dt);
+        osc.stop(t0 + dt + 0.2);
+      }
+    } catch {
+      /* audio unavailable — stay silent, never break the pill */
+    }
+  }
+
   _render(s) {
     this.state = s;
     this.root.classList.remove("hidden");
     this.root.dataset.status = s.status;
-    this.root.classList.toggle("pill-pulse", s.pulse === true);
+    // Pulse only in "pulse" notify mode; "sound" and "off" stay still.
+    this.root.classList.toggle("pill-pulse", s.pulse === true && this.notifyMode === "pulse");
     this.root.classList.toggle("pill-dnd", this.dnd);
     if (this.dot) this.dot.className = "pill-dot " + (s.dot || "blue");
     if (this.text) this.text.textContent = s.label || "";

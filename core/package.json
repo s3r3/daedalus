@@ -33,6 +33,9 @@
     "./workflow/decompose.ts": "./src/workflow/decompose.ts",
     "./workflow/approval.ts": "./src/workflow/approval.ts",
     "./workflow/timeline.ts": "./src/workflow/timeline.ts",
+    "./workflow/memory.ts": "./src/workflow/memory.ts",
+    "./workflow/reminder.ts": "./src/workflow/reminder.ts",
+    "./workflow/model-roles.ts": "./src/workflow/model-roles.ts",
     "./dokumen/export-md.ts": "./src/dokumen/export-md.ts"
   },
   "engines": {

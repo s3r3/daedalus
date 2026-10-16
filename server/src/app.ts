@@ -10,6 +10,9 @@ import { fileURLToPath } from "node:url";
 import { planTask, type TaskPlan, type SubTask } from "@daedalus/core/workflow/decompose.ts";
 import { UndoStore, type Action as WorkflowAction } from "@daedalus/core/workflow/approval.ts";
 import { getEvents, type AnyTimelineEvent } from "@daedalus/core/workflow/timeline.ts";
+import { UserMemory } from "@daedalus/core/workflow/memory.ts";
+import { ReminderStore } from "@daedalus/core/workflow/reminder.ts";
+import { listRoles, MODEL_TIER_LABELS, MODEL_TIERS, type ModelTier } from "@daedalus/core/workflow/model-roles.ts";
 import { exportDocumentMarkdown } from "@daedalus/core/dokumen/export-md.ts";
 import {
   EventBus,
@@ -146,7 +149,7 @@ import {
   translateArtifacts,
   updateTurn,
 } from "@daedalus/core";
-import { collectRoots, listDirectory, listFilesFlat, listPlanDocuments, buildTree, resolveInside, MAX_FILE_BYTES, IMAGE_MEDIA_TYPES, MAX_IMAGE_FILE_BYTES } from "./workspace.ts";
+import { collectRoots, listDirectory, listFilesFlat, listPlanDocuments, listRecentFiles, buildTree, resolveInside, MAX_FILE_BYTES, IMAGE_MEDIA_TYPES, MAX_IMAGE_FILE_BYTES } from "./workspace.ts";
 import { classifyWebIntent, executeFastPath, resolveFastPathProvider } from "./fast-path.ts";
 import { gitStatus, revertFileToHead } from "./git-status.ts";
 import {
@@ -289,6 +292,15 @@ function recordCaptainUndo(input: {
 export type SessionState = {
   mode: AgentMode;
   autoApprove: boolean;
+  /**
+   * Dae Captain v2 Fase 8: per-type approval prefs (Settings → Approval).
+   * Legacy `autoApprove: true` forces all three to "auto" (see
+   * resolveApprovalTypes); otherwise these decide per tool call:
+   * - newFile: "auto" (approved default — file baru auto-ON)
+   * - modifyFile: "ask" (approved default — ubah/hapus auto-OFF)
+   * - command: "ask" (approved default — perintah auto-OFF)
+   */
+  approvalTypes?: ApprovalTypePrefs;
   thinking: boolean;
   /**
    * Reasoning-effort tier (settings layer 2). The deprecated `thinking`
@@ -306,6 +318,80 @@ export type SessionState = {
    */
   disabledEngines?: WorkflowEngine[];
 };
+
+/**
+ * Dae Captain v2 Fase 8: per-type approval treatment. One of "auto"
+ * (run without asking) or "ask" (approval card first), per category.
+ */
+export type ApprovalTypePrefs = {
+  newFile: "auto" | "ask";
+  modifyFile: "auto" | "ask";
+  command: "auto" | "ask";
+};
+
+/** Approved defaults (mockup + Coding flow): new files auto, modify/delete and commands ask. */
+export const DEFAULT_APPROVAL_TYPES: ApprovalTypePrefs = {
+  newFile: "auto",
+  modifyFile: "ask",
+  command: "ask",
+};
+
+/** Effective per-type prefs: legacy global auto-approve wins over everything. */
+export function resolveApprovalTypes(ctx: AppContext): ApprovalTypePrefs {
+  if (ctx.session.autoApprove) return { newFile: "auto", modifyFile: "auto", command: "auto" };
+  return { ...DEFAULT_APPROVAL_TYPES, ...(ctx.session.approvalTypes ?? {}) };
+}
+
+/**
+ * `approvalTypes` / `approval_types`: `{ newFile?, modifyFile?, command? }`
+ * with "auto"|"ask" values; unset fields keep their defaults. Non-object
+ * or bad values → named 400.
+ */
+function parseApprovalTypes(value: unknown): ApprovalTypePrefs {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid_approval_types");
+  }
+  const record = value as Record<string, unknown>;
+  const pick = (key: keyof ApprovalTypePrefs): "auto" | "ask" => {
+    const raw = record[key];
+    if (raw === undefined) return DEFAULT_APPROVAL_TYPES[key];
+    if (raw !== "auto" && raw !== "ask") throw new Error("invalid_approval_types");
+    return raw;
+  };
+  return { newFile: pick("newFile"), modifyFile: pick("modifyFile"), command: pick("command") };
+}
+
+/**
+ * Map one tool call to the per-type approval treatment.
+ *
+ * - `execute` (run_command) → the "command" pref.
+ * - `write` to a path that does not exist yet → "newFile".
+ * - `write` to an existing path (or an unresolvable one) → "modifyFile".
+ * - `read` never reaches here (the runtime returns 'auto' first), but
+ *   defaults to 'auto' anyway.
+ */
+function approvalTypePolicyFor(
+  key: { action: "read" | "write" | "execute"; path?: string },
+  workspaceRoot: string,
+  types: ApprovalTypePrefs,
+): "auto" | "ask" | "deny" {
+  if (key.action === "execute") return types.command;
+  if (key.action === "write") {
+    const p = key.path;
+    if (p) {
+      try {
+        const absoluteRoot = resolve(workspaceRoot);
+        const abs = resolve(absoluteRoot, p);
+        if (abs !== absoluteRoot && !abs.startsWith(absoluteRoot + sep)) return types.modifyFile;
+        return existsSync(abs) ? types.modifyFile : types.newFile;
+      } catch {
+        return types.modifyFile;
+      }
+    }
+    return types.modifyFile;
+  }
+  return "auto";
+}
 
 /** One skill in the inventory payload: the collision winner, or a shadowed copy marked with the winner's origin. */
 export type ExtensionSkill = {
@@ -656,6 +742,11 @@ function applySessionUpdate(ctx: AppContext, parsed: Record<string, unknown>): v
     if (typeof parsed.autoApprove !== "boolean") throw new Error("autoApprove must be a boolean");
     ctx.session.autoApprove = parsed.autoApprove;
   }
+  // Dae Captain v2 Fase 8: per-type approval prefs (Settings → Approval).
+  const approvalTypesRaw = parsed.approvalTypes ?? parsed.approval_types;
+  if (approvalTypesRaw !== undefined) {
+    ctx.session.approvalTypes = parseApprovalTypes(approvalTypesRaw);
+  }
   // Reasoning-effort tier (settings layer 2): an explicit level wins; the
   // deprecated `thinking` boolean stays accepted and maps false → 'off'
   // only when no level was given (core resolveThinkingLevel semantics).
@@ -965,6 +1056,59 @@ async function handleProviders(ctx: AppContext, req: IncomingMessage, res: Serve
       const provider = registry.upsert(providerInput(mergeProviderInput(registry, parsed)) as never);
       await ctx.providerStore.save();
       sendJson(res, 201, { provider });
+      return;
+    }
+
+    // Dae Captain v2 Fase 8 (additive): test an UNSAVED provider config
+    // (the Settings "Tambah Provider" form) — nothing is persisted.
+    // "Tes Koneksi" must pass before the form's Simpan. `type` selects the
+    // strategy: "openai" (default) fetches /models like a saved provider's
+    // test; "other" only checks the base URL is reachable (no model list).
+    if (method === "POST" && url.pathname === "/providers/test-input") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        const baseUrl = typeof parsed.baseUrl === "string" ? parsed.baseUrl.trim().replace(/\/+$/, "") : "";
+        if (!baseUrl) {
+          sendJson(res, 400, { error: "base_url_required", request_id: requestId });
+          return;
+        }
+        const apiKey = typeof parsed.apiKey === "string" && parsed.apiKey.trim() ? parsed.apiKey.trim() : undefined;
+        const type = parsed.type === "other" ? "other" : "openai";
+        try {
+          if (type === "other") {
+            // Non-OpenAI provider: the base URL just has to answer.
+            // Any HTTP status (even 404) proves reachability; only a
+            // network failure fails the test.
+            const response = await fetch(baseUrl, { method: "GET", signal: AbortSignal.timeout(15_000) });
+            sendJson(res, 200, {
+              ok: true,
+              models: [],
+              message: `Terjangkau (HTTP ${response.status}) — tipe "Lainnya", daftar model tidak diambil.`,
+              request_id: requestId,
+            });
+            return;
+          }
+          const response = await fetch(`${baseUrl}/models`, {
+            method: "GET",
+            headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (!response.ok) {
+            const text = await response.text().catch(() => "");
+            throw new Error(`provider returned HTTP ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
+          }
+          const json = (await response.json().catch(() => ({}))) as { data?: Array<{ id?: string }>; models?: Array<{ id?: string }> };
+          const entries = json.data ?? json.models ?? [];
+          const models = entries.map((entry) => entry.id).filter((id): id is string => typeof id === "string" && id.length > 0);
+          sendJson(res, 200, { ok: true, models, message: `Connection OK (${models.length} models)`, request_id: requestId });
+        } catch (error) {
+          sendJson(res, 502, { ok: false, models: [], message: errorMessage(error), request_id: requestId });
+        }
+      })();
       return;
     }
 
@@ -1814,6 +1958,17 @@ async function createTaskCore(
       workspaceRoot: repoPath,
       approvalPolicy: autoApprove ? "auto" : "ask",
       approvalMemory: ctx.approvalMemory,
+      // Dae Captain v2 Fase 8: per-type approval (file baru / ubah-hapus /
+      // perintah) from the Settings page. A request-level autoApprove=true
+      // forces all-auto, exactly like the legacy global did.
+      harness: {
+        policyFor: (key, _tool) => {
+          const types: ApprovalTypePrefs = autoApprove
+            ? { newFile: "auto", modifyFile: "auto", command: "auto" }
+            : resolveApprovalTypes(ctx);
+          return approvalTypePolicyFor(key, repoPath, types);
+        },
+      },
       ...(maxIterations !== undefined ? { maxIterations } : {}),
       bus: ctx.bus,
       store: taskStore,
@@ -3624,6 +3779,74 @@ export function createApp(ctx: AppContext) {
           });
         }
       })();
+      return;
+    }
+
+    // ---- Dae Captain v2 Fase 8: settings surfaces (additive) ----
+    // Per-user long-term memory (core/src/workflow/memory.ts) and reminders
+    // (core/src/workflow/reminder.ts), plus the model-per-role labels from
+    // core/src/workflow/model-roles.ts for the Settings "Model per Peran"
+    // section. Single-user daemon: the user is fixed to "default".
+    function captainHome(): string {
+      return resolveDaedalusHome(ctx.settings.daedalusHome, ctx.session.workspaceRoot ?? ctx.cwd);
+    }
+
+    // Model per peran: 2 tier labels + role list (labels Indonesia) from core.
+    if (method === "GET" && url.pathname === "/captain/model-roles") {
+      sendJson(res, 200, {
+        tiers: MODEL_TIERS.map((tier: ModelTier) => ({ tier, label: MODEL_TIER_LABELS[tier] })),
+        roles: listRoles(),
+        request_id: requestId,
+      });
+      return;
+    }
+
+    // "Apa yang kamu ingat tentang saya?" — everything remembered.
+    if (method === "GET" && url.pathname === "/captain/memory") {
+      try {
+        const memory = new UserMemory(captainHome(), "default");
+        sendJson(res, 200, { user_id: "default", memories: memory.getAllMemories(), request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    // Wipe all long-term memory for this user.
+    if (method === "DELETE" && url.pathname === "/captain/memory") {
+      try {
+        new UserMemory(captainHome(), "default").forgetAll();
+        sendJson(res, 200, { forgotten: true, user_id: "default", request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    // Active (pending) reminders, soonest first.
+    if (method === "GET" && url.pathname === "/captain/reminders") {
+      try {
+        const reminders = new ReminderStore(captainHome()).listReminders("default");
+        sendJson(res, 200, { user_id: "default", reminders, request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    // Cancel one reminder.
+    const cancelReminderMatch = /^\/captain\/reminders\/([^/]+)\/cancel$/.exec(url.pathname);
+    if (method === "POST" && cancelReminderMatch?.[1]) {
+      try {
+        const cancelled = new ReminderStore(captainHome()).cancelReminder(cancelReminderMatch[1]);
+        if (!cancelled) {
+          sendJson(res, 404, { error: "reminder_not_found", request_id: requestId });
+          return;
+        }
+        sendJson(res, 200, { cancelled: true, request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
       return;
     }
 
@@ -6698,6 +6921,21 @@ export function createApp(ctx: AppContext) {
         sendJson(res, 200, { root, files, truncated });
       } catch (error) {
         sendJson(res, errorStatus(error), { error: errorMessage(error) });
+      }
+      return;
+    }
+
+    // Dae Captain v2 Fase 8 (additive): files modified within the last N
+    // hours (default 24), newest first — the Workspace page's "Terbaru"
+    // section. Query: ?root=&hours=.
+    if (method === "GET" && url.pathname === "/workspace/recent") {
+      try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+        const hours = Math.min(168, Math.max(1, Number(url.searchParams.get("hours")) || 24));
+        const { files, truncated } = listRecentFiles(root, hours);
+        sendJson(res, 200, { root, hours, files, truncated, request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
       }
       return;
     }

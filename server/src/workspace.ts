@@ -50,6 +50,12 @@ export type WorkspaceTreeNode = WorkspaceEntry & { children?: WorkspaceTreeNode[
 
 export type FlatWorkspaceEntry = { path: string; type: "file" | "dir" };
 
+/** One recently-modified file for the Dae Captain Workspace "Terbaru" section. */
+export type RecentWorkspaceFile = { path: string; mtimeMs: number; size: number };
+
+/** Recent-files budget: enough for the "Terbaru" section without unbounded walks. */
+export const MAX_RECENT_FILE_ENTRIES = 50;
+
 /** Flat file index budget: enough for @-mention completion in large repos without unbounded walks. */
 export const MAX_FLAT_FILE_ENTRIES = 2000;
 
@@ -142,6 +148,59 @@ export function listFilesFlat(root: string, maxEntries = MAX_FLAT_FILE_ENTRIES):
   };
   walk(absoluteRoot);
   files.sort((a, b) => a.path.localeCompare(b.path));
+  return { files, truncated };
+}
+
+/**
+ * Files modified within the last `hours` hours (Dae Captain v2 Fase 8:
+ * the Workspace page's "Terbaru" section), newest first. Same listing
+ * hygiene as listFilesFlat: dotfiles/dot-dirs and IGNORED_DIRECTORIES
+ * are pruned, symlinks are never descended. Additive — the flat index is
+ * untouched.
+ */
+export function listRecentFiles(
+  root: string,
+  hours = 24,
+  maxEntries = MAX_RECENT_FILE_ENTRIES,
+): { files: RecentWorkspaceFile[]; truncated: boolean } {
+  const absoluteRoot = resolve(root);
+  const cutoff = Date.now() - Math.max(1, hours) * 3_600_000;
+  const files: RecentWorkspaceFile[] = [];
+  let truncated = false;
+  const walk = (dir: string): void => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    entries.sort((a, b) => a.name.localeCompare(b.name));
+    for (const entry of entries) {
+      if (truncated) return;
+      if (entry.name.startsWith(".")) continue;
+      const child = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (isIgnored(entry.name)) continue;
+        walk(child);
+        continue;
+      }
+      let st;
+      try {
+        st = statSync(child);
+      } catch {
+        continue;
+      }
+      if (!st.isFile()) continue;
+      if (st.mtimeMs < cutoff) continue;
+      if (files.length >= maxEntries) {
+        truncated = true;
+        return;
+      }
+      files.push({ path: relative(absoluteRoot, child), mtimeMs: st.mtimeMs, size: st.size });
+    }
+  };
+  walk(absoluteRoot);
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path));
   return { files, truncated };
 }
 

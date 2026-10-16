@@ -97,6 +97,7 @@ const state = {
   pill: null, // PillController (Fase 6) — owns the dynamic-island pill
   // ---- Dae Captain v2 Fase 7: chat cards ----
   seenTimelineEvents: new Set(), // v2 timeline event ids already applied (verify bubbles)
+  captainFilePaths: new Set(), // workspace-relative paths from timeline `file` events (Workspace ✨)
   lastTimelineEventId: "", // pagination cursor for GET /captain/runs/:id/timeline
   timelinePolling: false, // re-entrancy guard for the timeline poll
   cardWatchers: new Map(), // taskId -> { stop() } staged-artifact watchers
@@ -114,7 +115,7 @@ function showView(name) {
   if (name === "workflow") renderWorkflowView();
   if (name === "crew") loadCrewView();
   if (name === "settings") loadSettingsView();
-  if (name === "workspace") { renderWorkspaceStatus(); }
+  if (name === "workspace") { loadWorkspaceView(); }
 }
 
 /**
@@ -208,6 +209,7 @@ function expand() {
   $("pill").classList.add("hidden");
   $("panel").classList.remove("hidden");
   setWindowSize(EXPANDED.w, EXPANDED.h);
+  void moveIslandToCorner();
 }
 
 function collapse() {
@@ -216,6 +218,22 @@ function collapse() {
   $("panel").classList.add("hidden");
   $("pill").classList.remove("hidden");
   setWindowSize(COMPACT.w, COMPACT.h);
+  void moveIslandToCorner();
+}
+
+/**
+ * Dae Captain v2 Fase 8: rest the island on the configured pill corner
+ * (Settings → Pill → Posisi). No-op for the default top-center and in
+ * plain-browser dev (the Rust command is Tauri-only).
+ */
+async function moveIslandToCorner() {
+  const corner = state.prefs?.island_corner ?? "top-center";
+  if (corner === "top-center") return;
+  try {
+    await invoke("position_island", { corner, expanded: state.expanded === true });
+  } catch {
+    /* non-Tauri context: ignore */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -905,7 +923,6 @@ async function handleChatResponse(res, { text, override, attachments }) {
     state.transcript.push({ kind: "assistant", text: res.message ?? "Pilih folder workspace dulu." });
     renderTranscript();
     showView("workspace");
-    renderRecentWorkspaces();
   } else {
     state.runId = res.run_id ?? state.runId;
     const turnEntry = {
@@ -1272,6 +1289,7 @@ async function pollCaptainTimeline() {
     for (const e of events) {
       if (!e?.id || state.seenTimelineEvents.has(e.id)) continue;
       state.seenTimelineEvents.add(e.id);
+      if (e.type === "file" && e.payload?.path) state.captainFilePaths.add(e.payload.path);
       if (e.type === "verify" && e.payload?.result === "fail") {
         const reason = e.payload?.reason ?? "verifikasi gagal";
         state.transcript.push({ kind: "verify-fail", text: reason, ts: Date.now() });
@@ -2552,283 +2570,925 @@ async function refreshRunsQuiet() {
 // Settings
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// i18n — static UI chrome (Dae Captain v2 Fase 8, Settings → Umum → Bahasa).
+// Covers the island's static labels via data-i18n attributes; agent chat
+// text and dynamic status lines stay in Indonesian (documented scope).
+// ---------------------------------------------------------------------------
+
+const I18N = {
+  id: {
+    "common.back": "← Kembali",
+    "nav.workspace": "Pilih workspace",
+    "nav.settings": "Pengaturan",
+    "nav.collapse": "Kecilkan",
+    "nav.quit": "Keluar",
+    "chat.jump": "↓ pesan baru",
+    "chat.approveAll": "Approve All",
+    "chat.queue": "Antrean",
+    "chat.crew": "Kru",
+    "chat.export": "Ekspor",
+    "chat.attach": "Lampirkan gambar/teks",
+    "chat.inputPh": "Tanya Dae Captain sesuatu… (Enter kirim, Shift+Enter baris baru)",
+    "chat.stop": "Hentikan task",
+    "chat.send": "Kirim",
+    "wf.title": "Antrean",
+    "wf.all": "Semua",
+    "wf.running": "Jalan",
+    "wf.approval": "Butuh approval",
+    "wf.done": "Selesai",
+    "wf.failed": "Gagal",
+    "wf.cancel": "Cancel Workflow",
+    "crew.title": "Kru",
+    "crew.hint": "Agen, skills, dan koneksi yang dikendalikan captain — baca saja, tidak bisa diubah dari sini.",
+    "ws.title": "Workspace",
+    "ws.activeFolder": "Folder aktif",
+    "ws.change": "Ganti",
+    "ws.recent": "Terbaru",
+    "ws.allFiles": "Semua file",
+    "ws.searchPh": "🔍 Cari file...",
+    "ws.hint": 'Ganti workspace lewat chat: "pindah workspace ke ~/tesis"',
+    "set.title": "Pengaturan",
+    "set.saved": "✓ tersimpan",
+    "set.provider": "Provider",
+    "set.addProvider": "＋ Tambah Provider",
+    "set.provFormAdd": "Tambah provider",
+    "set.provFormEdit": "Ubah provider",
+    "set.provName": "Nama",
+    "set.provType": "Tipe",
+    "set.provTypeOpenAI": "OpenAI-compatible",
+    "set.provTypeOther": "Lainnya",
+    "set.provKeyOpt": "(opsional)",
+    "set.testConn": "Tes Koneksi",
+    "set.saveProv": "Simpan",
+    "set.testRequired": "Tes koneksi wajib lolos sebelum Simpan aktif.",
+    "set.modelRoles": "Model per Peran",
+    "set.globalModel": "Model global (semua peran)",
+    "set.tierStrong": "Tier Kuat",
+    "set.tierLight": "Tier Ringan",
+    "set.lightEmpty": "Kosongkan tier ringan untuk pakai 1 model global.",
+    "set.pillPosition": "Posisi",
+    "set.posTopCenter": "Tengah atas",
+    "set.posTopLeft": "Kiri atas",
+    "set.posTopRight": "Kanan atas",
+    "set.posBottomLeft": "Kiri bawah",
+    "set.posBottomRight": "Kanan bawah",
+    "set.pillNotify": "Notifikasi",
+    "set.notifyPulse": "Denyut",
+    "set.notifySound": "Suara",
+    "set.notifyOff": "Mati",
+    "set.pillDnd": "Jangan ganggu",
+    "set.approval": "Approval",
+    "set.askAll": "Tanya semua",
+    "set.autoAll": "Otomatis semua",
+    "set.memory": "Memori",
+    "set.memoryHint": "Dae Captain mengingat preferensi dan polamu antar sesi.",
+    "set.memoryShow": "Lihat yang diingat",
+    "set.memoryClear": "Hapus semua",
+    "set.reminders": "Pengingat",
+    "set.general": "Umum",
+    "set.language": "Bahasa",
+    "set.theme": "Tema",
+    "set.themeDark": "Gelap",
+    "set.themeLight": "Terang",
+    "set.thinking": "Berpikir (reasoning effort)",
+    "set.thinkOff": "Mati — tercepat, tanpa penalaran",
+    "set.thinkLow": "Rendah — cepat",
+    "set.thinkMedium": "Sedang — seimbang",
+    "set.thinkHigh": "Tinggi — paling teliti",
+    "set.temperature": "Kreativitas (temperature 0–2)",
+    "set.engines": "Engine aktif",
+  },
+  en: {
+    "common.back": "← Back",
+    "nav.workspace": "Choose workspace",
+    "nav.settings": "Settings",
+    "nav.collapse": "Collapse",
+    "nav.quit": "Quit",
+    "chat.jump": "↓ new messages",
+    "chat.approveAll": "Approve All",
+    "chat.queue": "Queue",
+    "chat.crew": "Crew",
+    "chat.export": "Export",
+    "chat.attach": "Attach image/text",
+    "chat.inputPh": "Ask Dae Captain anything… (Enter to send, Shift+Enter for new line)",
+    "chat.stop": "Stop task",
+    "chat.send": "Send",
+    "wf.title": "Queue",
+    "wf.all": "All",
+    "wf.running": "Running",
+    "wf.approval": "Needs approval",
+    "wf.done": "Done",
+    "wf.failed": "Failed",
+    "wf.cancel": "Cancel Workflow",
+    "crew.title": "Crew",
+    "crew.hint": "Agents, skills, and connections the captain commands — read-only, cannot be changed here.",
+    "ws.title": "Workspace",
+    "ws.activeFolder": "Active folder",
+    "ws.change": "Change",
+    "ws.recent": "Recent",
+    "ws.allFiles": "All files",
+    "ws.searchPh": "🔍 Search files...",
+    "ws.hint": 'Switch workspace via chat: "move workspace to ~/thesis"',
+    "set.title": "Settings",
+    "set.saved": "✓ saved",
+    "set.provider": "Provider",
+    "set.addProvider": "＋ Add Provider",
+    "set.provFormAdd": "Add provider",
+    "set.provFormEdit": "Edit provider",
+    "set.provName": "Name",
+    "set.provType": "Type",
+    "set.provTypeOpenAI": "OpenAI-compatible",
+    "set.provTypeOther": "Other",
+    "set.provKeyOpt": "(optional)",
+    "set.testConn": "Test Connection",
+    "set.saveProv": "Save",
+    "set.testRequired": "The connection test must pass before Save is enabled.",
+    "set.modelRoles": "Model per Role",
+    "set.globalModel": "Global model (all roles)",
+    "set.tierStrong": "Strong Tier",
+    "set.tierLight": "Light Tier",
+    "set.lightEmpty": "Leave the light tier empty to use 1 global model.",
+    "set.pillPosition": "Position",
+    "set.posTopCenter": "Top center",
+    "set.posTopLeft": "Top left",
+    "set.posTopRight": "Top right",
+    "set.posBottomLeft": "Bottom left",
+    "set.posBottomRight": "Bottom right",
+    "set.pillNotify": "Notifications",
+    "set.notifyPulse": "Pulse",
+    "set.notifySound": "Sound",
+    "set.notifyOff": "Off",
+    "set.pillDnd": "Do not disturb",
+    "set.approval": "Approval",
+    "set.askAll": "Ask everything",
+    "set.autoAll": "Auto everything",
+    "set.memory": "Memory",
+    "set.memoryHint": "Dae Captain remembers your preferences and patterns across sessions.",
+    "set.memoryShow": "See what's remembered",
+    "set.memoryClear": "Forget all",
+    "set.reminders": "Reminders",
+    "set.general": "General",
+    "set.language": "Language",
+    "set.theme": "Theme",
+    "set.themeDark": "Dark",
+    "set.themeLight": "Light",
+    "set.thinking": "Thinking (reasoning effort)",
+    "set.thinkOff": "Off — fastest, no reasoning",
+    "set.thinkLow": "Low — fast",
+    "set.thinkMedium": "Medium — balanced",
+    "set.thinkHigh": "High — most thorough",
+    "set.temperature": "Creativity (temperature 0–2)",
+    "set.engines": "Active engines",
+  },
+};
+
+/** Translate a static-chrome key; falls back to Indonesian, then the key. */
+function t(key) {
+  const lang = state.prefs?.language === "en" ? "en" : "id";
+  return I18N[lang][key] ?? I18N.id[key] ?? key;
+}
+
+/** Apply the language to every [data-i18n] element in the static chrome. */
+function applyLanguage(lang) {
+  const l = lang === "en" ? "en" : "id";
+  document.documentElement.lang = l;
+  for (const el of document.querySelectorAll("[data-i18n]")) {
+    el.textContent = t(el.getAttribute("data-i18n"));
+  }
+  for (const el of document.querySelectorAll("[data-i18n-ph]")) {
+    el.placeholder = t(el.getAttribute("data-i18n-ph"));
+  }
+  for (const el of document.querySelectorAll("[data-i18n-title]")) {
+    el.title = t(el.getAttribute("data-i18n-title"));
+  }
+}
+
+/** Apply the theme: body[data-theme="light"] switches the token set. */
+function applyTheme(theme) {
+  document.body.dataset.theme = theme === "light" ? "light" : "dark";
+}
+
+// ---------------------------------------------------------------------------
+// Settings (Dae Captain v2 Fase 8).
+// Auto-save: every change persists immediately + the "✓ tersimpan"
+// indicator flashes. No Save button anywhere.
+// ---------------------------------------------------------------------------
+
+let saveFlashTimer = null;
+
+/** Flash the "✓ tersimpan" indicator after a successful auto-save. */
+function flashSaved() {
+  const el = $("set-saved");
+  if (!el) return;
+  el.classList.remove("hidden");
+  clearTimeout(saveFlashTimer);
+  saveFlashTimer = setTimeout(() => el.classList.add("hidden"), 1800);
+}
+
+function setSettingsStatus(text, cls) {
+  const el = $("set-status");
+  if (!el) return;
+  el.className = "status-line" + (cls ? " " + cls : "");
+  el.textContent = text ?? "";
+}
+
 async function loadSettingsView() {
-  const status = $("set-status");
-  status.className = "status-line";
-  status.textContent = "";
+  setSettingsStatus("", "");
   try {
-    const [s, providers] = await Promise.all([state.api.getSettings(), state.api.getProviders()]);
-    const list = providers.providers ?? [];
-    const provSel = $("set-provider");
-    provSel.innerHTML = "";
-    for (const p of list) {
-      const o = document.createElement("option");
-      o.value = p.id;
-      o.textContent = `${p.name ?? p.id}${p.enabled === false ? " (nonaktif)" : ""}`;
-      provSel.appendChild(o);
-    }
-    // Empty registry: say so with the real storage path instead of a
-    // dead dropdown. Providers live per workspace-home, so a list added
-    // under another workspace legitimately shows up empty here.
-    const emptyNote = $("set-prov-empty");
-    if (emptyNote) {
-      if (list.length === 0) {
-        emptyNote.textContent = "Belum ada provider di workspace ini. Pilih preset di bawah atau isi manual, lalu Test koneksi.";
-        emptyNote.className = "status-line error";
-      } else {
-        emptyNote.textContent = "";
-        emptyNote.className = "status-line hidden";
-      }
-    }
-    renderProviderPresets(providers.presets ?? []);
-    const homeHint = $("prov-home");
-    if (homeHint && providers.home) {
-      homeHint.textContent = `Kunci API tersimpan di server (${providers.home}) dan tidak pernah ditampilkan kembali — sama seperti Web/CLI.`;
-    }
-    const current = s.session?.providerId ?? s.session?.provider_id ?? "";
-    if (current) provSel.value = current;
-    state.providersCache = list;
-    updateKeyState();
-    updateToggleEnabledButton();
-    await loadModels(provSel.value);
-    const curModel = s.session?.model ?? "";
-    if (curModel) $("set-model").value = curModel;
-    // Reasoning + creativity dials (server layer 1–2; same values Web/CLI use).
-    const thinking = s.session?.thinkingLevel ?? s.settings?.session?.thinkingLevel ?? "medium";
-    $("set-thinking").value = ["off", "low", "medium", "high"].includes(thinking) ? thinking : "medium";
-    const temp = s.settings?.llm?.temperature;
-    $("set-temperature").value = typeof temp === "number" ? String(temp) : "";
-    // The approval buttons reflect the LIVE server session, not just the
+    const s = await state.api.getSettings();
+    const activeId = s.session?.providerId ?? s.session?.provider_id ?? "";
+    state.activeProviderId = activeId;
+    // The approval radios reflect the LIVE server session, not just the
     // last thing this panel wrote — another client may have changed it.
     state.prefs = { ...state.prefs, auto_approve: s.session?.autoApprove === true };
     await invoke("set_prefs", { prefs: state.prefs }).catch(() => {});
+    await loadProviderSection(activeId);
+    await loadModelSection(s);
+    loadPillSection();
+    // Mirror resolveApprovalTypes(): legacy global auto-approve = all auto.
+    renderApprovalTypes(s.session?.autoApprove === true
+      ? { newFile: "auto", modifyFile: "auto", command: "auto" }
+      : (s.session?.approvalTypes ?? { newFile: "auto", modifyFile: "ask", command: "ask" }));
+    await loadReminderSection();
+    loadGeneralSection(s);
     await loadEngineToggles();
-    // Show current workspace
-    const ws = $("set-workspace");
-    if (ws) ws.value = state.workspaceRoot || "";
-    // Update approval buttons
-    updateApprovalButtons();
   } catch (e) {
-    status.className = "status-line error";
-    status.textContent = "Gagal memuat pengaturan: " + errText(e);
+    setSettingsStatus("Gagal memuat pengaturan: " + errText(e), "error");
   }
 }
 
-/** Update approval mode button states. */
-function updateApprovalButtons() {
-  const auto = state.prefs?.auto_approve === true;
-  $("approve-ask").className = auto ? "ghost-btn" : "primary-btn";
-  $("approve-auto").className = auto ? "primary-btn" : "ghost-btn";
-}
-
-/** Set approval mode (ask every time / auto-approve). */
-async function setApprovalMode(mode) {
-  const auto = mode === "auto";
-  state.prefs = { ...state.prefs, auto_approve: auto };
-  await invoke("set_prefs", { prefs: state.prefs }).catch(() => {});
-  if (state.api) {
-    try {
-      await state.api.updateSettings({ session: { autoApprove: auto } });
-    } catch {}
-  }
-  updateApprovalButtons();
-}
+// ---- 1. Provider ----
 
 /**
- * Connection & diagnostics: real facts only — server health + the workspace
- * the server is actually serving, plus whether the pill is layer-shell
- * pinned (compositor_info). Surfaces failures instead of hiding them.
+ * Provider list: live status dot per row (real /models round-trip in the
+ * background), one radio = the active provider, per-row key/edit, enable
+ * toggle, and two-step delete. API keys are never shown — "••••••••" when
+ * a secret is stored, nothing otherwise.
  */
-async function runDiagnostics() {
-  const out = $("set-diag");
-  if (!out) return;
-  out.className = "status-line";
-  out.textContent = "Memeriksa…";
-  const lines = [];
-  let ok = true;
-  try {
-    const health = await invoke("server_health");
-    const served = health.workspace_root ?? "(tak diketahui)";
-    const matches = state.workspaceRoot && sameWorkspace(health.workspace_root ?? "", state.workspaceRoot);
-    lines.push(health.healthy ? "Server: aktif" : "Server: tidak merespons");
-    lines.push("Server melayani: " + served);
-    if (health.healthy) {
-      if (state.workspaceRoot && !matches) {
-        ok = false;
-        lines.push("≠ workspace UI (" + state.workspaceRoot + ")");
-      } else {
-        lines.push("Workspace sinkron");
-      }
-    } else ok = false;
-    try {
-      const comp = await invoke("compositor_info");
-      lines.push("Layer-shell pinned: " + (comp?.layer_shell_pinned ? "ya" : "tidak (panel mengapung)"));
-    } catch { /* optional command */ }
-    lines.push("Stream: " + (state.connected ? "terhubung" : "terputus"));
-  } catch (e) {
-    ok = false;
-    lines.push("Gagal memeriksa: " + errText(e));
-  }
-  out.className = "status-line " + (ok ? "ok" : "error");
-  out.textContent = "• " + lines.join("  ·  ");
-}
-
-/**
- * Preset shortcuts from the server's real preset list. Clicking the name
- * fills the form (the key is still typed by hand); the "+" creates the
- * entry immediately without a key, so an empty registry stops being a
- * dead end — Test koneksi then proves the key for real.
- */
-function renderProviderPresets(presets) {
-  const box = $("prov-presets");
+async function loadProviderSection(activeId) {
+  const box = $("set-provider-list");
   if (!box) return;
+  box.innerHTML = `<p class="hint">Memuat…</p>`;
+  let providers = [];
+  try {
+    const data = await state.api.getProviders();
+    providers = data.providers ?? [];
+  } catch (e) {
+    box.innerHTML = `<p class="status-line error">Gagal memuat provider: ${escapeHtml(errText(e))}</p>`;
+    return;
+  }
+  state.providersCache = providers;
   box.innerHTML = "";
-  for (const preset of presets.filter((p) => p.id !== "custom")) {
-    const wrap = document.createElement("span");
-    wrap.className = "preset-wrap";
-    const b = document.createElement("button");
-    b.className = "ghost-btn small";
-    b.textContent = preset.name ?? preset.id;
-    b.title = preset.baseUrl ?? "";
-    b.onclick = () => {
-      $("prov-id").value = preset.id;
-      $("prov-name").value = preset.name ?? preset.id;
-      $("prov-url").value = preset.baseUrl ?? "";
-      $("prov-key").focus?.();
-    };
-    const add = document.createElement("button");
-    add.className = "ghost-btn small";
-    add.textContent = "+";
-    add.title = `Langsung tambah ${preset.name ?? preset.id} (tanpa kunci)`;
-    add.onclick = () => addPresetProvider(preset);
-    wrap.append(b, add);
-    box.appendChild(wrap);
+  if (!providers.length) {
+    box.innerHTML = `<p class="hint">Belum ada provider. Tambah satu di bawah.</p>`;
   }
+  for (const p of providers) {
+    const row = document.createElement("div");
+    row.className = "prov-row";
+    const disabled = p.enabled === false;
+    const dot = document.createElement("span");
+    dot.className = "status-dot prov-status";
+    dot.dataset.prov = p.id;
+    dot.title = "Mengecek…";
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "prov-active";
+    radio.checked = p.id === activeId;
+    radio.disabled = disabled;
+    radio.title = disabled ? "Aktifkan dulu untuk memakai provider ini" : "Jadikan provider aktif";
+    radio.onchange = () => setActiveProvider(p.id);
+    const info = document.createElement("span");
+    info.className = "prov-info";
+    info.innerHTML =
+      `<span class="prov-name">${escapeHtml(p.name ?? p.id)}${disabled ? ' <span class="conf">(nonaktif)</span>' : ""}</span>` +
+      `<span class="url">${escapeHtml(p.baseUrl ?? "")}</span>`;
+    const key = document.createElement("span");
+    key.className = "prov-key";
+    key.innerHTML = p.hasApiKey ? "••••••••" : '<span class="conf">tanpa kunci</span>';
+    const actions = document.createElement("span");
+    actions.className = "prov-actions";
+    const editBtn = document.createElement("button");
+    editBtn.className = "ghost-btn small";
+    editBtn.textContent = "🔑";
+    editBtn.title = "Ubah kunci / URL";
+    editBtn.onclick = () => openProviderForm("edit", p);
+    const toggleBtn = document.createElement("button");
+    toggleBtn.className = "ghost-btn small";
+    toggleBtn.textContent = disabled ? "Aktifkan" : "Nonaktif";
+    toggleBtn.onclick = () => toggleProviderEnabled(p.id, !disabled);
+    const delBtn = document.createElement("button");
+    delBtn.className = "deny-btn small";
+    delBtn.textContent = "Hapus";
+    delBtn.onclick = () => deleteProvider(p.id, delBtn);
+    actions.append(editBtn, toggleBtn, delBtn);
+    row.append(dot, radio, info, key, actions);
+    box.appendChild(row);
+  }
+  // Live dots: test every provider concurrently; a slow one never blocks the rest.
+  void refreshProviderStatuses(providers);
 }
 
-/** Direct-add a preset as a keyless entry, then reload the real list. */
-async function addPresetProvider(preset) {
-  const status = $("set-status");
+async function refreshProviderStatuses(providers) {
+  await Promise.all(
+    providers.map(async (p) => {
+      let dot = null;
+      try {
+        dot = document.querySelector(`.prov-status[data-prov="${CSS.escape(p.id)}"]`);
+      } catch {
+        return;
+      }
+      if (!dot) return;
+      try {
+        const res = await state.api.testProvider(p.id);
+        dot.classList.toggle("dot-green", res.ok === true);
+        dot.classList.toggle("dot-red", res.ok !== true);
+        dot.title = res.message ?? (res.ok ? "OK" : "Gagal");
+      } catch (e) {
+        dot.classList.add("dot-red");
+        dot.title = errText(e);
+      }
+    }),
+  );
+}
+
+/** Switch the active provider — real session change, models follow. */
+async function setActiveProvider(id) {
   try {
-    await state.api.createProvider({
-      id: preset.id,
-      name: preset.name ?? preset.id,
-      baseUrl: preset.baseUrl ?? "",
-    });
-    const saved = await confirmProviderSaved(preset.id);
-    await loadSettingsView();
-    // Reload wipes the status line — restore the confirmation after it.
-    status.className = "status-line ok";
-    status.textContent = `${saved} Isi key, Test koneksi, lalu Simpan.`;
+    await state.api.updateSettings({ providerId: id });
+    state.activeProviderId = id;
+    flashSaved();
+    await loadProviderSection(id);
+    await loadModelSection(await state.api.getSettings());
   } catch (e) {
-    status.className = "status-line error";
-    status.textContent = "Gagal: " + errText(e);
+    setSettingsStatus("Gagal mengganti provider: " + errText(e), "error");
   }
 }
 
-/** Key indicator: does the picked provider actually have a secret stored? */
-function updateKeyState() {
-  const hint = $("set-key-state");
-  if (!hint) return;
-  const id = ($("set-provider")?.value ?? "").trim();
-  const found = (state.providersCache ?? []).find((p) => p.id === id);
-  if (!id || !found) {
-    hint.textContent = "";
-    return;
-  }
-  hint.textContent = found.hasApiKey
-    ? `Kunci: tersimpan${found.apiKeyMasked ? ` (${found.apiKeyMasked})` : ""} — isi + Simpan untuk mengganti.`
-    : "Kunci: belum ada — isi lalu Simpan.";
-}
-
-/** Enable/disable + delete operate on the picked provider; labels stay honest. */
-function updateToggleEnabledButton() {
-  const btn = $("set-toggle-enabled");
-  if (!btn) return;
-  const id = ($("set-provider")?.value ?? "").trim();
-  const found = (state.providersCache ?? []).find((p) => p.id === id);
-  btn.textContent = found?.enabled === false ? "Aktifkan provider" : "Nonaktifkan provider";
-  const del = $("set-delete");
-  if (del && del.dataset.armed !== "1") del.textContent = "Hapus provider";
-}
-
-async function toggleSelectedProvider() {
-  const status = $("set-status");
-  const id = ($("set-provider")?.value ?? "").trim();
-  if (!id) {
-    status.className = "status-line error";
-    status.textContent = "Pilih provider dulu.";
-    return;
-  }
+async function toggleProviderEnabled(id, currentlyEnabled) {
   try {
-    const found = (state.providersCache ?? []).find((p) => p.id === id);
-    const next = !(found?.enabled !== false);
-    await state.api.setProviderEnabled(id, next);
-    const done = next ? "Provider diaktifkan." : "Provider dinonaktifkan.";
+    await state.api.setProviderEnabled(id, !currentlyEnabled);
+    flashSaved();
     await loadSettingsView();
-    status.className = "status-line ok";
-    status.textContent = done;
   } catch (e) {
-    status.className = "status-line error";
-    status.textContent = "Gagal: " + errText(e);
+    setSettingsStatus("Gagal: " + errText(e), "error");
   }
 }
 
-async function deleteSelectedProvider() {
-  const status = $("set-status");
-  const del = $("set-delete");
-  const id = ($("set-provider")?.value ?? "").trim();
-  if (!id) {
-    status.className = "status-line error";
-    status.textContent = "Pilih provider dulu.";
-    return;
-  }
+async function deleteProvider(id, btn) {
   // Two-step confirm (no modal in the island): first click arms, second executes.
-  if (del?.dataset.armed !== "1") {
-    if (del) {
-      del.dataset.armed = "1";
-      del.textContent = `Yakin hapus ${id}? Klik lagi.`;
+  if (btn?.dataset.armed !== "1") {
+    if (btn) {
+      btn.dataset.armed = "1";
+      const old = btn.textContent;
+      btn.textContent = `Yakin?`;
       setTimeout(() => {
-        if (del.dataset.armed === "1") {
-          del.dataset.armed = "";
-          del.textContent = "Hapus provider";
+        if (btn.dataset.armed === "1") {
+          btn.dataset.armed = "";
+          btn.textContent = old;
         }
       }, 5000);
     }
     return;
   }
-  if (del) {
-    del.dataset.armed = "";
-    del.textContent = "Hapus provider";
-  }
+  if (btn) btn.dataset.armed = "";
   try {
     await state.api.deleteProvider(id);
+    flashSaved();
     await loadSettingsView();
-    status.className = "status-line ok";
-    status.textContent = "Provider dihapus.";
   } catch (e) {
-    status.className = "status-line error";
-    status.textContent = "Gagal: " + errText(e);
+    setSettingsStatus("Gagal menghapus provider: " + errText(e), "error");
   }
 }
 
-/** Test provider connection (real server round-trip, no fake success). */
-async function testConnection() {
-  const status = $("set-conn-status");
-  if (!status) return;
-  status.textContent = "Menghubungi…";
-  status.className = "status-line";
+// ---- Add / edit provider form: [Tes Koneksi] is MANDATORY before [Simpan]. ----
+
+let provFormMode = "add";
+let provEditId = null;
+let provTestOk = false;
+
+function openProviderForm(mode, provider) {
+  provFormMode = mode;
+  provEditId = provider?.id ?? null;
+  provTestOk = false;
+  $("prov-form-title").textContent = mode === "edit" ? `${t("set.provFormEdit")} — ${provider?.name ?? provider?.id}` : t("set.provFormAdd");
+  $("set-prov-form").classList.remove("hidden");
+  $("prov-name").value = provider?.name ?? "";
+  $("prov-url").value = provider?.baseUrl ?? "";
+  $("prov-key").value = "";
+  $("prov-save").disabled = true;
+  const st = $("prov-test-status");
+  st.className = "status-line";
+  st.textContent = "";
+  // Any edit invalidates the previous test — Simpan locks again.
+  for (const id of ["prov-name", "prov-url", "prov-key"]) {
+    $(id).oninput = () => {
+      provTestOk = false;
+      $("prov-save").disabled = true;
+      st.className = "status-line";
+      st.textContent = "";
+    };
+  }
+  for (const r of document.querySelectorAll('input[name="prov-type"]')) {
+    r.onchange = () => {
+      provTestOk = false;
+      $("prov-save").disabled = true;
+      st.className = "status-line";
+      st.textContent = "";
+    };
+  }
+  $("prov-name").focus?.();
+}
+
+function slugifyProviderId(name) {
+  const slug = String(name ?? "").toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  return slug || "provider";
+}
+
+/**
+ * Mandatory connection test: fetches /models against the TYPED base URL +
+ * key via POST /providers/test-input — nothing is persisted. Only a
+ * passing test enables Simpan.
+ */
+async function testProviderForm() {
+  const st = $("prov-test-status");
+  const baseUrl = ($("prov-url").value ?? "").trim();
+  const apiKey = ($("prov-key").value ?? "").trim();
+  if (!baseUrl || !/^https?:\/\//i.test(baseUrl)) {
+    st.className = "status-line error";
+    st.textContent = "Base URL harus diawali http:// atau https://.";
+    return;
+  }
+  st.className = "status-line";
+  st.textContent = "Menghubungi…";
   try {
-    const providerId = ($("set-provider")?.value ?? "").trim();
-    if (!providerId) throw new Error("Pilih provider dulu.");
-    const res = await state.api.testProvider(providerId);
-    status.className = "status-line " + (res.ok ? "ok" : "error");
-    status.textContent = res.message ?? (res.ok ? "Koneksi OK." : "Koneksi gagal.");
+    const type = document.querySelector('input[name="prov-type"]:checked')?.value === "other" ? "other" : "openai";
+    const res = await state.api.testProviderInput({ baseUrl, type, ...(apiKey ? { apiKey } : {}) });
+    if (res.ok) {
+      provTestOk = true;
+      $("prov-save").disabled = false;
+      st.className = "status-line ok";
+      const n = (res.models ?? []).length;
+      st.textContent = type === "other" ? `✅ ${res.message ?? "Terjangkau."}` : `✅ ${n} model ditemukan.`;
+    } else {
+      provTestOk = false;
+      $("prov-save").disabled = true;
+      st.className = "status-line error";
+      st.textContent = "Gagal: " + (res.message ?? "koneksi gagal");
+    }
   } catch (e) {
-    status.textContent = "Gagal: " + errText(e);
-    status.className = "status-line error";
+    provTestOk = false;
+    $("prov-save").disabled = true;
+    st.className = "status-line error";
+    st.textContent = "Gagal: " + errText(e);
   }
 }
+
+async function saveProviderForm() {
+  if (!provTestOk) return; // Simpan is disabled until the test passes.
+  const name = ($("prov-name").value ?? "").trim();
+  const baseUrl = ($("prov-url").value ?? "").trim();
+  const apiKey = ($("prov-key").value ?? "").trim();
+  const st = $("prov-test-status");
+  try {
+    if (provFormMode === "edit" && provEditId) {
+      await state.api.updateProvider(provEditId, {
+        ...(name ? { name } : {}),
+        baseUrl,
+        ...(apiKey ? { apiKey } : {}),
+      });
+    } else {
+      const id = slugifyProviderId(name);
+      await state.api.createProvider({
+        id,
+        name: name || id,
+        baseUrl,
+        ...(apiKey ? { apiKey } : {}),
+      });
+    }
+    $("prov-key").value = "";
+    $("set-prov-form").classList.add("hidden");
+    flashSaved();
+    await loadSettingsView();
+    // loadSettingsView wipes set-status — restore the confirmation after it.
+    setSettingsStatus("Provider tersimpan. Kunci tidak pernah ditampilkan kembali.", "ok");
+  } catch (e) {
+    st.className = "status-line error";
+    st.textContent = "Gagal menyimpan: " + errText(e);
+  }
+}
+
+// ---- 2. Model per peran (2 tier) ----
+
+/**
+ * Tier dropdowns + global model, populated from the ACTIVE provider's
+ * /models. Role labels come from core listRoles() via
+ * GET /captain/model-roles. Every change auto-saves to
+ * settings.modelRoles (PUT /settings).
+ */
+async function loadModelSection(settingsData) {
+  let roles = [];
+  let tierLabels = { strong: "🧠 Kuat", light: "⚡ Ringan" };
+  try {
+    const data = await state.api.captainModelRoles();
+    roles = data.roles ?? [];
+    for (const tl of data.tiers ?? []) tierLabels[tl.tier] = tl.label;
+  } catch {
+    /* labels fall back to the built-ins above */
+  }
+  const byTier = { strong: [], light: [] };
+  for (const r of roles) if (byTier[r.tier]) byTier[r.tier].push(r.label);
+  const hint = (labels) => (labels.length ? "— " + labels.slice(0, 4).join(", ") + (labels.length > 4 ? ", …" : "") : "");
+  $("set-strong-roles").textContent = hint(byTier.strong);
+  $("set-light-roles").textContent = hint(byTier.light);
+
+  const stored = settingsData?.settings?.modelRoles ?? {};
+  const globalInput = $("set-model-global");
+  globalInput.value = stored.default ?? settingsData?.settings?.llm?.model ?? settingsData?.session?.model ?? "";
+
+  // Model options from the active provider.
+  const providerId = state.activeProviderId;
+  const strongSel = $("set-model-strong");
+  const lightSel = $("set-model-light");
+  const list = $("set-model-list");
+  for (const el of [strongSel, lightSel]) el.innerHTML = "";
+  if (list) list.innerHTML = "";
+  state.modelsVision = { loaded: false, set: new Set() };
+  if (providerId) {
+    try {
+      const data = await state.api.getModels(providerId);
+      const models = (data.models ?? []).map((m) => m.model).filter(Boolean);
+      const vision = new Set();
+      for (const m of data.models ?? []) if (m.supportsVision && m.model) vision.add(m.model);
+      state.modelsVision = { loaded: true, set: vision };
+      for (const m of models) {
+        const o = document.createElement("option");
+        o.value = m;
+        if (list) list.appendChild(o.cloneNode());
+      }
+    } catch {
+      /* suggestions are best-effort; the inputs stay usable regardless */
+    }
+  }
+  const fillTier = (sel, value, emptyLabel) => {
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = emptyLabel;
+    sel.appendChild(empty);
+    const seen = new Set([""]);
+    const cur = (value ?? "").trim();
+    if (cur && !seen.has(cur)) {
+      const o = document.createElement("option");
+      o.value = cur;
+      o.textContent = `${cur} (saat ini)`;
+      sel.appendChild(o);
+      seen.add(cur);
+    }
+    for (const opt of (list?.children ?? [])) {
+      if (!seen.has(opt.value)) {
+        sel.appendChild(opt.cloneNode());
+        seen.add(opt.value);
+      }
+    }
+    sel.value = cur;
+  };
+  fillTier(strongSel, stored.strong, "— sama dengan global —");
+  fillTier(lightSel, stored.light, "— sama dengan global —");
+  updateAttachVisionWarn();
+}
+
+function readModelRolesForm() {
+  return {
+    default: ($("set-model-global").value ?? "").trim(),
+    strong: ($("set-model-strong").value ?? "").trim(),
+    light: ($("set-model-light").value ?? "").trim(),
+  };
+}
+
+async function saveModelRoles() {
+  try {
+    await state.api.updateSettings({ modelRoles: readModelRolesForm() });
+    flashSaved();
+  } catch (e) {
+    setSettingsStatus("Gagal menyimpan model: " + errText(e), "error");
+  }
+}
+
+// ---- 3. Pill ----
+
+function loadPillSection() {
+  const pos = $("set-pill-position");
+  if (pos) pos.value = state.prefs.island_corner ?? "top-center";
+  const mode = state.pill?.getNotificationMode() ?? "pulse";
+  const radio = document.querySelector(`input[name="pill-notify"][value="${mode}"]`);
+  if (radio) radio.checked = true;
+  const dnd = $("set-pill-dnd");
+  if (dnd) dnd.checked = state.pill?.isDoNotDisturb() === true;
+}
+
+/**
+ * Move the island to a screen corner for real (Rust `position_island` —
+ * also persists the pref). Falls back to persisting the pref only when
+ * the backend command is unavailable (plain-browser dev).
+ */
+async function setPillPosition(corner) {
+  state.prefs = { ...state.prefs, island_corner: corner };
+  try {
+    await invoke("position_island", { corner, expanded: state.expanded === true });
+  } catch {
+    await invoke("set_prefs", { prefs: state.prefs });
+  }
+  flashSaved();
+}
+
+function setNotifyMode(mode) {
+  try {
+    state.pill?.setNotificationMode(mode);
+    state.prefs = { ...state.prefs, notify_mode: mode };
+    invoke("set_prefs", { prefs: state.prefs }).catch(() => {});
+    flashSaved();
+  } catch (e) {
+    setSettingsStatus("Gagal: " + errText(e), "error");
+  }
+}
+
+function setPillDnd(on) {
+  // Wired straight into Fase 6's PillController: approvals stay queued,
+  // the pill stays quiet (no pulse, no auto-expand).
+  state.pill?.setDoNotDisturb(on === true);
+  flashSaved();
+}
+
+// ---- 4. Approval: radio auto/tanya per jenis ----
+
+const APPROVAL_TYPE_ROWS = [
+  ["newFile", "📄 File baru", "file yang belum ada — dibuat baru"],
+  ["modifyFile", "✏️ Ubah / hapus file", "file existing yang diubah atau dihapus"],
+  ["command", "⌨️ Jalankan perintah", "perintah terminal (run_command)"],
+];
+
+function renderApprovalTypes(current) {
+  const box = $("set-approval-types");
+  if (!box) return;
+  box.innerHTML = "";
+  for (const [key, label, sub] of APPROVAL_TYPE_ROWS) {
+    const row = document.createElement("div");
+    row.className = "approval-row";
+    const lab = document.createElement("span");
+    lab.className = "approval-label";
+    lab.innerHTML = `${label}<span class="conf">${escapeHtml(sub)}</span>`;
+    const radios = document.createElement("span");
+    radios.className = "approval-radios";
+    for (const val of ["auto", "ask"]) {
+      const l = document.createElement("label");
+      l.className = "radio";
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = `approval-${key}`;
+      input.value = val;
+      input.checked = (current?.[key] ?? "ask") === val;
+      input.onchange = () => saveApprovalTypes();
+      l.append(input, document.createTextNode(val === "auto" ? "Auto" : "Tanya"));
+      radios.appendChild(l);
+    }
+    row.append(lab, radios);
+    box.appendChild(row);
+  }
+}
+
+function readApprovalTypes() {
+  const out = {};
+  for (const [key] of APPROVAL_TYPE_ROWS) {
+    const sel = document.querySelector(`input[name="approval-${key}"]:checked`);
+    out[key] = sel?.value === "auto" ? "auto" : "ask";
+  }
+  return out;
+}
+
+/**
+ * Persist per-type prefs. The legacy global auto-approve goes OFF when a
+ * per-type choice is made — the types are the source of truth from here.
+ * The server applies them in the runner's harness policyFor (real effect:
+ * new-file writes skip the card when "auto", modify/delete and commands
+ * ask when "tanya").
+ */
+async function saveApprovalTypes() {
+  try {
+    await state.api.updateSettings({ session: { autoApprove: false }, approvalTypes: readApprovalTypes() });
+    state.prefs = { ...state.prefs, auto_approve: false };
+    invoke("set_prefs", { prefs: state.prefs }).catch(() => {});
+    flashSaved();
+  } catch (e) {
+    setSettingsStatus("Gagal menyimpan approval: " + errText(e), "error");
+  }
+}
+
+/** Quick presets: all-ask / all-auto (the old global buttons, kept honest). */
+async function setApprovalPreset(all) {
+  const types = { newFile: all, modifyFile: all, command: all };
+  renderApprovalTypes(types);
+  try {
+    await state.api.updateSettings({ session: { autoApprove: all === "auto" }, approvalTypes: types });
+    state.prefs = { ...state.prefs, auto_approve: all === "auto" };
+    invoke("set_prefs", { prefs: state.prefs }).catch(() => {});
+    flashSaved();
+  } catch (e) {
+    setSettingsStatus("Gagal: " + errText(e), "error");
+  }
+}
+
+// ---- 5. Memori ----
+
+/** "Apa yang kamu ingat tentang saya?" — everything, via GET /captain/memory. */
+async function showMemories() {
+  const box = $("set-memory-list");
+  if (!box) return;
+  box.innerHTML = `<p class="hint">Memuat…</p>`;
+  try {
+    const data = await state.api.captainMemory();
+    renderMemories(box, data.memories ?? {});
+  } catch (e) {
+    box.innerHTML = `<p class="status-line error">Gagal memuat memori: ${escapeHtml(errText(e))}</p>`;
+  }
+}
+
+function renderMemories(box, m) {
+  box.innerHTML = "";
+  const groups = [
+    ["Preferensi", Object.entries(m.preferences ?? {})],
+    ["Fakta", Object.entries(m.facts ?? {})],
+    ["Pola koreksi", (m.patterns ?? []).map((p) => [`${p.kind}: ${p.pattern}`, p.value])],
+  ];
+  let any = false;
+  for (const [title, entries] of groups) {
+    if (!entries.length) continue;
+    any = true;
+    const h = document.createElement("h4");
+    h.className = "memory-group";
+    h.textContent = title;
+    box.appendChild(h);
+    for (const [k, v] of entries) {
+      const row = document.createElement("div");
+      row.className = "memory-row";
+      const key = document.createElement("span");
+      key.className = "memory-key";
+      key.textContent = k;
+      const val = document.createElement("span");
+      val.className = "memory-val";
+      val.textContent = typeof v === "string" ? v : JSON.stringify(v);
+      row.append(key, val);
+      box.appendChild(row);
+    }
+  }
+  if (!any) box.innerHTML = `<p class="hint">Belum ada yang diingat.</p>`;
+}
+
+/** "Hapus semua" — two-step confirm, then DELETE /captain/memory for real. */
+async function clearMemories(btn) {
+  if (btn?.dataset.armed !== "1") {
+    if (btn) {
+      btn.dataset.armed = "1";
+      const old = btn.textContent;
+      btn.textContent = "Yakin hapus semua? Klik lagi.";
+      setTimeout(() => {
+        if (btn.dataset.armed === "1") {
+          btn.dataset.armed = "";
+          btn.textContent = old;
+        }
+      }, 5000);
+    }
+    return;
+  }
+  if (btn) {
+    btn.dataset.armed = "";
+    btn.textContent = t("set.memoryClear");
+  }
+  try {
+    await state.api.captainForgetMemory();
+    const box = $("set-memory-list");
+    if (box) box.innerHTML = `<p class="hint">Memori dihapus.</p>`;
+    flashSaved();
+  } catch (e) {
+    setSettingsStatus("Gagal menghapus memori: " + errText(e), "error");
+  }
+}
+
+// ---- 6. Pengingat (read-only list + cancel; creation stays in chat) ----
+
+async function loadReminderSection() {
+  const box = $("set-reminder-list");
+  if (!box) return;
+  box.innerHTML = `<p class="hint">Memuat…</p>`;
+  try {
+    const data = await state.api.captainReminders();
+    const list = data.reminders ?? [];
+    box.innerHTML = "";
+    if (!list.length) {
+      box.innerHTML = `<p class="hint">Tidak ada pengingat aktif. Buat lewat chat: "ingatkan saya …"</p>`;
+      return;
+    }
+    for (const r of list) {
+      const row = document.createElement("div");
+      row.className = "reminder-row";
+      const msg = document.createElement("span");
+      msg.className = "reminder-msg";
+      msg.textContent = `⏰ ${r.message}`;
+      const when = document.createElement("span");
+      when.className = "conf";
+      let whenText = "";
+      try {
+        whenText = new Date(r.deliverAt).toLocaleString("id-ID");
+      } catch {
+        whenText = String(r.deliverAt);
+      }
+      when.textContent = whenText + (r.repeat ? ` · ${r.repeat}` : "");
+      const btn = document.createElement("button");
+      btn.className = "ghost-btn small";
+      btn.textContent = "Batalkan";
+      btn.onclick = async () => {
+        try {
+          await state.api.captainCancelReminder(r.id);
+          flashSaved();
+          await loadReminderSection();
+        } catch (e) {
+          setSettingsStatus("Gagal membatalkan: " + errText(e), "error");
+        }
+      };
+      row.append(msg, when, btn);
+      box.appendChild(row);
+    }
+  } catch (e) {
+    box.innerHTML = `<p class="status-line error">Gagal memuat pengingat: ${escapeHtml(errText(e))}</p>`;
+  }
+}
+
+// ---- 7. Umum ----
+
+function loadGeneralSection(settingsData) {
+  const lang = $("set-language");
+  if (lang) lang.value = state.prefs.language ?? "id";
+  const theme = $("set-theme");
+  if (theme) theme.value = state.prefs.theme ?? "dark";
+  const thinking = settingsData?.session?.thinkingLevel ?? settingsData?.settings?.session?.thinkingLevel ?? "medium";
+  const thinkSel = $("set-thinking");
+  if (thinkSel) thinkSel.value = ["off", "low", "medium", "high"].includes(thinking) ? thinking : "medium";
+  const temp = settingsData?.settings?.llm?.temperature;
+  const tempInput = $("set-temperature");
+  if (tempInput) tempInput.value = typeof temp === "number" ? String(temp) : "";
+}
+
+async function setLanguage(lang) {
+  state.prefs = { ...state.prefs, language: lang };
+  try {
+    await invoke("set_prefs", { prefs: state.prefs });
+  } catch {
+    /* non-Tauri: language still applies to this session */
+  }
+  applyLanguage(lang);
+  flashSaved();
+}
+
+async function setTheme(theme) {
+  state.prefs = { ...state.prefs, theme };
+  try {
+    await invoke("set_prefs", { prefs: state.prefs });
+  } catch {
+    /* non-Tauri: theme still applies to this session */
+  }
+  applyTheme(theme);
+  flashSaved();
+}
+
+async function saveThinking() {
+  try {
+    await state.api.updateSettings({ session: { thinkingLevel: $("set-thinking").value } });
+    flashSaved();
+  } catch (e) {
+    setSettingsStatus("Gagal: " + errText(e), "error");
+  }
+}
+
+let tempSaveTimer = null;
+function saveTemperatureSoon() {
+  clearTimeout(tempSaveTimer);
+  tempSaveTimer = setTimeout(async () => {
+    const raw = ($("set-temperature").value ?? "").trim();
+    try {
+      if (raw === "") {
+        setSettingsStatus("Isi 0–2, atau biarkan kosong untuk default.", "");
+        return;
+      }
+      const num = Number(raw);
+      if (!Number.isFinite(num) || num < 0 || num > 2) throw new Error("temperature harus 0–2");
+      await state.api.updateSettings({ llm: { temperature: num } });
+      flashSaved();
+    } catch (e) {
+      setSettingsStatus("Gagal: " + errText(e), "error");
+    }
+  }, 600);
+}
+
+// ---- 8. Engine aktif (existing — kept) ----
 
 /** Agentic Systems toggles — persisted to Tauri prefs AND the live server. */
 async function loadEngineToggles() {
@@ -2871,8 +3531,7 @@ async function setEngineEnabled(engine, enabled) {
     await state.api.updateSettings({ session: { disabledEngines: disabled } });
     // A picked override for a now-disabled engine is no longer valid.
     if (!enabled && state.engineOverride === engine) state.engineOverride = null;
-    status.className = "status-line ok";
-    status.textContent = `${engineLabel(engine)} ${enabled ? "diaktifkan" : "dinonaktifkan"}.`;
+    flashSaved();
     loadEngineToggles();
     renderEngineChips();
   } catch (e) {
@@ -2890,45 +3549,12 @@ async function pushDisabledEngines() {
   } catch { /* server restart pick-up; non-fatal */ }
 }
 
-async function loadModels(providerId) {
-  // Free-text input + datalist suggestions: known models are one click
-  // away, but a custom/brand-new model id is always typeable — even when
-  // the provider is unreachable and the list comes back empty.
-  const list = $("set-model-list");
-  if (!list) return;
-  list.innerHTML = "";
-  state.modelsVision = { loaded: false, set: new Set() };
-  if (!providerId) {
-    updateAttachVisionWarn();
-    return;
-  }
-  try {
-    const data = await state.api.getModels(providerId);
-    const vision = new Set();
-    for (const m of data.models ?? []) {
-      const o = document.createElement("option");
-      o.value = m.model;
-      // Vision badge: pickers must see which models can actually look at
-      // attached images — a text-only model fails those messages opaquely.
-      if (m.supportsVision) {
-        o.label = `${m.model}  👁 vision`;
-        vision.add(m.model);
-      }
-      list.appendChild(o);
-    }
-    state.modelsVision = { loaded: true, set: vision };
-  } catch {
-    /* suggestions are best-effort; the input stays usable regardless */
-  }
-  updateAttachVisionWarn();
-}
-
 /** Warn when a queued image meets a model known to lack vision. */
 function updateAttachVisionWarn() {
   const warn = $("attach-warn");
   if (!warn) return;
   const hasImage = state.pendingAttachments.some((a) => a.kind === "image");
-  const model = ($("set-model")?.value ?? "").trim() || null;
+  const model = ($("set-model-global")?.value ?? "").trim() || null;
   const known = state.modelsVision.loaded && model;
   if (hasImage && known && !state.modelsVision.set.has(model)) {
     warn.textContent = `Model ${model} tampaknya tidak mendukung gambar — jawaban bisa gagal.`;
@@ -2950,30 +3576,244 @@ async function openWebUI() {
 }
 
 // ---------------------------------------------------------------------------
-// Workspace
+// Workspace (Dae Captain v2 Fase 8) — secondary file browser per the mockup:
+// search, active path + Ganti, 🕐 Terbaru (✨ = from Dae Captain), tree with
+// git badges, click → overlay preview. No delete/rename here, ever.
 // ---------------------------------------------------------------------------
 
-function renderRecentWorkspaces() {
-  const box = $("ws-recent");
-  box.innerHTML = "";
-  for (const w of state.prefs.recent_workspaces ?? []) {
-    const b = document.createElement("button");
-    b.textContent = w;
-    b.onclick = () => setWorkspace(w);
-    box.appendChild(b);
+let wsFlatFiles = null; // [{path, type}] from GET /workspace/files
+let wsTreeNodes = null; // nested tree built from wsFlatFiles
+let wsRecentFiles = null; // [{path, mtimeMs, size}] from GET /workspace/recent
+let wsGitMap = null; // path -> git status kind
+let wsGitBranch = null;
+let wsGitIsRepo = false;
+let wsSearchQuery = "";
+const wsOpenDirs = new Set();
+
+/** Relative time in Indonesian: "10 mnt lalu", "2 jam lalu", "3 hri lalu". */
+function relTime(mtimeMs) {
+  const mins = Math.max(0, Math.round((Date.now() - mtimeMs) / 60000));
+  if (mins < 1) return "baru saja";
+  if (mins < 60) return `${mins} mnt lalu`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} jam lalu`;
+  return `${Math.floor(hours / 24)} hri lalu`;
+}
+
+async function loadWorkspaceView() {
+  const root = state.workspaceRoot;
+  const pathEl = $("ws-path");
+  if (pathEl) pathEl.value = root ?? "";
+  await renderWorkspaceHealth();
+  const treeBox = $("ws-tree");
+  const recentBox = $("ws-recent-list");
+  if (!root) {
+    if (treeBox) treeBox.innerHTML = `<p class="hint">Pilih workspace dulu.</p>`;
+    if (recentBox) recentBox.innerHTML = "";
+    return;
   }
-  if (!box.children.length) box.innerHTML = `<span class="hint">Belum ada.</span>`;
+  if (treeBox) treeBox.innerHTML = `<p class="hint">Memuat…</p>`;
+  if (recentBox) recentBox.innerHTML = `<p class="hint">Memuat…</p>`;
+  try {
+    const [flat, recent, git] = await Promise.all([
+      state.api.workspaceFiles(root).catch((e) => { throw new Error("daftar file: " + errText(e)); }),
+      state.api.workspaceRecent(root, 24).catch(() => ({ files: [] })),
+      state.api.workspaceGitStatus(root).catch(() => null),
+    ]);
+    wsFlatFiles = flat.files ?? [];
+    wsRecentFiles = recent.files ?? [];
+    wsGitIsRepo = git?.isRepo === true;
+    wsGitBranch = git?.branch ?? null;
+    wsGitMap = new Map();
+    if (wsGitIsRepo) {
+      for (const f of git.files ?? []) wsGitMap.set(f.path, f.status);
+    }
+    // ✨ markers: file events from the current run's timeline (Dae Captain's
+    // own writes), fetched whole — not just the poll cursor.
+    if (state.runId) {
+      try {
+        const tl = await state.api.captainTimeline(state.runId, root);
+        for (const e of tl?.events ?? []) {
+          if (e?.type === "file" && e.payload?.path) state.captainFilePaths.add(e.payload.path);
+        }
+      } catch {
+        /* timeline unavailable — recent list still renders, without ✨ */
+      }
+    }
+    wsTreeNodes = buildWsTree(wsFlatFiles);
+    renderWorkspaceTree();
+    renderRecentList();
+    renderWsGitHead();
+  } catch (e) {
+    const msg = `<p class="status-line error">Gagal memuat workspace: ${escapeHtml(errText(e))}</p>`;
+    if (treeBox) treeBox.innerHTML = msg;
+    if (recentBox) recentBox.innerHTML = "";
+  }
+}
+
+/** Build a sorted nested tree (dirs first) from the flat file index. */
+function buildWsTree(files) {
+  const root = { name: "", path: "", type: "dir", children: [] };
+  for (const f of files ?? []) {
+    const parts = f.path.split("/");
+    let node = root;
+    for (let i = 0; i < parts.length; i++) {
+      const isLast = i === parts.length - 1;
+      const partPath = parts.slice(0, i + 1).join("/");
+      let child = node.children.find((c) => c.name === parts[i]);
+      if (!child) {
+        child = { name: parts[i], path: partPath, type: isLast ? f.type : "dir", children: [] };
+        node.children.push(child);
+      }
+      node = child;
+    }
+  }
+  const sort = (n) => {
+    n.children.sort((a, b) => (a.type === b.type ? a.name.localeCompare(b.name) : a.type === "dir" ? -1 : 1));
+    n.children.forEach(sort);
+  };
+  sort(root);
+  return root.children;
+}
+
+function gitBadge(path) {
+  const kind = wsGitMap?.get(path);
+  if (!kind) return "";
+  if (kind === "untracked") return `<span class="git-u" title="untracked">+</span>`;
+  return `<span class="git-m" title="${escapeHtml(kind)}">●</span>`;
+}
+
+function wsFileRow(path, depth) {
+  const row = document.createElement("div");
+  row.className = "ws-item ws-file";
+  row.style.paddingLeft = `${12 + depth * 18}px`;
+  const name = path.split("/").pop() ?? path;
+  row.innerHTML =
+    `<span class="ws-file-icon">📄</span> ` +
+    `<span class="ws-file-name">${escapeHtml(name)}</span>` +
+    gitBadge(path);
+  row.title = path;
+  row.onclick = () => previewWorkspaceFile(path);
+  return row;
+}
+
+function renderWsNode(node, depth) {
+  if (node.type !== "dir") return wsFileRow(node.path, depth);
+  const wrap = document.createElement("div");
+  const head = document.createElement("div");
+  head.className = "ws-item ws-dir";
+  head.style.paddingLeft = `${12 + depth * 18}px`;
+  const open = wsOpenDirs.has(node.path);
+  head.innerHTML = `<span class="ws-caret">${open ? "▾" : "▸"}</span> <span class="ws-file-icon">📁</span> <span class="ws-file-name">${escapeHtml(node.name)}/</span>`;
+  head.title = node.path;
+  head.onclick = () => {
+    if (wsOpenDirs.has(node.path)) wsOpenDirs.delete(node.path);
+    else wsOpenDirs.add(node.path);
+    renderWorkspaceTree();
+  };
+  wrap.appendChild(head);
+  if (open) for (const c of node.children) wrap.appendChild(renderWsNode(c, depth + 1));
+  return wrap;
+}
+
+/** Tree, filtered live by the search box. With a query: flat matches. */
+function renderWorkspaceTree() {
+  const box = $("ws-tree");
+  if (!box) return;
+  box.innerHTML = "";
+  const q = wsSearchQuery.trim().toLowerCase();
+  if (q) {
+    const matches = (wsFlatFiles ?? []).filter((f) => f.type === "file" && f.path.toLowerCase().includes(q));
+    if (!matches.length) {
+      box.innerHTML = `<p class="hint">Tidak ada file yang cocok dengan "${escapeHtml(wsSearchQuery.trim())}".</p>`;
+      return;
+    }
+    const shown = matches.slice(0, 200);
+    for (const f of shown) box.appendChild(wsFileRow(f.path, 0));
+    if (matches.length > shown.length) {
+      const more = document.createElement("p");
+      more.className = "hint";
+      more.textContent = `…dan ${matches.length - shown.length} lainnya.`;
+      box.appendChild(more);
+    }
+    return;
+  }
+  const nodes = wsTreeNodes ?? [];
+  if (!nodes.length) {
+    box.innerHTML = `<p class="hint">Workspace kosong.</p>`;
+    return;
+  }
+  for (const n of nodes) box.appendChild(renderWsNode(n, 0));
+}
+
+/** 🕐 Terbaru: files changed today, newest first; ✨ = written by Dae Captain. */
+function renderRecentList() {
+  const box = $("ws-recent-list");
+  if (!box) return;
+  box.innerHTML = "";
+  const files = wsRecentFiles ?? [];
+  if (!files.length) {
+    box.innerHTML = `<p class="hint">Belum ada file yang diubah hari ini.</p>`;
+    return;
+  }
+  for (const f of files.slice(0, 12)) {
+    const row = document.createElement("div");
+    row.className = "ws-item ws-file";
+    const name = f.path.split("/").pop() ?? f.path;
+    const star = state.captainFilePaths.has(f.path)
+      ? `<span class="tag-cap" title="Ditulis oleh Dae Captain">✨</span>`
+      : "";
+    row.innerHTML =
+      `<span class="ws-file-icon">📄</span> ` +
+      `<span class="ws-file-name">${escapeHtml(name)}</span>` +
+      star +
+      `<span class="meta">${escapeHtml(relTime(f.mtimeMs))}</span>`;
+    row.title = f.path;
+    row.onclick = () => previewWorkspaceFile(f.path);
+    box.appendChild(row);
+  }
+}
+
+/** Git head: branch + changed-file count, or nothing outside a repo. */
+function renderWsGitHead() {
+  const el = $("ws-git");
+  if (!el) return;
+  if (!wsGitIsRepo) {
+    el.textContent = "";
+    return;
+  }
+  const n = wsGitMap?.size ?? 0;
+  el.textContent = n ? `⎇ ${wsGitBranch ?? "?"} · ${n} berubah` : `⎇ ${wsGitBranch ?? "?"}`;
+}
+
+/**
+ * Click a file → overlay preview (never a new page). Reuses the Fase 7
+ * preview overlay: images/pdf embed, md/csv/text render inline, office
+ * files get the honest download fallback (the Fase 7 renderers are
+ * deck/workbook-specific, so they must NOT run on arbitrary files).
+ */
+function previewWorkspaceFile(path) {
+  const ext = (path.split(".").pop() ?? "").toLowerCase();
+  const name = path.split("/").pop() ?? path;
+  let kind = "other";
+  if (["png", "jpg", "jpeg", "gif", "webp"].includes(ext)) kind = ext;
+  else if (ext === "pdf") kind = "pdf";
+  else if (ext === "csv") kind = "csv";
+  else if (ext === "md") kind = "md";
+  else if (["txt", "json", "bib", "log", "yaml", "yml", "toml", "xml", "html", "css", "js", "ts", "tsx", "jsx", "py", "rs", "go", "sh", "sql", "mdx"].includes(ext)) kind = "txt";
+  openPreviewOverlay({ kind, path, name });
 }
 
 /**
  * Real workspace status: is the folder valid, and is the server actually
  * anchored to it (via server_health.workspace_root from PR #102)?
  */
-async function renderWorkspaceStatus() {
+async function renderWorkspaceHealth() {
   const el = $("ws-health");
+  if (!el) return;
   el.className = "status-line";
   el.textContent = "Mengecek…";
-  const path = ((($("ws-path")?.value ?? "") || state.workspaceRoot)).trim();
+  const path = state.workspaceRoot;
   if (!path) {
     el.textContent = "Belum ada workspace dipilih.";
     return;
@@ -2990,34 +3830,10 @@ async function renderWorkspaceStatus() {
     el.textContent = "● Aktif — server melayani workspace ini.";
   } else if (health?.healthy && health.workspace_root) {
     el.className = "status-line error";
-    el.textContent = `● Folder valid, tapi server melayani workspace lain (${health.workspace_root}). Klik "Pilih Folder" untuk re-anchor.`;
+    el.textContent = `● Folder valid, tapi server melayani workspace lain (${health.workspace_root}). Klik "Ganti" untuk re-anchor.`;
   } else {
     el.className = "status-line";
     el.textContent = "● Folder valid — server belum jalan.";
-  }
-}
-
-/** "Buat folder baru" — creates the typed path, then uses it as workspace. */
-async function createWorkspace(folderName) {
-  const status = $("ws-status");
-  // New mockup: folder name input; old: full path input.
-  const nameInput = $("ws-new-name");
-  const name = (folderName ?? (nameInput ? nameInput.value.trim() : "")).trim();
-  const base = state.workspaceRoot || (($("ws-path")?.value ?? "").trim());
-  const path = name ? (base ? base.replace(/\/+$/, "") + "/" + name : name) : (($("ws-path")?.value ?? "").trim());
-  if (!path) {
-    status.className = "status-line error";
-    status.textContent = "Isi folder dulu.";
-    return;
-  }
-  try {
-    const created = await invoke("create_dir", { path });
-    status.className = "status-line ok";
-    status.textContent = created ? "Folder dibuat." : "Folder sudah ada — dipakai.";
-    await setWorkspace(path);
-  } catch (e) {
-    status.className = "status-line error";
-    status.textContent = "Gagal: " + errText(e);
   }
 }
 
@@ -3037,17 +3853,21 @@ async function setWorkspace(path) {
     state.seenEvents.clear(); // new workspace = new event history
     state.wsSubscribed = false;
     state.approvalOpen = false;
+    state.captainFilePaths.clear();
+    wsOpenDirs.clear();
+    wsSearchQuery = "";
+    const searchEl = $("ws-search");
+    if (searchEl) searchEl.value = "";
     const serverOk = await ensureServer((t, e) => {
       status.className = "status-line" + (e ? " error" : "");
       status.textContent = t;
     });
     if (!serverOk) {
-      renderRecentWorkspaces();
       return;
     }
     status.className = "status-line ok";
     status.textContent = "Workspace aktif: " + path;
-    renderRecentWorkspaces();
+    await loadWorkspaceView();
     await refreshRuns();
     // Retry a work command that was waiting for a workspace.
     if (state.pendingMessage) {
@@ -3066,6 +3886,7 @@ async function setWorkspace(path) {
     status.textContent = "Gagal: " + errText(e);
   }
 }
+
 
 // ---------------------------------------------------------------------------
 // Boot
@@ -3132,6 +3953,9 @@ async function boot() {
     return;
   }
   state.prefs = prefs;
+  // Dae Captain v2 Fase 8: apply saved theme + language before anything renders.
+  applyTheme(prefs.theme);
+  applyLanguage(prefs.language);
 
   if (!prefs.repo_root) {
     showView("setup");
@@ -3265,43 +4089,50 @@ function bindEvents() {
   bindGuarded("btn-collapse", "click", collapse);
   bindGuarded("btn-settings", "click", () => { loadSettingsView(); showView("settings"); });
   bindGuarded("set-back", "click", () => showView("main"));
-  // Approval mode buttons (mockup: Tanya setiap kali / Setujui otomatis)
-  bindGuarded("approve-ask", "click", () => setApprovalMode("ask"));
-  bindGuarded("approve-auto", "click", () => setApprovalMode("auto"));
-  // API key show/hide
-  bindGuarded("set-showkey", "click", () => {
-    const inp = $("set-apikey");
-    if (!inp) return;
-    const show = inp.type === "password";
-    inp.type = show ? "text" : "password";
-    const _sk = $("set-showkey"); if (_sk) _sk.textContent = show ? "Sembunyikan" : "Tampilkan";
-  });
-  // Test connection
-  bindGuarded("set-test", "click", testConnection);
-  // Connection & diagnostics
-  bindGuarded("set-diag-refresh", "click", runDiagnostics);
-  // Workspace picker from settings
-  bindGuarded("set-pick-workspace", "click", () => showView("workspace"));
-  bindGuarded("btn-workspace", "click", () => { const p = $("ws-path"); if (p) p.value = state.workspaceRoot; const st = $("ws-status"); if (st) st.textContent = ""; showView("workspace"); });
+  // ---- Dae Captain v2 Fase 8: Settings bindings (auto-save, no Save button) ----
+  bindGuarded("set-prov-add", "click", () => openProviderForm("add"));
+  bindGuarded("prov-test", "click", testProviderForm);
+  bindGuarded("prov-save", "click", saveProviderForm);
+  bindGuarded("set-model-global", "change", saveModelRoles);
+  bindGuarded("set-model-strong", "change", saveModelRoles);
+  bindGuarded("set-model-light", "change", saveModelRoles);
+  bindGuarded("set-model-global", "input", updateAttachVisionWarn);
+  bindGuarded("set-pill-position", "change", (e) => setPillPosition(e.target.value));
+  for (const r of document.querySelectorAll('input[name="pill-notify"]')) {
+    r.addEventListener("change", (e) => { if (e.target.checked) setNotifyMode(e.target.value); });
+  }
+  bindGuarded("set-pill-dnd", "change", (e) => setPillDnd(e.target.checked));
+  bindGuarded("approve-ask-all", "click", () => setApprovalPreset("ask"));
+  bindGuarded("approve-auto-all", "click", () => setApprovalPreset("auto"));
+  bindGuarded("set-memory-show", "click", showMemories);
+  bindGuarded("set-memory-clear", "click", (e) => clearMemories(e.target));
+  bindGuarded("set-language", "change", (e) => setLanguage(e.target.value));
+  bindGuarded("set-theme", "change", (e) => setTheme(e.target.value));
+  bindGuarded("set-thinking", "change", saveThinking);
+  bindGuarded("set-temperature", "change", saveTemperatureSoon);
+  // ---- Workspace bindings ----
+  bindGuarded("btn-workspace", "click", () => { showView("workspace"); });
   bindGuarded("ws-back", "click", () => showView("main"));
-  bindGuarded("ws-use", "click", async () => {
-    // Native folder picker (Tauri dialog)
+  bindGuarded("ws-change", "click", async () => {
+    // Native folder picker (Tauri dialog) — the existing picker, not a new one.
     try {
       const picked = await invoke("pick_folder");
-      if (picked) {
-        if ($("ws-path")) $("ws-path").value = picked;
-        await setWorkspace(picked);
-      }
+      if (picked) await setWorkspace(picked);
     } catch (e) {
-      // Fallback to manual path input
-      const path = (($("ws-path")?.value ?? "").trim());
-      if (path) await setWorkspace(path);
+      const st = $("ws-status");
+      if (st) {
+        st.className = "status-line error";
+        st.textContent = "Gagal membuka pemilih folder: " + errText(e);
+      }
     }
   });
-  bindGuarded("ws-create", "click", () => {
-    const name = (($("ws-new-name")?.value ?? "").trim());
-    if (name) createWorkspace(name);
-  });
+  const wsSearch = $("ws-search");
+  if (wsSearch) {
+    wsSearch.addEventListener("input", (e) => {
+      wsSearchQuery = e.target.value ?? "";
+      renderWorkspaceTree();
+    });
+  }
 
   bindGuarded("chat-send", "click", () => sendChat());
   bindGuarded("chat-attach", "click", () => $("chat-file")?.click());
@@ -3395,140 +4226,6 @@ function bindEvents() {
     b.onclick = () => { state.wfFilter = b.dataset.filter; renderWorkflowView(); };
   }
   bindGuarded("wf-cancel", "click", cancelWorkflow);
-
-  bindGuarded("set-provider", "change", (e) => {
-    updateKeyState();
-    updateToggleEnabledButton();
-    loadModels(e.target.value);
-  });
-  bindGuarded("set-model", "change", updateAttachVisionWarn);
-  $("set-model")?.addEventListener("input", updateAttachVisionWarn);
-  bindGuarded("set-toggle-enabled", "click", toggleSelectedProvider);
-  bindGuarded("set-delete", "click", deleteSelectedProvider);
-  // Approval mode (ask/auto) and engine toggles cover the permission model;
-  // the legacy trust/thinking selects were dropped in the mockup redesign.
-  bindGuarded("set-save", "click", async () => {
-    const status = $("set-status");
-    const providerId = ($("set-provider").value ?? "").trim();
-    const model = ($("set-model").value ?? "").trim();
-    const key = $("set-apikey").value ?? "";
-    const thinking = $("set-thinking").value;
-    const tempRaw = ($("set-temperature").value ?? "").trim();
-    try {
-      // The key field used to be silently discarded here. A non-empty key
-      // rotates the selected provider's secret (partial update — base URL,
-      // models, and name are preserved server-side); an empty field leaves
-      // the stored key untouched.
-      let keyNote = "";
-      if (key && providerId) {
-        await state.api.updateProvider(providerId, { apiKey: key });
-        $("set-apikey").value = "";
-        keyNote = " Kunci diperbarui.";
-      } else if (key && !providerId) {
-        throw new Error("Pilih provider dulu untuk menyimpan kunci.");
-      }
-      const patch = { providerId, model, thinkingLevel: thinking };
-      if (tempRaw !== "") {
-        const temp = Number(tempRaw);
-        if (!Number.isFinite(temp) || temp < 0 || temp > 2) {
-          throw new Error("Temperature harus angka 0–2.");
-        }
-        patch.llm_temperature = temp;
-      }
-      await state.api.updateSettings(patch);
-      status.className = "status-line ok";
-      status.textContent = "Tersimpan — berlaku untuk semua engine." + keyNote;
-      await loadSettingsView();
-    } catch (e) {
-      status.className = "status-line error";
-      status.textContent = "Gagal: " + errText(e);
-    }
-  });
-  /** Validate the add-provider form before any round trip. Returns null when valid. */
-  function validateProviderForm() {
-    const id = ($("prov-id").value ?? "").trim();
-    const baseUrl = ($("prov-url").value ?? "").trim();
-    if (!id) return "Isi ID dulu (mis. nine-router-local).";
-    if (/[\s/]/.test(id)) return "ID tidak boleh mengandung spasi atau /.";
-    if (baseUrl && !/^https?:\/\//i.test(baseUrl)) {
-      return "Base URL harus diawali http:// atau https://.";
-    }
-    return null;
-  }
-
-  /**
-   * Read the saved entry back and say exactly what landed in the registry —
-   * a save the list cannot see is reported as a failure, never as success.
-   */
-  async function confirmProviderSaved(id) {
-    const data = await state.api.getProvider(id);
-    const saved = data?.provider;
-    if (!saved || saved.id !== id) {
-      throw new Error(`tersimpan tapi tidak terbaca kembali (id: ${id})`);
-    }
-    const total = (await state.api.getProviders()).providers?.length ?? "?";
-    return `Provider "${id}" tersimpan (${total} terdaftar). Kunci tidak pernah ditampilkan kembali.`;
-  }
-
-  bindGuarded("prov-test", "click", async () => {
-    const status = $("set-status");
-    const problem = validateProviderForm();
-    if (problem) {
-      status.className = "status-line error";
-      status.textContent = problem;
-      return;
-    }
-    const id = $("prov-id").value.trim();
-    try {
-      // simpan dulu (upsert), lalu test — pola yang sama dipakai Web UI.
-      // List selalu dimuat ulang akhirnya: entry yang tersimpan harus
-      // terlihat bahkan ketika tes koneksinya gagal.
-      await state.api.createProvider({
-        id,
-        name: $("prov-name").value.trim() || id,
-        baseUrl: $("prov-url").value.trim(),
-        apiKey: $("prov-key").value,
-      });
-      const res = await state.api.testProvider(id);
-      const outcome = res.message ?? (res.ok ? "Koneksi OK." : "Koneksi gagal.");
-      const cls = "status-line " + (res.ok ? "ok" : "error");
-      if (res.ok) $("prov-key").value = "";
-      await loadSettingsView();
-      status.className = cls;
-      status.textContent = outcome;
-    } catch (e) {
-      status.className = "status-line error";
-      status.textContent = "Gagal: " + errText(e);
-      await loadSettingsView();
-    }
-  });
-  bindGuarded("prov-save", "click", async () => {
-    const status = $("set-status");
-    const problem = validateProviderForm();
-    if (problem) {
-      status.className = "status-line error";
-      status.textContent = problem;
-      return;
-    }
-    const id = $("prov-id").value.trim();
-    try {
-      await state.api.createProvider({
-        id,
-        name: $("prov-name").value.trim() || id,
-        baseUrl: $("prov-url").value.trim(),
-        apiKey: $("prov-key").value,
-      });
-      $("prov-key").value = "";
-      const saved = await confirmProviderSaved(id);
-      await loadSettingsView();
-      // Reload wipes the status line — restore the confirmation after it.
-      status.className = "status-line ok";
-      status.textContent = saved;
-    } catch (e) {
-      status.className = "status-line error";
-      status.textContent = "Gagal: " + errText(e);
-    }
-  });
 
   bindGuarded("setup-save", "click", async () => {
     const status = $("setup-status");
