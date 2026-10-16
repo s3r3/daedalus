@@ -1816,6 +1816,7 @@ async function createTaskCore(
     const doneCriteria = stringList(parsed.done_criteria ?? parsed.doneCriteria);
     const mode = parseMode(parsed.mode) ?? ctx.session.mode;
     const autoApprove = typeof parsed.auto_approve === "boolean" ? parsed.auto_approve : typeof parsed.autoApprove === "boolean" ? parsed.autoApprove : ctx.session.autoApprove;
+    const questionGate = typeof parsed.questionGate === "boolean" ? parsed.questionGate : undefined;
     // Per-task max iterations: explicit values only. When the payload
     // omits it, the runner resolves per-task > domain override >
     // global settings.maxIterations > 25 (core runtime) — so a
@@ -2085,6 +2086,7 @@ async function createTaskCore(
         ...(modelStrategy ? { modelStrategy } : {}),
         ...(tokenBudget !== undefined ? { tokenBudget } : {}),
         ...(toolRules ? { toolRules } : {}),
+        ...(questionGate !== undefined ? { questionGate } : {}),
         ...(typeof parsed.plan_task_id === "string" && parsed.plan_task_id ? { planTaskId: parsed.plan_task_id } : {}),
         ...(priorContext ? { priorContext } : {}),
         ...(conversationId ? { conversationId } : {}),
@@ -2895,6 +2897,9 @@ async function dispatchChatTurn(
       // Dae Captain: selalu mode "auto" — task dari chat harus bisa
       // menjalankan command (npm, node, dll). Mode "ask" akan DENY semua.
       mode: "auto",
+      // Dae Captain: matikan question gate — filosofi "bangun langsung",
+      // jangan interogasi user untuk detail yang bisa diputuskan sendiri.
+      questionGate: false,
       ...(engine === "coding" ? {} : { domain: engine }),
       ...(providerId ? { provider_id: providerId } : {}),
       ...(model ? { model } : {}),
