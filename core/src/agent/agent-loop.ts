@@ -521,6 +521,10 @@ export class AgentLoop {
     const validationRecoveryLimit = Math.max(1, Math.min(3, this.#stopPolicy.max_errors));
     for (;;) {
       if (this.#cancelled.has(state.id) || this.#store.isCancelRequested(state.id)) { state = { ...state, status: 'failed', last_error: 'aborted' }; await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: 'aborted' }); this.#store.saveState(state.id, state); return state; }
+      // Cooperative pause (Dae Captain pill ⏸): suspend at this safe
+      // checkpoint until the pause marker is cleared. State is untouched —
+      // resume continues the loop from here.
+      await this.#store.waitWhilePaused(state.id);
       // Hard stops (stall backstop, hard-pause stop, input-token
       // budget): the task ends as failed-with-reason here; the runtime
       // reports these as partial with the detail as evidence — stopping

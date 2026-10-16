@@ -137,7 +137,14 @@ export const CHAT_ATTACH_LIMITS = {
     "text/x-python", "application/x-python", "text/yaml", "application/yaml",
     "application/toml", "text/xml", "application/xml", "text/x-sh",
   ],
+  // Dae Captain v2 Fase 7: spreadsheet files attachable for [Jadikan dataset].
+  // They never ride the chat payload (the server only takes image/text);
+  // the dataset flows go through /uploads + /sheets/workbook/open or the
+  // analyze-plan API directly.
+  fileMimes: ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+  fileMaxBytes: 5 * 1024 * 1024,
   imageExts: { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" },
+  fileExts: { xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" },
   textExts: {
     txt: "text/plain", md: "text/markdown", markdown: "text/markdown", csv: "text/csv",
     json: "application/json", log: "text/plain", html: "text/html", css: "text/css",
@@ -151,7 +158,7 @@ function mimeForPick(name, mime) {
   const m = String(mime ?? "").toLowerCase();
   if (m && m !== "application/octet-stream") return m;
   const ext = String(name ?? "").split(".").pop()?.toLowerCase() ?? "";
-  return CHAT_ATTACH_LIMITS.imageExts[ext] ?? CHAT_ATTACH_LIMITS.textExts[ext] ?? m;
+  return CHAT_ATTACH_LIMITS.imageExts[ext] ?? CHAT_ATTACH_LIMITS.textExts[ext] ?? CHAT_ATTACH_LIMITS.fileExts[ext] ?? m;
 }
 
 /**
@@ -175,7 +182,13 @@ export function validateAttachmentPick({ name, mime, sizeBytes }) {
     }
     return { ok: true, kind: "text", mime: m };
   }
-  return { ok: false, reason: "tipe file belum didukung (gambar atau teks saja)" };
+  if (CHAT_ATTACH_LIMITS.fileMimes.includes(m)) {
+    if ((sizeBytes ?? 0) > CHAT_ATTACH_LIMITS.fileMaxBytes) {
+      return { ok: false, reason: "file melebihi 5 MB" };
+    }
+    return { ok: true, kind: "file", mime: m };
+  }
+  return { ok: false, reason: "tipe file belum didukung (gambar, teks, atau xlsx)" };
 }
 
 /**
@@ -695,4 +708,273 @@ export function renderMarkdown(text) {
     html += `<div class="code-block"><div class="code-head"><span>${esc(codeLang)}</span><button class="copy-btn" data-code="${encodeURIComponent(codeBuf.join("\n"))}">Salin</button></div><pre><code>${code}</code></pre></div>`;
   }
   return html;
+}
+
+// ---------------------------------------------------------------------------
+// Pill v2 — 9-status derivation (Fase 6).
+// Pure functions; the PillController (pill.js) renders from derivePillState().
+// Unit-tested with node:test (dae-captain/tests/pill.test.js).
+// ---------------------------------------------------------------------------
+
+/** The 9 pill statuses (mockup + Master Design §3.1). */
+export const PILL_STATUSES = [
+  "idle",
+  "working",
+  "verifying",
+  "fixing",
+  "waiting_approval",
+  "paused",
+  "queued",
+  "done",
+  "error",
+];
+
+/** Dot color per status (CSS classes: .pill-dot.<color>). */
+export const PILL_DOT_COLORS = {
+  idle: "green",
+  working: "blue",
+  verifying: "purple",
+  fixing: "yellow",
+  waiting_approval: "yellow",
+  paused: "gray",
+  queued: "gray",
+  done: "green",
+  error: "red",
+};
+
+/** Which pill buttons each status shows. cancel/pause are real controls. */
+export const PILL_BUTTONS = {
+  idle: [],
+  working: ["cancel", "pause"],
+  verifying: ["cancel"],
+  fixing: ["cancel"],
+  waiting_approval: ["view"],
+  paused: [],
+  queued: [],
+  done: [],
+  error: ["view"],
+};
+
+/** Statuses that pulse (notification throb, no sound). */
+export const PILL_PULSE = new Set(["done", "waiting_approval"]);
+
+/**
+ * Parse a progress fraction from engine narration ("Mengisi slide 8/12…").
+ * Returns { current, total } or null. The numbers come from the engine's
+ * own progress text — never fabricated. Only the LAST x/y in the text
+ * counts (earlier ones are stale narration).
+ */
+export function parseProgressFraction(text) {
+  const matches = String(text ?? "").match(/(\d+)\s*\/\s*(\d+)/g);
+  if (!matches) return null;
+  const last = /(\d+)\s*\/\s*(\d+)/.exec(matches[matches.length - 1]);
+  if (!last) return null;
+  const current = Number(last[1]);
+  const total = Number(last[2]);
+  if (!Number.isFinite(current) || !Number.isFinite(total) || total <= 0 || current < 0) return null;
+  return { current: Math.min(current, total), total };
+}
+
+const GENERIC_PHASE = {
+  slide: "Membuat slide…",
+  dokumen: "Menyiapkan dokumen…",
+  spreadsheet: "Menyiapkan spreadsheet…",
+  research: "Menjalankan riset…",
+  coding: "Bekerja…",
+};
+
+/**
+ * Phase line for one running turn. Prefers the engine's own latest
+ * narration (last_event_text, e.g. "Mengisi slide 8/12: Judul…"),
+ * shortened to pill size; falls back to last_event mapping, then a
+ * per-engine generic. Never invents numbers.
+ */
+export function turnPhaseText(turn) {
+  const narration = typeof turn?.last_event_text === "string" ? turn.last_event_text.trim().replace(/\s+/g, " ") : "";
+  if (narration) return narration.length > 44 ? narration.slice(0, 43) + "…" : narration;
+  const last = String(turn?.last_event ?? "");
+  if (/VALIDATION_STARTED/i.test(last)) return "Memverifikasi…";
+  if (/TOOL_CALL_STARTED/i.test(last)) return "Menjalankan alat…";
+  if (/FILE_CHANGED/i.test(last)) return "Mengubah file…";
+  if (/COMMAND|TEST/i.test(last)) return "Menjalankan perintah…";
+  if (/THOUGHT|MODEL|LLM/i.test(last)) return "Berpikir…";
+  return GENERIC_PHASE[turn?.engine] ?? "Bekerja…";
+}
+
+/** Compact per-task chip for the multi-task label: "slide 8/12". */
+export function taskChip(turn) {
+  const engine = String(turn?.engine ?? "").toLowerCase() || "?";
+  const frac = parseProgressFraction(turn?.last_event_text);
+  return frac ? `${engine} ${frac.current}/${frac.total}` : engine;
+}
+
+function turnKey(t) {
+  return String(t?.turn_id ?? t?.task_id ?? "");
+}
+
+function pendingCount(t) {
+  return (t?.pending_approvals ?? []).length + (t?.pending_questions ?? []).length;
+}
+
+/**
+ * Aggregate workflow runs into the pill's 9-state view-model.
+ *
+ * Priority: waiting_approval > error > paused > verifying > fixing >
+ * working > queued > done > idle.
+ *
+ * `memory` is the controller's cross-update turn ledger
+ * ({ [turnKey]: { status } }) powering the transient `done` flash and
+ * error acknowledgement. It is mutated in place; pass the same object
+ * on every update. `opts.dnd` demotes waiting_approval to a quiet
+ * working display (approvals stay queued, pill doesn't pulse).
+ *
+ * Returns { status, label, tasks, primary, cancelTaskId, pauseTaskId,
+ * resumeTaskId, progress, pulse }.
+ */
+export function derivePillState(runs, memory = {}, opts = {}) {
+  const dnd = opts.dnd === true;
+  const now = Date.now();
+  const turns = [];
+  for (const run of runs ?? []) for (const t of run.turns ?? []) turns.push(t);
+
+  const running = turns.filter((t) => t?.status === "running");
+  const approvals = running.filter((t) => pendingCount(t) > 0);
+  const paused = running.filter((t) => t?.paused === true);
+  const verifying = running.filter(
+    (t) => !t?.paused && /VALIDATION_STARTED/i.test(String(t?.last_event ?? "")),
+  );
+  const fixing = running.filter(
+    (t) => !t?.paused && String(t?.last_event ?? "") === "VALIDATION_FAILED",
+  );
+  const queued = running.filter((t) => t?.queued === true && !t?.paused);
+  const working = running.filter(
+    (t) => !t?.paused && !t?.queued && pendingCount(t) === 0 &&
+      !verifying.includes(t) && !fixing.includes(t),
+  );
+
+  // Ledger: detect fresh completions (done flash) and fresh failures.
+  let freshDone = null;
+  let freshFailed = null;
+  for (const t of turns) {
+    const key = turnKey(t);
+    if (!key) continue;
+    const prev = memory[key];
+    if (prev && prev.status === "running" && t.status === "done") {
+      memory[key] = { status: "done", doneAt: now };
+      freshDone = t;
+    } else if (prev && prev.status === "running" && t.status === "failed") {
+      memory[key] = { status: "failed", failedAt: now };
+      freshFailed = t;
+    } else if (!prev) {
+      memory[key] = { status: t.status };
+      if (t.status === "done") memory[key].doneAt = now;
+      if (t.status === "failed") memory[key].failedAt = now;
+    } else {
+      // Preserve acked (error acknowledgement survives re-derives until a
+      // NEW failure arrives, which resets the ledger entry above).
+      memory[key] = { status: t.status, doneAt: prev.doneAt, failedAt: prev.failedAt, acked: prev.acked };
+    }
+  }
+  const doneFlash = freshDone && now - (memory[turnKey(freshDone)]?.doneAt ?? 0) < 4000
+    ? freshDone
+    : null;
+  // Error shows for failures from the last 10 minutes, until acknowledged.
+  const recentFailed = turns.filter((t) => {
+    if (t?.status !== "failed") return false;
+    const entry = memory[turnKey(t)];
+    if (entry?.acked) return false;
+    const at = entry?.failedAt ?? Date.parse(t?.updated_at ?? "") ?? 0;
+    return now - at < 10 * 60 * 1000;
+  });
+
+  let status = "idle";
+  let primary = null;
+  if (approvals.length && !dnd) { status = "waiting_approval"; primary = approvals[approvals.length - 1]; }
+  else if (recentFailed.length) { status = "error"; primary = recentFailed[recentFailed.length - 1]; }
+  else if (paused.length) { status = "paused"; primary = paused[paused.length - 1]; }
+  else if (verifying.length) { status = "verifying"; primary = verifying[verifying.length - 1]; }
+  else if (fixing.length) { status = "fixing"; primary = fixing[fixing.length - 1]; }
+  else if (working.length) { status = "working"; primary = working[working.length - 1]; }
+  else if (queued.length) { status = "queued"; primary = queued[queued.length - 1]; }
+  else if (doneFlash) { status = "done"; primary = doneFlash; }
+
+  const activeTasks = [...paused, ...verifying, ...fixing, ...working, ...queued];
+  const multi = activeTasks.length > 1;
+
+  let label;
+  switch (status) {
+    case "waiting_approval": {
+      const n = approvals.reduce((a, t) => a + pendingCount(t), 0);
+      label = n > 1 ? `⚠ ${n} butuh persetujuan` : "⚠ Perlu persetujuan";
+      break;
+    }
+    case "error": label = "✕ Gagal — lihat chat"; break;
+    case "paused": label = multi ? `⏸ Dijeda (${paused.length}) — klik untuk lanjut` : "⏸ Dijeda — klik untuk lanjut"; break;
+    case "verifying": label = "Memverifikasi…"; break;
+    case "fixing": {
+      const n = Number(primary?.validation_failures);
+      label = Number.isFinite(n) && n > 0 ? `Memperbaiki (${Math.min(n, 99)}/2)` : "Memperbaiki…";
+      break;
+    }
+    case "working":
+      label = multi
+        ? `${activeTasks.length} task: ${activeTasks.map(taskChip).join(" + ")}`
+        : turnPhaseText(primary);
+      break;
+    case "queued": {
+      const n = queued.length;
+      label = n > 1 ? `Antrian: ${n} task` : "Antrian: 1 task";
+      break;
+    }
+    case "done": label = "✓ Selesai"; break;
+    default: label = "Dae Captain";
+  }
+
+  // Progress ring: the primary task's own fraction, else indeterminate.
+  const frac = primary ? parseProgressFraction(primary.last_event_text) : null;
+  const progress = frac && status !== "idle" && status !== "done"
+    ? { current: frac.current, total: frac.total }
+    : null;
+
+  const cancelTaskId = primary && ["working", "verifying", "fixing"].includes(status)
+    ? String(primary.task_id ?? "") || null
+    : null;
+  const pauseTaskId = primary && ["working", "verifying", "fixing"].includes(status) && !primary.paused
+    ? String(primary.task_id ?? "") || null
+    : null;
+  const resumeTaskId = status === "paused" && primary
+    ? String(primary.task_id ?? "") || null
+    : null;
+
+  return {
+    status,
+    label,
+    dot: PILL_DOT_COLORS[status] ?? "blue",
+    buttons: PILL_BUTTONS[status] ?? [],
+    pulse: PILL_PULSE.has(status) && !dnd,
+    tasks: activeTasks.map((t) => ({
+      taskId: String(t.task_id ?? ""),
+      engine: t.engine ?? "",
+      phase: turnPhaseText(t),
+      paused: t.paused === true,
+      queued: t.queued === true,
+    })),
+    primary: primary ? { taskId: String(primary.task_id ?? ""), engine: primary.engine ?? "" } : null,
+    cancelTaskId,
+    pauseTaskId,
+    resumeTaskId,
+    approvalCount: approvals.reduce((a, t) => a + pendingCount(t), 0),
+    progress,
+  };
+}
+
+/** Mark every currently-failed turn acknowledged (pill click on error). */
+export function acknowledgePillErrors(runs, memory = {}) {
+  for (const run of runs ?? []) {
+    for (const t of run.turns ?? []) {
+      const key = turnKey(t);
+      if (!key || t?.status !== "failed") continue;
+      memory[key] = { ...(memory[key] ?? {}), status: "failed", acked: true };
+    }
+  }
 }

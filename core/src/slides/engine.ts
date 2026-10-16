@@ -280,6 +280,15 @@ export class SlideEngine {
     if (this.#abort.signal.aborted || this.#deps.store.isCancelRequested(this.#taskId)) throw new EngineAborted();
   }
 
+  /**
+   * Cooperative pause (Dae Captain pill ⏸): suspend at this safe
+   * checkpoint until the pause marker is cleared. Deck state is untouched —
+   * resume continues from here.
+   */
+  async #waitIfPaused(): Promise<void> {
+    if (this.#taskId) await this.#deps.store.waitWhilePaused(this.#taskId);
+  }
+
   run(spec: TaskSpec, slide?: SlideTaskParams): Promise<SlideEngineRunResult> {
     const completion = this.#runTask(spec, slide);
     this.#completion = completion;
@@ -319,6 +328,7 @@ export class SlideEngine {
 
     try {
       this.#throwIfAborted();
+      await this.#waitIfPaused();
       const result =
         route === 'edit'
           ? await this.#runEdit(spec, { setStep, save })
@@ -382,6 +392,7 @@ export class SlideEngine {
         text: `Outline tersusun (${outline.length} slide) dan tersimpan sebagai deck kerangka:\n${outline.map((item, i) => `${i + 1}. [${item.layoutId}] ${item.title}`).join('\n')}`,
       });
       this.#throwIfAborted();
+      await this.#waitIfPaused();
 
       const generation = slide?.generation ?? 'standard';
       if (generation === 'smart') {
@@ -407,6 +418,7 @@ export class SlideEngine {
         if (decision.designId) brief.designId = decision.designId;
         stagedFill = true;
         this.#throwIfAborted();
+        await this.#waitIfPaused();
       }
     } else {
       ctx.setStep('outline', 'done');
@@ -446,6 +458,7 @@ export class SlideEngine {
     await this.#emitDeckChanged(root, deckTextBeforeFill);
     ctx.setStep('fill', fill.failures.length === 0 ? 'done' : 'active');
     this.#throwIfAborted();
+    await this.#waitIfPaused();
 
     ctx.setStep('validate', 'active');
     const validation = await this.#validateAndEmit();
@@ -541,6 +554,7 @@ export class SlideEngine {
       signal,
     );
     this.#throwIfAborted();
+    await this.#waitIfPaused();
 
     const deckTextBeforeEdit = await this.#deckFileText(root);
     await writeDeck(root, next.deck);

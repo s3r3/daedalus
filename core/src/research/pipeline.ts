@@ -64,6 +64,11 @@ export interface ResearchPipelineInput {
   elsevierApiKey?: string;
   signal?: AbortSignal;
   onProgress?: (stage: ResearchStageId, detail: string) => void;
+  /**
+   * Cooperative pause (Dae Captain pill ⏸): awaited at every stage
+   * boundary via progress(); suspends until the pause marker is cleared.
+   */
+  waitWhilePaused?: () => Promise<void>;
 }
 
 export interface ResearchPipelineResult {
@@ -506,8 +511,12 @@ export async function runResearchPipeline(input: ResearchPipelineInput): Promise
   }
 
   // execute → evidence
+  // Cooperative pause (Dae Captain pill ⏸): suspend at each stage
+  // boundary while the pause marker exists; resume continues here.
+  await input.waitWhilePaused?.().catch(() => {});
   const executed = await executeStage(input, plan);
   progress(input, 'evidence', `${executed.length} sumber ter-fetch, menilai kredibilitas…`);
+  await input.waitWhilePaused?.().catch(() => {});
   const { sources, evidence } = await evidenceStage(input, executed);
 
   // verify (ekstraksi independen) — 1x revisi bila model gagal total.
@@ -516,6 +525,7 @@ export async function runResearchPipeline(input: ResearchPipelineInput): Promise
   for (let attempt = 1; attempt <= MAX_STAGE_ATTEMPTS; attempt += 1) {
     try {
       progress(input, 'verify', `ekstraksi klaim (upaya ${attempt})…`);
+      await input.waitWhilePaused?.().catch(() => {});
       claims = await verifyStage(input.provider, sources, evidence, plan.language, signal);
       break;
     } catch (err) {
@@ -526,6 +536,7 @@ export async function runResearchPipeline(input: ResearchPipelineInput): Promise
 
   // synthesize
   progress(input, 'synthesize', 'menyusun laporan dari klaim terverifikasi…');
+  await input.waitWhilePaused?.().catch(() => {});
   const synth = await synthesizeStage(
     input.provider,
     { question: plan.question, language: plan.language, claims, sources },

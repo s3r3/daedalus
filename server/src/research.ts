@@ -51,6 +51,8 @@ export type ResearchCoreHooks = {
     /** API key Elsevier (env ELSEVIER_API_KEY) — kuartil Scopus penuh. */
     elsevierApiKey?: string;
     onProgress?: (stage: ResearchStageId, detail: string) => void;
+    /** Cooperative pause (Dae Captain pill ⏸) — diteruskan ke pipeline. */
+    waitWhilePaused?: () => Promise<void>;
   }): Promise<ResearchEngineSurface>;
   searchWeb(query: string): Promise<ResearchSearchHit[]>;
   fetchPage(url: string): Promise<FetchedPage | null>;
@@ -729,9 +731,9 @@ export function defaultResearchHooks(): ResearchCoreHooks {
       });
       return engine.planResearch(question);
     },
-    createEngine: async ({ provider, fetch, elsevierApiKey, onProgress }) => {
+    createEngine: async ({ provider, fetch, elsevierApiKey, onProgress, waitWhilePaused }) => {
       const mod = await import("@daedalus/core/research/engine.ts");
-      const engine = new mod.ResearchEngine({ provider, fetch, elsevierApiKey, onProgress });
+      const engine = new mod.ResearchEngine({ provider, fetch, elsevierApiKey, onProgress, waitWhilePaused });
       return engine as unknown as ResearchEngineSurface;
     },
     searchWeb: defaultSearchWeb,
@@ -785,6 +787,8 @@ export type StagedResearchPlan = {
   question: string;
   workspaceRoot: string;
   plan: ResearchPlan;
+  /** Dae Captain v2 Fase 7 — kedalaman yang dipilih di kartu [Cepat][Standar][Mendalam]. */
+  depth?: string;
   createdAt: number;
 };
 

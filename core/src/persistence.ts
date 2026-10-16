@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import type { Event, EventType } from "./contracts.ts";
 import type { WorktreeRecord } from "./worktree.ts";
@@ -9,6 +9,20 @@ import type { WorktreeRecord } from "./worktree.ts";
  *   .daedalus/tasks/<task_id>/state.json     current task state snapshot
  * No database dependency (Phases 0–3).
  */
+/**
+ * Best-effort human text from a task event payload (THOUGHT.text,
+ * MODEL deltas excluded — too noisy). Used for the pill's phase line.
+ */
+function eventText(payload: unknown): string {
+  if (!payload || typeof payload !== "object") return "";
+  const p = payload as Record<string, unknown>;
+  for (const key of ["text", "message", "summary", "detail"]) {
+    const v = p[key];
+    if (typeof v === "string" && v.trim()) return v.trim().replace(/\s+/g, " ");
+  }
+  return "";
+}
+
 export class TaskStore {
   readonly root: string;
 
@@ -154,6 +168,90 @@ export class TaskStore {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Cooperative pause (Dae Captain pill ⏸): `POST /tasks/:id/pause` writes
+   * a marker; every engine polls it at its next safe checkpoint and blocks
+   * there until `POST /tasks/:id/resume` clears the marker. Unlike cancel,
+   * the task keeps all its state and continues from the checkpoint.
+   */
+  requestPause(taskId: string): void {
+    const dir = this.taskDir(taskId);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "pause.request"), new Date().toISOString(), "utf8");
+  }
+
+  clearPause(taskId: string): void {
+    try {
+      unlinkSync(join(this.taskDir(taskId), "pause.request"));
+    } catch {
+      /* not paused — nothing to clear */
+    }
+  }
+
+  isPauseRequested(taskId: string): boolean {
+    try {
+      readFileSync(join(this.taskDir(taskId), "pause.request"), "utf8");
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Block while the pause marker exists. Engines await this at their safe
+   * checkpoints (loop-top, stage boundaries) — the task suspends without
+   * losing state and resumes from the same checkpoint. Resolves immediately
+   * when the task is not paused.
+   */
+  async waitWhilePaused(taskId: string): Promise<void> {
+    if (!this.isPauseRequested(taskId)) return;
+    while (this.isPauseRequested(taskId)) {
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+  }
+
+  /** Count events of one type in a task's log (cheap line scan, no full replay). */
+  countEventType(taskId: string, type: string): number {
+    let raw: string;
+    try {
+      raw = readFileSync(join(this.taskDir(taskId), "events.jsonl"), "utf8");
+    } catch {
+      return 0;
+    }
+    let count = 0;
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const event = JSON.parse(line) as { type?: unknown };
+        if (event.type === type) count++;
+      } catch {
+        /* corrupt line — skip */
+      }
+    }
+    return count;
+  }
+
+  /** Short human text of the task's latest event payload (THOUGHT etc.), for the pill's phase line. Empty when none. */
+  lastEventText(taskId: string, maxChars = 90): string {
+    let raw: string;
+    try {
+      raw = readFileSync(join(this.taskDir(taskId), "events.jsonl"), "utf8");
+    } catch {
+      return "";
+    }
+    const lines = raw.split("\n").filter((line) => line.trim().length > 0);
+    for (let i = lines.length - 1; i >= 0 && i >= lines.length - 6; i--) {
+      try {
+        const event = JSON.parse(lines[i]!) as { payload?: unknown };
+        const text = eventText(event.payload);
+        if (text) return text.length > maxChars ? text.slice(0, maxChars - 1) + "…" : text;
+      } catch {
+        /* corrupt line — try an older one */
+      }
+    }
+    return "";
   }
 
   // --- Checkpoints -------------------------------------------------------

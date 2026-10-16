@@ -1675,6 +1675,9 @@ export class TaskRunner {
       // token budget (partial stop, never a crash).
       chatOptions: this.#engineChatOptions('dokumen', this.#resolveRunThinkingLevel(options)),
       tokenBudget: this.#createRunTokenBudget(options),
+      // Cooperative pause (Dae Captain pill ⏸): the engine suspends at
+      // stage boundaries while the pause marker exists.
+      waitWhilePaused: () => this.store.waitWhilePaused(spec.id),
       onEvent: (event) => {
         if (event.type === 'model-request-started') {
           emit('MODEL_REQUEST_STARTED', { model: event.model });

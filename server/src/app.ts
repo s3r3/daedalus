@@ -4,6 +4,16 @@ import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/p
 import { createHash, randomBytes } from "node:crypto";
 import { basename, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+// Dae Captain v2 Fase 7 — chat cards: decompose plans, approval UndoStore,
+// and the v2 run timeline, surfaced through additive /captain/* routes.
+// Deep imports (not the barrel) mirror server/src/research.ts style.
+import { planTask, type TaskPlan, type SubTask } from "@daedalus/core/workflow/decompose.ts";
+import { UndoStore, type Action as WorkflowAction } from "@daedalus/core/workflow/approval.ts";
+import { getEvents, type AnyTimelineEvent } from "@daedalus/core/workflow/timeline.ts";
+import { UserMemory } from "@daedalus/core/workflow/memory.ts";
+import { ReminderStore } from "@daedalus/core/workflow/reminder.ts";
+import { listRoles, MODEL_TIER_LABELS, MODEL_TIERS, type ModelTier } from "@daedalus/core/workflow/model-roles.ts";
+import { exportDocumentMarkdown } from "@daedalus/core/dokumen/export-md.ts";
 import {
   EventBus,
   McpManager,
@@ -26,6 +36,7 @@ import {
   setSkillDisabled,
   parseModelStrategy,
   normalizeModelList,
+  normalizeRoleModelConfig,
   redactSettings,
   resolveDaedalusHome,
   reviewDiff,
@@ -57,6 +68,7 @@ import {
   readDeck,
   readActiveDocument,
   writeDocument,
+  documentPaths,
   readParsedBlocks,
   readAudit,
   appendAudit,
@@ -137,7 +149,7 @@ import {
   translateArtifacts,
   updateTurn,
 } from "@daedalus/core";
-import { collectRoots, listDirectory, listFilesFlat, listPlanDocuments, buildTree, resolveInside, MAX_FILE_BYTES, IMAGE_MEDIA_TYPES, MAX_IMAGE_FILE_BYTES } from "./workspace.ts";
+import { collectRoots, listDirectory, listFilesFlat, listPlanDocuments, listRecentFiles, buildTree, resolveInside, MAX_FILE_BYTES, IMAGE_MEDIA_TYPES, MAX_IMAGE_FILE_BYTES } from "./workspace.ts";
 import { classifyWebIntent, executeFastPath, resolveFastPathProvider } from "./fast-path.ts";
 import { gitStatus, revertFileToHead } from "./git-status.ts";
 import {
@@ -188,6 +200,90 @@ import {
   type ResearchCoreHooks,
   type ResearchDocHooks,
 } from "./research.ts";
+
+/**
+ * Dae Captain v2 Fase 7 — chat cards (additive state, server-process-local).
+ *
+ * - Staged task plans: planTask() (core/src/workflow/decompose.ts) splits a
+ *   multi-engine goal; the plan waits for the card's [Jalankan] before any
+ *   sub-task is dispatched. 30-minute TTL, same as staged research plans.
+ * - Undo stores: one bounded UndoStore (core/src/workflow/approval.ts) per
+ *   daedalus home. Route-level mutations (slide deck, dokumen sections)
+ *   record the pre-change bytes; POST /captain/undo/apply restores them.
+ */
+type StagedTaskPlan = {
+  plan: TaskPlan;
+  runId: string;
+  workspaceRoot: string;
+  createdAt: number;
+  execution?: CaptainPlanExecution;
+};
+
+/** Live state of one plan execution (polled by the chat card). */
+type CaptainPlanExecution = {
+  status: "executing" | "done" | "done_with_failures";
+  startedAt: string;
+  finishedAt?: string;
+  subTasks: Array<{
+    sub_id: string;
+    engine: string;
+    goal: string;
+    dependsOn: string[];
+    task_id: string | null;
+    status: "waiting" | "running" | "done" | "failed" | "skipped";
+    error?: string;
+    /** Short producer note threaded into consumer sub-task goals. */
+    resultNote?: string;
+  }>;
+};
+const STAGED_TASK_PLAN_TTL_MS = 30 * 60 * 1000;
+const stagedTaskPlans = new Map<string, StagedTaskPlan>();
+
+function sweepStagedTaskPlans(now: number = Date.now()): void {
+  for (const [id, staged] of stagedTaskPlans) {
+    if (now - staged.createdAt >= STAGED_TASK_PLAN_TTL_MS) stagedTaskPlans.delete(id);
+  }
+}
+
+const undoStores = new Map<string, UndoStore>();
+function undoStoreFor(daedalusHome: string): UndoStore {
+  let store = undoStores.get(daedalusHome);
+  if (!store) {
+    store = new UndoStore({ backupDir: join(daedalusHome, "undo") });
+    undoStores.set(daedalusHome, store);
+  }
+  return store;
+}
+
+/**
+ * Snapshot the pre-change bytes of a route-level mutation into the
+ * approval UndoStore. Never throws: a failed snapshot is logged and the
+ * mutation proceeds — undo is then honestly unavailable (404) rather
+ * than half-recorded.
+ */
+function recordCaptainUndo(input: {
+  ctx: AppContext;
+  root: string;
+  runId?: unknown;
+  action: WorkflowAction;
+  target: string;
+  content: string | Uint8Array;
+}): void {
+  const home = resolveDaedalusHome(input.ctx.settings.daedalusHome, input.root);
+  const runId =
+    typeof input.runId === "string" && input.runId.trim() ? input.runId.trim() : "chat";
+  try {
+    undoStoreFor(home).record(runId, input.action, {
+      target: input.target,
+      content: input.content,
+    });
+  } catch (error) {
+    input.ctx.log.warn("captain undo snapshot failed", {
+      error: String(error),
+      target: input.target,
+    });
+  }
+}
 /**
  * REST + WebSocket gateway (PLAN.md §3.0, §3.6). Commands and reads only —
  * no agent, tool, or LLM logic lives here; the core owns execution.
@@ -196,6 +292,15 @@ import {
 export type SessionState = {
   mode: AgentMode;
   autoApprove: boolean;
+  /**
+   * Dae Captain v2 Fase 8: per-type approval prefs (Settings → Approval).
+   * Legacy `autoApprove: true` forces all three to "auto" (see
+   * resolveApprovalTypes); otherwise these decide per tool call:
+   * - newFile: "auto" (approved default — file baru auto-ON)
+   * - modifyFile: "ask" (approved default — ubah/hapus auto-OFF)
+   * - command: "ask" (approved default — perintah auto-OFF)
+   */
+  approvalTypes?: ApprovalTypePrefs;
   thinking: boolean;
   /**
    * Reasoning-effort tier (settings layer 2). The deprecated `thinking`
@@ -213,6 +318,80 @@ export type SessionState = {
    */
   disabledEngines?: WorkflowEngine[];
 };
+
+/**
+ * Dae Captain v2 Fase 8: per-type approval treatment. One of "auto"
+ * (run without asking) or "ask" (approval card first), per category.
+ */
+export type ApprovalTypePrefs = {
+  newFile: "auto" | "ask";
+  modifyFile: "auto" | "ask";
+  command: "auto" | "ask";
+};
+
+/** Approved defaults (mockup + Coding flow): new files auto, modify/delete and commands ask. */
+export const DEFAULT_APPROVAL_TYPES: ApprovalTypePrefs = {
+  newFile: "auto",
+  modifyFile: "ask",
+  command: "ask",
+};
+
+/** Effective per-type prefs: legacy global auto-approve wins over everything. */
+export function resolveApprovalTypes(ctx: AppContext): ApprovalTypePrefs {
+  if (ctx.session.autoApprove) return { newFile: "auto", modifyFile: "auto", command: "auto" };
+  return { ...DEFAULT_APPROVAL_TYPES, ...(ctx.session.approvalTypes ?? {}) };
+}
+
+/**
+ * `approvalTypes` / `approval_types`: `{ newFile?, modifyFile?, command? }`
+ * with "auto"|"ask" values; unset fields keep their defaults. Non-object
+ * or bad values → named 400.
+ */
+function parseApprovalTypes(value: unknown): ApprovalTypePrefs {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid_approval_types");
+  }
+  const record = value as Record<string, unknown>;
+  const pick = (key: keyof ApprovalTypePrefs): "auto" | "ask" => {
+    const raw = record[key];
+    if (raw === undefined) return DEFAULT_APPROVAL_TYPES[key];
+    if (raw !== "auto" && raw !== "ask") throw new Error("invalid_approval_types");
+    return raw;
+  };
+  return { newFile: pick("newFile"), modifyFile: pick("modifyFile"), command: pick("command") };
+}
+
+/**
+ * Map one tool call to the per-type approval treatment.
+ *
+ * - `execute` (run_command) → the "command" pref.
+ * - `write` to a path that does not exist yet → "newFile".
+ * - `write` to an existing path (or an unresolvable one) → "modifyFile".
+ * - `read` never reaches here (the runtime returns 'auto' first), but
+ *   defaults to 'auto' anyway.
+ */
+function approvalTypePolicyFor(
+  key: { action: "read" | "write" | "execute"; path?: string },
+  workspaceRoot: string,
+  types: ApprovalTypePrefs,
+): "auto" | "ask" | "deny" {
+  if (key.action === "execute") return types.command;
+  if (key.action === "write") {
+    const p = key.path;
+    if (p) {
+      try {
+        const absoluteRoot = resolve(workspaceRoot);
+        const abs = resolve(absoluteRoot, p);
+        if (abs !== absoluteRoot && !abs.startsWith(absoluteRoot + sep)) return types.modifyFile;
+        return existsSync(abs) ? types.modifyFile : types.newFile;
+      } catch {
+        return types.modifyFile;
+      }
+    }
+    return types.modifyFile;
+  }
+  return "auto";
+}
 
 /** One skill in the inventory payload: the collision winner, or a shadowed copy marked with the winner's origin. */
 export type ExtensionSkill = {
@@ -563,6 +742,11 @@ function applySessionUpdate(ctx: AppContext, parsed: Record<string, unknown>): v
     if (typeof parsed.autoApprove !== "boolean") throw new Error("autoApprove must be a boolean");
     ctx.session.autoApprove = parsed.autoApprove;
   }
+  // Dae Captain v2 Fase 8: per-type approval prefs (Settings → Approval).
+  const approvalTypesRaw = parsed.approvalTypes ?? parsed.approval_types;
+  if (approvalTypesRaw !== undefined) {
+    ctx.session.approvalTypes = parseApprovalTypes(approvalTypesRaw);
+  }
   // Reasoning-effort tier (settings layer 2): an explicit level wins; the
   // deprecated `thinking` boolean stays accepted and maps false → 'off'
   // only when no level was given (core resolveThinkingLevel semantics).
@@ -660,9 +844,31 @@ function applySettingsUpdate(ctx: AppContext, parsed: Record<string, unknown>): 
       throw new Error("invalid_max_iterations");
     } else ctx.settings.maxIterations = maxIterationsRaw;
   }
+  // Model per peran — 2 tier (Dae Captain v2, Fase 5): additive; string kosong
+  // = unset (ikut default). Non-object 400s.
+  const modelRolesRaw = parsed.modelRoles !== undefined ? parsed.modelRoles : parsed.model_roles;
+  if (modelRolesRaw !== undefined) {
+    ctx.settings.modelRoles = parseModelRoles(modelRolesRaw);
+  }
   if (typeof parsed.model === "string") ctx.session.model = parsed.model;
   if (typeof parsed.providerId === "string") ctx.session.providerId = parsed.providerId;
   if (typeof parsed.provider_id === "string") ctx.session.providerId = parsed.provider_id;
+}
+
+/**
+ * `modelRoles` / `model_roles`: object `{ default?, strong?, light? }` dengan
+ * string model ID; string kosong = unset. Non-object → named 400.
+ */
+function parseModelRoles(value: unknown): { default: string; strong?: string; light?: string } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("invalid_model_roles");
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (key !== "default" && key !== "strong" && key !== "light") throw new Error("invalid_model_roles");
+    if (record[key] !== undefined && typeof record[key] !== "string") throw new Error("invalid_model_roles");
+  }
+  return normalizeRoleModelConfig(record);
 }
 
 /** `llm.temperature`: a finite number in 0..2, else a named 400. */
@@ -850,6 +1056,59 @@ async function handleProviders(ctx: AppContext, req: IncomingMessage, res: Serve
       const provider = registry.upsert(providerInput(mergeProviderInput(registry, parsed)) as never);
       await ctx.providerStore.save();
       sendJson(res, 201, { provider });
+      return;
+    }
+
+    // Dae Captain v2 Fase 8 (additive): test an UNSAVED provider config
+    // (the Settings "Tambah Provider" form) — nothing is persisted.
+    // "Tes Koneksi" must pass before the form's Simpan. `type` selects the
+    // strategy: "openai" (default) fetches /models like a saved provider's
+    // test; "other" only checks the base URL is reachable (no model list).
+    if (method === "POST" && url.pathname === "/providers/test-input") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        const baseUrl = typeof parsed.baseUrl === "string" ? parsed.baseUrl.trim().replace(/\/+$/, "") : "";
+        if (!baseUrl) {
+          sendJson(res, 400, { error: "base_url_required", request_id: requestId });
+          return;
+        }
+        const apiKey = typeof parsed.apiKey === "string" && parsed.apiKey.trim() ? parsed.apiKey.trim() : undefined;
+        const type = parsed.type === "other" ? "other" : "openai";
+        try {
+          if (type === "other") {
+            // Non-OpenAI provider: the base URL just has to answer.
+            // Any HTTP status (even 404) proves reachability; only a
+            // network failure fails the test.
+            const response = await fetch(baseUrl, { method: "GET", signal: AbortSignal.timeout(15_000) });
+            sendJson(res, 200, {
+              ok: true,
+              models: [],
+              message: `Terjangkau (HTTP ${response.status}) — tipe "Lainnya", daftar model tidak diambil.`,
+              request_id: requestId,
+            });
+            return;
+          }
+          const response = await fetch(`${baseUrl}/models`, {
+            method: "GET",
+            headers: apiKey ? { authorization: `Bearer ${apiKey}` } : {},
+            signal: AbortSignal.timeout(15_000),
+          });
+          if (!response.ok) {
+            const text = await response.text().catch(() => "");
+            throw new Error(`provider returned HTTP ${response.status}${text ? `: ${text.slice(0, 200)}` : ""}`);
+          }
+          const json = (await response.json().catch(() => ({}))) as { data?: Array<{ id?: string }>; models?: Array<{ id?: string }> };
+          const entries = json.data ?? json.models ?? [];
+          const models = entries.map((entry) => entry.id).filter((id): id is string => typeof id === "string" && id.length > 0);
+          sendJson(res, 200, { ok: true, models, message: `Connection OK (${models.length} models)`, request_id: requestId });
+        } catch (error) {
+          sendJson(res, 502, { ok: false, models: [], message: errorMessage(error), request_id: requestId });
+        }
+      })();
       return;
     }
 
@@ -1699,6 +1958,17 @@ async function createTaskCore(
       workspaceRoot: repoPath,
       approvalPolicy: autoApprove ? "auto" : "ask",
       approvalMemory: ctx.approvalMemory,
+      // Dae Captain v2 Fase 8: per-type approval (file baru / ubah-hapus /
+      // perintah) from the Settings page. A request-level autoApprove=true
+      // forces all-auto, exactly like the legacy global did.
+      harness: {
+        policyFor: (key, _tool) => {
+          const types: ApprovalTypePrefs = autoApprove
+            ? { newFile: "auto", modifyFile: "auto", command: "auto" }
+            : resolveApprovalTypes(ctx);
+          return approvalTypePolicyFor(key, repoPath, types);
+        },
+      },
       ...(maxIterations !== undefined ? { maxIterations } : {}),
       bus: ctx.bus,
       store: taskStore,
@@ -1816,7 +2086,7 @@ async function createTaskCore(
  */
 async function stageResearchPlanCore(
   ctx: AppContext,
-  input: { question: string; root?: unknown; provider_id?: string; model?: string },
+  input: { question: string; root?: unknown; provider_id?: string; model?: string; depth?: string },
   requestId: string,
 ): Promise<{ planId?: string; status: number; body: unknown }> {
   try {
@@ -1835,11 +2105,27 @@ async function stageResearchPlanCore(
       return { status: 400, body: { error: "no_provider_configured", request_id: requestId } };
     }
     const plan = await hooks.planResearch({ question, provider });
-    const staged = stageResearchPlan({ question, workspaceRoot: root, plan });
+    // Dae Captain v2 Fase 7 — kedalaman riset [Cepat][Standar][Mendalam]:
+    // honest resource-budget lever on the staged plan. Cepat caps the
+    // query/source budget down; Mendalam raises the floor; Standar keeps
+    // the planner's own budget.
+    const depth = input.depth === "cepat" || input.depth === "mendalam" ? input.depth : "standar";
+    if (depth === "cepat") {
+      plan.budget = {
+        maxQueries: Math.min(plan.budget.maxQueries, 4),
+        maxSources: Math.min(plan.budget.maxSources, 5),
+      };
+    } else if (depth === "mendalam") {
+      plan.budget = {
+        maxQueries: Math.max(plan.budget.maxQueries, 10),
+        maxSources: Math.max(plan.budget.maxSources, 12),
+      };
+    }
+    const staged = stageResearchPlan({ question, workspaceRoot: root, plan, depth });
     return {
       planId: staged.planId,
       status: 200,
-      body: { planId: staged.planId, plan, request_id: requestId },
+      body: { planId: staged.planId, plan, depth, request_id: requestId },
     };
   } catch (error) {
     return { status: errorStatus(error), body: { error: errorMessage(error), request_id: requestId } };
@@ -1848,11 +2134,243 @@ async function stageResearchPlanCore(
 
 
 /**
+ * Run a staged research plan (shared core behind POST /research/run and
+ * the Dae Captain task-plan executor). Returns { status, body }; callers
+ * send it as the HTTP response. Behavior-identical to the original inline
+ * route body: the staged plan is single-use, a verify failure inside the
+ * engine answers 422, and a report is NEVER returned with unverified
+ * claims. Progress events stream to GET /research/progress/:planId.
+ */
+async function runStagedResearchPlanCore(
+  ctx: AppContext,
+  parsed: Record<string, unknown>,
+  requestId: string,
+): Promise<{ status: number; body: unknown }> {
+  const planId = typeof parsed.planId === "string" ? parsed.planId : "";
+  // Peek dulu (jangan consume): plan baru dihapus saat run selesai.
+  // Request kedua untuk plan yang masih berjalan -> 409, bukan 410.
+  const staged = planId ? peekStagedResearchPlan(planId) : undefined;
+  if (!staged) {
+    return { status: 410, body: { error: "plan_expired", message: "rencana kedaluwarsa, buat ulang", request_id: requestId } };
+  }
+  if (!tryStartResearchRun(planId)) {
+    return { status: 409, body: { error: "already_running", message: "riset untuk rencana ini sudah berjalan", request_id: requestId } };
+  }
+  const hooks = await resolveResearchHooks(ctx);
+  await ensureProvidersLoaded(ctx);
+  const provider = researchProviderFromRequest(ctx, parsed);
+  if (!provider) {
+    finishResearchRun(planId);
+    return { status: 400, body: { error: "no_provider_configured", request_id: requestId } };
+  }
+  const engine = await hooks.createEngine({
+    provider,
+    fetch: { searchWeb: hooks.searchWeb, fetchPage: hooks.fetchPage },
+    elsevierApiKey: process.env.ELSEVIER_API_KEY || undefined,
+    onProgress: (stage, detail) => appendResearchProgress(planId, stage, detail),
+    // Cooperative pause (Dae Captain pill ⏸): POST /tasks/:planId/pause
+    // suspends the pipeline at the next stage boundary.
+    waitWhilePaused: () => ctx.store.waitWhilePaused(planId),
+  });
+  let result;
+  try {
+    result = await engine.runResearch(staged.plan);
+  } catch (error) {
+    const issues = researchVerifyIssues(error);
+    if (issues) {
+      return { status: 422, body: { error: "verify_failed", issues, request_id: requestId } };
+    }
+    throw error;
+  } finally {
+    // Single-use gate: plan dikonsumsi saat run selesai (sukses/gagal).
+    takeStagedResearchPlan(planId);
+    finishResearchRun(planId);
+  }
+  storeResearchReport(result.report);
+  rememberResearchRunReport(planId, result.report.reportId);
+  return {
+    status: 200,
+    body: {
+      report: result.report,
+      request_id: requestId,
+    },
+  };
+}
+
+/**
  * Dae Captain workflow helpers (PR1). The router never calls engine
  * classes directly: dispatch reuses createTaskCore (same boundary as
  * POST /tasks) and stageResearchPlanCore (same boundary as
  * POST /research/plan), so the engine-separation rule holds.
  */
+
+/** Poll a dispatched task until it leaves the active states. */
+async function waitForCaptainTask(
+  tasks: TaskStore,
+  taskId: string,
+  timeoutMs = 90 * 60 * 1000,
+): Promise<string> {
+  const start = Date.now();
+  for (;;) {
+    const state = tasks.loadState<{ status?: string }>(taskId);
+    const status = typeof state?.status === "string" ? state.status : "";
+    if (status === "done" || status === "failed" || status === "cancelled") return status;
+    if (Date.now() - start > timeoutMs) return "timeout";
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+
+type CaptainSubTaskState = NonNullable<CaptainPlanExecution["subTasks"]>[number];
+
+/** Dispatch + await one plan sub-task, then record its outcome. */
+async function runCaptainSubTask(
+  ctx: AppContext,
+  staged: StagedTaskPlan,
+  sub: CaptainSubTaskState,
+  requestId: string,
+): Promise<void> {
+  const exec = staged.execution;
+  if (!exec) return;
+  const home = resolveDaedalusHome(ctx.settings.daedalusHome, staged.workspaceRoot);
+  const tasks = new TaskStore(home);
+  sub.status = "running";
+  try {
+    // Consumer-after-producer: thread the producers' short notes into the
+    // consumer's goal so the engine sees "dari hasil ..." context.
+    let goal = sub.goal;
+    const notes = sub.dependsOn
+      .map((d) => exec.subTasks.find((x) => x.sub_id === d)?.resultNote)
+      .filter((n): n is string => !!n);
+    if (notes.length > 0) goal += "\n\nKonteks dari sub-task sebelumnya:\n" + notes.join("\n");
+
+    if (sub.engine === "research") {
+      const stagedPlan = await stageResearchPlanCore(
+        ctx,
+        { question: goal, root: staged.workspaceRoot },
+        requestId,
+      );
+      if (stagedPlan.status !== 200 || !stagedPlan.planId) {
+        throw new Error("gagal menyiapkan rencana riset");
+      }
+      sub.task_id = stagedPlan.planId;
+      appendPlanSubTaskTurn(ctx, staged, sub);
+      const runOut = await runStagedResearchPlanCore(ctx, { planId: stagedPlan.planId }, requestId);
+      if (runOut.status !== 200) {
+        const body = runOut.body as { error?: string; issues?: unknown };
+        throw new Error(
+          body?.error === "verify_failed"
+            ? "riset gagal verifikasi"
+            : `riset gagal (${body?.error ?? runOut.status})`,
+        );
+      }
+      const report = (runOut.body as { report?: { reportId?: string; summary?: string } })?.report;
+      sub.resultNote = `Riset selesai (report ${report?.reportId ?? "-"}): ${(report?.summary ?? "").slice(0, 400)}`;
+    } else {
+      const created = await createTaskCore(
+        ctx,
+        {
+          goal,
+          repo_path: staged.workspaceRoot,
+          ...(sub.engine === "coding" ? {} : { domain: sub.engine }),
+        },
+        requestId,
+      );
+      if (created.status !== 201 || !created.taskId) {
+        throw new Error(`dispatch gagal (${created.status})`);
+      }
+      sub.task_id = created.taskId;
+      appendPlanSubTaskTurn(ctx, staged, sub);
+      const finalStatus = await waitForCaptainTask(tasks, created.taskId);
+      if (finalStatus !== "done") throw new Error(`sub-task ${finalStatus}`);
+      const report = tasks.loadReport<{ summary?: string; title?: string }>(created.taskId);
+      const note = report?.summary ?? report?.title ?? "";
+      if (note) sub.resultNote = `Sub-task ${sub.sub_id} selesai: ${String(note).slice(0, 400)}`;
+    }
+    sub.status = "done";
+  } catch (error) {
+    sub.status = "failed";
+    sub.error = errorMessage(error).slice(0, 300);
+  }
+}
+
+/** Record a plan sub-task as a run turn so Antrean/chat can follow it. */
+function appendPlanSubTaskTurn(
+  ctx: AppContext,
+  staged: StagedTaskPlan,
+  sub: CaptainSubTaskState,
+): void {
+  try {
+    const runs = new WorkflowRunStore(
+      resolveDaedalusHome(ctx.settings.daedalusHome, staged.workspaceRoot),
+    );
+    const run = runs.loadRun(staged.runId);
+    if (!run) return;
+    appendTurn(run, {
+      engine: sub.engine as WorkflowEngine,
+      task_id: sub.task_id ?? sub.sub_id,
+      goal: sub.goal,
+      status: "running",
+      note: `rencana ${staged.plan.id} · ${sub.sub_id}`,
+    });
+    runs.saveRun(run);
+  } catch {
+    /* monitoring nicety — never fails the sub-task */
+  }
+}
+
+/**
+ * Background plan executor: Kahn waves over dependsOn, max 3 parallel per
+ * wave (the decompose design's ceiling). A failed sub-task skips its
+ * dependents but never stops the others. Mutates staged.execution in
+ * place; the chat card polls GET /captain/plans/:id.
+ */
+async function runCaptainPlanExecution(
+  ctx: AppContext,
+  staged: StagedTaskPlan,
+  requestId: string,
+): Promise<void> {
+  const exec = staged.execution;
+  if (!exec) return;
+  const remaining = new Set(exec.subTasks.map((s) => s.sub_id));
+  const doneOk = new Set<string>();
+  const failed = new Set<string>();
+  const isDone = (id: string) => doneOk.has(id);
+  const isFailed = (id: string) => failed.has(id);
+  while (remaining.size > 0) {
+    // Dependents of failed sub-tasks can never run: skip them now so the
+    // wave below never deadlocks waiting on an impossible dependency.
+    for (const s of exec.subTasks) {
+      if (remaining.has(s.sub_id) && s.status === "waiting" && s.dependsOn.some(isFailed)) {
+        s.status = "skipped";
+        s.error = "dependensi gagal";
+        remaining.delete(s.sub_id);
+        failed.add(s.sub_id);
+      }
+    }
+    const ready = exec.subTasks.filter(
+      (s) => remaining.has(s.sub_id) && s.status === "waiting" && s.dependsOn.every(isDone),
+    );
+    if (ready.length === 0) {
+      // Nothing dispatchable left (dependency cycle): skip honestly.
+      for (const s of exec.subTasks) {
+        if (remaining.has(s.sub_id)) {
+          s.status = "skipped";
+          s.error = s.error ?? "dependensi tidak terpenuhi";
+          remaining.delete(s.sub_id);
+        }
+      }
+      break;
+    }
+    const batch = ready.slice(0, 3);
+    await Promise.all(batch.map((s) => runCaptainSubTask(ctx, staged, s, requestId)));
+    for (const s of batch) {
+      if (s.status === "done") doneOk.add(s.sub_id);
+      else if (s.status === "failed" || s.status === "skipped") failed.add(s.sub_id);
+    }
+  }
+  exec.status = exec.subTasks.some((s) => s.status === "failed") ? "done_with_failures" : "done";
+  exec.finishedAt = new Date().toISOString();
+}
 
 /**
  * The provider + model the companion actually picked in Settings — chat
@@ -2266,6 +2784,44 @@ async function dispatchChatTurn(
   const goal = message + formatResolvedForGoal(resolved);
   const routerInfo = { layer: routerLayer, confidence, rule: matchedRule };
 
+  // Dae Captain v2 Fase 7 — multi-engine goals decompose into a plan card
+  // (core/src/workflow/decompose.ts planTask, staged like research plans)
+  // instead of a single-engine task. An explicit engine override always
+  // wins; single-engine goals keep the exact old path below.
+  // NOTE: planTask sees the RAW message, not the resolved goal — the
+  // appended "Konteks" block's bullet lines would otherwise split into
+  // phantom fragments and turn every continuation ("dari X tadi …")
+  // into a spurious multi-engine plan. planTask resolves "tadi" itself
+  // from the run timeline for contextRefs.
+  if (!overrideRaw) {
+    const taskPlan = planTask(message, run);
+    if (taskPlan.showPlanCard) {
+      sweepStagedTaskPlans();
+      stagedTaskPlans.set(taskPlan.id, {
+        plan: taskPlan,
+        runId: run.run_id,
+        workspaceRoot: root,
+        createdAt: Date.now(),
+      });
+      const turn = appendTurn(run, {
+        engine,
+        task_id: taskPlan.id,
+        goal: message,
+        status: "running",
+        note: "rencana multi-engine staged — menunggu 'Jalankan'",
+      });
+      runs.saveRun(run);
+      return {
+        status: 200,
+        body: {
+          run_id: run.run_id, turn_id: turn.turn_id, engine,
+          plan_id: taskPlan.id, plan: taskPlan, staged: true,
+          resolved_artifacts: resolved, router: routerInfo, request_id: requestId,
+        },
+      };
+    }
+  }
+
   if (engine === "research") {
     const staged = await stageResearchPlanCore(
       ctx,
@@ -2420,22 +2976,49 @@ function presentWorkflowTurn(
     updated_at: turn.updated_at,
   };
   if (turn.status !== "running") return base;
+  // Cooperative pause (Dae Captain pill ⏸): the marker survives even
+  // without a live runner, so the pill can show "paused" honestly.
+  const paused = tasks.isPauseRequested(turn.task_id);
   if (turn.engine === "research") {
     return {
       ...base,
       live: peekStagedResearchPlan(turn.task_id)
         ? "staged_awaiting_gate"
         : "running",
+      ...(paused ? { paused: true } : {}),
     };
   }
   const runner = ctx.activeRunners.get(turn.task_id);
-  if (!runner) return base;
+  if (!runner) {
+    // No live runner: either queued (task created/pending, not picked up
+    // yet) or orphaned (reconcile() will settle it). The pill shows
+    // "queued" only for the former — never for a dead task.
+    const taskState = tasks.loadState<{ status?: string }>(turn.task_id);
+    const taskStatus = typeof taskState?.status === "string" ? taskState.status : "";
+    const queued = taskStatus === "created" || taskStatus === "pending" || taskStatus === "";
+    return {
+      ...base,
+      ...(paused ? { paused: true } : {}),
+      ...(queued ? { queued: true } : {}),
+    };
+  }
   const stats = tasks.eventStats(turn.task_id);
+  const lastText = tasks.lastEventText(turn.task_id);
   return {
     ...base,
     live: "running",
     ...(stats.lastType ? { last_event: stats.lastType } : {}),
     ...(stats.lastTs ? { last_event_ts: stats.lastTs } : {}),
+    // Engine's own latest narration ("Mengisi slide 8/12…") — the pill's
+    // phase line and progress ring read this, never a fabricated number.
+    ...(lastText ? { last_event_text: lastText } : {}),
+    ...(paused ? { paused: true } : {}),
+    // Consecutive validation failures → the pill's "Memperbaiki (n/2)".
+    // Only meaningful while the engine is still retrying (last event
+    // is the failure itself); otherwise the field is omitted.
+    ...(stats.lastType === "VALIDATION_FAILED"
+      ? { validation_failures: tasks.countEventType(turn.task_id, "VALIDATION_FAILED") }
+      : {}),
     pending_approvals: runner.approvals.pending().map((entry) => ({
       // `id` first: the companion resolves approvals by id
       // (`POST /tasks/:id/approvals/:approvalId`), which searches every
@@ -3199,6 +3782,354 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
+    // ---- Dae Captain v2 Fase 8: settings surfaces (additive) ----
+    // Per-user long-term memory (core/src/workflow/memory.ts) and reminders
+    // (core/src/workflow/reminder.ts), plus the model-per-role labels from
+    // core/src/workflow/model-roles.ts for the Settings "Model per Peran"
+    // section. Single-user daemon: the user is fixed to "default".
+    function captainHome(): string {
+      return resolveDaedalusHome(ctx.settings.daedalusHome, ctx.session.workspaceRoot ?? ctx.cwd);
+    }
+
+    // Model per peran: 2 tier labels + role list (labels Indonesia) from core.
+    if (method === "GET" && url.pathname === "/captain/model-roles") {
+      sendJson(res, 200, {
+        tiers: MODEL_TIERS.map((tier: ModelTier) => ({ tier, label: MODEL_TIER_LABELS[tier] })),
+        roles: listRoles(),
+        request_id: requestId,
+      });
+      return;
+    }
+
+    // "Apa yang kamu ingat tentang saya?" — everything remembered.
+    if (method === "GET" && url.pathname === "/captain/memory") {
+      try {
+        const memory = new UserMemory(captainHome(), "default");
+        sendJson(res, 200, { user_id: "default", memories: memory.getAllMemories(), request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    // Wipe all long-term memory for this user.
+    if (method === "DELETE" && url.pathname === "/captain/memory") {
+      try {
+        new UserMemory(captainHome(), "default").forgetAll();
+        sendJson(res, 200, { forgotten: true, user_id: "default", request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    // Active (pending) reminders, soonest first.
+    if (method === "GET" && url.pathname === "/captain/reminders") {
+      try {
+        const reminders = new ReminderStore(captainHome()).listReminders("default");
+        sendJson(res, 200, { user_id: "default", reminders, request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    // Cancel one reminder.
+    const cancelReminderMatch = /^\/captain\/reminders\/([^/]+)\/cancel$/.exec(url.pathname);
+    if (method === "POST" && cancelReminderMatch?.[1]) {
+      try {
+        const cancelled = new ReminderStore(captainHome()).cancelReminder(cancelReminderMatch[1]);
+        if (!cancelled) {
+          sendJson(res, 404, { error: "reminder_not_found", request_id: requestId });
+          return;
+        }
+        sendJson(res, 200, { cancelled: true, request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    // ---- Dae Captain v2 Fase 7: chat cards (/captain/*, additive) ----
+    // Structured action cards are rendered from server data, never from
+    // hardcoded HTML. Every card button calls one of these (or a
+    // pre-existing engine) endpoints.
+
+    // Stage a task plan via core/src/workflow/decompose.ts planTask().
+    // Body: { goal, workspace_root?, run_id? }.
+    if (method === "POST" && url.pathname === "/captain/plans") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const goal = typeof parsed.goal === "string" ? parsed.goal.trim() : "";
+          if (!goal) {
+            sendJson(res, 400, { error: "goal_required", request_id: requestId });
+            return;
+          }
+          const root = resolveAllowedRoot(ctx, parsed.workspace_root ?? parsed.workspaceRoot);
+          const runs = new WorkflowRunStore(
+            resolveDaedalusHome(ctx.settings.daedalusHome, root),
+          );
+          const runIdRaw =
+            typeof parsed.run_id === "string" && parsed.run_id ? parsed.run_id : undefined;
+          const loaded = loadOrCreateChatRun(runs, root, runIdRaw);
+          if ("missing" in loaded) {
+            sendJson(res, 404, { error: "run_not_found", request_id: requestId });
+            return;
+          }
+          const plan = planTask(goal, loaded.run);
+          sweepStagedTaskPlans();
+          stagedTaskPlans.set(plan.id, {
+            plan,
+            runId: loaded.run.run_id,
+            workspaceRoot: root,
+            createdAt: Date.now(),
+          });
+          sendJson(res, 200, {
+            plan_id: plan.id,
+            plan,
+            run_id: loaded.run.run_id,
+            request_id: requestId,
+          });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Read one staged plan + its live execution state (the card polls this).
+    const captainPlanMatch = /^\/captain\/plans\/([^/]+)$/.exec(url.pathname);
+    if (method === "GET" && captainPlanMatch?.[1] !== undefined) {
+      sweepStagedTaskPlans();
+      const staged = stagedTaskPlans.get(captainPlanMatch[1] ?? "");
+      if (!staged) {
+        sendJson(res, 404, { error: "plan_not_found", request_id: requestId });
+        return;
+      }
+      sendJson(res, 200, {
+        plan_id: staged.plan.id,
+        plan: staged.plan,
+        execution: staged.execution ?? null,
+        request_id: requestId,
+      });
+      return;
+    }
+
+    // Execute a staged plan: 202 immediately, Kahn waves in the background
+    // (max 3 parallel), polled via GET /captain/plans/:id.
+    const captainPlanExecMatch = /^\/captain\/plans\/([^/]+)\/execute$/.exec(url.pathname);
+    if (method === "POST" && captainPlanExecMatch?.[1] !== undefined) {
+      void (async () => {
+        try {
+          sweepStagedTaskPlans();
+          const staged = stagedTaskPlans.get(captainPlanExecMatch[1] ?? "");
+          if (!staged) {
+            sendJson(res, 404, { error: "plan_not_found", request_id: requestId });
+            return;
+          }
+          if (staged.execution?.status === "executing") {
+            sendJson(res, 409, { error: "already_executing", request_id: requestId });
+            return;
+          }
+          staged.execution = {
+            status: "executing",
+            startedAt: new Date().toISOString(),
+            subTasks: staged.plan.tasks.map((t: SubTask) => ({
+              sub_id: t.id,
+              engine: t.engine,
+              goal: t.goal,
+              dependsOn: [...(t.dependsOn ?? [])],
+              task_id: null,
+              status: "waiting" as const,
+            })),
+          };
+          sendJson(res, 202, {
+            plan_id: staged.plan.id,
+            status: "executing",
+            sub_tasks: staged.execution.subTasks,
+            request_id: requestId,
+          });
+          void runCaptainPlanExecution(ctx, staged, requestId).catch((error) =>
+            ctx.log.error("captain plan execution failed", {
+              error: String(error),
+              plan_id: staged.plan.id,
+            }),
+          );
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // Approval UndoStore: list snapshots for a run (the [📋 Versi] card and
+    // the [↩️ Undo] button read this). Query: ?run_id=&workspace_root=.
+    if (method === "GET" && url.pathname === "/captain/undo") {
+      const runId = url.searchParams.get("run_id") ?? "";
+      const root = resolveAllowedRoot(
+        ctx,
+        url.searchParams.get("workspace_root") ?? url.searchParams.get("root") ?? ctx.session.workspaceRoot,
+      );
+      const home = resolveDaedalusHome(ctx.settings.daedalusHome, root);
+      const entries = undoStoreFor(home)
+        .list()
+        .filter((e) => !runId || e.runId === runId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .map((e) => ({
+          undo_id: e.undoId,
+          run_id: e.runId,
+          engine: e.engine,
+          action_type: e.actionType,
+          summary: e.summary,
+          target: e.snapshot.target,
+          bytes: e.snapshot.bytes,
+          created_at: e.createdAt,
+        }));
+      sendJson(res, 200, { entries, request_id: requestId });
+      return;
+    }
+
+    // Approval UndoStore: apply the latest snapshot for (run_id, target?),
+    // or one specific snapshot via undo_id (the [📋 Versi] card).
+    // Body: { run_id?, target?, undo_id?, workspace_root? }. One-shot: the
+    // entry is discarded after a successful apply (standard undo-stack
+    // behavior).
+    if (method === "POST" && url.pathname === "/captain/undo/apply") {
+      void (async () => {
+        const parsed = await readJson(req);
+        if (!parsed) {
+          sendJson(res, 400, { error: "invalid_json", request_id: requestId });
+          return;
+        }
+        try {
+          const root = resolveAllowedRoot(ctx, parsed.workspace_root ?? parsed.root);
+          const home = resolveDaedalusHome(ctx.settings.daedalusHome, root);
+          const store = undoStoreFor(home);
+          const undoId = typeof parsed.undo_id === "string" ? parsed.undo_id : "";
+          let entry = undoId ? store.get(undoId) : undefined;
+          if (!entry && !undoId) {
+            const runId = typeof parsed.run_id === "string" ? parsed.run_id : "";
+            const target = typeof parsed.target === "string" ? parsed.target : "";
+            const candidates = store
+              .list()
+              .filter((e) => (!runId || e.runId === runId) && (!target || e.snapshot.target === target))
+              .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+            entry = candidates[0];
+          }
+          if (!entry) {
+            sendJson(res, 404, {
+              error: "nothing_to_undo",
+              message: "Tidak ada aksi yang bisa di-undo untuk konteks ini.",
+              request_id: requestId,
+            });
+            return;
+          }
+          const snap = entry.snapshot;
+          const bytes =
+            snap.kind === "content" ? Buffer.from(snap.content, "utf8") : await readFile(snap.backupPath);
+          // The snapshot target must stay inside the workspace — a stale
+          // absolute path never escapes the root.
+          const abs = resolve(root, snap.target);
+          if (abs !== resolve(root) && !abs.startsWith(resolve(root) + sep)) {
+            sendJson(res, 400, { error: "undo_target_outside_workspace", request_id: requestId });
+            return;
+          }
+          await mkdir(join(abs, ".."), { recursive: true });
+          await writeFile(abs, bytes);
+          store.discard(entry.undoId);
+          sendJson(res, 200, {
+            undone: true,
+            undo_id: entry.undoId,
+            summary: entry.summary,
+            target: snap.target,
+            request_id: requestId,
+          });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // v2 run timeline (Fase 1): the chat polls this for verify/agent
+    // events. ?after=<event id> returns only newer events (bounded 100).
+    // Raw file bytes for the chat's [📥 Download] button (any workspace
+    // file: docx, xlsx, csv, md, bib...). ?root=&path= (workspace-relative).
+    if (method === "GET" && url.pathname === "/captain/download") {
+      const targetRel = url.searchParams.get("path") || "";
+      if (!targetRel) {
+        sendJson(res, 400, { error: "path_required", request_id: requestId });
+        return;
+      }
+      try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+        const absolute = resolveInside(root, targetRel);
+        const st = statSync(absolute);
+        if (st.isDirectory()) {
+          sendJson(res, 400, { error: "path_is_directory", request_id: requestId });
+          return;
+        }
+        if (st.size > MAX_FILE_BYTES) {
+          sendJson(res, 413, { error: "file_too_large", size: st.size, limit: MAX_FILE_BYTES, request_id: requestId });
+          return;
+        }
+        const data = readFileSync(absolute);
+        const name = basename(absolute);
+        res.writeHead(200, {
+          "content-type": guessMimeType(name),
+          "content-disposition": `attachment; filename="${name}"`,
+          "content-length": data.length,
+        });
+        res.end(data);
+      } catch (error) {
+        sendJson(res, errorMessage(error).includes("escapes workspace") ? 404 : errorStatus(error), {
+          error: errorMessage(error),
+          request_id: requestId,
+        });
+      }
+      return;
+    }
+
+    const captainTimelineMatch = /^\/captain\/runs\/([^/]+)\/timeline$/.exec(url.pathname);
+    if (method === "GET" && captainTimelineMatch?.[1] !== undefined) {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(
+            ctx,
+            url.searchParams.get("workspace_root") ?? url.searchParams.get("root") ?? ctx.session.workspaceRoot,
+          );
+          const runs = new WorkflowRunStore(
+            resolveDaedalusHome(ctx.settings.daedalusHome, root),
+          );
+          const run = runs.loadRun(captainTimelineMatch[1] ?? "");
+          if (!run) {
+            sendJson(res, 404, { error: "run_not_found", request_id: requestId });
+            return;
+          }
+          const events: AnyTimelineEvent[] = getEvents(run);
+          const after = url.searchParams.get("after") ?? "";
+          let slice = events;
+          if (after) {
+            const idx = events.findIndex((e) => e.id === after);
+            if (idx >= 0) slice = events.slice(idx + 1);
+          }
+          sendJson(res, 200, {
+            run_id: run.run_id,
+            events: slice.slice(-100),
+            request_id: requestId,
+          });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
     const workflowRunMatch = /^\/workflow\/runs\/([^/]+)$/.exec(url.pathname);
     if (method === "GET" && workflowRunMatch?.[1] !== undefined) {
       void (async () => {
@@ -3427,6 +4358,39 @@ export function createApp(ctx: AppContext) {
       // stops at its next checkpoint. `cancelled` only claims an in-process
       // runner was signalled directly.
       sendJson(res, 200, { cancelled: runner !== undefined, cancel_requested: true, task_id: taskId });
+      return;
+    }
+
+    // Dae Captain pill ⏸ — cooperative pause. The marker is always recorded;
+    // every engine suspends at its next safe checkpoint (loop-top / stage
+    // boundary) and resumes from the same checkpoint on /resume. Unlike
+    // cancel, no state is lost. Sensitive: same daemon token as cancel.
+    const pauseMatch = /^\/tasks\/([^/]+)\/pause$/.exec(url.pathname);
+    if (method === "POST" && pauseMatch?.[1] !== undefined) {
+      if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
+        sendJson(res, 401, { error: "unauthorized" });
+        return;
+      }
+      const taskId = pauseMatch[1] as string;
+      const lookup = findTask(ctx, taskId);
+      (lookup?.store ?? ctx.store).requestPause(taskId);
+      const runner = ctx.activeRunners.get(taskId);
+      // `pause_requested` is the honest half: the marker is recorded and any
+      // engine polls it. `live` says whether a runner is currently attached.
+      sendJson(res, 200, { paused: true, pause_requested: true, live: runner !== undefined, task_id: taskId });
+      return;
+    }
+
+    const resumeMatch = /^\/tasks\/([^/]+)\/resume$/.exec(url.pathname);
+    if (method === "POST" && resumeMatch?.[1] !== undefined) {
+      if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
+        sendJson(res, 401, { error: "unauthorized" });
+        return;
+      }
+      const taskId = resumeMatch[1] as string;
+      const lookup = findTask(ctx, taskId);
+      (lookup?.store ?? ctx.store).clearPause(taskId);
+      sendJson(res, 200, { paused: false, task_id: taskId });
       return;
     }
 
@@ -4561,6 +5525,7 @@ export function createApp(ctx: AppContext) {
             if (!document) return;
             const list = Array.isArray(parsed.sections) ? parsed.sections : [];
             const byId = new Map(document.sections.map((s) => [s.id, s]));
+            const before = JSON.stringify(document);
             document.sections = list.map((entry) => {
               const raw = entry as Record<string, unknown>;
               const id = typeof raw.id === "string" ? raw.id : "";
@@ -4576,6 +5541,14 @@ export function createApp(ctx: AppContext) {
             });
             await writeDocument(root, document);
             await appendAudit(root, document.id, { actor: "web", action: "outline_edited", detail: `${document.sections.length} bab disimpan dari panel` });
+            recordCaptainUndo({
+              ctx,
+              root,
+              runId: parsed.run_id,
+              action: { type: "edit_document", engine: "dokumen", summary: "edit kerangka dokumen", target: documentPaths(root, document.id).file },
+              target: documentPaths(root, document.id).file,
+              content: before,
+            });
             sendJson(res, 200, { root, document });
             return;
           }
@@ -4588,9 +5561,18 @@ export function createApp(ctx: AppContext) {
               sendJson(res, 404, { error: "section_not_found", request_id: requestId });
               return;
             }
+            const before = JSON.stringify(document);
             if (typeof parsed.prose === "string") section.prose = parsed.prose;
             await writeDocument(root, document);
             await appendAudit(root, document.id, { actor: "web", action: "section_edited", detail: `prosa bab "${section.title}" disunting pengguna` });
+            recordCaptainUndo({
+              ctx,
+              root,
+              runId: parsed.run_id,
+              action: { type: "edit_document", engine: "dokumen", summary: `edit bab "${section.title}"`, target: documentPaths(root, document.id).file },
+              target: documentPaths(root, document.id).file,
+              content: before,
+            });
             sendJson(res, 200, { root, document, section });
             return;
           }
@@ -4609,7 +5591,13 @@ export function createApp(ctx: AppContext) {
           if (url.pathname === "/dokumen/export-document") {
             const document = await needDocument();
             if (!document) return;
-            const result = parsed.format === "pdf" ? await exportDocumentPdf(root, document) : await exportDocumentDocx(root, document);
+            // Dae Captain v2 Fase 7: the kerangka card offers [DOCX][PDF][MD].
+            const format = parsed.format === "pdf" ? "pdf" : parsed.format === "md" ? "md" : "docx";
+            const result = format === "pdf"
+              ? await exportDocumentPdf(root, document)
+              : format === "md"
+                ? await exportDocumentMarkdown(root, document)
+                : await exportDocumentDocx(root, document);
             await writeDocument(root, document);
             await appendAudit(root, document.id, { actor: "web", action: "export_document", detail: `${result.format}: ${result.path}` });
             sendJson(res, 200, { root, result, document });
@@ -4691,11 +5679,24 @@ export function createApp(ctx: AppContext) {
           const badDeck = (status: number, error: string, extra: Record<string, unknown> = {}) => sendJson(res, status, { error, request_id: requestId, ...extra });
           // Validates the candidate deck; on errors responds 422 and
           // writes nothing, otherwise persists and returns the deck.
-          const commit = async (next: DeckSpec) => {
+          // The pre-change deck is snapshotted into the approval
+          // UndoStore (Dae Captain [↩️ Undo]) — failures never block
+          // the write itself.
+          const commit = async (next: DeckSpec, undoSummary?: string) => {
             const errors = validateDeck(next, { root }).filter((issue) => issue.severity === "error");
             if (errors.length > 0) {
               badDeck(422, "deck_invalid", { issues: errors });
               return;
+            }
+            if (undoSummary) {
+              recordCaptainUndo({
+                ctx,
+                root,
+                runId: parsed.run_id,
+                action: { type: "edit_deck", engine: "slide", summary: undoSummary, target: deckPaths(root).file },
+                target: deckPaths(root).file,
+                content: JSON.stringify(deck),
+              });
             }
             await writeDeck(root, next);
             sendJson(res, 200, { root, deck: next });
@@ -4726,7 +5727,7 @@ export function createApp(ctx: AppContext) {
               }
               try {
                 const applied = await applyPptxTemplateTheme(root, customTemplateId);
-                await commit({ ...deck, theme: applied.theme });
+                await commit({ ...deck, theme: applied.theme }, "ganti template (impor)");
               } catch (error) {
                 if (error instanceof PptxTemplateError) {
                   badDeck(error.code === "ppt_template_not_found" ? 404 : 400, error.code, { message: error.message });
@@ -4768,7 +5769,7 @@ export function createApp(ctx: AppContext) {
             const next: DeckSpec = { ...deck, theme: { ...layered } };
             if (typeof accent === "string") next.theme = { ...next.theme, accent };
             if (typeof parsed.dark === "boolean") next.theme = { ...next.theme, dark: parsed.dark };
-            await commit(next);
+            await commit(next, "ganti tema/template");
             return;
           }
 
@@ -4933,6 +5934,14 @@ export function createApp(ctx: AppContext) {
               badDeck(422, "deck_invalid", { issues: errors });
               return;
             }
+            recordCaptainUndo({
+              ctx,
+              root,
+              runId: parsed.run_id,
+              action: { type: "edit_deck", engine: "slide", summary: "tambah slide", target: deckPaths(root).file },
+              target: deckPaths(root).file,
+              content: JSON.stringify(deck),
+            });
             await writeDeck(root, next);
             sendJson(res, 200, { root, deck: next, slide_id: slide.id });
             return;
@@ -4987,12 +5996,12 @@ export function createApp(ctx: AppContext) {
               }
               return next;
             });
-            await commit({ ...deck, slides });
+            await commit({ ...deck, slides }, `edit slide ${index + 1}`);
             return;
           }
 
           if (url.pathname === "/slides/deck/slide/delete") {
-            await commit({ ...deck, slides: deck.slides.filter((_, i) => i !== index) });
+            await commit({ ...deck, slides: deck.slides.filter((_, i) => i !== index) }, `hapus slide ${index + 1}`);
             return;
           }
 
@@ -5006,7 +6015,7 @@ export function createApp(ctx: AppContext) {
             const slides = [...deck.slides];
             const [moved] = slides.splice(index, 1);
             slides.splice(to, 0, moved!);
-            await commit({ ...deck, slides });
+            await commit({ ...deck, slides }, `pindah slide ${index + 1} ke ${to + 1}`);
             return;
           }
 
@@ -5632,6 +6641,7 @@ export function createApp(ctx: AppContext) {
             ...(parsed.root !== undefined ? { root: parsed.root } : {}),
             ...(typeof parsed.provider_id === "string" ? { provider_id: parsed.provider_id } : {}),
             ...(typeof parsed.model === "string" ? { model: parsed.model } : {}),
+            ...(typeof parsed.depth === "string" ? { depth: parsed.depth } : {}),
           },
           requestId,
         );
@@ -5641,11 +6651,8 @@ export function createApp(ctx: AppContext) {
     }
 
     // Agentic Research: run a staged plan (the "Jalankan riset" gate).
-    // Body: { planId, model?, provider_id? }. The staged plan is
-    // single-use: consumed whether the run succeeds or fails the
-    // Verify gate. A verify failure inside the engine throws → 422
-    // with the issues; a report is NEVER returned with unverified
-    // claims. Progress events stream to GET /research/progress/:planId.
+    // Body: { planId, model?, provider_id? }. Shared core above; the
+    // route only parses and sends.
     if (method === "POST" && url.pathname === "/research/run") {
       void (async () => {
         const parsed = await readJson(req);
@@ -5654,53 +6661,12 @@ export function createApp(ctx: AppContext) {
           return;
         }
         try {
-          const planId = typeof parsed.planId === "string" ? parsed.planId : "";
-          // Peek dulu (jangan consume): plan baru dihapus saat run selesai.
-          // Request kedua untuk plan yang masih berjalan -> 409, bukan 410.
-          const staged = planId ? peekStagedResearchPlan(planId) : undefined;
-          if (!staged) {
-            sendJson(res, 410, { error: "plan_expired", message: "rencana kedaluwarsa, buat ulang", request_id: requestId });
-            return;
-          }
-          if (!tryStartResearchRun(planId)) {
-            sendJson(res, 409, { error: "already_running", message: "riset untuk rencana ini sudah berjalan", request_id: requestId });
-            return;
-          }
-          const hooks = await resolveResearchHooks(ctx);
-          await ensureProvidersLoaded(ctx);
-          const provider = researchProviderFromRequest(ctx, parsed);
-          if (!provider) {
-            finishResearchRun(planId);
-            sendJson(res, 400, { error: "no_provider_configured", request_id: requestId });
-            return;
-          }
-          const engine = await hooks.createEngine({
-            provider,
-            fetch: { searchWeb: hooks.searchWeb, fetchPage: hooks.fetchPage },
-            elsevierApiKey: process.env.ELSEVIER_API_KEY || undefined,
-            onProgress: (stage, detail) => appendResearchProgress(planId, stage, detail),
-          });
-          let result;
-          try {
-            result = await engine.runResearch(staged.plan);
-          } catch (error) {
-            const issues = researchVerifyIssues(error);
-            if (issues) {
-              sendJson(res, 422, { error: "verify_failed", issues, request_id: requestId });
-              return;
-            }
-            throw error;
-          } finally {
-            // Single-use gate: plan dikonsumsi saat run selesai (sukses/gagal).
-            takeStagedResearchPlan(planId);
-            finishResearchRun(planId);
-          }
-          storeResearchReport(result.report);
-          rememberResearchRunReport(planId, result.report.reportId);
-          sendJson(res, 200, {
-            report: result.report,
-            request_id: requestId,
-          });
+          const out = await runStagedResearchPlanCore(
+            ctx,
+            parsed as Record<string, unknown>,
+            requestId,
+          );
+          sendJson(res, out.status, out.body);
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
@@ -5740,6 +6706,7 @@ export function createApp(ctx: AppContext) {
         planId: staged.planId,
         plan: staged.plan,
         question: staged.question,
+        ...(staged.depth ? { depth: staged.depth } : {}),
         request_id: requestId,
       });
       return;
@@ -5755,6 +6722,39 @@ export function createApp(ctx: AppContext) {
         return;
       }
       sendJson(res, 200, { report, request_id: requestId });
+      return;
+    }
+
+    // Dae Captain v2 Fase 7 — research-report card [DOCX] button.
+    // ?format=docx only (PDF goes through the preview overlay's print;
+    // BibTeX is generated client-side from the report JSON).
+    const captainReportExportMatch = /^\/captain\/research\/report\/([^/]+)\/export$/.exec(url.pathname);
+    if (method === "GET" && captainReportExportMatch?.[1] !== undefined) {
+      void (async () => {
+        try {
+          const format = url.searchParams.get("format") ?? "docx";
+          if (format !== "docx") {
+            sendJson(res, 400, { error: "unsupported_format", formats: ["docx"], request_id: requestId });
+            return;
+          }
+          const report = getResearchReport(captainReportExportMatch[1] ?? "");
+          if (!report) {
+            sendJson(res, 404, { error: "report_not_found", request_id: requestId });
+            return;
+          }
+          const { buildResearchReportDocx } = await import("./captain.ts");
+          const bytes = await buildResearchReportDocx(report);
+          const name = `laporan-riset-${report.reportId.slice(0, 8)}.docx`;
+          res.writeHead(200, {
+            "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "content-disposition": `attachment; filename="${name}"`,
+            "content-length": bytes.length,
+          });
+          res.end(bytes);
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
       return;
     }
 
@@ -5921,6 +6921,21 @@ export function createApp(ctx: AppContext) {
         sendJson(res, 200, { root, files, truncated });
       } catch (error) {
         sendJson(res, errorStatus(error), { error: errorMessage(error) });
+      }
+      return;
+    }
+
+    // Dae Captain v2 Fase 8 (additive): files modified within the last N
+    // hours (default 24), newest first — the Workspace page's "Terbaru"
+    // section. Query: ?root=&hours=.
+    if (method === "GET" && url.pathname === "/workspace/recent") {
+      try {
+        const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+        const hours = Math.min(168, Math.max(1, Number(url.searchParams.get("hours")) || 24));
+        const { files, truncated } = listRecentFiles(root, hours);
+        sendJson(res, 200, { root, hours, files, truncated, request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
       }
       return;
     }

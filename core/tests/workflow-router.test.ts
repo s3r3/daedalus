@@ -8,7 +8,7 @@ import {
   resolveReferences,
   routeByRules,
 } from "../src/workflow/router.ts";
-import { createWorkflowRun, appendTurn } from "../src/workflow/store.ts";
+import { createWorkflowRun, appendTurn, updateTurn } from "../src/workflow/store.ts";
 import type { RunContext } from "../src/workflow/types.ts";
 
 describe("routeByRules — classification matrix (ID + EN)", () => {
@@ -104,24 +104,28 @@ describe("routeByRules — ambiguity handling", () => {
 describe("resolveReferences", () => {
   function runWithArtifacts(): RunContext {
     const run = createWorkflowRun("/ws");
-    appendTurn(run, {
+    // Artifacts go through the timeline (updateTurn -> task_end event);
+    // resolveReferences queries the timeline, not the deprecated turns view.
+    const t1 = appendTurn(run, {
       engine: "coding",
       task_id: "t1",
       goal: "buat landing page Vue",
-      status: "done",
+      status: "running",
     });
-    run.turns[0]!.artifacts = [
-      { kind: "files", label: "landing page Vue", path: "index.html" },
-    ];
-    appendTurn(run, {
+    updateTurn(run, t1.turn_id, {
+      status: "done",
+      artifacts: [{ kind: "files", label: "landing page Vue", path: "index.html" }],
+    });
+    const t2 = appendTurn(run, {
       engine: "slide",
       task_id: "t2",
       goal: "buatkan slide",
-      status: "done",
+      status: "running",
     });
-    run.turns[1]!.artifacts = [
-      { kind: "deck", label: "deck presentasi", path: "deck/deck.json" },
-    ];
+    updateTurn(run, t2.turn_id, {
+      status: "done",
+      artifacts: [{ kind: "deck", label: "deck presentasi", path: "deck/deck.json" }],
+    });
     return run;
   }
 

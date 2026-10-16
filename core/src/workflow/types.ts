@@ -1,4 +1,5 @@
 import type { TaskDomain } from "../contracts.ts";
+import type { AnyTimelineEvent } from "./timeline.ts";
 
 /**
  * Dae Captain workflow types (PR1).
@@ -70,6 +71,13 @@ export type RunTurn = {
 export type RunContext = {
   run_id: string;
   workspace_root: string;
+  /** The single event timeline — the sole source of run history (v2). */
+  events: AnyTimelineEvent[];
+  /**
+   * @deprecated Derived from `events` via syncTurns(); never written
+   * directly. Kept so router/tests keep working while later phases migrate
+   * to the timeline. Rebuilt on every task-event append, save, and load.
+   */
   turns: RunTurn[];
   created_at: string;
   updated_at: string;
