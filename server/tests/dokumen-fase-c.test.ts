@@ -70,3 +70,43 @@ describe('Fase C1 — GET /dokumen/doc-templates (desain 4.1)', () => {
     }
   })
 })
+
+describe('Fase C2 — POST /dokumen/compare (desain 4.2)', () => {
+  const V1 = `KONTRAK KERJA SAMA\n\nPasal 1: Para pihak sepakat bekerja sama.\n\nPasal 2: Nilai kontrak sebesar Rp 100.000.000.\n\nPasal 3: Jangka waktu 12 bulan.`
+  const V2 = `KONTRAK KERJA SAMA\n\nPasal 1: Para pihak sepakat bekerja sama.\n\nPasal 2: Nilai kontrak sebesar Rp 150.000.000.\n\nPasal 4: Denda keterlambatan 2% per hari.`
+
+  test('diffs two workspace text files paragraph by paragraph', async () => {
+    const { base, root } = await listen()
+    writeFileSync(join(root, 'kontrak-v1.txt'), V1)
+    writeFileSync(join(root, 'kontrak-v2.txt'), V2)
+    const got = await req(base, 'POST', '/dokumen/compare', { root, pathA: 'kontrak-v1.txt', pathB: 'kontrak-v2.txt' })
+    expect(got.status).toBe(200)
+    expect(got.body.fileA).toBe('kontrak-v1.txt')
+    expect(got.body.fileB).toBe('kontrak-v2.txt')
+    const cmp = got.body.comparison as { counts: { added: number; removed: number; changed: number; same: number }; summary: string[]; blocks: unknown[] }
+    expect(cmp.counts.changed).toBe(1)
+    expect(cmp.counts.added).toBe(1)
+    expect(cmp.counts.removed).toBe(1)
+    expect(cmp.counts.same).toBe(2)
+    expect(cmp.summary.some((s) => s.startsWith('~'))).toBe(true)
+  })
+
+  test('identical files produce zero changes', async () => {
+    const { base, root } = await listen()
+    writeFileSync(join(root, 'sama.txt'), V1)
+    const got = await req(base, 'POST', '/dokumen/compare', { root, pathA: 'sama.txt', pathB: 'sama.txt' })
+    expect(got.status).toBe(200)
+    const cmp = got.body.comparison as { counts: { added: number; removed: number; changed: number }; summary: string[] }
+    expect(cmp.counts).toMatchObject({ added: 0, removed: 0, changed: 0 })
+    expect(cmp.summary).toEqual([])
+  })
+
+  test('missing paths and outside-workspace paths are rejected honestly', async () => {
+    const { base, root } = await listen()
+    const missing = await req(base, 'POST', '/dokumen/compare', { root })
+    expect(missing.status).toBe(400)
+    writeFileSync(join(root, 'a.txt'), 'x')
+    const outside = await req(base, 'POST', '/dokumen/compare', { root, pathA: 'a.txt', pathB: '../evil.txt' })
+    expect(outside.status).toBe(400)
+  })
+})

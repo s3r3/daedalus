@@ -1593,3 +1593,283 @@ for (const kind of FASEC_CARD_KINDS) {
   if (!CARD_KINDS.includes(kind)) CARD_KINDS.push(kind);
 }
 RENDERERS["dokumen-doc-templates"] = renderDokumenDocTemplates;
+
+// ---------------------------------------------------------------------------
+// FASE D: fitur Spreadsheet Dae Captain v2 (D1 dashboard 1 perintah,
+// D2 tanya jawab data).
+//
+// Pola yang sama seperti FASE C: setiap tombol memanggil API nyata via
+// ctx.api — tidak ada tombol dekoratif. Terdiri dari (1) kartu mandiri
+// "sheets-quick-tools" yang bisa di-push dari chat, dan (2) baris aksi
+// cepat yang ditempel ke kartu spreadsheet yang sudah ada
+// (sheets-blueprint, sheets-analyze-plan) secara komposisi — tanpa
+// mengubah renderer di atas.
+// ---------------------------------------------------------------------------
+
+const FASED_CARD_KINDS = ["sheets-quick-tools"];
+
+/** Baris hasil FASE D: ringkasan KPI + tombol [📥 XLSX] unduhan nyata. */
+function faseDResultDash(result, data, ctx) {
+  result.innerHTML = "";
+  result.appendChild(h("p", "dc-goal", data.summary ?? "Dashboard dibuat."));
+  const kpis = h("div", "dc-list");
+  for (const k of data.kpis ?? []) {
+    const row = h("div", "dc-row");
+    row.appendChild(h("span", "dc-row-main", `ƒ ${k.label}`));
+    if (k.formula) row.appendChild(h("span", "dc-hint", String(k.formula)));
+    kpis.appendChild(row);
+  }
+  result.appendChild(kpis);
+  const actions = h("div", "dc-row");
+  const dl = document.createElement("a");
+  dl.className = "card-btn dc-primary";
+  dl.textContent = "📥 XLSX";
+  dl.href = ctx.api.sheetsDownloadUrlFor(ctx.workspaceRoot, data.downloadPath);
+  dl.setAttribute("download", "");
+  actions.appendChild(dl);
+  result.appendChild(actions);
+  if (Array.isArray(data.notes) && data.notes.length) {
+    result.appendChild(h("p", "dc-hint", data.notes.join(" · ")));
+  }
+}
+
+/** Bangun isi kartu/bar FASE D: tombol dashboard + form tanya jawab. */
+function faseDQuickBody(body, ctx) {
+  const result = h("div", "dc-list");
+
+  const dash = btn("📊 Buat Dashboard", "dc-primary dc-block", async () => {
+    result.innerHTML = "";
+    result.appendChild(h("p", "dc-hint", "Menyusun dashboard dari dataset…"));
+    try {
+      const data = await ctx.api.sheetsQuickDashboard({ root: ctx.workspaceRoot });
+      faseDResultDash(result, data, ctx);
+      ctx.onGenerated?.("spreadsheet");
+    } catch (e) {
+      result.innerHTML = "";
+      cardError(result, "Dashboard gagal: " + errText(e?.data?.message ?? e));
+    }
+  });
+  body.appendChild(dash);
+
+  const qaRow = h("div", "dc-row");
+  const input = document.createElement("input");
+  input.className = "dc-input";
+  input.placeholder = "Tanya data… (mis. Berapa total penjualan bulan Januari?)";
+  input.setAttribute("aria-label", "Tanya jawab data");
+  const ask = btn("❓ Tanya", "", async () => {
+    const q = input.value.trim();
+    if (!q) return;
+    result.innerHTML = "";
+    result.appendChild(h("p", "dc-hint", "Menghitung dari data…"));
+    try {
+      const data = await ctx.api.sheetsQa({ root: ctx.workspaceRoot, question: q });
+      result.innerHTML = "";
+      result.appendChild(h("p", "dc-goal", data.answer ?? ""));
+      if (data.method) result.appendChild(h("p", "dc-hint", "🔍 " + data.method));
+    } catch (e) {
+      result.innerHTML = "";
+      cardError(result, "Gagal menjawab: " + errText(e?.data?.message ?? e));
+    }
+  });
+  input.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      ask.click();
+    }
+  });
+  qaRow.append(input, ask);
+  body.appendChild(qaRow);
+  body.appendChild(result);
+}
+
+// D1 + D2 sebagai kartu mandiri (bisa di-push dari chat / aksi cepat).
+function renderSheetsQuickTools(data, ctx) {
+  const { card, body } = cardShell("sheets-quick-tools", "📊 Spreadsheet cepat");
+  body.appendChild(
+    h(
+      "p",
+      "dc-hint",
+      "Satu perintah: susun dashboard KPI dari dataset, atau tanya jawab langsung dari data (angka dihitung deterministik, bukan tebakan).",
+    ),
+  );
+  faseDQuickBody(body, ctx);
+  return card;
+}
+
+RENDERERS["sheets-quick-tools"] = renderSheetsQuickTools;
+
+// Tombol "📊 Buat Dashboard" di kartu spreadsheet yang sudah ada —
+// ditempel di bawah isi kartu (komposisi, bukan modifikasi renderer).
+for (const faseDKind of ["sheets-blueprint", "sheets-analyze-plan"]) {
+  const faseDOrig = RENDERERS[faseDKind];
+  if (faseDOrig) {
+    RENDERERS[faseDKind] = (data, ctx) => {
+      const card = faseDOrig(data, ctx);
+      try {
+        const inner = h("div", "dc-list");
+        inner.appendChild(h("p", "dc-hint", "Aksi cepat:"));
+        const host = h("div", "");
+        faseDQuickBody(host, ctx);
+        inner.appendChild(host);
+        card.querySelector(".dc-card-body")?.appendChild(inner);
+      } catch {
+        /* bar aksi cepat bersifat best-effort */
+      }
+      return card;
+    };
+  }
+}
+
+// Daftar kind FASE D diekspos agar CARD_KINDS bisa diperluas tanpa
+// mengedit blok di atas.
+for (const kind of FASED_CARD_KINDS) {
+  if (!CARD_KINDS.includes(kind)) CARD_KINDS.push(kind);
+}
+
+// C2 (desain 4.2): bandingkan dua dokumen.
+// Data: { fileA, fileB, comparison? } — comparison dari POST /dokumen/compare.
+// Tanpa comparison, kartu menampilkan tombol [⚖️ Bandingkan] yang memanggil
+// API lalu me-render hasilnya. Tiap perubahan punya [👁️ Lihat detail] yang
+// membuka tampilan side-by-side lama vs baru dengan highlight per kata.
+
+/** Diff per kata (LCS) untuk highlight di tampilan detail — cerminan wordDiff() core. */
+function fasecWordSpans(oldText, newText) {
+  const wa = String(oldText ?? "").split(/\s+/).filter(Boolean);
+  const wb = String(newText ?? "").split(/\s+/).filter(Boolean);
+  const n = wa.length;
+  const m = wb.length;
+  const dp = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      dp[i][j] = wa[i] === wb[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+    }
+  }
+  const oldToks = [];
+  const newToks = [];
+  let i = 0;
+  let j = 0;
+  while (i < n && j < m) {
+    if (wa[i] === wb[j]) {
+      oldToks.push({ t: "same", w: wa[i] });
+      newToks.push({ t: "same", w: wb[j] });
+      i++; j++;
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      oldToks.push({ t: "del", w: wa[i++] });
+    } else {
+      newToks.push({ t: "ins", w: wb[j++] });
+    }
+  }
+  while (i < n) oldToks.push({ t: "del", w: wa[i++] });
+  while (j < m) newToks.push({ t: "ins", w: wb[j++] });
+  return { oldToks, newToks };
+}
+
+function fasecHighlight(tokens) {
+  const frag = document.createDocumentFragment();
+  for (const { t, w } of tokens) {
+    if (frag.childNodes.length) frag.appendChild(document.createTextNode(" "));
+    const s = document.createElement("span");
+    s.className = t === "same" ? "dc-wsame" : t === "del" ? "dc-wdel" : "dc-wins";
+    s.textContent = w;
+    frag.appendChild(s);
+  }
+  return frag;
+}
+
+function renderCompareResult(body, data, ctx) {
+  const cmp = data.comparison ?? {};
+  const blocks = Array.isArray(cmp.blocks) ? cmp.blocks : [];
+  const counts = cmp.counts ?? { added: 0, removed: 0, changed: 0, same: 0 };
+  const changes = blocks.filter((b) => b.kind !== "same");
+
+  const head = h("p", "dc-compare-head");
+  head.textContent = `📊 ${counts.changed} diubah · ${counts.added} ditambah · ${counts.removed} dihapus · ${counts.same} sama`;
+  body.appendChild(head);
+
+  if (!changes.length) {
+    body.appendChild(h("p", "dc-hint", "Tidak ada perbedaan — kedua dokumen identik."));
+    return;
+  }
+
+  const list = h("div", "dc-list");
+  for (const b of changes) {
+    const marker = b.kind === "changed" ? "~" : b.kind === "added" ? "+" : "−";
+    const row = h("div", "dc-row");
+    const main = h("div", "dc-row-main");
+    const line = h("div", "dc-diff-line");
+    line.appendChild(h("span", `dc-diff-marker dc-${b.kind}`, marker + " "));
+    const text = h("span", "", b.kind === "added" ? (b.newText ?? "") : (b.oldText ?? ""));
+    text.textContent = String(text.textContent).slice(0, 120) + (String(b.kind === "added" ? (b.newText ?? "") : (b.oldText ?? "")).length > 120 ? "…" : "");
+    line.appendChild(text);
+    main.appendChild(line);
+    if (b.kind === "changed" && b.detail) {
+      main.appendChild(h("div", "dc-hint", String(b.detail)));
+    }
+    row.appendChild(main);
+
+    const detailBtn = btn("👁️ Lihat detail", "", (el) => {
+      let pane = row.nextSibling;
+      if (pane && pane.classList && pane.classList.contains("dc-diff-detail")) {
+        pane.remove();
+        el.innerHTML = "👁️ Lihat detail";
+        return;
+      }
+      pane = h("div", "dc-diff-detail");
+      if (b.kind === "changed") {
+        const { oldToks, newToks } = fasecWordSpans(b.oldText, b.newText);
+        const col1 = h("div", "dc-diff-col");
+        col1.appendChild(h("div", "dc-diff-colhead", `Lama — ${esc(data.fileA ?? "")}`));
+        const p1 = h("p", "dc-diff-text");
+        p1.appendChild(fasecHighlight(oldToks));
+        col1.appendChild(p1);
+        const col2 = h("div", "dc-diff-col");
+        col2.appendChild(h("div", "dc-diff-colhead", `Baru — ${esc(data.fileB ?? "")}`));
+        const p2 = h("p", "dc-diff-text");
+        p2.appendChild(fasecHighlight(newToks));
+        col2.appendChild(p2);
+        pane.append(col1, col2);
+      } else {
+        const p = h("p", "dc-diff-text");
+        p.textContent = String(b.kind === "added" ? (b.newText ?? "") : (b.oldText ?? ""));
+        pane.appendChild(p);
+      }
+      row.after(pane);
+      el.innerHTML = "👁️ Tutup detail";
+    });
+    row.appendChild(detailBtn);
+    list.appendChild(row);
+  }
+  body.appendChild(list);
+}
+
+function renderDokumenCompare(data, ctx) {
+  const { card, body } = cardShell(
+    "dokumen-compare",
+    `⚖️ Bandingkan dokumen`,
+  );
+  const files = h("p", "dc-hint", `${esc(data?.fileA ?? "?")}  ↔  ${esc(data?.fileB ?? "?")}`);
+  body.appendChild(files);
+
+  if (data?.comparison) {
+    renderCompareResult(body, data, ctx);
+    return card;
+  }
+
+  const go = btn("⚖️ Bandingkan sekarang", "dc-primary dc-block", async () => {
+    const res = await ctx.api.dokumenCompare({
+      root: ctx.workspaceRoot,
+      pathA: data.fileA,
+      pathB: data.fileB,
+    });
+    if (!res?.comparison) throw new Error("server tidak mengembalikan hasil perbandingan");
+    data = { ...data, ...res };
+    renderCompareResult(body, data, ctx);
+    go.remove();
+    ctx.notify(`Perbandingan selesai: ${res.comparison.counts.changed} diubah, ${res.comparison.counts.added} ditambah, ${res.comparison.counts.removed} dihapus.`);
+  });
+  body.appendChild(go);
+  return card;
+}
+
+if (!CARD_KINDS.includes("dokumen-compare")) CARD_KINDS.push("dokumen-compare");
+RENDERERS["dokumen-compare"] = renderDokumenCompare;

@@ -154,6 +154,8 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
     // ---- FASE C: fitur Dokumen Dae Captain v2 (desain 4.1–4.3 + Q&A) ----
     /** 4.1 Template dokumen bawaan (makalah, laporan, proposal, surat resmi). */
     dokumenDocTemplates: () => req("GET", "/dokumen/doc-templates"),
+    /** 4.2 Bandingkan dua dokumen: { root, pathA, pathB } -> diff per paragraf. */
+    dokumenCompare: (body) => req("POST", "/dokumen/compare", body),
     // Spreadsheet
     sheetsWorkbook: (root) =>
       req("GET", "/sheets/workbook", undefined, { root }),

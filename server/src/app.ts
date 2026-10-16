@@ -86,6 +86,8 @@ import {
   createActiveDocument,
   exportData,
   listDocumentTemplates,
+  compareTexts,
+  splitParagraphs,
   exportDocumentDocx,
   exportDocumentPdf,
   inspectDocxStyles,
@@ -5749,6 +5751,45 @@ export function createApp(ctx: AppContext) {
             await writeDocument(root, document);
             await appendAudit(root, document.id, { actor: "web", action: "export_document", detail: `${result.format}: ${result.path}` });
             sendJson(res, 200, { root, result, document });
+            return;
+          }
+
+          // Fase C (desain 4.2): bandingkan dua dokumen. Body:
+          // { root, pathA, pathB } (workspace-relative). Kedua berkas
+          // diekstrak teksnya secara native lalu di-diff per paragraf.
+          if (url.pathname === "/dokumen/compare") {
+            const pathA = typeof parsed.pathA === "string" ? parsed.pathA : "";
+            const pathB = typeof parsed.pathB === "string" ? parsed.pathB : "";
+            if (!pathA || !pathB) {
+              sendJson(res, 400, { error: "missing_paths", message: "Butuh pathA dan pathB (relatif terhadap workspace).", request_id: requestId });
+              return;
+            }
+            const absA = resolve(root, pathA);
+            const absB = resolve(root, pathB);
+            if (!isInside(root, absA) || !isInside(root, absB)) {
+              sendJson(res, 400, { error: "path_outside_workspace", message: "Berkas harus di dalam workspace.", request_id: requestId });
+              return;
+            }
+            if (!isSupportedSource(pathA) || !isSupportedSource(pathB)) {
+              sendJson(res, 400, { error: "unsupported_source", message: "Bandingkan hanya mendukung PDF, DOCX, EML, TXT, MD.", request_id: requestId });
+              return;
+            }
+            try {
+              const [parsedA, parsedB] = await Promise.all([parseSourceFile(absA), parseSourceFile(absB)]);
+              const comparison = compareTexts(parsedA.text, parsedB.text);
+              sendJson(res, 200, {
+                root,
+                fileA: basename(pathA),
+                fileB: basename(pathB),
+                pagesA: parsedA.pages,
+                pagesB: parsedB.pages,
+                paragraphsA: splitParagraphs(parsedA.text).length,
+                paragraphsB: splitParagraphs(parsedB.text).length,
+                comparison,
+              });
+            } catch (error) {
+              sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+            }
             return;
           }
 

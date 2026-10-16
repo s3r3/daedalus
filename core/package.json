@@ -39,6 +39,7 @@
     "./workflow/model-roles.ts": "./src/workflow/model-roles.ts",
     "./dokumen/export-md.ts": "./src/dokumen/export-md.ts",
     "./dokumen/templates.ts": "./src/dokumen/templates.ts",
+    "./dokumen/compare.ts": "./src/dokumen/compare.ts",
     "./research/followup.ts": "./src/research/followup.ts"
   },
   "engines": {

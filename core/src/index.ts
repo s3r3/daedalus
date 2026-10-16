@@ -954,6 +954,21 @@ export {
   type DocumentTemplateSection,
 } from "./dokumen/templates.ts";
 
+/** Fase C (desain 4.2): bandingkan dua dokumen — diff per paragraf + detail per kata. */
+export {
+  CHANGED_SIMILARITY_THRESHOLD,
+  compareTexts,
+  describeWordDiff,
+  splitParagraphs,
+  textSimilarity,
+  wordDiff,
+  type CompareCounts,
+  type CompareResult,
+  type DiffBlock,
+  type DiffKind,
+  type WordToken,
+} from "./dokumen/compare.ts";
+
 export {
   inspectDocxStyles,
   proposeStyleOps,
