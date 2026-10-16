@@ -1114,7 +1114,7 @@ export {
   mainNumericColumn,
   numericColumns,
   toNumber,
-  type QaAnswer,
+  type QaAnswer as SheetsQaAnswer,
   type QaIntent,
   type QaFilter,
   type DatasetTable,

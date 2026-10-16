@@ -63,14 +63,14 @@ export function compareSources(
 
   // Build agreement summary from conflicts.
   const relevantConflicts = report.conflicts.filter((c) =>
-    c.sourceIds.some((id) => sourceIds.includes(id)),
+    c.positions.some((p) => sourceIds.includes(p.sourceId)),
   );
   let summary: string;
   if (relevantConflicts.length === 0) {
     summary = "Sumber-sumber ini tidak menunjukkan konflik langsung dalam laporan.";
   } else {
     summary = relevantConflicts
-      .map((c) => `Perbedaan: ${c.description}`)
+      .map((c) => `Perbedaan (${c.topic}): ${c.positions.map((p) => p.stance).join(" vs ")}`)
       .join("\n");
   }
 
