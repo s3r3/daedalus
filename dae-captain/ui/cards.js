@@ -133,6 +133,12 @@ function renderSlideOutline(data, ctx) {
         info.appendChild(document.createTextNode(" "));
         info.appendChild(badge);
       }
+      if (typeof s.notes === "string" && s.notes.trim()) {
+        const nb = h("span", "dc-badge", "🗒️");
+        nb.title = s.notes;
+        info.appendChild(document.createTextNode(" "));
+        info.appendChild(nb);
+      }
       row.appendChild(info);
       const edit = btn("✏️", "dc-icon", () => openSlideEditor(row, s, idx));
       edit.title = "Edit slide";
@@ -165,13 +171,21 @@ function renderSlideOutline(data, ctx) {
     bulletsInput.rows = 3;
     bulletsInput.placeholder = "Poin-poin (satu per baris)";
     bulletsInput.value = Array.isArray(c.bullets) ? c.bullets.join("\n") : "";
+    const notesLabel = h("div", "dc-hint", "🗒️ Catatan pembicara (masuk ke PPTX sebagai speaker notes)");
+    const notesInput = document.createElement("textarea");
+    notesInput.className = "dc-input";
+    notesInput.rows = 3;
+    notesInput.placeholder = "Naskah omongan untuk slide ini…";
+    notesInput.value = typeof slide.notes === "string" ? slide.notes : "";
     const actions = h("div", "dc-row-actions");
     const save = btn("Simpan", "dc-primary", async () => {
       const bullets = bulletsInput.value.split("\n").map((x) => x.trim()).filter(Boolean);
+      const notes = notesInput.value.trim();
       await ctx.api.slideUpdate({
         root: ctx.workspaceRoot,
         slide_id: slide.id,
         content: { title: titleInput.value.trim(), bullets },
+        notes,
         ...(ctx.taskId ? { run_id: ctx.taskId } : {}),
       });
       ctx.notify(`Slide ${idx + 1} diperbarui.`);
@@ -180,7 +194,7 @@ function renderSlideOutline(data, ctx) {
     });
     const cancel = btn("Batal", "", () => ed.remove());
     actions.append(save, cancel);
-    ed.append(titleInput, bulletsInput, actions);
+    ed.append(titleInput, bulletsInput, notesLabel, notesInput, actions);
     row.appendChild(ed);
     titleInput.focus();
   }
@@ -798,10 +812,101 @@ function renderResearchReport(data, ctx) {
     for (const ex of (claim.excerpts ?? []).slice(0, 2)) {
       item.appendChild(h("p", "dc-trace-ex", `“${ex}”`));
     }
+    // E1: Dalami temuan — button per claim.
+    const deepenBtn = btn("🔍 Dalami temuan ini", "dc-small", async () => {
+      try {
+        deepenBtn.disabled = true;
+        deepenBtn.textContent = "Menyiapkan...";
+        const res = await ctx.api.researchDeepen(report.reportId, claim.id);
+        const q = res?.focusedQuestion;
+        if (!q) throw new Error("gagal membuat pertanyaan pendalaman");
+        ctx.say(`Siap mendalami temuan ini. Kirim untuk mulai riset lanjutan?`);
+        // Dispatch as a new research task via chat.
+        ctx.sendChat(q);
+      } catch (e) {
+        ctx.notify("Gagal: " + errText(e));
+        deepenBtn.disabled = false;
+        deepenBtn.textContent = "🔍 Dalami temuan ini";
+      }
+    });
+    item.appendChild(deepenBtn);
     traceBox.appendChild(item);
   }
   if (!claims.length) traceBox.appendChild(h("p", "dc-hint", "Tidak ada klaim."));
   body.appendChild(traceBox);
+
+  // FASE E2/E3: Follow-up action bar.
+  const followBar = h("div", "dc-row-actions");
+  // E2: Compare sources — toggle source picker.
+  const compareBtn = btn("⚖️ Bandingkan sumber", "", () => {
+    compareBox.classList.toggle("dc-hidden");
+  });
+  // E3: Update with newer sources.
+  const updateBtn = btn("🔄 Cari yang lebih baru", "", async () => {
+    try {
+      updateBtn.disabled = true;
+      const res = await ctx.api.researchUpdateQuery(report.reportId);
+      const q = res?.updateQuery;
+      if (!q) throw new Error("gagal membuat query update");
+      ctx.say(`Mencari sumber lebih baru dari ${res.cutoffYear}. Kirim untuk mulai?`);
+      ctx.sendChat(q);
+    } catch (e) {
+      ctx.notify("Gagal: " + errText(e));
+    } finally {
+      updateBtn.disabled = false;
+    }
+  });
+  followBar.append(compareBtn, updateBtn);
+  body.appendChild(followBar);
+
+  // E2: Source comparison picker + results.
+  const compareBox = h("div", "dc-compare dc-hidden");
+  compareBox.appendChild(h("p", "dc-hint", "Pilih minimal 2 sumber untuk dibandingkan:"));
+  const sourceChecks = [];
+  for (const s of sources) {
+    const label = h("label", "dc-check");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = s.id;
+    label.append(cb, document.createTextNode(` [${s.id}] ${s.title ?? s.url}`));
+    compareBox.appendChild(label);
+    sourceChecks.push(cb);
+  }
+  const compareGo = btn("Bandingkan", "dc-primary", async () => {
+    const ids = sourceChecks.filter((cb) => cb.checked).map((cb) => cb.value);
+    if (ids.length < 2) {
+      ctx.notify("Pilih minimal 2 sumber.");
+      return;
+    }
+    try {
+      compareGo.disabled = true;
+      const res = await ctx.api.researchCompare(report.reportId, ids);
+      // Render comparison table.
+      compareResult.innerHTML = "";
+      const table = h("div", "dc-compare-table");
+      for (const src of res.sources ?? []) {
+        const col = h("div", "dc-compare-col");
+        col.appendChild(h("div", "dc-compare-title", src.title ?? src.url));
+        col.appendChild(h("div", "dc-hint", `${(src.authors ?? []).join(", ")}${src.year ? ` (${src.year})` : ""}`));
+        const findings = (res.findings ?? {})[src.id] ?? [];
+        if (findings.length) {
+          const ul = h("ul", "dc-compare-findings");
+          for (const f of findings) ul.appendChild(h("li", "", f));
+          col.appendChild(ul);
+        }
+        table.appendChild(col);
+      }
+      compareResult.appendChild(table);
+      if (res.summary) compareResult.appendChild(h("p", "dc-compare-summary", res.summary));
+    } catch (e) {
+      ctx.notify("Gagal membandingkan: " + errText(e));
+    } finally {
+      compareGo.disabled = false;
+    }
+  });
+  const compareResult = h("div", "dc-compare-result");
+  compareBox.append(compareGo, compareResult);
+  body.appendChild(compareBox);
 
   return card;
 }
@@ -1355,3 +1460,71 @@ function errText(e) {
     return String(e);
   }
 }
+
+// ---------------------------------------------------------------------------
+// FASE C: fitur Dokumen Dae Captain v2 (desain 4.1 template, 4.2 bandingkan,
+// 4.3 batch ekstrak, Q&A dokumen).
+//
+// Kartu-kartu ini mengikuti pola yang sama: data dari SERVER (bukan HTML
+// hardcoded), setiap tombol memanggil API nyata via ctx.api — tidak ada
+// tombol dekoratif.
+// ---------------------------------------------------------------------------
+
+const FASEC_CARD_KINDS = [
+  "dokumen-doc-templates",
+  "dokumen-compare",
+  "dokumen-batch",
+  "dokumen-qa",
+];
+
+// C1 (desain 4.1): pilih template dokumen bawaan → kerangka otomatis terisi
+// mengikuti template (di-stage via POST /dokumen/outline, sama seperti
+// kerangka dari engine — tombol "Buat" tetap di kartu dokumen-outline).
+function renderDokumenDocTemplates(data, ctx) {
+  const templates = Array.isArray(data?.templates) ? data.templates : [];
+  const { card, body } = cardShell(
+    "dokumen-doc-templates",
+    `📑 Pilih template dokumen`,
+  );
+  if (!templates.length) {
+    body.appendChild(h("p", "dc-hint", "Template tidak tersedia — coba lagi nanti."));
+    return card;
+  }
+  const grid = h("div", "dc-list");
+  for (const t of templates) {
+    const row = h("div", "dc-row");
+    const main = h("div", "dc-row-main");
+    main.appendChild(h("strong", "", t.name ?? t.id));
+    if (t.description) main.appendChild(h("div", "dc-hint", String(t.description)));
+    const secs = Array.isArray(t.sections) ? t.sections : [];
+    if (secs.length) {
+      main.appendChild(h("div", "dc-hint", `${secs.length} bagian: ` + secs.slice(0, 4).map((s) => s.title).join(" · ") + (secs.length > 4 ? " · …" : "")));
+    }
+    row.appendChild(main);
+    const pick = btn("Pilih", "dc-primary", async () => {
+      const sections = secs.map((s) => ({
+        title: s.title,
+        thesisPoints: s.contentPrompt ? [String(s.contentPrompt)] : [],
+      }));
+      const res = await ctx.api.dokumenOutline({
+        root: ctx.workspaceRoot,
+        sections,
+        ...(ctx.taskId ? { run_id: ctx.taskId } : {}),
+      });
+      const staged = res?.document?.sections?.length ?? sections.length;
+      ctx.notify(`Template "${t.name ?? t.id}" dipakai — ${staged} bagian terisi di kerangka.`);
+      ctx.say(`Kerangka "${t.name ?? t.id}" sudah terisi (${staged} bagian). Sunting di panel bila perlu, lalu tekan tombol Buat untuk menyusun dokumen.`);
+    });
+    row.appendChild(pick);
+    grid.appendChild(row);
+  }
+  body.appendChild(grid);
+  return card;
+}
+
+// Daftar kind FASE C diekspos agar CARD_KINDS bisa diperluas tanpa
+// mengedit blok di atas.
+for (const kind of FASEC_CARD_KINDS) {
+  if (!CARD_KINDS.includes(kind)) CARD_KINDS.push(kind);
+}
+RENDERERS["dokumen-doc-templates"] = renderDokumenDocTemplates;

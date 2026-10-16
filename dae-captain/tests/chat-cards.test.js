@@ -168,8 +168,29 @@ describe("slide-outline card", () => {
       root: "/ws",
       slide_id: "s1",
       content: { title: "Judul Baru", bullets: ["x", "y"] },
+      notes: "",
       run_id: "task-1",
     });
+  });
+
+  it("🗒️ speaker notes disimpan via slideUpdate + badge tampil di baris", async () => {
+    const { api, calls } = mockApi();
+    const { ctx } = mockCtx(api);
+    const card = renderCard("slide-outline", deckData(), ctx);
+    await clickBtn(card, "✏️");
+    const areas = card.querySelectorAll(".dc-editor textarea");
+    const notesArea = areas[areas.length - 1];
+    notesArea.value = "Buka dengan salam, lalu jelaskan latar belakang.";
+    await clickBtn(card, "Simpan");
+    const call = calls.find((c) => c.name === "slideUpdate");
+    assert.ok(call, "slideUpdate called");
+    assert.equal(call.args[0].notes, "Buka dengan salam, lalu jelaskan latar belakang.");
+
+    // Badge 🗒️ muncul pada baris yang sudah punya notes.
+    const data = deckData();
+    data.deck.slides[0].notes = "Catatan lama";
+    const card2 = renderCard("slide-outline", data, ctx);
+    assert.match(card2.textContent, /🗒️/);
   });
 
   it("template button calls slideTheme", async () => {
@@ -567,5 +588,70 @@ describe("slideTitle + buildBibtex", () => {
     assert.match(bib, /@misc\{src_s1,/);
     assert.match(bib, /author = \{Kemendikbud\}/);
     assert.match(bib, /doi = \{10\.1\/y\}/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FASE C: fitur Dokumen Dae Captain v2 (desain 4.1 template dokumen).
+// ---------------------------------------------------------------------------
+
+describe("FASE C — dokumen-doc-templates card", () => {
+  const templatesData = () => ({
+    templates: [
+      {
+        id: "makalah",
+        name: "Makalah",
+        description: "Struktur akademik.",
+        sections: [
+          { title: "Abstrak", contentPrompt: "Ringkasan 150 kata." },
+          { title: "Pendahuluan", contentPrompt: "Latar belakang." },
+        ],
+      },
+      {
+        id: "surat-resmi",
+        name: "Surat Resmi",
+        description: "Format surat dinas.",
+        sections: [{ title: "Kop Surat", contentPrompt: "Nama instansi." }],
+      },
+    ],
+  });
+
+  it("is a registered card kind and renders every template from server data", () => {
+    const { api } = mockApi();
+    const { ctx } = mockCtx(api);
+    assert.ok(CARD_KINDS.includes("dokumen-doc-templates"));
+    const card = renderCard("dokumen-doc-templates", templatesData(), ctx);
+    assert.match(card.textContent, /Makalah/);
+    assert.match(card.textContent, /Surat Resmi/);
+    assert.match(card.textContent, /2 bagian/);
+  });
+
+  it("Pilih stages the template outline via the real API and notifies", async () => {
+    const { api, calls } = mockApi({
+      dokumenOutline: async (body) => {
+        calls.push({ name: "dokumenOutline", args: [body] });
+        return { document: { sections: body.sections.map((s, i) => ({ id: `s${i}`, ...s })) } };
+      },
+      dokumenDocTemplates: async () => templatesData(),
+    });
+    const { ctx, events } = mockCtx(api);
+    const card = renderCard("dokumen-doc-templates", templatesData(), ctx);
+    await clickBtn(card, "Pilih");
+    const call = calls.find((c) => c.name === "dokumenOutline");
+    assert.ok(call, "dokumenOutline called");
+    const body = call.args[0];
+    assert.equal(body.root, "/ws");
+    assert.equal(body.sections.length, 2);
+    assert.equal(body.sections[0].title, "Abstrak");
+    assert.deepEqual(body.sections[0].thesisPoints, ["Ringkasan 150 kata."]);
+    assert.ok(events.some(([k, t]) => k === "notify" && /Makalah/.test(t)), "notify mentions template");
+    assert.ok(events.some(([k, t]) => k === "say" && /terisi/.test(t)), "chat bubble explains next step");
+  });
+
+  it("shows a hint when the server has no templates", () => {
+    const { api } = mockApi();
+    const { ctx } = mockCtx(api);
+    const card = renderCard("dokumen-doc-templates", { templates: [] }, ctx);
+    assert.match(card.textContent, /tidak tersedia/);
   });
 });
