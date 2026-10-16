@@ -211,6 +211,11 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
     /** Cancel one reminder by id. */
     captainCancelReminder: (id) =>
       req("POST", `/captain/reminders/${encodeURIComponent(id)}/cancel`),
+    /** A1: Fired reminders awaiting delivery (drains server queue). */
+    captainRemindersDue: () => req("GET", "/captain/reminders/due"),
+    /** A1: Snooze a reminder by 1 hour. */
+    captainSnoozeReminder: (id) =>
+      req("POST", `/captain/reminders/${encodeURIComponent(id)}/snooze`),
     /**
      * Test an UNSAVED provider config (the add-provider form): fetches
      * /models against the given base URL + key without persisting.

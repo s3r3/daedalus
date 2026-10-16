@@ -163,6 +163,36 @@ export class PillController {
   }
 
   /**
+   * A1: Reminder fired — pulse the pill (unless DND) to get attention.
+   * The chat message carries the details; this is just the visual nudge.
+   */
+  notifyReminder() {
+    if (this.dnd) return;
+    this.manual = {
+      status: "idle",
+      label: "⏰ Pengingat",
+      dot: "blue",
+      buttons: [],
+      pulse: true,
+      progress: null,
+      tasks: [],
+      primary: null,
+      cancelTaskId: null,
+      pauseTaskId: null,
+      resumeTaskId: null,
+      approvalCount: 0,
+    };
+    this._render(this.manual);
+    // Clear the pulse after 30s so it doesn't throb forever.
+    clearTimeout(this._reminderTimer);
+    this._reminderTimer = setTimeout(() => {
+      this._reminderTimer = null;
+      this.manual = null;
+      this.update(this.lastRuns);
+    }, 30_000);
+  }
+
+  /**
    * Notification mode (Settings → Pill → Notifikasi), persisted in
    * localStorage and mirrored to the Rust prefs by app.js:
    * - "pulse": the pill throbs on alerts (default, no sound);

@@ -11,7 +11,7 @@ import { planTask, type TaskPlan, type SubTask } from "@daedalus/core/workflow/d
 import { UndoStore, type Action as WorkflowAction } from "@daedalus/core/workflow/approval.ts";
 import { getEvents, type AnyTimelineEvent } from "@daedalus/core/workflow/timeline.ts";
 import { UserMemory } from "@daedalus/core/workflow/memory.ts";
-import { ReminderStore } from "@daedalus/core/workflow/reminder.ts";
+import { ReminderStore, startScheduler, type Reminder } from "@daedalus/core/workflow/reminder.ts";
 import { listRoles, MODEL_TIER_LABELS, MODEL_TIERS, type ModelTier } from "@daedalus/core/workflow/model-roles.ts";
 import { exportDocumentMarkdown } from "@daedalus/core/dokumen/export-md.ts";
 import {
@@ -451,6 +451,13 @@ export type AppContext = {
   /** Dokumen Pratinjau renderer (raster preview of the composed/re-laid-out DOCX; Word on Windows, else LibreOffice); tests inject a fake-backed service. */
   dokumenPreview?: DokumenPreviewService;
   /**
+   * Fired reminders awaiting UI delivery (A1). The in-process scheduler's
+   * onDue pushes here; GET /captain/reminders/due drains the queue.
+   * In-memory only: restarting the server clears undelivered fires, but
+   * the persisted reminder state is unaffected.
+   */
+  firedReminders: Reminder[];
+  /**
    * Mode Analis (Agentic Spreadsheet): seam to the core analysis contract
    * (profileWorkbook / classifyAnalysisIntent / generateAnalysisPlan /
    * SpreadsheetEngine.runAnalysis). Production resolves lazy core imports;
@@ -508,6 +515,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     analysisHooks: overrides.analysisHooks,
     researchHooks: overrides.researchHooks,
     researchDocHooks: overrides.researchDocHooks,
+    firedReminders: overrides.firedReminders ?? [],
   };
 }
 
@@ -3132,6 +3140,19 @@ export function createApp(ctx: AppContext) {
   // Extensions) shows them even before the first task runs. Idempotent and
   // never overwrites existing copies; failures must not take the server down.
   void ensureBundledSkillsInstalled().catch(() => undefined);
+  // A1: Reminder delivery. Start the in-process scheduler; onDue pushes
+  // fired reminders into ctx.firedReminders for UI polling via
+  // GET /captain/reminders/due.
+  {
+    const home = resolveDaedalusHome(ctx.settings.daedalusHome, ctx.session.workspaceRoot ?? ctx.cwd);
+    startScheduler({
+      root: home,
+      onDue: (reminder) => {
+        ctx.firedReminders.push(reminder);
+        ctx.log.info({ reminderId: reminder.id }, "reminder fired; queued for UI delivery");
+      },
+    });
+  }
   const slidePreview = ctx.slidePreview ?? new SlidePreviewService();
   const previewPageUrl = (root: string, key: string, page: number): string =>
     `/slides/deck/preview/page?root=${encodeURIComponent(root)}&key=${key}&page=${page}`;
@@ -3828,6 +3849,38 @@ export function createApp(ctx: AppContext) {
       try {
         const reminders = new ReminderStore(captainHome()).listReminders("default");
         sendJson(res, 200, { user_id: "default", reminders, request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    // A1: Fired reminders awaiting UI delivery. Drains the queue —
+    // the UI polls this and shows pill pulse + chat message per item.
+    if (method === "GET" && url.pathname === "/captain/reminders/due") {
+      try {
+        const due = ctx.firedReminders.splice(0, ctx.firedReminders.length);
+        sendJson(res, 200, { user_id: "default", reminders: due, request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
+    // A1: Snooze a reminder by 1 hour (from now).
+    const snoozeReminderMatch = /^\/captain\/reminders\/([^/]+)\/snooze$/.exec(url.pathname);
+    if (method === "POST" && snoozeReminderMatch?.[1]) {
+      try {
+        const store = new ReminderStore(captainHome());
+        const r = store.getReminder(snoozeReminderMatch[1]);
+        if (!r) {
+          sendJson(res, 404, { error: "reminder_not_found", request_id: requestId });
+          return;
+        }
+        r.deliverAt = Date.now() + 3_600_000;
+        r.done = false;
+        store.saveReminder(r);
+        sendJson(res, 200, { snoozed: true, deliverAt: r.deliverAt, request_id: requestId });
       } catch (error) {
         sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
       }

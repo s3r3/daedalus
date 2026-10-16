@@ -4074,6 +4074,35 @@ async function boot() {
   // Runs list: WebSocket events are primary (via refreshRunsQuiet);
   // this is a 10s safety net for missed events.
   setInterval(refreshRuns, 10000);
+  // A1: Reminder delivery poll — check for fired reminders every 30s.
+  setInterval(pollDueReminders, 30_000);
+  // Check once shortly after boot too.
+  setTimeout(pollDueReminders, 5000);
+}
+
+/**
+ * A1: Poll for fired reminders. For each: pulse the pill + push a chat
+ * message with [Tunda 1 jam] [Selesai] actions.
+ */
+async function pollDueReminders() {
+  try {
+    const res = await state.api.captainRemindersDue();
+    const due = Array.isArray(res?.reminders) ? res.reminders : [];
+    for (const r of due) {
+      // Pulse the pill (respects DND).
+      try { state.pill?.notifyReminder?.(); } catch { /* ignore */ }
+      // Chat message with actions.
+      pushAssistant(`⏰ Waktunya: ${r.message}`);
+      pushCard("reminder-due", {
+        id: r.id,
+        message: r.message,
+        repeat: r.repeat ?? null,
+      }, {});
+      renderTranscript();
+    }
+  } catch {
+    /* server down or no reminders — silent */
+  }
 }
 
 // ---------------------------------------------------------------------------

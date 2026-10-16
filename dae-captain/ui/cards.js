@@ -33,6 +33,7 @@ export const CARD_KINDS = [
   "task-plan",
   "deliverable",
   "progress",
+  "reminder-due",
 ];
 
 const esc = (s) =>
@@ -1150,6 +1151,46 @@ function renderProgress(data, ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// A1: Reminder due card — [Tunda 1 jam] [Selesai]
+// ---------------------------------------------------------------------------
+
+/**
+ * A fired reminder: message + snooze/dismiss actions.
+ * [⏰ Tunda 1 jam] → POST /captain/reminders/:id/snooze
+ * [✓ Selesai] → POST /captain/reminders/:id/cancel (marks done)
+ */
+function renderReminderDue(data, ctx) {
+  const { card, body } = cardShell(
+    "reminder-due",
+    `⏰ Pengingat`,
+  );
+  body.appendChild(h("p", "", data?.message ?? ""));
+
+  const actions = h("div", "dc-row-actions");
+  const doneBtn = btn("✓ Selesai", "dc-primary", async () => {
+    try {
+      await ctx.api.captainCancelReminder(data.id);
+      ctx.notify("Pengingat selesai.");
+      card.remove();
+    } catch (e) {
+      ctx.notify("Gagal: " + errText(e));
+    }
+  });
+  const snoozeBtn = btn("⏰ Tunda 1 jam", "", async () => {
+    try {
+      await ctx.api.captainSnoozeReminder(data.id);
+      ctx.notify("Pengingat ditunda 1 jam.");
+      card.remove();
+    } catch (e) {
+      ctx.notify("Gagal: " + errText(e));
+    }
+  });
+  actions.append(snoozeBtn, doneBtn);
+  body.appendChild(actions);
+  return card;
+}
+
+// ---------------------------------------------------------------------------
 // Public entry
 // ---------------------------------------------------------------------------
 
@@ -1164,6 +1205,7 @@ const RENDERERS = {
   "task-plan": renderTaskPlan,
   "deliverable": renderDeliverable,
   "progress": renderProgress,
+  "reminder-due": renderReminderDue,
 };
 
 /** Render one card. Throws for unknown kinds (caller shows a fallback). */
