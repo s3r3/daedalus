@@ -1140,6 +1140,13 @@ async function maybePushDeliverableCard(runTurn) {
           engine: "dokumen",
           taskId,
         }, { taskId, retryGoal: runTurn.goal });
+      } else {
+        // Fallback: outline staged tapi watcher tidak menangkap —
+        // tampilkan kartu outline langsung agar user bisa klik "Buat Makalah".
+        const stagedSections = (doc?.sections ?? []).some((s) => s.status === "staged");
+        if (stagedSections) {
+          pushCard("dokumen-outline", { document: doc }, { taskId, retryGoal: runTurn.goal });
+        }
       }
     } else if (engine === "spreadsheet") {
       pushCard("deliverable", {
@@ -1677,6 +1684,8 @@ async function sendChat(message, override) {
   state.transcript.push(live);
   renderTranscript();
   updateStopButton();
+  // Pill langsung tunjukkan "working" — jangan tunggu polling 10 detik.
+  state.pill?.setStatus("working", "Memproses…");
   const controller = new AbortController();
   state.streamAbort = controller;
   const dropLive = () => {
@@ -4066,8 +4075,18 @@ async function boot() {
   renderHeaderStatus();
   await refreshRuns();
   // Runs list: WebSocket events are primary (via refreshRunsQuiet);
-  // this is a 10s safety net for missed events.
-  setInterval(refreshRuns, 10000);
+  // adaptive polling: 2s saat ada task berjalan, 10s saat idle.
+  // Ini safety net untuk event yang terlewat + update pill yang responsif.
+  setInterval(async () => {
+    const hasRunning = (state.runs ?? []).some((r) =>
+      (r.turns ?? []).some((t) => t?.status === "running")
+    );
+    await refreshRuns();
+    // Jika ada yang berjalan, poll lagi lebih cepat untuk update pill
+    if (hasRunning) {
+      setTimeout(() => refreshRuns(), 2000);
+    }
+  }, 10000);
   // A1: Reminder delivery poll — check for fired reminders every 30s.
   setInterval(pollDueReminders, 30_000);
   // Check once shortly after boot too.

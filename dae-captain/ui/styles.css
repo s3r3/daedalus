@@ -847,3 +847,85 @@ body[data-theme="light"] .inline-code { background: rgba(0,0,0,.07); }
 
 /* Turn hint: subtle "working" indicator, not an echo of user message. */
 .turn-hint { color: var(--muted, #888); font-style: italic; font-size: 0.9em; }
+
+/* ---- Smooth micro-interactions (GPU-accelerated: transform + opacity only) ---- */
+
+/* Buttons: lift on hover, press on active */
+button, .btn, .dc-chip, .dc-primary {
+  transition: transform 160ms cubic-bezier(.2,.9,.2,1),
+              box-shadow 160ms ease,
+              background-color 160ms ease,
+              opacity 160ms ease;
+}
+button:hover:not(:disabled), .btn:hover:not(:disabled),
+.dc-chip:hover:not(:disabled), .dc-primary:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+button:active:not(:disabled), .btn:active:not(:disabled),
+.dc-chip:active:not(:disabled), .dc-primary:active:not(:disabled) {
+  transform: translateY(0) scale(0.98);
+}
+
+/* Chat bubbles: slide-in on appear */
+.bubble {
+  animation: bubble-in 220ms cubic-bezier(0,0,.2,1);
+}
+@keyframes bubble-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Cards: fade + scale on appear */
+.card-bubble, .dc-card {
+  animation: card-in 280ms cubic-bezier(0,0,.2,1);
+}
+@keyframes card-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Pill: smooth status transitions */
+#pill {
+  transition: transform 200ms cubic-bezier(.2,.9,.2,1),
+              box-shadow 200ms ease,
+              background-color 200ms ease;
+}
+
+/* Progress ring: smooth rotation */
+.pill-ring, .progress-ring {
+  transition: stroke-dashoffset 300ms ease-out;
+}
+
+/* Staggered list items */
+.dc-list > *, .dc-rows > * {
+  animation: list-in 240ms cubic-bezier(0,0,.2,1);
+  animation-fill-mode: both;
+}
+.dc-list > *:nth-child(1) { animation-delay: 0ms; }
+.dc-list > *:nth-child(2) { animation-delay: 40ms; }
+.dc-list > *:nth-child(3) { animation-delay: 80ms; }
+.dc-list > *:nth-child(4) { animation-delay: 120ms; }
+.dc-list > *:nth-child(5) { animation-delay: 160ms; }
+.dc-list > *:nth-child(n+6) { animation-delay: 200ms; }
+@keyframes list-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+/* Loading shimmer */
+.turn-hint, .dc-loading {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%, 100% { opacity: 0.6; }
+  50% { opacity: 1; }
+}
+
+/* Respect user motion preferences */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

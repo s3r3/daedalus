@@ -306,7 +306,8 @@ function renderSlideOutline(data, ctx) {
       tBox.appendChild(b);
     }
     for (const t of imported) {
-      if (!t || typeof t !== "object") continue; // skip entri rusak      const b = btn("🗂 " + esc(t.name ?? t.id), "dc-chip" + (selectedId === t.id ? " selected" : ""), async () => {
+      if (!t || typeof t !== "object") continue; // skip entri rusak
+      const b = btn("🗂 " + esc(t.name ?? t.id), "dc-chip" + (selectedId === t.id ? " selected" : ""), async () => {
         await ctx.api.slideTheme({
           root: ctx.workspaceRoot,
           template_id: t.id,
