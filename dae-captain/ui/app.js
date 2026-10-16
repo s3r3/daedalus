@@ -659,10 +659,12 @@ function renderTranscript() {  const box = $("transcript");
       const arts = formatResolvedArtifacts(m.resolved);
       // Streaming answers render as plain text with a caret (cheap per
       // delta); the Markdown pass runs once the stream finishes.
-      // Assistant chat messages render Markdown; turn goals stay plain.
+      // Assistant chat messages render Markdown; turn goals are NOT echoed
+      // (the user's message is already visible above) — the turn shows
+      // engine activity instead.
       const bodyHtml = m.kind === "assistant"
         ? (m.streaming ? escapeHtml(m.text) + `<span class="stream-caret">▍</span>` : renderMarkdown(m.text))
-        : escapeHtml(m.goal);
+        : `<span class="turn-hint">Mengerjakan…</span>`;
       el.innerHTML = `
         <div class="who">${escapeHtml(who)}${when ? ` <span class="msg-time">${escapeHtml(when)}</span>` : ""}</div>
         <div class="body">${bodyHtml}</div>
