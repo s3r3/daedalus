@@ -506,6 +506,9 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     // wins; legacy DAEDALUS_THINKING=false maps to 'off'; else 'medium'.
     thinkingLevel: resolveThinkingLevel({ thinking: settings.session?.thinking }, settings.session?.thinkingLevel ?? "medium"),
     workspaceRoot: anchoredWorkspace,
+    // Model per peran: default tier menjadi model sesi saat boot,
+    // agar pilihan di Settings langsung aktif tanpa perlu save ulang.
+    model: settings.modelRoles?.default?.trim() || settings.llm?.model || undefined,
   };
   return {
     bus: overrides.bus ?? new EventBus(),
@@ -870,6 +873,13 @@ function applySettingsUpdate(ctx: AppContext, parsed: Record<string, unknown>): 
   const modelRolesRaw = parsed.modelRoles !== undefined ? parsed.modelRoles : parsed.model_roles;
   if (modelRolesRaw !== undefined) {
     ctx.settings.modelRoles = parseModelRoles(modelRolesRaw);
+    // Sinkronkan default tier ke model aktif — agar pilihan di Settings
+    // "Model per peran" benar-benar dipakai, bukan cuma tersimpan.
+    const def = ctx.settings.modelRoles?.default?.trim();
+    if (def) {
+      ctx.settings.llm.model = def;
+      ctx.session.model = def;
+    }
   }
   if (typeof parsed.model === "string") ctx.session.model = parsed.model;
   if (typeof parsed.providerId === "string") ctx.session.providerId = parsed.providerId;
