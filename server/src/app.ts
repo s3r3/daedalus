@@ -3973,6 +3973,49 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
+    // A2: Update a staged plan — reorder tasks or remove tasks.
+    // Body: { order?: string[] } (task ids in new order) and/or
+    // { remove?: string[] } (task ids to delete). Only before execution.
+    const captainPlanPatchMatch = /^\/captain\/plans\/([^/]+)$/.exec(url.pathname);
+    if (method === "PATCH" && captainPlanPatchMatch?.[1] !== undefined) {
+      try {
+        sweepStagedTaskPlans();
+        const staged = stagedTaskPlans.get(captainPlanPatchMatch[1] ?? "");
+        if (!staged) {
+          sendJson(res, 404, { error: "plan_not_found", request_id: requestId });
+          return;
+        }
+        if (staged.execution) {
+          sendJson(res, 409, { error: "plan_already_executing", request_id: requestId });
+          return;
+        }
+        const raw = await readBody(req);
+        const body = raw ? (JSON.parse(raw) as { order?: string[]; remove?: string[] }) : {};
+        const tasks = staged.plan.tasks ?? [];
+        // Remove tasks first.
+        const removeIds = new Set(Array.isArray(body?.remove) ? body.remove.filter((x) => typeof x === "string") : []);
+        let updated = tasks.filter((t) => !removeIds.has(t.id));
+        // Then reorder.
+        if (Array.isArray(body?.order)) {
+          const orderMap = new Map(body.order.map((id, i) => [id, i]));
+          updated = [...updated].sort((a, b) => {
+            const ai = orderMap.has(a.id) ? orderMap.get(a.id) : 9999;
+            const bi = orderMap.has(b.id) ? orderMap.get(b.id) : 9999;
+            return ai - bi;
+          });
+        }
+        staged.plan.tasks = updated;
+        sendJson(res, 200, {
+          plan_id: staged.plan.id,
+          plan: staged.plan,
+          request_id: requestId,
+        });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
+      return;
+    }
+
     // Execute a staged plan: 202 immediately, Kahn waves in the background
     // (max 3 parallel), polled via GET /captain/plans/:id.
     const captainPlanExecMatch = /^\/captain\/plans\/([^/]+)\/execute$/.exec(url.pathname);

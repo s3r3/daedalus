@@ -777,7 +777,8 @@ function renderTaskPlan(data, ctx) {
 
   function renderRows(execSubs) {
     list.innerHTML = "";
-    for (const t of tasks) {
+    const isEditing = !data?.execution; // Only editable before execution
+    tasks.forEach((t, idx) => {
       const row = h("div", "dc-row");
       const main = h("span", "dc-row-main", `${t.id} · ${t.goal}`);
       row.appendChild(main);
@@ -790,7 +791,73 @@ function renderTaskPlan(data, ctx) {
       if (live) {
         row.appendChild(h("span", "dc-badge", PLAN_STATUS_LABEL[live.status] ?? live.status));
       }
+      // A2: Edit controls (only before execution starts).
+      if (isEditing && tasks.length > 1) {
+        if (idx > 0) {
+          const up = btn("↑", "dc-icon", async () => {
+            await moveTask(idx, idx - 1);
+          });
+          up.title = "Pindah ke atas";
+          row.appendChild(up);
+        }
+        if (idx < tasks.length - 1) {
+          const down = btn("↓", "dc-icon", async () => {
+            await moveTask(idx, idx + 1);
+          });
+          down.title = "Pindah ke bawah";
+          row.appendChild(down);
+        }
+      }
+      if (isEditing) {
+        const del = btn("✕", "dc-icon", async () => {
+          await removeTask(t.id);
+        });
+        del.title = "Hapus sub-task";
+        row.appendChild(del);
+      }
       list.appendChild(row);
+    });
+  }
+
+  // A2: Track removed task IDs to sync deletions to server.
+  const removedIds = [];
+
+  /** A2: Move a task in the order and sync to server. */
+  async function moveTask(fromIdx, toIdx) {
+    const [moved] = tasks.splice(fromIdx, 1);
+    tasks.splice(toIdx, 0, moved);
+    await syncPlan();
+  }
+
+  /** A2: Remove a task and sync to server. */
+  async function removeTask(taskId) {
+    const idx = tasks.findIndex((t) => t.id === taskId);
+    if (idx >= 0) {
+      tasks.splice(idx, 1);
+      removedIds.push(taskId);
+    }
+    await syncPlan();
+  }
+
+  /** A2: Push the current task order/removals to the server. */
+  async function syncPlan() {
+    if (!planId) return;
+    try {
+      const res = await ctx.api.captainPlanUpdate(planId, {
+        order: tasks.map((t) => t.id),
+        remove: removedIds.length ? [...removedIds] : undefined,
+      });
+      // Server returns the updated plan; refresh local tasks.
+      const updated = res?.plan?.tasks;
+      if (Array.isArray(updated)) {
+        tasks.length = 0;
+        tasks.push(...updated);
+      }
+      removedIds.length = 0;
+      renderRows(data?.execution?.subTasks);
+      ctx.notify("Rencana diperbarui.");
+    } catch (e) {
+      ctx.notify("Gagal update rencana: " + errText(e));
     }
   }
   renderRows(data?.execution?.subTasks);

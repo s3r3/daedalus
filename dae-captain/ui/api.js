@@ -184,6 +184,9 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
       req("GET", `/captain/plans/${encodeURIComponent(planId)}`),
     captainPlanExecute: (planId) =>
       req("POST", `/captain/plans/${encodeURIComponent(planId)}/execute`),
+    /** A2: Reorder/remove sub-tasks before execution. */
+    captainPlanUpdate: (planId, body) =>
+      req("PATCH", `/captain/plans/${encodeURIComponent(planId)}`, body),
     // Approval UndoStore
     captainUndoList: (runId, workspaceRoot) =>
       req("GET", "/captain/undo", undefined, { run_id: runId, workspace_root: workspaceRoot }),
