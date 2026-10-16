@@ -929,6 +929,15 @@ async function handleChatResponse(res, { text, override, attachments }) {
     showView("workspace");
   } else {
     state.runId = res.run_id ?? state.runId;
+    // Natural acknowledgment before the turn — human-like, per engine.
+    const ack = {
+      coding: "Siap. Aku cek workspace dan siapkan pengerjaannya.",
+      slide: "Siap. Aku siapkan outline slide-nya dulu.",
+      dokumen: "Siap. Aku cek dokumennya dulu.",
+      spreadsheet: "Siap. Aku siapkan spreadsheet-nya.",
+      research: "Siap. Aku susun rencana risetnya.",
+    }[res.engine] ?? "Siap. Aku kerjakan.";
+    state.transcript.push({ kind: "assistant", text: ack, ts: Date.now() });
     const turnEntry = {
       kind: "turn",
       ts: Date.now(),
