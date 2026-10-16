@@ -45,7 +45,8 @@
     "./research/followup.ts": "./src/research/followup.ts",
     "./sheets/qa": "./src/sheets/qa.ts",
     "./sheets/quick-dashboard": "./src/sheets/quick-dashboard.ts",
-    "./slides/template-recommend.ts": "./src/slides/template-recommend.ts"
+    "./slides/template-recommend.ts": "./src/slides/template-recommend.ts",
+    "./workflow/persona.ts": "./src/workflow/persona.ts"
   },
   "engines": {
     "node": ">=22"
