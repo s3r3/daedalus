@@ -985,8 +985,8 @@ async function onDispatchResponse(res, turnEntry) {
   if (res.engine === "slide") watchSlideOutline(taskId);
   else if (res.engine === "dokumen") watchDokumenState(taskId);
   else if (res.engine === "spreadsheet") watchSheetsState(taskId);
-  // Turn-done → deliverable card.
-  if (["slide", "dokumen", "spreadsheet", "research"].includes(res.engine)) {
+  // Turn-done → deliverable card (all engines incl. coding).
+  if (["slide", "dokumen", "spreadsheet", "research", "coding"].includes(res.engine)) {
     state.cardWatchers.set("gen:" + taskId, { stop: watchTurnDone(taskId, res.engine) });
   }
 }
@@ -1087,9 +1087,8 @@ function watchTurnDone(taskId, engine) {
 
 /**
  * A turn just finished → push the engine's deliverable card (slide pptx,
- * dokumen export, spreadsheet xlsx, research report). Coding keeps its
- * existing "Lihat perubahan" flow; failures stay silent here (the error
- * bubble already explains).
+ * dokumen export, spreadsheet xlsx, research report, coding file summary).
+ * Failures stay silent here (the error bubble already explains).
  */
 async function maybePushDeliverableCard(runTurn) {
   const taskId = String(runTurn.task_id ?? "");
@@ -1145,6 +1144,32 @@ async function maybePushDeliverableCard(runTurn) {
       if (rep?.report_id) {
         const report = (await state.api.researchReport(rep.report_id))?.report;
         if (report) pushCard("research-report", { report }, { taskId });
+      }
+    } else if (engine === "coding") {
+      // Coding: "Jadi." + file summary card per user flow.
+      const artifacts = runTurn.artifacts ?? [];
+      const files = artifacts.filter((a) => a.kind === "files" && a.path);
+      const count = files.length;
+      const label = runTurn.goal ?? "Task coding";
+      // "Jadi." message first (human-like completion).
+      pushAssistant(`Jadi. ${label} selesai.`);
+      if (count > 0) {
+        const firstPath = files[0].path;
+        // Derive a folder hint from the first file path.
+        const folderHint = firstPath.includes("/")
+          ? firstPath.split("/").slice(0, -1).join("/") + "/"
+          : "";
+        pushCard("deliverable", {
+          name: count === 1 ? firstPath.split("/").pop() : `${count} file`,
+          label: folderHint ? `${count} file di ${folderHint}` : `${count} file dibuat`,
+          kind: "files",
+          engine: "coding",
+          taskId,
+          path: firstPath,
+        }, { taskId, retryGoal: runTurn.goal });
+      } else {
+        // No file artifacts tracked — still acknowledge completion.
+        pushAssistant("Cek workspace untuk melihat hasilnya.");
       }
     }
   } catch (e) {
