@@ -54,7 +54,8 @@ function mockApi(overrides = {}) {
     slideArchiveRestore: mk("slideArchiveRestore", {}),
     dokumenExportDocument: mk("dokumenExportDocument", { result: { path: ".daedalus/documents/1/exports/dokumen-x.md", format: "md" } }),
     dokumenExportData: mk("dokumenExportData", { result: { path: ".daedalus/documents/1/exports/data.json", recordCount: 2 } }),
-    dokumenDocument: mk("dokumenDocument", { document: { sections: [] } }),
+    dokumenDocument: mk("dokumenDocument", { document: { sections: [{ status: "drafted" }] } }),
+    dokumenRelease: mk("dokumenRelease", { released: true }),
     dokumenSection: mk("dokumenSection", {}),
     sheetsGenerate: mk("sheetsGenerate", { summary: "ok" }),
     sheetsWorkbook: mk("sheetsWorkbook", { workbook: { sheets: [{ name: "S1", cells: {} }] } }),
@@ -291,12 +292,28 @@ describe("dokumen-outline card", () => {
     const { ctx, events } = mockCtx(api);
     const card = renderCard("dokumen-outline", docData(), ctx);
     await clickBtn(card, "MD");
-    await clickBtn(card, "Buat Makalah");
-    const call = calls.find((c) => c.name === "dokumenExportDocument");
+    // Klik Buat Makalah — handler async: release gate, poll, export.
+    // Tunggu hingga dokumenExportDocument dipanggil (poll 3s di impl).
+    const btn = [...card.querySelectorAll("button")].find((b) => b.textContent.includes("Buat Makalah"));
+    assert.ok(btn, 'button "Buat Makalah" exists');
+    btn.click();
+    // Tunggu max 10 detik untuk polling loop.
+    let call;
+    for (let i = 0; i < 100; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      call = calls.find((c) => c.name === "dokumenExportDocument");
+      if (call) break;
+    }
     assert.ok(call, "dokumenExportDocument called");
     assert.equal(call.args[0].format, "md");
     assert.equal(call.args[0].root, "/ws");
-    const delivered = events.find((e) => e[0] === "onDeliverable");
+    // Tunggu deliverable event.
+    let delivered;
+    for (let i = 0; i < 50; i++) {
+      await new Promise((r) => setTimeout(r, 100));
+      delivered = events.find((e) => e[0] === "onDeliverable");
+      if (delivered) break;
+    }
     assert.ok(delivered, "deliverable emitted");
     assert.equal(delivered[1].kind, "md");
   });

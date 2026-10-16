@@ -2889,6 +2889,9 @@ async function dispatchChatTurn(
     {
       goal,
       repo_path: root,
+      // Dae Captain: selalu mode "auto" — task dari chat harus bisa
+      // menjalankan command (npm, node, dll). Mode "ask" akan DENY semua.
+      mode: "auto",
       ...(engine === "coding" ? {} : { domain: engine }),
       ...(providerId ? { provider_id: providerId } : {}),
       ...(model ? { model } : {}),
