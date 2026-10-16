@@ -22,6 +22,10 @@
 //
 // Runs under node:test with jsdom (dae-captain/tests/chat-cards.test.js).
 
+// Plan IDs yang sudah diumumkan selesai (global, cegah pesan ganda
+// saat kartu di-render ulang atau ada beberapa instance polling).
+const announcedPlanDone = new Set();
+
 export const CARD_KINDS = [
   "slide-outline",
   "dokumen-outline",
@@ -284,6 +288,7 @@ function renderSlideOutline(data, ctx) {
       tBox.appendChild(recLine);
     }
     for (const t of templates) {
+      if (!t || typeof t !== "object") continue; // skip entri rusak
       const isRec = !!recommendation && recommendation.template_id === t.id;
       const b = btn((isRec ? "⭐ " : "") + esc(t.name ?? t.id), "dc-chip" + (selectedId === t.id ? " selected" : ""), async () => {
         // Built-in design templates apply via design_id (verified against
@@ -301,7 +306,7 @@ function renderSlideOutline(data, ctx) {
       tBox.appendChild(b);
     }
     for (const t of imported) {
-      const b = btn("🗂 " + esc(t.name ?? t.id), "dc-chip" + (selectedId === t.id ? " selected" : ""), async () => {
+      if (!t || typeof t !== "object") continue; // skip entri rusak      const b = btn("🗂 " + esc(t.name ?? t.id), "dc-chip" + (selectedId === t.id ? " selected" : ""), async () => {
         await ctx.api.slideTheme({
           root: ctx.workspaceRoot,
           template_id: t.id,
@@ -1104,11 +1109,15 @@ function renderTaskPlan(data, ctx) {
           : "";
         if (!exec || exec.status !== "executing") {
           const failed = subs.filter((s) => s.status === "failed").length;
-          ctx.say(
-            failed
-              ? `Rencana selesai dengan ${failed} sub-task gagal.`
-              : "Rencana selesai — semua sub-task jalan.",
-          );
+          // Cegah pengumuman ganda: kartu bisa di-render ulang.
+          if (planId && !announcedPlanDone.has(planId)) {
+            announcedPlanDone.add(planId);
+            ctx.say(
+              failed
+                ? `Rencana selesai dengan ${failed} sub-task gagal.`
+                : "Rencana selesai — semua sub-task jalan.",
+            );
+          }
           break;
         }
         await new Promise((r) => setTimeout(r, 3000));
@@ -1557,6 +1566,7 @@ function renderDokumenDocTemplates(data, ctx) {
   }
   const grid = h("div", "dc-list");
   for (const t of templates) {
+    if (!t || typeof t !== "object") continue; // skip entri rusak
     const row = h("div", "dc-row");
     const main = h("div", "dc-row-main");
     main.appendChild(h("strong", "", t.name ?? t.id));
