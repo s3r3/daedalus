@@ -1160,18 +1160,19 @@ async function maybePushDeliverableCard(runTurn) {
       }
     } else if (engine === "coding") {
       // Coding: "Jadi." + file summary card per user flow.
+      // Jangan echo goal mentah — buat kalimat natural.
       const artifacts = runTurn.artifacts ?? [];
       const files = artifacts.filter((a) => a.kind === "files" && a.path);
       const count = files.length;
-      const label = runTurn.goal ?? "Task coding";
-      // "Jadi." message first (human-like completion).
-      pushAssistant(`Jadi. ${label} selesai.`);
       if (count > 0) {
         const firstPath = files[0].path;
-        // Derive a folder hint from the first file path.
         const folderHint = firstPath.includes("/")
           ? firstPath.split("/").slice(0, -1).join("/") + "/"
           : "";
+        const desc = count === 1
+          ? `File ${firstPath.split("/").pop()} sudah dibuat`
+          : `${count} file sudah dibuat${folderHint ? ` di ${folderHint}` : ""}`;
+        pushAssistant(`Jadi. ${desc}.`);
         pushCard("deliverable", {
           name: count === 1 ? firstPath.split("/").pop() : `${count} file`,
           label: folderHint ? `${count} file di ${folderHint}` : `${count} file dibuat`,
@@ -1181,8 +1182,8 @@ async function maybePushDeliverableCard(runTurn) {
           path: firstPath,
         }, { taskId, retryGoal: runTurn.goal });
       } else {
-        // No file artifacts tracked — still acknowledge completion.
-        pushAssistant("Cek workspace untuk melihat hasilnya.");
+        // No file artifacts tracked — generic but natural.
+        pushAssistant("Jadi. Sudah selesai.");
       }
     }
   } catch (e) {
