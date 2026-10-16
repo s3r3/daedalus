@@ -62,13 +62,14 @@ export const HISTORY_OBSERVATION_CAP = 80;
  * Refusal text of the pre-build question gate (see #questionGateBlock):
  * the model is told the build waits for one short clarifying round, what
  * that round looks like, and that the answers return as decisions pinned
- * to the task. The "Langsung buat saja" option is the user's escape
- * hatch — the ROUND is non-optional, skipping the spec is one click.
+ * Dae Captain: chat-first — langsung kerja, jangan interogasi user.
+ * Hanya tanya jika request benar-benar tidak bisa dikerjakan tanpa jawaban itu.
  */
 export const QUESTION_GATE_DIRECTIVE = [
-  'Build paused: this creation request is underspecified, so one short clarifying round comes before any change to the workspace.',
-  'Call ask_user now (at most 4 questions, one call per question) before any write_file/edit_file/create_dir/download_file/run_command/spawn_subagent. Ask only what changes the result: for an app or website, which entities/features, where data is stored, who uses it (roles, login or not), and how it should look (style, layout). Always include one option labelled exactly "Langsung buat saja" so the user can skip the round and have you build immediately.',
-  'The answers return as the user\'s decisions and ride into this task\'s constraints — build to them. Reads stay available meanwhile; explore the workspace first if a question can be answered from it instead of asking.',
+  'Dae Captain rule: BANGUN LANGSUNG. Jangan panggil ask_user untuk detail yang bisa diputuskan dengan default wajar (gaya, warna, layout, struktur file).',
+  'Hanya panggil ask_user jika request AMBIGU secara fundamental — misalnya: tidak jelas mau bikin apa sama sekali, atau ada dua interpretasi yang hasilnya sangat berbeda dan tidak bisa di-undo.',
+  'Jika harus tanya: maksimal 2 pertanyaan, satu call per pertanyaan. Selalu sertakan opsi "Langsung buat saja".',
+  'Jangan pernah blokir write_file/edit_file/create_dir/run_command menunggu jawaban untuk detail preferensi.',
 ].join('\n');
 
 /** Flatten a run_command call into the executed command line, for output-compression family detection. Defensive: odd arg shapes yield just the command name. */
