@@ -12,6 +12,7 @@
     "./interaction/slash-commands": "./src/interaction/slash-commands.ts",
     "./slides/layouts": "./src/slides/layouts.ts",
     "./slides/builtin-templates": "./src/slides/builtin-templates.ts",
+    "./slides/variants.ts": "./src/slides/variants.ts",
     "./skills/origin": "./src/skills/origin.ts",
     "./sheets/evaluator": "./src/sheets/evaluator.ts",
     "./sheets/refs": "./src/sheets/refs.ts",
@@ -36,7 +37,9 @@
     "./workflow/memory.ts": "./src/workflow/memory.ts",
     "./workflow/reminder.ts": "./src/workflow/reminder.ts",
     "./workflow/model-roles.ts": "./src/workflow/model-roles.ts",
-    "./dokumen/export-md.ts": "./src/dokumen/export-md.ts"
+    "./dokumen/export-md.ts": "./src/dokumen/export-md.ts",
+    "./dokumen/templates.ts": "./src/dokumen/templates.ts",
+    "./research/followup.ts": "./src/research/followup.ts"
   },
   "engines": {
     "node": ">=22"

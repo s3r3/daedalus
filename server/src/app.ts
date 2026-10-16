@@ -14,6 +14,7 @@ import { UserMemory } from "@daedalus/core/workflow/memory.ts";
 import { ReminderStore, startScheduler, type Reminder } from "@daedalus/core/workflow/reminder.ts";
 import { listRoles, MODEL_TIER_LABELS, MODEL_TIERS, type ModelTier } from "@daedalus/core/workflow/model-roles.ts";
 import { exportDocumentMarkdown } from "@daedalus/core/dokumen/export-md.ts";
+import { slideVariants } from "@daedalus/core/slides/variants.ts";
 import {
   EventBus,
   McpManager,
@@ -81,6 +82,7 @@ import {
   archiveActiveDocument,
   createActiveDocument,
   exportData,
+  listDocumentTemplates,
   exportDocumentDocx,
   exportDocumentPdf,
   inspectDocxStyles,
@@ -3978,6 +3980,7 @@ export function createApp(ctx: AppContext) {
     // { remove?: string[] } (task ids to delete). Only before execution.
     const captainPlanPatchMatch = /^\/captain\/plans\/([^/]+)$/.exec(url.pathname);
     if (method === "PATCH" && captainPlanPatchMatch?.[1] !== undefined) {
+      void (async () => {
       try {
         sweepStagedTaskPlans();
         const staged = stagedTaskPlans.get(captainPlanPatchMatch[1] ?? "");
@@ -4013,6 +4016,7 @@ export function createApp(ctx: AppContext) {
       } catch (error) {
         sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
       }
+      })();
       return;
     }
 
@@ -5355,6 +5359,20 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
+    // Fase C (desain 4.1): template dokumen bawaan (makalah, laporan,
+    // proposal, surat resmi) untuk kartu pilih-template Dae Captain.
+    if (method === "GET" && url.pathname === "/dokumen/doc-templates") {
+      void (async () => {
+        try {
+          const root = resolveAllowedRoot(ctx, url.searchParams.get("root") || ctx.cwd);
+          sendJson(res, 200, { root, templates: listDocumentTemplates() });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
     if (method === "GET" && url.pathname === "/dokumen/blocks") {
       void (async () => {
         try {
@@ -6115,6 +6133,21 @@ export function createApp(ctx: AppContext) {
             return;
           }
 
+          if (url.pathname === "/slides/deck/slide/variants") {
+            // Three deterministic arrangement variants for one slide
+            // (core/slides/variants.ts): same elements, three different
+            // placements. Read-only — applying one is an ordinary
+            // /slides/deck/slide/update with positions.
+            if (!slideId || index < 0) {
+              badDeck(404, "slide_not_found");
+              return;
+            }
+            const slide = deck.slides[index]!;
+            const variants = slideVariants(slide.layout, slide.content ?? {});
+            sendJson(res, 200, { root, slide_id: slideId, layout: slide.layout, variants });
+            return;
+          }
+
           badDeck(404, "unknown_slides_route");
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
@@ -6818,6 +6851,91 @@ export function createApp(ctx: AppContext) {
         return;
       }
       sendJson(res, 200, { report, request_id: requestId });
+      return;
+    }
+
+    // FASE E: Research follow-up actions.
+    // E1: Build a focused deepen question from a claim.
+    const deepenMatch = /^\/captain\/research\/report\/([^/]+)\/deepen$/.exec(url.pathname);
+    if (method === "POST" && deepenMatch?.[1]) {
+      void (async () => {
+        try {
+          const report = getResearchReport(deepenMatch[1] ?? "");
+          if (!report) {
+            sendJson(res, 404, { error: "report_not_found", request_id: requestId });
+            return;
+          }
+          const raw = await readBody(req);
+          const body = raw ? (JSON.parse(raw) as { claimId?: string }) : {};
+          const claim = report.claims.find((c) => c.id === body.claimId);
+          if (!claim) {
+            sendJson(res, 404, { error: "claim_not_found", request_id: requestId });
+            return;
+          }
+          // Import lazily to avoid circular deps.
+          const { buildDeepenQuestion } = await import("@daedalus/core/research/followup.ts");
+          const focusedQuestion = buildDeepenQuestion(claim, report.question);
+          sendJson(res, 200, { focusedQuestion, claimId: claim.id, request_id: requestId });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // E2: Compare sources critically (uses existing report data).
+    const compareMatch = /^\/captain\/research\/report\/([^/]+)\/compare$/.exec(url.pathname);
+    if (method === "POST" && compareMatch?.[1]) {
+      void (async () => {
+        try {
+          const report = getResearchReport(compareMatch[1] ?? "");
+          if (!report) {
+            sendJson(res, 404, { error: "report_not_found", request_id: requestId });
+            return;
+          }
+          const raw = await readBody(req);
+          const body = raw ? (JSON.parse(raw) as { sourceIds?: string[] }) : {};
+          const sourceIds = Array.isArray(body.sourceIds) ? body.sourceIds : [];
+          if (sourceIds.length < 2) {
+            sendJson(res, 400, { error: "need_at_least_2_sources", request_id: requestId });
+            return;
+          }
+          const { compareSources } = await import("@daedalus/core/research/followup.ts");
+          const comparison = compareSources(report, sourceIds);
+          // Convert Map to object for JSON.
+          sendJson(res, 200, {
+            sources: comparison.sources,
+            findings: Object.fromEntries(comparison.findings),
+            summary: comparison.summary,
+            request_id: requestId,
+          });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
+      return;
+    }
+
+    // E3: Build an update query for newer sources.
+    const updateMatch = /^\/captain\/research\/report\/([^/]+)\/update-query$/.exec(url.pathname);
+    if (method === "GET" && updateMatch?.[1]) {
+      void (async () => {
+        try {
+          const report = getResearchReport(updateMatch[1] ?? "");
+          if (!report) {
+            sendJson(res, 404, { error: "report_not_found", request_id: requestId });
+            return;
+          }
+          const { buildUpdateQuery, getUpdateCutoff } = await import("@daedalus/core/research/followup.ts");
+          sendJson(res, 200, {
+            updateQuery: buildUpdateQuery(report),
+            cutoffYear: getUpdateCutoff(report),
+            request_id: requestId,
+          });
+        } catch (error) {
+          sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+        }
+      })();
       return;
     }
 

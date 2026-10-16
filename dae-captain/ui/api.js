@@ -148,6 +148,9 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
     dokumenSection: (body) => req("POST", "/dokumen/section", body),
     dokumenExportData: (body) => req("POST", "/dokumen/export-data", body),
     dokumenExportDocument: (body) => req("POST", "/dokumen/export-document", body),
+    // ---- FASE C: fitur Dokumen Dae Captain v2 (desain 4.1–4.3 + Q&A) ----
+    /** 4.1 Template dokumen bawaan (makalah, laporan, proposal, surat resmi). */
+    dokumenDocTemplates: () => req("GET", "/dokumen/doc-templates"),
     // Spreadsheet
     sheetsWorkbook: (root) =>
       req("GET", "/sheets/workbook", undefined, { root }),
@@ -178,6 +181,15 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
     researchReportDocxUrl: (reportId) =>
       baseUrl.replace(/\/+$/, "") +
       `/captain/research/report/${encodeURIComponent(reportId)}/export?format=docx`,
+    /** FASE E1: Get a focused deepen question for a claim. */
+    researchDeepen: (reportId, claimId) =>
+      req("POST", `/captain/research/report/${encodeURIComponent(reportId)}/deepen`, { claimId }),
+    /** FASE E2: Compare sources critically. */
+    researchCompare: (reportId, sourceIds) =>
+      req("POST", `/captain/research/report/${encodeURIComponent(reportId)}/compare`, { sourceIds }),
+    /** FASE E3: Get an update query for newer sources. */
+    researchUpdateQuery: (reportId) =>
+      req("GET", `/captain/research/report/${encodeURIComponent(reportId)}/update-query`),
     // Task plans (decompose.ts via server)
     captainPlan: (body) => req("POST", "/captain/plans", body),
     captainPlanGet: (planId) =>
