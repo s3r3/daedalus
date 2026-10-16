@@ -943,6 +943,17 @@ export { exportData, type DataExportResult } from "./dokumen/export-data.ts";
 export { buildDocumentDocxBytes, exportDocumentDocx, exportDocumentPdf, type DocumentExportResult } from "./dokumen/export-docx.ts";
 export { buildDocumentMarkdown, exportDocumentMarkdown, type MarkdownExportResult } from "./dokumen/export-md.ts";
 
+/** Fase C (desain 4.1): template dokumen bawaan — makalah, laporan, proposal, surat resmi. */
+export {
+  DOCUMENT_TEMPLATES,
+  getDocumentTemplate,
+  listDocumentTemplates,
+  templateOutlineSections,
+  type DocumentTemplate,
+  type DocumentTemplateId,
+  type DocumentTemplateSection,
+} from "./dokumen/templates.ts";
+
 export {
   inspectDocxStyles,
   proposeStyleOps,

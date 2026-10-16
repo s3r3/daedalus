@@ -119,6 +119,7 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
     slideDeck: (root) =>
       req("GET", "/slides/deck", undefined, { root }),
     slideUpdate: (body) => req("POST", "/slides/deck/slide/update", body),
+    slideVariants: (body) => req("POST", "/slides/deck/slide/variants", body),
     slideTheme: (body) => req("POST", "/slides/deck/theme", body),
     slideGenerate: (body) => req("POST", "/slides/deck/generate", body),
     slideRegenerate: (body) => req("POST", "/slides/deck/regenerate", body),

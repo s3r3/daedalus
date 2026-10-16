@@ -31,6 +31,13 @@ function mockApi(overrides = {}) {
   };
   const api = {
     slideUpdate: mk("slideUpdate", { deck: {} }),
+    slideVariants: mk("slideVariants", {
+      variants: [
+        { id: "klasik", label: "Klasik", description: "Tata letak bawaan template.", positions: {} },
+        { id: "terpusat", label: "Terpusat", description: "Judul di tengah atas.", positions: { title: { x: 0.22, y: 0.06, w: 0.56 } } },
+        { id: "melebar", label: "Melebar", description: "Isi selebar slide.", positions: { title: { x: 0.08, y: 0.05, w: 0.84 } } },
+      ],
+    }),
     slideTheme: mk("slideTheme", {}),
     slideGenerate: mk("slideGenerate", { task_id: "t-gen" }),
     slideRegenerate: mk("slideRegenerate", {}),
@@ -201,6 +208,24 @@ describe("slide-outline card", () => {
     const call = calls.find((c) => c.name === "slideTheme");
     assert.ok(call, "slideTheme called");
     assert.deepEqual(call.args[0], { root: "/ws", template_id: "elegan", run_id: "task-1" });
+  });
+
+  it("🎨 varian per slide: tampilkan 3 opsi, Pilih terapkan positions", async () => {
+    const { api, calls } = mockApi();
+    const { ctx, events } = mockCtx(api);
+    const card = renderCard("slide-outline", deckData(), ctx);
+    await clickBtn(card, "🎨");
+    assert.match(card.textContent, /A\. Klasik/);
+    assert.match(card.textContent, /B\. Terpusat/);
+    assert.match(card.textContent, /C\. Melebar/);
+    const svCall = calls.find((c) => c.name === "slideVariants");
+    assert.ok(svCall, "slideVariants called");
+    assert.deepEqual(svCall.args[0], { root: "/ws", slide_id: "s1", run_id: "task-1" });
+    await clickBtn(card, "Pilih");
+    const upCall = calls.find((c) => c.name === "slideUpdate");
+    assert.ok(upCall, "slideUpdate called");
+    assert.deepEqual(upCall.args[0], { root: "/ws", slide_id: "s1", positions: {}, run_id: "task-1" });
+    assert.ok(events.some((e) => e[0] === "say" && /Slide 1 pakai desain A/.test(e[1])), "say confirms the pick");
   });
 
   it("[Buat Slide] calls slideGenerate", async () => {

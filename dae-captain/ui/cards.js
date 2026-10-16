@@ -144,6 +144,10 @@ function renderSlideOutline(data, ctx) {
       edit.title = "Edit slide";
       edit.setAttribute("aria-label", `Edit slide ${idx + 1}`);
       row.appendChild(edit);
+      const variant = btn("🎨", "dc-icon", () => openVariantPicker(row, s, idx));
+      variant.title = "Varian desain";
+      variant.setAttribute("aria-label", `Varian desain slide ${idx + 1}`);
+      row.appendChild(variant);
       listBox.appendChild(row);
     });
     if (slides.length > 3) {
@@ -211,6 +215,46 @@ function renderSlideOutline(data, ctx) {
     } catch {
       /* keep stale rows; the save already succeeded */
     }
+  }
+
+  /** 🎨 per-slide design variants: 3 arrangements of the same elements. */
+  async function openVariantPicker(row, slide, idx) {
+    if (row.querySelector(".dc-variants")) return;
+    const box = h("div", "dc-editor dc-variants");
+    box.appendChild(h("p", "dc-hint", `🎨 Varian desain — slide ${idx + 1}: elemen sama, susunan berbeda.`));
+    row.appendChild(box);
+    try {
+      const res = await ctx.api.slideVariants({
+        root: ctx.workspaceRoot,
+        slide_id: slide.id,
+        ...(ctx.taskId ? { run_id: ctx.taskId } : {}),
+      });
+      const variants = res?.variants ?? [];
+      if (!variants.length) {
+        box.appendChild(h("p", "dc-hint", "Tidak ada varian untuk layout ini (desain milik template impor)."));
+      }
+      variants.forEach((v, vi) => {
+        const letter = "ABC"[vi] ?? String(vi + 1);
+        const vrow = h("div", "dc-row");
+        vrow.appendChild(h("span", "dc-row-main", `${letter}. ${v.label} — ${v.description}`));
+        vrow.appendChild(btn("Pilih", "dc-primary", async () => {
+          await ctx.api.slideUpdate({
+            root: ctx.workspaceRoot,
+            slide_id: slide.id,
+            positions: v.positions,
+            ...(ctx.taskId ? { run_id: ctx.taskId } : {}),
+          });
+          ctx.notify(`Slide ${idx + 1} pakai varian ${v.label}.`);
+          ctx.say(`Slide ${idx + 1} pakai desain ${letter} (${v.label}). Bisa di-undo kalau kurang cocok.`);
+          box.remove();
+          await reload();
+        }));
+        box.appendChild(vrow);
+      });
+    } catch (e) {
+      box.appendChild(h("p", "dc-hint", "Gagal memuat varian: " + errText(e)));
+    }
+    box.appendChild(btn("Tutup", "", () => box.remove()));
   }
 
   renderRows();
