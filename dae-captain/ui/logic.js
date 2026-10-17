@@ -837,7 +837,15 @@ export function derivePillState(runs, memory = {}, opts = {}) {
   const turns = [];
   for (const run of runs ?? []) for (const t of run.turns ?? []) turns.push(t);
 
-  const running = turns.filter((t) => t?.status === "running");
+  // Stale task filter: a task marked "running" but with no activity for 30+
+  // minutes is likely a phantom from a crashed/restarted server. Don't show it.
+  const STALE_MS = 30 * 60 * 1000;
+  const isFresh = (t) => {
+    const at = Date.parse(t?.updated_at ?? t?.created_at ?? "");
+    return !Number.isFinite(at) || (now - at) < STALE_MS;
+  };
+
+  const running = turns.filter((t) => t?.status === "running" && isFresh(t));
   const approvals = running.filter((t) => pendingCount(t) > 0);
   const paused = running.filter((t) => t?.paused === true);
   const verifying = running.filter(
