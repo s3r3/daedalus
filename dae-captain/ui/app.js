@@ -2541,16 +2541,8 @@ function updateStopButton() {
   stop.classList.toggle("hidden", !busy);
   send.classList.toggle("hidden", busy);
   stop.title = isStreaming() && !running ? "Hentikan jawaban" : "Hentikan task";
-  // Mascot follows task state: show engine variant when working, idle otherwise.
-  try {
-    if (runningTurn?.engine) {
-      setMascotStatus(runningTurn.engine);
-    } else if (running) {
-      setMascotStatus("working");
-    } else {
-      setMascotStatus("idle");
-    }
-  } catch { /* mascot is cosmetic */ }
+  // Mascot v2 observes pill data-status/data-engine via MutationObserver —
+  // no manual status sync needed here.
 }
 
 /**

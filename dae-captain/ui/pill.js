@@ -11,7 +11,6 @@
 //     "resume" {taskId} | "view" {status} | "click" {status}
 
 import { derivePillState, acknowledgePillErrors, PILL_STATUSES } from "./logic.js";
-import { setMascotStatus } from "./mascot.js";
 
 const DND_KEY = "dae-captain:pill-dnd";
 const NOTIFY_KEY = "dae-captain:pill-notify";
@@ -116,8 +115,8 @@ export class PillController {
     this.manual = null;
     const state = derivePillState(this.lastRuns, this.memory, { dnd: this.dnd });
     this._render(state);
-    // Mascot follows pill status (error→error variant, waiting_approval→permission, etc.)
-    try { setMascotStatus(state.status); } catch { /* cosmetic */ }
+    // Mascot v2 observes pill data-status/data-engine via MutationObserver —
+    // no manual setMascotStatus needed here.
     // Sound mode: one ping per transition into an alert status (never in
     // do-not-disturb).
     if (
@@ -249,6 +248,7 @@ export class PillController {
     this.state = s;
     this.root.classList.remove("hidden");
     this.root.dataset.status = s.status;
+    this.root.dataset.engine = s.primary?.engine ?? "";
     // Pulse only in "pulse" notify mode; "sound" and "off" stay still.
     this.root.classList.toggle("pill-pulse", s.pulse === true && this.notifyMode === "pulse");
     this.root.classList.toggle("pill-dnd", this.dnd);
