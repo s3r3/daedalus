@@ -2585,6 +2585,23 @@ function handleTaskEvents(events) {
     if (lastEvent?.type === "TASK_COMPLETED" || lastEvent?.type === "TASK_FAILED" || lastEvent?.type === "TASK_CANCELLED") {
       turn.activityDone = true;
       updateStopButton();
+      // Add a completion message to the chat so the user sees the result.
+      // Without this, the task shows "Done" in the queue but the chat stays silent.
+      if (lastEvent?.type === "TASK_COMPLETED" && !turn.completionShown) {
+        turn.completionShown = true;
+        const engine = turn.engine || "task";
+        const summary = lastEvent?.data?.summary || lastEvent?.summary;
+        state.transcript.push({
+          kind: "assistant",
+          engine,
+          text: summary
+            ? `Selesai. ${summary}`
+            : "Selesai. Cek hasil di tab Antrean atau klik Lihat perubahan.",
+          ts: Date.now(),
+          taskId,
+        });
+        if (isChatViewVisible()) renderTranscript();
+      }
     }
   }
   // Dae Captain v2 Fase 7: task events may coincide with v2 timeline
