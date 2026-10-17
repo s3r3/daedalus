@@ -1959,6 +1959,9 @@ function clearConversation() {
   if (running.length) {
     text += ` ${running.length} task masih berjalan di latar dan TIDAK dibatalkan — pantau di Antrean atau hentikan via /stop.`;
   }
+  // Reset pill to idle immediately — the next refreshRuns() will repopulate
+  // with fresh data. This gives the "realtime" feel: new chat = clean slate.
+  try { state.pill?.setStatus("idle", "Percakapan baru"); } catch { /* cosmetic */ }
   pushAssistant(text);
 }
 
