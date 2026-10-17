@@ -42,6 +42,17 @@ export function variantFor(status) {
     document: "document",
     dokumen: "document",
     research: "research",
+    error: "error",
+    failed: "error",
+    fix: "fix",
+    fixing: "fix",
+    paused: "paused",
+    pause: "paused",
+    queued: "queued",
+    queue: "queued",
+    verify: "verify",
+    verifying: "verify",
+    screenshot: "screenshot",
   };
   return map[status] ?? "idle";
 }
