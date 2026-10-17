@@ -199,10 +199,20 @@ describe('server', () => {
   test('POST /tasks/{id}/cancel records a cancellation request', async () => {
     const { base, ctx } = await listen()
     ctx.store.saveState('t4', { status: 'active' })
-    const res = await fetch(new URL('/tasks/t4/cancel', base), { method: 'POST' })
+    // Cancel is a sensitive route: it requires the local daemon token.
+    await fetch(new URL('/health', base))
+    const auth = { authorization: `Bearer ${ctx.daemonToken ?? ''}` }
+    const res = await fetch(new URL('/tasks/t4/cancel', base), { method: 'POST', headers: auth })
     const body = (await res.json()) as { cancelled: boolean; cancel_requested: boolean; task_id: string }
     expect(body).toEqual({ cancelled: false, cancel_requested: true, task_id: 't4' })
     expect(ctx.store.isCancelRequested('t4')).toBe(true)
+  })
+
+  test('POST /tasks/{id}/cancel requires the daemon token', async () => {
+    const { base } = await listen()
+    await fetch(new URL('/health', base))
+    const res = await fetch(new URL('/tasks/t4b/cancel', base), { method: 'POST' })
+    expect(res.status).toBe(401)
   })
 
   // Dae Captain pill ⏸ (Fase 6): cooperative pause — the marker is recorded
@@ -242,9 +252,11 @@ describe('server', () => {
     ctx.activeRunners.set('t5', runner)
     const key = { taskId: 't5', tool: 'write_file', action: 'write' as const, path: 'a.ts' }
     const decision = runner.approvals.request(key, 'ask')
+    // Approve is a sensitive route: it requires the local daemon token.
+    await fetch(new URL('/health', base))
     const res = await fetch(new URL('/tasks/t5/approve', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${ctx.daemonToken ?? ''}` },
       body: JSON.stringify({ key, decision: 'grant', remember: true }),
     })
     const body = (await res.json()) as { success: boolean; decision: string }

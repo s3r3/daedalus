@@ -241,13 +241,17 @@ describe('POST /tasks fast paths', () => {
   })
 
   test('cancelling a running task reaches a stopped terminal state and the loop halts', async () => {
-    const { base } = await listen(() => ({ delayMs: 400, toolCalls: [{ name: 'read_file', arguments: '{"path":"src/index.ts"}' }] }))
+    const { base, ctx } = await listen(() => ({ delayMs: 400, toolCalls: [{ name: 'read_file', arguments: '{"path":"src/index.ts"}' }] }))
     const created = await postTask(base, { goal: 'baca file src/index.ts berulang kali dan analisis isinya', provider_id: 'fake', max_iterations: 25 })
     expect(created.status).toBe(201)
 
-    // Let it get going, then stop it mid-flight.
-    await waitForEvents(base, created.body.id, 'TOOL_CALL_STARTED')
-    const cancelRes = await fetch(new URL(`/tasks/${created.body.id}/cancel`, base), { method: 'POST' })
+    // Let it get going, then stop it mid-flight. Cancel is a sensitive
+    // route: it requires the local daemon token, same as pause/approve.
+    await fetch(new URL('/health', base))
+    const cancelRes = await fetch(new URL(`/tasks/${created.body.id}/cancel`, base), {
+      method: 'POST',
+      headers: { authorization: `Bearer ${ctx.daemonToken ?? ''}` },
+    })
     const cancelBody = (await cancelRes.json()) as { cancelled: boolean; cancel_requested: boolean }
     expect(cancelBody.cancel_requested).toBe(true)
     expect(cancelBody.cancelled).toBe(true)

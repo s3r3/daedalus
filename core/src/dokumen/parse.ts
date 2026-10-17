@@ -46,7 +46,17 @@ function textToParsed(text: string): ParsedSource {
     .map((part) => part.trim())
     .filter((part) => part.length > 0)
     .map((part) => ({ page: 1, text: part.replace(/\s+/g, ' ') }));
-  return { pages: 1, pageSizes: [{ width: 0, height: 0 }], blocks, text: blocks.map((b) => b.text).join('\n') };
+  return { pages: 1, pageSizes: [{ width: 0, height: 0 }], blocks, text: joinBlocks(blocks) };
+}
+
+/**
+ * Blocks are paragraphs, so they must be rejoined with a BLANK line:
+ * `compareTexts` (dokumen/compare.ts) splits paragraphs on /\n\s*\n/, and a
+ * single '\n' would flatten the whole document into one paragraph — making
+ * every /dokumen/compare diff report zero changes.
+ */
+function joinBlocks(blocks: ParsedBlock[]): string {
+  return blocks.map((b) => b.text).join('\n\n');
 }
 
 /* -------------------------------------------------------------- PDF */
@@ -128,7 +138,7 @@ async function parsePdf(bytes: Buffer): Promise<ParsedSource> {
     }
     flush();
   }
-  return { pages: doc.numPages, pageSizes, blocks, text: blocks.map((b) => b.text).join('\n') };
+  return { pages: doc.numPages, pageSizes, blocks, text: joinBlocks(blocks) };
 }
 
 /* ------------------------------------------------------------- DOCX */
@@ -143,7 +153,7 @@ async function parseDocx(bytes: Buffer): Promise<ParsedSource> {
     .map((part) => part.trim())
     .filter((part) => part.length > 0)
     .map((part) => ({ page: 1, text: part.replace(/\s+/g, ' ') }));
-  return { pages: 1, pageSizes: [{ width: 0, height: 0 }], blocks, text: blocks.map((b) => b.text).join('\n') };
+  return { pages: 1, pageSizes: [{ width: 0, height: 0 }], blocks, text: joinBlocks(blocks) };
 }
 
 /* -------------------------------------------------------------- EML */
@@ -167,7 +177,7 @@ async function parseEml(bytes: Buffer): Promise<ParsedSource> {
   for (const att of mail.attachments ?? []) {
     blocks.push({ page: 1, text: `[lampiran: ${att.filename ?? 'tanpa-nama'} (${att.contentType}, ${att.size} byte)]` });
   }
-  return { pages: 1, pageSizes: [{ width: 0, height: 0 }], blocks, text: blocks.map((b) => b.text).join('\n') };
+  return { pages: 1, pageSizes: [{ width: 0, height: 0 }], blocks, text: joinBlocks(blocks) };
 }
 
 /* --------------------------------------------------------- chunking */
