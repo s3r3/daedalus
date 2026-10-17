@@ -24,9 +24,18 @@ export class EventBus {
       const specific = this.#handlers.get(event.type);
       const wildcard = this.#handlers.get("*");
       for (const handler of [...(specific ?? []), ...(wildcard ?? [])]) {
-        await handler(event);
+        // BUG-2 fix: isolate handler failures — one throwing subscriber must
+        // not poison the queue permanently (which would silence all future
+        // events and break drain()).
+        try {
+          await handler(event);
+        } catch (error) {
+          console.error(`[EventBus] handler for ${event.type} threw:`, error);
+        }
       }
     });
+    // Prevent an (impossible now, but defensive) rejection from sticking:
+    this.#queue = this.#queue.catch(() => {});
   }
 
   /** Await queue drain — tests use this to assert delivery completed. */

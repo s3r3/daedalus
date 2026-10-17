@@ -380,7 +380,7 @@ export class ExecutionHarness {
   #config: HarnessConfig;
   #deps: { bus?: EventBus; store?: TaskStore };
   #approval?: ApprovalCallback;
-  #controllers = new Map<string, AbortController>();
+  #controllers = new Map<string, Set<AbortController>>();
   /**
    * Tasks a cancel was requested for. Cancellation is sticky: a cancel that
    * arrives a hair before an execution registers its controller (the event
@@ -401,7 +401,13 @@ export class ExecutionHarness {
   setApprovalCallback(callback: ApprovalCallback): void { this.#approval = callback; }
   getResourceUsage(): ResourceUsage { return { ...this.#usage }; }
   getAuditTrail(taskId: string): HarnessEvent[] { return [...(this.#audit.get(taskId) ?? [])]; }
-  cancelTask(taskId: string): void { this.#cancelled.add(taskId); this.#controllers.get(taskId)?.abort(); this.#record('cancel_requested', taskId); }
+  cancelTask(taskId: string): void {
+    this.#cancelled.add(taskId);
+    // BUG-4 fix: abort ALL controllers for this task (parallel subagents
+    // share the taskId, each with its own controller).
+    for (const c of this.#controllers.get(taskId) ?? []) c.abort();
+    this.#record('cancel_requested', taskId);
+  }
 
   async execute(call: ToolCall, tool: ToolDefinition, context: HarnessContext): Promise<ToolResult> {
     const action: PermissionKey['action'] = tool.mutating ? 'write' : tool.name === 'run_command' ? 'execute' : 'read';
@@ -416,7 +422,13 @@ export class ExecutionHarness {
       : call;
     if (this.#usage.activeProcesses >= this.#config.maxConcurrentProcesses) { const result = denied(call.id, 'process limit exceeded'); this.#record('resource_limit_exceeded', context.taskId, tool.name); return result; }
     if (this.#usage.diskWrites >= this.#config.maxDiskWrites) { const result = denied(call.id, 'disk write cap exceeded'); this.#record('resource_limit_exceeded', context.taskId, tool.name); return result; }
-    const controller = new AbortController(); this.#controllers.set(context.taskId, controller); this.#usage.activeProcesses++;
+    const controller = new AbortController();
+    // BUG-4 fix: track per-execution controllers in a Set (parallel calls
+    // share taskId) instead of overwriting a single controller.
+    let set = this.#controllers.get(context.taskId);
+    if (!set) { set = new Set(); this.#controllers.set(context.taskId, set); }
+    set.add(controller);
+    this.#usage.activeProcesses++;
     if (this.#cancelled.has(context.taskId)) controller.abort();
     // Per-call budget: an explicit host context wins, then the call's own
     // `timeout_ms` argument (clamped to the 600s tool-call cap — this is
@@ -438,7 +450,13 @@ export class ExecutionHarness {
       if (timedOut) this.#record('timeout_enforced', context.taskId, tool.name, key.path);
       this.#record('tool_dispatch_completed', context.taskId, tool.name, key.path, { status: result.status });
       return result;
-    } finally { clearTimeout(timer); this.#controllers.delete(context.taskId); this.#usage.activeProcesses--; }
+    } finally {
+      clearTimeout(timer);
+      // BUG-4 fix: remove only this execution's controller, not the whole set.
+      const s = this.#controllers.get(context.taskId);
+      if (s) { s.delete(controller); if (s.size === 0) this.#controllers.delete(context.taskId); }
+      this.#usage.activeProcesses--;
+    }
   }
 
   async #decide(key: PermissionKey, policy: ApprovalPolicy, call: ToolCall, tool: ToolDefinition, context: HarnessContext): Promise<ApprovalResult> {

@@ -428,9 +428,14 @@ export class DefaultContextManager implements ContextManager {
 
   async compact(messages: Message[], budget: number): Promise<Message[]> {
     const system = messages[0];
-    const rest = messages.slice(1);
+    // BUG-6 fix: always preserve the goal message (messages[1], the user
+    // message with the task goal) — otherwise the model loses the goal
+    // while the loop still references it.
+    const goal = messages[1];
+    const rest = messages.slice(2);
     const result: Message[] = [];
     let used = system ? this.estimate([system]) : 0;
+    if (goal) used += this.estimate([goal]);
     for (let i = rest.length - 1; i >= 0; i--) {
       const message = rest[i]!;
       const cost = this.estimate([message]);
@@ -438,7 +443,10 @@ export class DefaultContextManager implements ContextManager {
       used += cost;
       result.unshift(message);
     }
-    return system ? [system, ...result] : result;
+    const head: Message[] = [];
+    if (system) head.push(system);
+    if (goal) head.push(goal);
+    return [...head, ...result];
   }
 
   estimate(messages: Message[]): number {

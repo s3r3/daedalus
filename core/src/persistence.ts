@@ -207,7 +207,9 @@ export class TaskStore {
    */
   async waitWhilePaused(taskId: string): Promise<void> {
     if (!this.isPauseRequested(taskId)) return;
-    while (this.isPauseRequested(taskId)) {
+    // BUG-1 fix: also break on cancel — otherwise pause → stop leaves the
+    // task stuck in waitWhilePaused forever (cancel never clears the pause).
+    while (this.isPauseRequested(taskId) && !this.isCancelRequested(taskId)) {
       await new Promise((resolve) => setTimeout(resolve, 400));
     }
   }

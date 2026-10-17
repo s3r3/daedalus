@@ -448,6 +448,8 @@ export class AgentLoop {
       this.#modelFailures.delete(spec.id);
       this.#spillCounters.delete(spec.id);
       this.#taskMutated.delete(spec.id);
+      // BUG-7 fix: clean up cancelled set to prevent unbounded growth.
+      this.#cancelled.delete(spec.id);
       this.#escalatedTasks.delete(spec.id);
       this.#changedFiles.delete(spec.id);
       this.#targets.delete(spec.id);
@@ -1652,7 +1654,25 @@ export class AgentLoop {
     turnId: string,
   ): Promise<TaskState> {
     const prepared = await this.#prepareToolCall(state, call, turnMode, turnId);
-    const result = 'result' in prepared ? prepared.result : await this.#executeTool(call);
+    // BUG-3 fix: catch executor throws and convert to error results —
+    // otherwise the assistant message (with tool_calls) is already in history
+    // without a matching tool result, poisoning all future requests.
+    let result: ToolResult;
+    if ('result' in prepared) {
+      result = prepared.result;
+    } else {
+      try {
+        result = await this.#executeTool(call);
+      } catch (error) {
+        result = {
+          call_id: call.id,
+          status: 'error',
+          output: String(error),
+          truncated: false,
+          meta: { tool: call.tool, mode: turnMode, reason: 'execution_error' },
+        };
+      }
+    }
     return this.#recordToolResult(state, current, call, result, turnMode, turnId);
   }
 
@@ -1989,7 +2009,14 @@ export class AgentLoop {
         if (this.#taskSignalAborted(taskId)) throw error;
         if (modelPoolFailureReason(error) !== 'format_or_empty' || attempt >= backoffMs.length) throw error;
         await this.#emit(taskId, turnId, 'LOOP_WARNING', { tool: '', repeats: attempt + 1, suppressed: false, kind: 'empty_response_retry', attempt: attempt + 1 });
-        await new Promise((resolve) => setTimeout(resolve, backoffMs[attempt]));
+        // BUG-5 fix: make backoff abort-aware so Stop during backoff
+        // doesn't sleep out the full delay.
+        const signal = this.#taskSignal(taskId);
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, backoffMs[attempt]);
+          signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(undefined); }, { once: true });
+        });
+        if (signal?.aborted) throw new Error('aborted');
       }
     }
   }
