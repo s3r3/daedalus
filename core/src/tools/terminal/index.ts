@@ -47,7 +47,12 @@ export const runCommandTool: ToolDefinition = {
     const a = args as { command?: unknown; args?: unknown; cwd?: unknown; timeout_ms?: unknown; background?: unknown };
     if (typeof a.command !== 'string' || !Array.isArray(a.args) || !a.args.every((x) => typeof x === 'string')) return { call_id: '', status: 'error', output: 'command must be a string and args an array of strings', truncated: false, meta: {} };
     const allowlist = process.env.DAEDALUS_CMD_ALLOWLIST?.split(',') ?? SANDBOX_ALLOWLIST;
-    if (!allowlist.includes(a.command) || INTERACTIVE_FLAG_RE.test((a.args as string[]).join(' ')) || isBlocked(a.command, a.args as string[])) return { call_id: '', status: 'denied', output: `'${a.command}' is not allowed`, truncated: false, meta: { allowlist } };
+    if (!allowlist.includes(a.command) || INTERACTIVE_FLAG_RE.test((a.args as string[]).join(' ')) || isBlocked(a.command, a.args as string[])) {
+      const hint = ['sh', 'bash', 'zsh', 'fish', 'cmd', 'powershell'].includes(a.command)
+        ? ` Do NOT retry with another shell — shells are never allowlisted. Call the allowlisted command directly instead (e.g. command='echo', args=['hello'] instead of command='sh', args=['-c', 'echo hello']).`
+        : '';
+      return { call_id: '', status: 'denied', output: `'${a.command}' is not allowed.${hint} Allowlist: ${allowlist.join(', ')}`, truncated: false, meta: { allowlist } };
+    }
     let cwd = context.workspaceRoot;
     try { if (typeof a.cwd === 'string') cwd = await pathInWorkspace(context.workspaceRoot, a.cwd); } catch (error) { return { call_id: '', status: 'denied', output: String(error), truncated: false, meta: {} }; }
     if (a.background === true) {
