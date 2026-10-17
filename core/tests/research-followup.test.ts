@@ -1,8 +1,7 @@
 /**
  * FASE E: Tests for research follow-up actions.
  */
-import { describe, it } from "node:test";
-import assert from "node:assert/strict";
+import { describe, expect, it } from "vitest";
 import {
   buildDeepenQuestion,
   compareSources,
@@ -23,36 +22,36 @@ const mockReport = {
     { id: "c2", text: "AI tidak menggantikan kreativitas", sourceIds: ["s2"], confidence: "moderate", status: "verified" },
   ],
   conflicts: [
-    { description: "s1 klaim 30%, s3 klaim 15%", sourceIds: ["s1", "s3"] },
+    { topic: "Dampak AI terhadap produktivitas", positions: [{ sourceId: "s1", stance: "meningkatkan 30%" }, { sourceId: "s3", stance: "meningkatkan 15%" }] },
   ],
 };
 
 describe("FASE E: research followup", () => {
   it("buildDeepenQuestion creates a focused question from a claim", () => {
     const q = buildDeepenQuestion(mockReport.claims[0], mockReport.question);
-    assert.ok(q.includes(mockReport.claims[0].text));
-    assert.ok(q.includes("Dalami"));
+    expect(q).toContain(mockReport.claims[0].text);
+    expect(q).toContain("Dalami");
   });
 
   it("compareSources returns sources with their findings", () => {
     const result = compareSources(mockReport, ["s1", "s2"]);
-    assert.equal(result.sources.length, 2);
-    assert.ok(result.findings.has("s1"));
-    assert.ok(result.findings.get("s1").includes("AI meningkatkan produktivitas 30%"));
+    expect(result.sources.length).toBe(2);
+    expect(result.findings.has("s1")).toBe(true);
+    expect(result.findings.get("s1")).toContain("AI meningkatkan produktivitas 30%");
   });
 
   it("compareSources includes conflict summary", () => {
     const result = compareSources(mockReport, ["s1", "s3"]);
-    assert.ok(result.summary.includes("30%"));
+    expect(result.summary).toContain("30%");
   });
 
   it("getUpdateCutoff returns max year", () => {
-    assert.equal(getUpdateCutoff(mockReport), 2025);
+    expect(getUpdateCutoff(mockReport)).toBe(2025);
   });
 
   it("buildUpdateQuery targets newer sources", () => {
     const q = buildUpdateQuery(mockReport);
-    assert.ok(q.includes("2025"));
-    assert.ok(q.includes(mockReport.question));
+    expect(q).toContain("2025");
+    expect(q).toContain(mockReport.question);
   });
 });
