@@ -148,6 +148,7 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
     dokumenDocument: (root) =>
       req("GET", "/dokumen/document", undefined, { root }),
     dokumenOutline: (body) => req("POST", "/dokumen/outline", body),
+    dokumenRelease: (body) => req("POST", "/dokumen/release", body),
     dokumenSection: (body) => req("POST", "/dokumen/section", body),
     dokumenExportData: (body) => req("POST", "/dokumen/export-data", body),
     dokumenExportDocument: (body) => req("POST", "/dokumen/export-document", body),

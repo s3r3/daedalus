@@ -407,22 +407,45 @@ function renderDokumenOutline(data, ctx) {
   body.appendChild(seg);
 
   const build = btn("Buat Makalah", "dc-primary dc-block", async () => {
-    const res = await ctx.api.dokumenExportDocument({
-      root: ctx.workspaceRoot,
-      format,
-      ...(ctx.taskId ? { run_id: ctx.taskId } : {}),
-    });
-    const path = res?.result?.path;
-    if (!path) throw new Error("server tidak mengembalikan path hasil");
-    ctx.onDeliverable?.({
-      name: baseName(path),
-      path,
-      kind: res.result.format ?? format,
-      engine: "dokumen",
-      taskId: ctx.taskId,
-      label: doc.title ?? "Makalah",
-    });
-    ctx.notify(`Makalah ${format.toUpperCase()} jadi.`);
+    build.disabled = true;
+    build.textContent = "Menulis makalah…";
+    try {
+      // 1. Release gate outline — biarkan engine menulis prose semua bab.
+      await ctx.api.dokumenRelease({
+        root: ctx.workspaceRoot,
+        ...(ctx.taskId ? { run_id: ctx.taskId } : {}),
+      });
+      // 2. Tunggu engine selesai menulis (poll status dokumen).
+      let waited = 0;
+      for (;;) {
+        await new Promise((r) => setTimeout(r, 3000));
+        waited += 3000;
+        const d = (await ctx.api.dokumenDocument(ctx.workspaceRoot))?.document;
+        const sections = d?.sections ?? [];
+        const allDone = sections.length > 0 && sections.every((s) => s.status === "drafted" || s.status === "done");
+        if (allDone || waited > 10 * 60 * 1000) break;
+      }
+      // 3. Export hasil akhir.
+      const res = await ctx.api.dokumenExportDocument({
+        root: ctx.workspaceRoot,
+        format,
+        ...(ctx.taskId ? { run_id: ctx.taskId } : {}),
+      });
+      const path = res?.result?.path;
+      if (!path) throw new Error("server tidak mengembalikan path hasil");
+      ctx.onDeliverable?.({
+        name: baseName(path),
+        path,
+        kind: res.result.format ?? format,
+        engine: "dokumen",
+        taskId: ctx.taskId,
+        label: doc.title ?? "Makalah",
+      });
+      ctx.notify(`Makalah ${format.toUpperCase()} jadi.`);
+    } finally {
+      build.disabled = false;
+      build.textContent = "Buat Makalah";
+    }
   });
   body.appendChild(build);
   return card;
