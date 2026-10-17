@@ -249,6 +249,8 @@ export type RunOptions = {
   attachments?: Attachment[];
   parentTaskId?: string;
   autoApprove?: boolean;
+  /** Pre-build question gate for this run. Unset = runner option, else settings.questionGate (on). Dae Captain passes false (BANGUN LANGSUNG). */
+  questionGate?: boolean;
   maxIterations?: number;
   maxErrors?: number;
   /** Execute the plan an earlier (plan-mode) task recorded: its steps are carried into this task's context. */
@@ -1071,7 +1073,7 @@ export class TaskRunner {
     const qualityEscalation = this.#options.qualityEscalation ?? (this.#settings.tailor?.qualityEscalation !== false);
     const earlyEscalation = this.#options.earlyEscalation ?? (this.#settings.tailor?.earlyEscalation !== false);
     const inputTokenBudget = this.#options.inputTokenBudget ?? this.#settings.context?.inputTokenBudget ?? 100_000;
-    const questionGate = this.#options.questionGate ?? (this.#settings.questionGate !== false);
+    const questionGate = effectiveOptions.questionGate ?? this.#options.questionGate ?? (this.#settings.questionGate !== false);
     // Loop-breaker hard pause: ask the user (question card) whether the
     // stuck task should continue differently or stop. Any non-answer
     // (timeout, cancel, other option) means stop — a stuck task that
