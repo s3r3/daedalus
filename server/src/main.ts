@@ -1,9 +1,23 @@
 import { loadSettings } from "@daedalus/core";
 import { attachWebSocket, createContext, createApp, ensureProvidersLoaded } from "./app.ts";
+import { WorkflowRunStore } from "@daedalus/core/workflow/store.ts";
+import { resolveDaedalusHome } from "@daedalus/core";
 
 const settings = loadSettings();
 const ctx = createContext();
 await ensureProvidersLoaded(ctx);
+
+// Clean up stale "running" turns from a previous server process.
+// A restart means those turns can never complete — mark them interrupted
+// so the UI doesn't show phantom active tasks.
+try {
+  const store = new WorkflowRunStore(resolveDaedalusHome(settings.daedalusHome, process.cwd()));
+  const marked = store.markStaleRunningInterrupted();
+  if (marked > 0) ctx.log.info("marked stale running turns as interrupted", { count: marked });
+} catch (e) {
+  ctx.log.warn("stale task cleanup failed", { error: String(e) });
+}
+
 const server = createApp(ctx);
 const channel = attachWebSocket(ctx, server);
 

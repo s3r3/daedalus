@@ -75,6 +75,28 @@ export class WorkflowRunStore {
     );
     return runs;
   }
+
+  /**
+   * Mark any turns still in "running" state as "cancelled".
+   * Called once at server startup — a restart means the process that was
+   * running those turns is gone, so they can never complete.
+   * Returns the number of turns marked.
+   */
+  markStaleRunningInterrupted(): number {
+    let marked = 0;
+    for (const run of this.listRuns()) {
+      let dirty = false;
+      for (const turn of run.turns ?? []) {
+        if (turn?.status === "running") {
+          turn.status = "cancelled";
+          dirty = true;
+          marked++;
+        }
+      }
+      if (dirty) this.saveRun(run);
+    }
+    return marked;
+  }
 }
 
 export function createWorkflowRun(workspaceRoot: string): RunContext {
