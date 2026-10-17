@@ -703,6 +703,9 @@ export function buildProgram(deps: CliProgramDeps = {}): Command {
       const runner = new TaskRunner({
         workspaceRoot,
         approvalPolicy,
+        // Dae Captain: matikan question gate — filosofi "bangun langsung".
+        // (Question gate + BANGUN LANGSUNG = catch-22.)
+        questionGate: false,
         ...(maxIterations !== undefined ? { maxIterations } : {}),
         settings,
         mode,
