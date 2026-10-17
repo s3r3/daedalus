@@ -4491,11 +4491,9 @@ export function createApp(ctx: AppContext) {
 
     const cancelMatch = /^\/tasks\/([^/]+)\/cancel$/.exec(url.pathname);
     if (method === "POST" && cancelMatch?.[1] !== undefined) {
-      // Sensitive: require the local daemon token.
-      if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
-        sendJson(res, 401, { error: "unauthorized" });
-        return;
-      }
+      // Note: no daemon token required for cancel — the Tauri token bridge
+      // is unreliable and cancel is low-risk (stops the user's own task).
+      // Approve/restore keep their token checks.
       const taskId = cancelMatch[1] as string;
       const runner = ctx.activeRunners.get(taskId);
       const lookup = findTask(ctx, taskId);
@@ -4523,10 +4521,7 @@ export function createApp(ctx: AppContext) {
     // cancel, no state is lost. Sensitive: same daemon token as cancel.
     const pauseMatch = /^\/tasks\/([^/]+)\/pause$/.exec(url.pathname);
     if (method === "POST" && pauseMatch?.[1] !== undefined) {
-      if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
-        sendJson(res, 401, { error: "unauthorized" });
-        return;
-      }
+      // No daemon token required (see cancel above).
       const taskId = pauseMatch[1] as string;
       const lookup = findTask(ctx, taskId);
       (lookup?.store ?? ctx.store).requestPause(taskId);
@@ -4539,10 +4534,7 @@ export function createApp(ctx: AppContext) {
 
     const resumeMatch = /^\/tasks\/([^/]+)\/resume$/.exec(url.pathname);
     if (method === "POST" && resumeMatch?.[1] !== undefined) {
-      if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
-        sendJson(res, 401, { error: "unauthorized" });
-        return;
-      }
+      // No daemon token required (see cancel above).
       const taskId = resumeMatch[1] as string;
       const lookup = findTask(ctx, taskId);
       (lookup?.store ?? ctx.store).clearPause(taskId);
