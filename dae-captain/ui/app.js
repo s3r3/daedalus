@@ -2526,15 +2526,26 @@ function updateStopButton() {
   const stop = $("chat-stop");
   const send = $("chat-send");
   if (!stop || !send) return;
-  const running = [...state.transcript].reverse().some(
+  const runningTurn = [...state.transcript].reverse().find(
     (m) => m.kind === "turn" && m.taskId && !m.activityDone
   );
+  const running = !!runningTurn;
   // Streaming answers are stoppable too — and sending is locked while one
   // flows, otherwise two live bubbles would trade each other's deltas.
   const busy = running || isStreaming();
   stop.classList.toggle("hidden", !busy);
   send.classList.toggle("hidden", busy);
   stop.title = isStreaming() && !running ? "Hentikan jawaban" : "Hentikan task";
+  // Mascot follows task state: show engine variant when working, idle otherwise.
+  try {
+    if (runningTurn?.engine) {
+      setMascotStatus(runningTurn.engine);
+    } else if (running) {
+      setMascotStatus("working");
+    } else {
+      setMascotStatus("idle");
+    }
+  } catch { /* mascot is cosmetic */ }
 }
 
 /**
