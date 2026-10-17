@@ -195,7 +195,7 @@ export class DefaultContextManager implements ContextManager {
     const template = {
       version: '1.0.0',
       sections: [
-        { id: 'role', content: 'You are Daedalus, an autonomous coding agent operating on a local repository.' },
+        { id: 'role', content: 'You are Daedalus, an autonomous coding agent operating on a local repository. You HAVE full file system access via tools (write_file, read_file, edit_file, create_dir, run_command, etc.). Never claim you lack file system access — use the tools to act directly.' },
         { id: 'task', content: state.goal },
         { id: 'repo', content: `Repository: ${state.repo_path}` },
         ...(workspaceOverview

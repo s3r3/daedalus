@@ -148,6 +148,15 @@ export class OpenAICompatProvider implements LLMProvider {
   async #request(messages: Message[], tools: ToolDefinition[] | undefined, options: ChatOptions, stream: boolean): Promise<Response> {
     const timeoutMs = options.timeout_ms ?? this.#defaultTimeoutMs;
     const signal = timeoutSignal(options.signal, timeoutMs);
+    // Some reasoning models (e.g. reflection/beam-free) require `reasoning_content`
+    // on EVERY assistant message in the history, including ones synthesized by the
+    // harness (mode changes, etc.) that never had reasoning. Ensure the field is
+    // present (empty string if no reasoning was captured) so the request validates.
+    const messagesWithReasoning = messages.map((m) =>
+      m.role === 'assistant' && m.reasoning_content === undefined
+        ? { ...m, reasoning_content: '' }
+        : m
+    );
     // Prompt caching: the stable prefix (system prompt + tool schemas) is
     // marked cacheable ONLY when the caller asked for it (options.cachePrefix)
     // AND this adapter positively supports a mechanism (this.#promptCache,
@@ -162,7 +171,7 @@ export class OpenAICompatProvider implements LLMProvider {
         // allOf/anyOf combinators are flattened (Bedrock rejects the whole
         // request over one); the declared schemas and the runtime
         // validator keep the original semantics. See schema-normalize.ts.
-        body: JSON.stringify({ model: this.#model, messages, ...(tools?.length ? { tools: normalizeToolSchemas(tools) } : {}), ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}), stream, stream_options: stream ? { include_usage: true } : undefined, temperature: options.temperature, max_tokens: options.max_tokens, top_p: options.top_p, stop: options.stop, reasoning_effort: options.reasoningEffort }),
+        body: JSON.stringify({ model: this.#model, messages: messagesWithReasoning, ...(tools?.length ? { tools: normalizeToolSchemas(tools) } : {}), ...(promptCacheKey ? { prompt_cache_key: promptCacheKey } : {}), stream, stream_options: stream ? { include_usage: true } : undefined, temperature: options.temperature, max_tokens: options.max_tokens, top_p: options.top_p, stop: options.stop, reasoning_effort: options.reasoningEffort }),
         signal,
       });
     } catch (error) {
