@@ -71,6 +71,13 @@ export class OpenAICompatProvider implements LLMProvider {
     const json = (await response.json().catch(() => {
       throw new LLMFormatError("provider response is not valid JSON");
     })) as OpenAIResponse;
+    // BUG-1 fix: some gateways (incl. 9Router) return HTTP 200 with {error} body
+    // on upstream failure. Surface the real error instead of a confusing
+    // "provider response has no choice message".
+    if (json.error) {
+      const msg = typeof json.error === 'string' ? json.error : json.error.message ?? JSON.stringify(json.error);
+      throw new LLMError(`provider error: ${msg}`, { code: typeof json.error === 'object' ? json.error.code : undefined });
+    }
     return chatResponseFromJson(json);
   }
 
@@ -90,12 +97,15 @@ export class OpenAICompatProvider implements LLMProvider {
       })) as OpenAIResponse;
       const whole = chatResponseFromJson(json);
       const wholeText = typeof whole.message.content === "string" ? whole.message.content : "";
-      if (wholeText || whole.message.tool_calls?.length) {
+      const wholeReasoning = whole.message.reasoning_content ?? whole.message.reasoning ?? whole.message.thinking;
+      // BUG-2 fix: include reasoning in the guard — a reasoning-only response
+      // (no content/tool_calls) is still a valid response, not an empty one.
+      if (wholeText || whole.message.tool_calls?.length || wholeReasoning) {
         yield {
           type: "delta",
           content: wholeText,
           tool_calls: whole.message.tool_calls,
-          reasoning: whole.message.reasoning_content ?? whole.message.reasoning ?? whole.message.thinking,
+          reasoning: wholeReasoning,
         };
       }
       if (whole.usage) yield { type: "usage", usage: whole.usage };
@@ -149,14 +159,18 @@ export class OpenAICompatProvider implements LLMProvider {
     const timeoutMs = options.timeout_ms ?? this.#defaultTimeoutMs;
     const signal = timeoutSignal(options.signal, timeoutMs);
     // Some reasoning models (e.g. reflection/beam-free) require `reasoning_content`
-    // on EVERY assistant message in the history, including ones synthesized by the
-    // harness (mode changes, etc.) that never had reasoning. Ensure the field is
-    // present (empty string if no reasoning was captured) so the request validates.
-    const messagesWithReasoning = messages.map((m) =>
-      m.role === 'assistant' && m.reasoning_content === undefined
-        ? { ...m, reasoning_content: '' }
-        : m
-    );
+    // on EVERY assistant message in the history. Only inject the field when the
+    // model has actually returned reasoning before (i.e. at least one message
+    // already has it) — otherwise we'd add a non-standard field to models that
+    // don't expect it and break strict schema validators. (BUG-5 fix)
+    const needsReasoning = messages.some((m) => m.role === 'assistant' && m.reasoning_content !== undefined);
+    const messagesWithReasoning = needsReasoning
+      ? messages.map((m) =>
+          m.role === 'assistant' && (m.reasoning_content === undefined || m.reasoning_content === null)
+            ? { ...m, reasoning_content: '' }
+            : m
+        )
+      : messages;
     // Prompt caching: the stable prefix (system prompt + tool schemas) is
     // marked cacheable ONLY when the caller asked for it (options.cachePrefix)
     // AND this adapter positively supports a mechanism (this.#promptCache,
@@ -279,8 +293,27 @@ function toRole(role: string | undefined): Message["role"] {
 }
 
 function normalizeUsage(usage: Partial<Usage> | undefined): Usage | undefined {
-  if (usage?.prompt_tokens === undefined || usage.completion_tokens === undefined || usage.total_tokens === undefined) return undefined;
-  return { prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, total_tokens: usage.total_tokens };
+  // BUG-6 fix: don't discard usage when only total_tokens is missing —
+  // compute it from prompt + completion. Only discard when we have nothing.
+  if (usage?.prompt_tokens === undefined && usage?.completion_tokens === undefined) return undefined;
+  const prompt_tokens = usage.prompt_tokens ?? 0;
+  const completion_tokens = usage.completion_tokens ?? 0;
+  return {
+    prompt_tokens,
+    completion_tokens,
+    total_tokens: usage.total_tokens ?? (prompt_tokens + completion_tokens),
+  };
+}
+
+function parseRetryAfterMs(retryAfter: string | null): number | undefined {
+  // BUG-3 fix: Retry-After can be seconds OR an HTTP date. Handle both;
+  // return undefined (not NaN) when unparseable so callers fall back to backoff.
+  if (!retryAfter) return undefined;
+  const seconds = Number(retryAfter);
+  if (!Number.isNaN(seconds)) return seconds * 1000;
+  const dateMs = Date.parse(retryAfter);
+  if (!Number.isNaN(dateMs)) return Math.max(0, dateMs - Date.now());
+  return undefined;
 }
 
 function providerHttpError(status: number, body: OpenAIResponse, retryAfter: string | null): LLMError {
@@ -290,7 +323,7 @@ function providerHttpError(status: number, body: OpenAIResponse, retryAfter: str
     return new LLMContentPolicyError(message);
   }
   if (status === 401 || status === 403) return new LLMAuthError(message);
-  if (status === 429) return new LLMRateLimitError(message, { retryAfterMs: retryAfter ? Number(retryAfter) * 1000 : undefined });
+  if (status === 429) return new LLMRateLimitError(message, { retryAfterMs: parseRetryAfterMs(retryAfter) });
   // Router-wrapped upstream failures arrive as 4xx (often 400) yet mean the
   // request never reached a healthy model — transient, so a pool fails over
   // and the loop retries instead of hard-failing the turn. A genuinely
