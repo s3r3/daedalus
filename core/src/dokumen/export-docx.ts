@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   AlignmentType,
@@ -134,6 +134,18 @@ export async function exportDocumentPdf(root: string, doc: DocumentState): Promi
     throw new Error('PDF render needs LibreOffice (soffice) on this machine — DOCX exported fine; install LibreOffice for PDF');
   }
   const pdfName = absDocx.split('/').pop()!.replace(/\.docx$/, '.pdf');
+  const absPdf = join(paths.exportsDir, pdfName);
+  // Validate the PDF is not blank/corrupt: check it exists and has reasonable size.
+  // A blank single-page PDF from a failed LibreOffice conversion is typically < 5KB.
+  try {
+    const pdfStat = await stat(absPdf);
+    if (pdfStat.size < 5000) {
+      throw new Error(`PDF conversion produced a suspiciously small file (${pdfStat.size} bytes) — likely blank. DOCX is fine; check LibreOffice installation.`);
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('suspiciously small')) throw error;
+    throw new Error(`PDF file not created at ${absPdf} — LibreOffice conversion may have failed silently. DOCX exported fine.`);
+  }
   const result: DocumentExportResult = {
     format: 'pdf',
     path: `.daedalus/documents/${doc.id}/exports/${pdfName}`,
