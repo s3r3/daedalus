@@ -489,6 +489,19 @@ function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+/**
+ * Strip raw <tool_call>/<tool_response> blocks from user-visible chat text.
+ * These leak when a weak model uses the text-protocol format instead of
+ * proper function calling — the user should see the result, not the XML.
+ */
+function stripToolTags(text) {
+  return String(text ?? "")
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, "")
+    .replace(/<tool_response>[\s\S]*?<\/tool_response>/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 /** Resolve a tool-result image (workspace-relative) to a data URL for inline view. */
 async function loadToolImage(path) {
   const data = await state.api.workspaceFile(state.workspaceRoot, path);
@@ -663,7 +676,7 @@ function renderTranscript() {  const box = $("transcript");
       // (the user's message is already visible above) — the turn shows
       // engine activity instead.
       const bodyHtml = m.kind === "assistant"
-        ? (m.streaming ? escapeHtml(m.text) + `<span class="stream-caret">▍</span>` : renderMarkdown(m.text))
+        ? (m.streaming ? escapeHtml(stripToolTags(m.text)) + `<span class="stream-caret">▍</span>` : renderMarkdown(stripToolTags(m.text)))
         : `<span class="turn-hint">Mengerjakan…</span>`;
       el.innerHTML = `
         <div class="who">${escapeHtml(who)}${when ? ` <span class="msg-time">${escapeHtml(when)}</span>` : ""}</div>
