@@ -1459,21 +1459,58 @@ async function renderPreviewBody(body, info) {
     return;
   }
   if (kind === "xlsx") {
-    await renderPagePreview(
-      body,
-      () => state.api.sheetsPreview(root),
-      () => state.api.sheetsPreviewRender({ root }),
-      "sheet",
-    );
+    // Client-side XLSX preview via SheetJS — no LibreOffice needed.
+    const url = info.url ?? (info.path ? state.api.captainDownloadUrl(root, info.path) : null);
+    if (!url) throw new Error("tidak ada sumber preview");
+    body.innerHTML = `<p class="hint">Memuat spreadsheet…</p>`;
+    try {
+      const resp = await fetch(url);
+      const buf = await resp.arrayBuffer();
+      const wb = XLSX.read(buf, { type: "array" });
+      body.innerHTML = "";
+      const sheetsBar = document.createElement("div");
+      sheetsBar.className = "preview-sheets-bar";
+      const tableWrap = document.createElement("div");
+      tableWrap.className = "preview-table-wrap";
+      const renderSheet = (name) => {
+        const ws = wb.Sheets[name];
+        const html = XLSX.utils.sheet_to_html(ws, { editable: false });
+        tableWrap.innerHTML = html;
+        for (const b of sheetsBar.children) b.classList.toggle("selected", b.textContent === name);
+      };
+      for (const name of wb.SheetNames) {
+        const b = document.createElement("button");
+        b.className = "dc-chip";
+        b.textContent = name;
+        b.onclick = () => renderSheet(name);
+        sheetsBar.appendChild(b);
+      }
+      body.append(sheetsBar, tableWrap);
+      if (wb.SheetNames.length) renderSheet(wb.SheetNames[0]);
+    } catch (e) {
+      body.innerHTML = `<p class="dc-error">Preview gagal: ${escapeHtml(errText(e))}</p>`;
+    }
     return;
   }
   if (kind === "docx") {
-    await renderPagePreview(
-      body,
-      () => state.api.dokumenPreview(root),
-      null,
-      "halaman",
-    );
+    // Client-side DOCX preview via docx-preview — no LibreOffice needed.
+    const url = info.url ?? (info.path ? state.api.captainDownloadUrl(root, info.path) : null);
+    if (!url) throw new Error("tidak ada sumber preview");
+    body.innerHTML = `<p class="hint">Memuat dokumen…</p>`;
+    try {
+      const resp = await fetch(url);
+      const buf = await resp.arrayBuffer();
+      body.innerHTML = "";
+      const docxContainer = document.createElement("div");
+      docxContainer.className = "preview-docx";
+      body.appendChild(docxContainer);
+      await docx.renderAsync(buf, docxContainer, undefined, {
+        className: "docx-preview",
+        inWrapper: true,
+      });
+    } catch (e) {
+      body.innerHTML = `<p class="dc-error">Preview gagal: ${escapeHtml(errText(e))}</p>`;
+    }
     return;
   }
   if (kind === "research-report" && info.report) {

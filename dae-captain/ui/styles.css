@@ -929,3 +929,37 @@ button:active:not(:disabled), .btn:active:not(:disabled),
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Browser-based document preview (docx-preview + SheetJS, no LibreOffice) */
+.preview-docx {
+  background: #fff;
+  color: #111;
+  padding: 2rem;
+  max-width: 800px;
+  margin: 0 auto;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+.preview-docx .docx-preview {
+  background: #fff;
+}
+.preview-sheets-bar {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+.preview-table-wrap {
+  overflow: auto;
+  max-height: 60vh;
+  background: #fff;
+  color: #111;
+}
+.preview-table-wrap table {
+  border-collapse: collapse;
+  width: 100%;
+}
+.preview-table-wrap td, .preview-table-wrap th {
+  border: 1px solid #ddd;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+}
