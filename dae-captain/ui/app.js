@@ -865,7 +865,7 @@ function renderTranscript() {  const box = $("transcript");
         // TASK BERHENTI card (mockup): reason + suggestion + actions.
         el.innerHTML = `
           <div class="task-stopped">TASK BERHENTI</div>
-          <div class="body">${escapeHtml(m.text)}</div>
+          <div class="body">${escapeHtml(stripToolTags(m.text))}</div>
           ${m.suggestion ? `<div class="suggestion">Saran: ${escapeHtml(m.suggestion)}</div>` : ""}
           <div class="row">
             <button class="primary-btn retry-btn">Coba lagi</button>
@@ -878,7 +878,7 @@ function renderTranscript() {  const box = $("transcript");
         const modelBtn = el.querySelector(".model-btn");
         if (modelBtn) modelBtn.onclick = () => showView("settings");
       } else {
-        el.innerHTML = `<div class="who">Dae Captain</div><div class="body">Gagal: ${escapeHtml(m.text)}</div>`;
+        el.innerHTML = `<div class="who">Dae Captain</div><div class="body">Gagal: ${escapeHtml(stripToolTags(m.text))}</div>`;
         if (m.retryMessage) {
           const retry = document.createElement("button");
           retry.className = "ghost-btn small";
