@@ -3178,7 +3178,7 @@ export function createApp(ctx: AppContext) {
       root: home,
       onDue: (reminder) => {
         ctx.firedReminders.push(reminder);
-        ctx.log.info({ reminderId: reminder.id }, "reminder fired; queued for UI delivery");
+        ctx.log.info("reminder fired; queued for UI delivery", { reminderId: reminder.id });
       },
     });
   }
@@ -4029,8 +4029,8 @@ export function createApp(ctx: AppContext) {
         if (Array.isArray(body?.order)) {
           const orderMap = new Map(body.order.map((id, i) => [id, i]));
           updated = [...updated].sort((a, b) => {
-            const ai = orderMap.has(a.id) ? orderMap.get(a.id) : 9999;
-            const bi = orderMap.has(b.id) ? orderMap.get(b.id) : 9999;
+            const ai = orderMap.get(a.id) ?? 9999;
+            const bi = orderMap.get(b.id) ?? 9999;
             return ai - bi;
           });
         }
