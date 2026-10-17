@@ -165,7 +165,7 @@ export function loadSettings(env: Env = process.env): Settings {
       spill: parseBoolean(env.DAEDALUS_TOOL_SPILL, true, "DAEDALUS_TOOL_SPILL"),
     },
     outputCompression: parseBoolean(env.DAEDALUS_OUTPUT_COMPRESSION, true, "DAEDALUS_OUTPUT_COMPRESSION"),
-    questionGate: parseBoolean(env.DAEDALUS_QUESTION_GATE, true, "DAEDALUS_QUESTION_GATE"),
+    questionGate: parseBoolean(env.DAEDALUS_QUESTION_GATE, false, "DAEDALUS_QUESTION_GATE"),
     maxIterations: parseOptionalPositiveInt(env.DAEDALUS_MAX_ITERATIONS, "DAEDALUS_MAX_ITERATIONS"),
     daedalusHome: env.DAEDALUS_HOME ?? ".daedalus",
   };
