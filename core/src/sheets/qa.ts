@@ -204,15 +204,6 @@ const MONTHS_EN: Record<string, number> = {
 
 export type QaFilter = { kind: 'month' | 'year' | 'value'; column: string; value: string; colIndex: number };
 
-type ParsedQuestion = {
-  intent: QaIntent;
-  topN: number;
-  measure: ProfiledColumn | null;
-  group: ProfiledColumn | null;
-  filters: QaFilter[];
-  unknownable: string | null;
-};
-
 function parseMonth(question: string): { month: number; name: string } | null {
   const lower = question.toLowerCase();
   for (const [name, m] of Object.entries({ ...MONTHS_ID, ...MONTHS_EN })) {
@@ -289,7 +280,6 @@ function resolveMeasure(table: DatasetTable, tokens: string[], intent: QaIntent)
 /** Parse filters: quoted values, "bulan X", "tahun NNNN", named category values. */
 function parseFilters(question: string, table: DatasetTable): QaFilter[] {
   const filters: QaFilter[] = [];
-  const lowered = question.toLowerCase();
 
   // 1) "bulan X" month filter — prefer a date column, else a text column mentioning the month.
   const month = parseMonth(question);
