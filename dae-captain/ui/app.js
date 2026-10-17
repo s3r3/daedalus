@@ -317,6 +317,11 @@ function smartPillClick(status) {
     } else {
       const box = $("transcript");
       if (box) box.scrollTop = box.scrollHeight;
+      // No approval card found but pill claimed waiting_approval:
+      // stale state — refresh workflows to clear the phantom notification.
+      if (status === "waiting_approval") {
+        refreshRunsQuiet();
+      }
     }
   });
 }
