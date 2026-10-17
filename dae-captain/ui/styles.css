@@ -963,3 +963,14 @@ button:active:not(:disabled), .btn:active:not(:disabled),
   padding: 0.4rem 0.6rem;
   font-size: 0.85rem;
 }
+
+/* New Dae Captain mascot (Farid's cat design, per-variant SVG) */
+.mascot-svg-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.mascot .mascot-svg-img {
+  border-radius: 50%;
+}

@@ -6,6 +6,7 @@ import { createEventStream } from "./events.js";
 import { createInvoker, listenEvent, WINDOW_SET_SIZE_CMD, setSizePayload } from "./bridge.js";
 import { PillController } from "./pill.js";
 import { renderCard, renderVerifyFail, slideTitle } from "./cards.js";
+import { refreshMascots, setMascotStatus, currentSeason } from "./mascot.js";
 import {
   ENGINES,
   aggregateStatus,
@@ -4040,6 +4041,8 @@ async function ensureServer(statusFn) {
 async function boot() {
   showView("boot");
   expand();
+  // New mascot: replace inline SVG placeholders with seasonal variant images.
+  try { refreshMascots("idle"); } catch { /* mascot is cosmetic */ }
   $("boot-title").textContent = "Menyiapkan Dae Captain…";
 
   let prefs;
