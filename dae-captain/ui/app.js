@@ -2569,7 +2569,7 @@ function handleTaskEvents(events) {
       if (isChatViewVisible()) renderTranscript();
     }
     const lastEvent = fresh[fresh.length - 1];
-    if (lastEvent?.type === "TASK_COMPLETED" || lastEvent?.type === "TASK_FAILED") {
+    if (lastEvent?.type === "TASK_COMPLETED" || lastEvent?.type === "TASK_FAILED" || lastEvent?.type === "TASK_CANCELLED") {
       turn.activityDone = true;
       updateStopButton();
     }
