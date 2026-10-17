@@ -32,26 +32,30 @@ export function currentSeason(date = new Date()) {
 /** Map a status/engine to a mascot variant file. */
 export function variantFor(status) {
   const map = {
+    // Pill statuses
     idle: "idle",
-    thinking: "thinking",
     working: "working",
-    permission: "permission",
+    waiting_approval: "permission",
+    error: "error",
+    failed: "error",
+    paused: "paused",
+    pause: "paused",
+    verifying: "verify",
+    verify: "verify",
+    fixing: "fix",
+    fix: "fix",
+    queued: "queued",
+    queue: "queued",
     done: "done",
+    thinking: "thinking",
+    // Engines
     coding: "coding",
     slide: "slide",
     document: "document",
     dokumen: "document",
     research: "research",
-    error: "error",
-    failed: "error",
-    fix: "fix",
-    fixing: "fix",
-    paused: "paused",
-    pause: "paused",
-    queued: "queued",
-    queue: "queued",
-    verify: "verify",
-    verifying: "verify",
+    spreadsheet: "working", // no spreadsheet variant in design → fallback to working
+    sheets: "working",
     screenshot: "screenshot",
   };
   return map[status] ?? "idle";
@@ -59,11 +63,16 @@ export function variantFor(status) {
 
 /**
  * Render mascot <img> HTML for a status.
- * Uses pre-extracted per-variant SVGs — no runtime SVG surgery.
+ * In Halloween season (October), the idle variant uses the Halloween costume.
+ * Other statuses keep their normal variants.
  */
 export function mascotHtml(status = "idle", cls = "") {
-  const variant = variantFor(status);
   const season = currentSeason();
+  let variant = variantFor(status);
+  // Halloween: idle gets the costume variant
+  if (season === "halloween" && variant === "idle") {
+    variant = "season-halloween";
+  }
   return `<img src="mascot/mascot-${variant}.svg" class="mascot-svg-img ${cls}" data-season="${season}" data-variant="${variant}" alt="Dae Captain (${variant})" />`;
 }
 

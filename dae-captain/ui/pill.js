@@ -11,6 +11,7 @@
 //     "resume" {taskId} | "view" {status} | "click" {status}
 
 import { derivePillState, acknowledgePillErrors, PILL_STATUSES } from "./logic.js";
+import { setMascotStatus } from "./mascot.js";
 
 const DND_KEY = "dae-captain:pill-dnd";
 const NOTIFY_KEY = "dae-captain:pill-notify";
@@ -115,6 +116,8 @@ export class PillController {
     this.manual = null;
     const state = derivePillState(this.lastRuns, this.memory, { dnd: this.dnd });
     this._render(state);
+    // Mascot follows pill status (error→error variant, waiting_approval→permission, etc.)
+    try { setMascotStatus(state.status); } catch { /* cosmetic */ }
     // Sound mode: one ping per transition into an alert status (never in
     // do-not-disturb).
     if (
