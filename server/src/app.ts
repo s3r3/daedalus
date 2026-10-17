@@ -1747,8 +1747,18 @@ async function createTaskCore(
       const sources = Array.isArray(sourcesRaw) ? sourcesRaw.filter((x): x is string => typeof x === "string" && x.trim().length > 0) : [];
       const docxRaw = raw.docx_path ?? raw.docxPath;
       const docxPath = typeof docxRaw === "string" && docxRaw.trim() ? docxRaw.trim() : undefined;
+      // Infer sub-mode from the goal when not explicitly specified:
+      // "buat/tulis/susun" (create) -> susun (compose), otherwise ekstrak (extract).
+      // Without this, "buat makalah" defaults to ekstrak and produces nothing.
+      let inferredSubMode: "susun" | "ekstrak" = "ekstrak";
+      if (subModeRaw === undefined) {
+        const goalLower = goal.toLowerCase();
+        if (/\b(buat|tulis|susun|bikin|create|write|compose|draft)\b/.test(goalLower)) {
+          inferredSubMode = "susun";
+        }
+      }
       dokumen = {
-        subMode: subModeRaw === "susun" ? "susun" : "ekstrak",
+        subMode: subModeRaw === "susun" ? "susun" : subModeRaw === "ekstrak" ? "ekstrak" : inferredSubMode,
         ...(sources.length > 0 ? { sources } : {}),
         ...(docxPath ? { docxPath } : {}),
       };
