@@ -1553,6 +1553,12 @@ function summarizeFrom(ctx: AppContext, lookup: TaskLookup, taskId: string): Rec
     store_root: store.root,
   };
   ctx.taskSummaryCache.set(cacheKey, { fingerprint, summary });
+  // BUG-5 fix: bound the cache size — evict oldest entries when over limit
+  // so a long-running server doesn't hold every historical task summary forever.
+  if (ctx.taskSummaryCache.size > 500) {
+    const oldest = ctx.taskSummaryCache.keys().next().value;
+    if (oldest !== undefined) ctx.taskSummaryCache.delete(oldest);
+  }
   return { ...summary, running: ctx.activeRunners.has(taskId) || summary.running === true };
 }
 
@@ -3247,8 +3253,12 @@ export function createApp(ctx: AppContext) {
 
     if (method === "GET" && url.pathname === "/settings") {
       void (async () => {
-        await ensureProvidersLoaded(ctx);
-        sendJson(res, 200, { settings: redactSettings(ctx.settings), session: publicSession(ctx), providers: ctx.providerStore.registry.list() });
+        try {
+          await ensureProvidersLoaded(ctx);
+          sendJson(res, 200, { settings: redactSettings(ctx.settings), session: publicSession(ctx), providers: ctx.providerStore.registry.list() });
+        } catch (error) {
+          sendJson(res, 500, { error: "settings_failed", detail: String(error), request_id: requestId });
+        }
       })();
       return;
     }
@@ -3335,10 +3345,14 @@ export function createApp(ctx: AppContext) {
 
     if (method === "GET" && url.pathname === "/models") {
       void (async () => {
-        await ensureProvidersLoaded(ctx);
-        const providerId = url.searchParams.get("provider_id") ?? url.searchParams.get("providerId") ?? undefined;
-        const models = await ctx.providerStore.registry.listModels(providerId);
-        sendJson(res, 200, { models, session: publicSession(ctx), count: models.length });
+        try {
+          await ensureProvidersLoaded(ctx);
+          const providerId = url.searchParams.get("provider_id") ?? url.searchParams.get("providerId") ?? undefined;
+          const models = await ctx.providerStore.registry.listModels(providerId);
+          sendJson(res, 200, { models, session: publicSession(ctx), count: models.length });
+        } catch (error) {
+          sendJson(res, 500, { error: "models_failed", detail: String(error), request_id: requestId });
+        }
       })();
       return;
     }
@@ -4555,7 +4569,7 @@ export function createApp(ctx: AppContext) {
       const lookup = findTask(ctx, taskId);
       const report = lookup?.store.loadReport<FinalReport>(taskId);
       if (!report) {
-        sendJson(res, 404, { error: "report_not_found" });
+        sendJson(res, 404, { error: "report_not_found", request_id: requestId });
         return;
       }
       sendJson(res, 200, { report });
@@ -4600,6 +4614,11 @@ export function createApp(ctx: AppContext) {
     }
 
     if (method === "POST" && restoreMatch?.[1] !== undefined) {
+      // Sensitive: require the local daemon token (same as /cancel, /pause, /resume).
+      if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
+        sendJson(res, 401, { error: "unauthorized", request_id: requestId });
+        return;
+      }
       const taskId = restoreMatch[1] as string;
       const lookup = findTask(ctx, taskId);
       if (!lookup) {
