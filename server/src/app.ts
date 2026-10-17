@@ -4487,6 +4487,14 @@ export function createApp(ctx: AppContext) {
       const lookup = findTask(ctx, taskId);
       (lookup?.store ?? ctx.store).requestCancel(taskId);
       runner?.cancel(taskId);
+      // Emit TASK_CANCELLED immediately so the UI updates instantly —
+      // the user sees "Stopping..." without waiting for the loop to unwind.
+      try {
+        emitEvent({ bus: ctx.bus, store: lookup?.store ?? ctx.store }, taskId, undefined, "TASK_CANCELLED", {
+          task_id: taskId,
+          reason: "user_requested",
+        });
+      } catch { /* event bus is best-effort */ }
       // `cancel_requested` is the honest half of this response: the marker is
       // always recorded and any polling loop (this process or a CLI one)
       // stops at its next checkpoint. `cancelled` only claims an in-process
