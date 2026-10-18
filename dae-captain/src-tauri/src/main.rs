@@ -39,6 +39,7 @@ struct AppState {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(default)]
 struct Prefs {
     repo_root: String,
     workspace_root: String,
@@ -96,7 +97,14 @@ fn get_prefs(app: AppHandle) -> Result<Prefs, String> {    let path = prefs_path
         return Ok(Prefs::default());
     }
     let raw = fs::read_to_string(&path).map_err(|e| format!("read prefs: {e}"))?;
-    let mut prefs: Prefs = serde_json::from_str(&raw).map_err(|e| format!("parse prefs: {e}"))?;
+    // B19: prefs korup bukan lagi fatal — backup lalu pakai default.
+    let mut prefs: Prefs = match serde_json::from_str(&raw) {
+        Ok(p) => p,
+        Err(_) => {
+            let _ = fs::rename(&path, path.with_extension("json.corrupt"));
+            Prefs::default()
+        }
+    };
     if prefs.server_host.is_empty() {
         prefs.server_host = "127.0.0.1".to_string();
     }
@@ -166,7 +174,7 @@ fn position_island(app: AppHandle, corner: String, expanded: bool) -> Result<Str
 
 /// Open a native folder picker dialog. Returns the selected path, or None
 /// if the user cancelled.
-#[tauri::command]
+#[tauri::command(async)]
 fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
     let path = app
@@ -178,16 +186,55 @@ fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn daemon_token() -> Result<String, String> {
-    let home = dirs::home_dir().ok_or("tidak bisa menemukan home directory")?;
-    let path = home.join(".daedalus").join("daemon.json");
-    let raw = fs::read_to_string(&path).map_err(|e| format!("baca daemon.json: {e}"))?;
-    let v: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| format!("parse daemon.json: {e}"))?;
-    v.get("token")
-        .and_then(|t| t.as_str())
-        .map(|s| s.to_string())
-        .ok_or("token tidak ada di daemon.json".to_string())
+/// B17: baca token dari workspace dulu, baru ~/.daedalus (kompatibilitas lama).
+/// Argumen workspace opsional agar UI lama tetap berfungsi.
+#[tauri::command]
+fn daemon_token(app: AppHandle, workspace: Option<String>) -> Result<String, String> {
+    let ws = workspace
+        .filter(|w| !w.trim().is_empty())
+        .or_else(|| get_prefs(app.clone()).ok().map(|p| p.workspace_root).filter(|w| !w.is_empty()));
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(ws) = ws {
+        candidates.push(daemon_home(&ws).join("daemon.json"));
+    }
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".daedalus").join("daemon.json"));
+    }
+    let mut last_err = "daemon.json tidak ditemukan".to_string();
+    for path in candidates {
+        match fs::read_to_string(&path) {
+            Ok(raw) => match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(v) => {
+                    if let Some(t) = v.get("token").and_then(|t| t.as_str()) {
+                        return Ok(t.to_string());
+                    }
+                    last_err = format!("token tidak ada di {}", path.display());
+                }
+                Err(e) => last_err = format!("parse {}: {e}", path.display()),
+            },
+            Err(e) => last_err = format!("baca {}: {e}", path.display()),
+        }
+    }
+    Err(last_err)
+}
+
+/// B17: tulis daemon.json dengan merge (bukan timpa) + atomik.
+/// Field `token` milik server tidak disentuh.
+fn write_daemon_json(path: &Path, fields: serde_json::Value) -> Result<(), String> {
+    let mut doc = fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let (Some(dst), Some(src)) = (doc.as_object_mut(), fields.as_object()) {
+        for (k, v) in src {
+            dst.insert(k.clone(), v.clone());
+        }
+    }
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -200,7 +247,10 @@ fn set_prefs(app: AppHandle, prefs: Prefs) -> Result<(), String> {
     }
     let path = prefs_path(&app)?;
     let raw = serde_json::to_string_pretty(&prefs).map_err(|e| format!("encode prefs: {e}"))?;
-    fs::write(&path, raw).map_err(|e| format!("write prefs: {e}"))?;
+    // B19: tulis atomik — crash saat tulis tak lagi memotong file.
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, raw).map_err(|e| format!("write prefs: {e}"))?;
+    fs::rename(&tmp, &path).map_err(|e| format!("replace prefs: {e}"))?;
     Ok(())
 }
 
@@ -264,7 +314,7 @@ struct HealthInfo {
     workspace_root: Option<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn server_health(app: AppHandle) -> Result<HealthInfo, String> {
     let prefs = get_prefs(app)?;
     let url = format!("http://{}:{}", prefs.server_host, prefs.server_port);
@@ -287,7 +337,7 @@ fn server_health(app: AppHandle) -> Result<HealthInfo, String> {
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn node_available() -> Result<bool, String> {
     Ok(Command::new("node")
         .arg("--version")
@@ -412,7 +462,7 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn spawn_server(
     app: AppHandle,
     state: State<AppState>,
@@ -491,7 +541,9 @@ fn spawn_server(
         .map_err(|e| format!("open log: {e}"))?;
     let log_err = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
 
+    // B19: set cwd agar process.cwd() server = workspace (lihat B6).
     let mut child = Command::new("node")
+        .current_dir(&workspace)
         .arg("--experimental-strip-types")
         .arg(&server_main)
         .env("DAEDALUS_HOST", &host)
@@ -515,11 +567,13 @@ fn spawn_server(
         "server_url": url,
         "workspace": workspace,
     });
-    fs::write(
-        &daemon_json_path,
-        serde_json::to_string_pretty(&state_doc).unwrap(),
-    )
-    .map_err(|e| format!("write daemon.json: {e}"))?;
+    // B17: merge (bukan timpa) agar token milik server tak hilang; tulis atomik.
+    // B19: bila tulis gagal, bunuh child agar tak yatim.
+    if let Err(e) = write_daemon_json(&daemon_json_path, state_doc) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(format!("write daemon.json: {e}"));
+    }
 
     // Wait for health (the CLI waits up to 5s; we allow a little more for
     // first-run type stripping).
@@ -549,9 +603,9 @@ fn spawn_server(
         ));
     }
 
-    *state.server_child.lock().unwrap() = Some(child);
-    *state.server_managed.lock().unwrap() = true;
-    *state.daemon_json.lock().unwrap() = Some(daemon_json_path);
+    *state.server_child.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
+    *state.server_managed.lock().unwrap_or_else(|e| e.into_inner()) = true;
+    *state.daemon_json.lock().unwrap_or_else(|e| e.into_inner()) = Some(daemon_json_path);
 
     Ok(SpawnInfo {
         started: true,
@@ -561,18 +615,33 @@ fn spawn_server(
     })
 }
 
-#[tauri::command]
+/// B19: SIGTERM dulu agar server sempat menutup terminal & socket (main.ts
+/// graceful shutdown); SIGKILL hanya bila masih hidup setelah 4 detik.
+fn terminate_gracefully(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill").args(["-TERM", &child.id().to_string()]).status();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) { return; }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[tauri::command(async)]
 fn stop_server(state: State<AppState>) -> Result<bool, String> {
     let mut stopped = false;
-    if *state.server_managed.lock().unwrap() {
-        if let Some(mut child) = state.server_child.lock().unwrap().take() {
-            let _ = child.kill();
-            let _ = child.wait();
+    if *state.server_managed.lock().unwrap_or_else(|e| e.into_inner()) {
+        if let Some(mut child) = state.server_child.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            terminate_gracefully(&mut child);
             stopped = true;
         }
-        *state.server_managed.lock().unwrap() = false;
+        *state.server_managed.lock().unwrap_or_else(|e| e.into_inner()) = false;
     }
-    if let Some(path) = state.daemon_json.lock().unwrap().take() {
+    if let Some(path) = state.daemon_json.lock().unwrap_or_else(|e| e.into_inner()).take() {
         let _ = fs::remove_file(path);
     }
     Ok(stopped)
@@ -580,7 +649,7 @@ fn stop_server(state: State<AppState>) -> Result<bool, String> {
 
 #[tauri::command]
 fn server_managed(state: State<AppState>) -> Result<bool, String> {
-    Ok(*state.server_managed.lock().unwrap())
+    Ok(*state.server_managed.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 // ---------------------------------------------------------------------------

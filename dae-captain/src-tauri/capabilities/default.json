@@ -23,7 +23,8 @@
     "allow-pick-folder",
     "dialog:allow-open",
     "allow-open-file",
-    "allow-reveal-in-folder"
+    "allow-reveal-in-folder",
+    "allow-position-island"
   ],
   "windows": [
     "main"

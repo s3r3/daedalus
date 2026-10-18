@@ -22,6 +22,7 @@ fn main() {
             "validate_workspace",
             "list_dir",
             "create_dir",
+            "position_island",
         ])),
     )
     .expect("failed to run tauri-build")
