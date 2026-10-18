@@ -255,7 +255,10 @@ const stagedTaskPlans = new Map<string, StagedTaskPlan>();
 
 function sweepStagedTaskPlans(now: number = Date.now()): void {
   for (const [id, staged] of stagedTaskPlans) {
-    if (now - staged.createdAt >= STAGED_TASK_PLAN_TTL_MS) stagedTaskPlans.delete(id);
+    // B12: jangan hapus plan yang sedang jalan; sub-task boleh hingga 90 mnt.
+    if (staged.execution?.status === "executing") continue;
+    const ref = staged.execution?.finishedAt ? Date.parse(staged.execution.finishedAt) : staged.createdAt;
+    if (now - ref >= STAGED_TASK_PLAN_TTL_MS) stagedTaskPlans.delete(id);
   }
 }
 
@@ -2386,6 +2389,12 @@ async function waitForCaptainTask(
     const state = tasks.loadState<{ status?: string }>(taskId);
     const status = typeof state?.status === "string" ? state.status : "";
     if (status === "done" || status === "failed" || status === "cancelled") return status;
+    // B12: jalan keluar dari report — task yang diselesaikan B4/B5 atau
+    // state aneh tak lagi menunggu 90 menit.
+    const report = tasks.loadReport<{ outcome?: string }>(taskId);
+    if (report) {
+      return report.outcome === "success" || report.outcome === "partial" ? "done" : String(report.outcome) === "cancelled" ? "cancelled" : "failed";
+    }
     if (Date.now() - start > timeoutMs) return "timeout";
     await new Promise((r) => setTimeout(r, 2000));
   }
@@ -2507,6 +2516,8 @@ async function runCaptainPlanExecution(
   const failed = new Set<string>();
   const isDone = (id: string) => doneOk.has(id);
   const isFailed = (id: string) => failed.has(id);
+  // B12: try/finally agar exec.status tak stuck "executing" bila exception lolos.
+  try {
   while (remaining.size > 0) {
     // Dependents of failed sub-tasks can never run: skip them now so the
     // wave below never deadlocks waiting on an impossible dependency.
@@ -2539,8 +2550,16 @@ async function runCaptainPlanExecution(
       else if (s.status === "failed" || s.status === "skipped") failed.add(s.sub_id);
     }
   }
-  exec.status = exec.subTasks.some((s) => s.status === "failed") ? "done_with_failures" : "done";
-  exec.finishedAt = new Date().toISOString();
+  } finally {
+    for (const s of exec.subTasks) {
+      if (s.status === "running" || s.status === "waiting") {
+        s.status = "failed";
+        s.error = s.error ?? "eksekusi rencana terhenti";
+      }
+    }
+    exec.status = exec.subTasks.some((s) => s.status === "failed" || s.status === "skipped") ? "done_with_failures" : "done";
+    exec.finishedAt = new Date().toISOString();
+  }
 }
 
 /**
@@ -4237,6 +4256,9 @@ export function createApp(ctx: AppContext) {
         // Remove tasks first.
         const removeIds = new Set(Array.isArray(body?.remove) ? body.remove.filter((x) => typeof x === "string") : []);
         let updated = tasks.filter((t) => !removeIds.has(t.id));
+        // B12: bersihkan dependsOn yang menunjuk ke task yang dihapus —
+        // kalau tidak, eksekutor mengira dependensi "tak terpenuhi" dan skip.
+        updated = updated.map((t) => ({ ...t, dependsOn: (t.dependsOn ?? []).filter((d) => !removeIds.has(d)) }));
         // Then reorder.
         if (Array.isArray(body?.order)) {
           const orderMap = new Map(body.order.map((id, i) => [id, i]));
