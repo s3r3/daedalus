@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { exportWorkbookToXlsx, workbookPaths, type WorkbookSpec } from "@daedalus/core";
+import { exportWorkbookToXlsx, workbookPaths, type WorkbookSpec } from "@s3r3/core";
 import { executableCandidates, findExecutableOnPath } from "./slide-preview.ts";
 
 /**

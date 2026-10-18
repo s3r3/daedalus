@@ -2,7 +2,7 @@ import type { Server } from "node:http";
 import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
 import type { AppContext } from "./app.ts";
-import type { Event } from "@daedalus/core";
+import type { Event } from "@s3r3/core";
 
 /**
  * WebSocket channel for the browser control plane (PLAN.md §3.6).

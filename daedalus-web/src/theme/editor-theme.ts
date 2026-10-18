@@ -13,7 +13,7 @@
  * the editor follow a theme switch with no second copy to keep in step.
  */
 import type * as Monaco from 'monaco-editor'
-import { getPalette, type PaletteName } from '@daedalus/core/palette'
+import { getPalette, type PaletteName } from '@s3r3/core/palette'
 
 /**
  * Resolved from the shared palette rather than read back from the cascade. The

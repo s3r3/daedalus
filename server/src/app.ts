@@ -7,16 +7,16 @@ import { fileURLToPath } from "node:url";
 // Dae Captain v2 Fase 7 — chat cards: decompose plans, approval UndoStore,
 // and the v2 run timeline, surfaced through additive /captain/* routes.
 // Deep imports (not the barrel) mirror server/src/research.ts style.
-import { planTask, type TaskPlan, type SubTask } from "@daedalus/core/workflow/decompose.ts";
-import { UndoStore, type Action as WorkflowAction } from "@daedalus/core/workflow/approval.ts";
-import { getEvents, type AnyTimelineEvent } from "@daedalus/core/workflow/timeline.ts";
-import { UserMemory } from "@daedalus/core/workflow/memory.ts";
-import { ReminderStore, startScheduler, type Reminder } from "@daedalus/core/workflow/reminder.ts";
-import { listRoles, MODEL_TIER_LABELS, MODEL_TIERS, type ModelTier } from "@daedalus/core/workflow/model-roles.ts";
-import { buildCaptainSystemPrompt, getPersonaForTier } from "@daedalus/core/workflow/persona.ts";
-import { exportDocumentMarkdown } from "@daedalus/core/dokumen/export-md.ts";
-import { slideVariants } from "@daedalus/core/slides/variants.ts";
-import { recommendTemplate } from "@daedalus/core/slides/template-recommend.ts";
+import { planTask, type TaskPlan, type SubTask } from "@s3r3/core/workflow/decompose.ts";
+import { UndoStore, type Action as WorkflowAction } from "@s3r3/core/workflow/approval.ts";
+import { getEvents, type AnyTimelineEvent } from "@s3r3/core/workflow/timeline.ts";
+import { UserMemory } from "@s3r3/core/workflow/memory.ts";
+import { ReminderStore, startScheduler, type Reminder } from "@s3r3/core/workflow/reminder.ts";
+import { listRoles, MODEL_TIER_LABELS, MODEL_TIERS, type ModelTier } from "@s3r3/core/workflow/model-roles.ts";
+import { buildCaptainSystemPrompt, getPersonaForTier } from "@s3r3/core/workflow/persona.ts";
+import { exportDocumentMarkdown } from "@s3r3/core/dokumen/export-md.ts";
+import { slideVariants } from "@s3r3/core/slides/variants.ts";
+import { recommendTemplate } from "@s3r3/core/slides/template-recommend.ts";
 import {
   EventBus,
   McpManager,
@@ -161,7 +161,7 @@ import {
   routeByRules,
   translateArtifacts,
   updateTurn,
-} from "@daedalus/core";
+} from "@s3r3/core";
 import { collectRoots, listDirectory, listFilesFlat, listPlanDocuments, listRecentFiles, buildTree, resolveInside, MAX_FILE_BYTES, IMAGE_MEDIA_TYPES, MAX_IMAGE_FILE_BYTES } from "./workspace.ts";
 import { classifyWebIntent, executeFastPath, resolveFastPathProvider } from "./fast-path.ts";
 import { gitStatus, revertFileToHead } from "./git-status.ts";
@@ -7166,7 +7166,7 @@ export function createApp(ctx: AppContext) {
             return;
           }
           // Import lazily to avoid circular deps.
-          const { buildDeepenQuestion } = await import("@daedalus/core/research/followup.ts");
+          const { buildDeepenQuestion } = await import("@s3r3/core/research/followup.ts");
           const focusedQuestion = buildDeepenQuestion(claim, report.question);
           sendJson(res, 200, { focusedQuestion, claimId: claim.id, request_id: requestId });
         } catch (error) {
@@ -7193,7 +7193,7 @@ export function createApp(ctx: AppContext) {
             sendJson(res, 400, { error: "need_at_least_2_sources", request_id: requestId });
             return;
           }
-          const { compareSources } = await import("@daedalus/core/research/followup.ts");
+          const { compareSources } = await import("@s3r3/core/research/followup.ts");
           const comparison = compareSources(report, sourceIds);
           // Convert Map to object for JSON.
           sendJson(res, 200, {
@@ -7219,7 +7219,7 @@ export function createApp(ctx: AppContext) {
             sendJson(res, 404, { error: "report_not_found", request_id: requestId });
             return;
           }
-          const { buildUpdateQuery, getUpdateCutoff } = await import("@daedalus/core/research/followup.ts");
+          const { buildUpdateQuery, getUpdateCutoff } = await import("@s3r3/core/research/followup.ts");
           sendJson(res, 200, {
             updateQuery: buildUpdateQuery(report),
             cutoffYear: getUpdateCutoff(report),
@@ -7566,4 +7566,4 @@ function errorMessage(error: unknown): string {
 }
 
 export { attachWebSocket } from "./events.ts";
-export type { Event } from "@daedalus/core";
+export type { Event } from "@s3r3/core";

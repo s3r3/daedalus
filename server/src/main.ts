@@ -1,4 +1,4 @@
-import { loadSettings, WorkflowRunStore, resolveDaedalusHome } from "@daedalus/core";
+import { loadSettings, WorkflowRunStore, resolveDaedalusHome } from "@s3r3/core";
 import { attachWebSocket, createContext, createApp, ensureProvidersLoaded } from "./app.ts";
 
 const settings = loadSettings();

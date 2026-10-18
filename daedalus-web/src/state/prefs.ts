@@ -1,5 +1,5 @@
-import type { AgentMode, ToolRules } from '@daedalus/core'
-import { AGENT_MODE_ORDER } from '@daedalus/core/interaction/modes'
+import type { AgentMode, ToolRules } from '@s3r3/core'
+import { AGENT_MODE_ORDER } from '@s3r3/core/interaction/modes'
 
 /**
  * Browser-side persistence for the composer's run defaults (PLAN.md §3.4: the
@@ -33,7 +33,7 @@ const MODES: ReadonlySet<string> = new Set(AGENT_MODE_ORDER)
 
 /**
  * Local mirror of core's parseToolRules for stored prefs. The web layer
- * must not value-import the `@daedalus/core` barrel (it pulls node-only
+ * must not value-import the `@s3r3/core` barrel (it pulls node-only
  * modules like agent/tool-output into the browser bundle), so the tiny
  * trim/dedupe rule lives here instead of being shared.
  */

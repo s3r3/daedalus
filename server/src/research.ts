@@ -3,21 +3,21 @@ import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createProviderForConfig } from "@daedalus/core";
-import type { EventBus, LLMProvider, TaskStore } from "@daedalus/core";
+import { createProviderForConfig } from "@s3r3/core";
+import type { EventBus, LLMProvider, TaskStore } from "@s3r3/core";
 // Contract types from the parallel core worker (core/src/research/*).
 // Type-only imports: erased at runtime, so the missing modules break
 // typecheck (expected until the core worker lands) but never break
 // runtime or tests. Value access goes through the lazy dynamic imports
 // in defaultResearchHooks() below.
-import type { ResearchPlan, ResearchReport } from "@daedalus/core/research/types.ts";
+import type { ResearchPlan, ResearchReport } from "@s3r3/core/research/types.ts";
 import type {
   FetchedPage,
   ResearchFetchHooks,
   ResearchPipelineResult,
   ResearchStageId,
   ResearchSearchHit,
-} from "@daedalus/core/research/pipeline.ts";
+} from "@s3r3/core/research/pipeline.ts";
 import type { AppContext } from "./app.ts";
 
 /**
@@ -33,7 +33,7 @@ import type { AppContext } from "./app.ts";
  *
  * Hard boundary (check.sh): file ini tidak boleh mengimport coding
  * agent loop, provider class, atau tool registry secara langsung.
- * Semua akses LLM lewat createProviderForConfig dari @daedalus/core;
+ * Semua akses LLM lewat createProviderForConfig dari @s3r3/core;
  * semua akses web lewat ResearchFetchHooks yang di-inject.
  */
 
@@ -724,7 +724,7 @@ async function cachedFetchPage(url: string): Promise<FetchedPage | null> {
 export function defaultResearchHooks(): ResearchCoreHooks {
   return {
     planResearch: async ({ question, provider }) => {
-      const mod = await import("@daedalus/core/research/engine.ts");
+      const mod = await import("@s3r3/core/research/engine.ts");
       const engine = new mod.ResearchEngine({
         provider,
         fetch: { searchWeb: defaultSearchWeb, fetchPage: cachedFetchPage },
@@ -732,7 +732,7 @@ export function defaultResearchHooks(): ResearchCoreHooks {
       return engine.planResearch(question);
     },
     createEngine: async ({ provider, fetch, elsevierApiKey, onProgress, waitWhilePaused }) => {
-      const mod = await import("@daedalus/core/research/engine.ts");
+      const mod = await import("@s3r3/core/research/engine.ts");
       const engine = new mod.ResearchEngine({ provider, fetch, elsevierApiKey, onProgress, waitWhilePaused });
       return engine as unknown as ResearchEngineSurface;
     },

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { DeckSpec, Slide } from '@daedalus/core'
+import type { DeckSpec, Slide } from '@s3r3/core'
 import { api } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
 

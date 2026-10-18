@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { getPalette } from '@daedalus/core/palette'
+import { getPalette } from '@s3r3/core/palette'
 import { EDITOR_THEME_NAMES, editorTheme } from './editor-theme'
 
 const SRC = join(process.cwd(), 'src')

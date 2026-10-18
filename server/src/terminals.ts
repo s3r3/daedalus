@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import type { Event } from "@daedalus/core";
+import type { Event } from "@s3r3/core";
 
 /**
  * Interactive terminal sessions for the Web control plane.

@@ -1,4 +1,4 @@
-import type { Event } from '@daedalus/core'
+import type { Event } from '@s3r3/core'
 
 /**
  * WebSocket client for the per-task event stream (PLAN.md §3.6).

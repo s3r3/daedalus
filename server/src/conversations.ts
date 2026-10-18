@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import type { Message } from "@daedalus/core";
+import type { Message } from "@s3r3/core";
 
 /**
  * Web chat conversations (Farid's main workflow complaint): a chat is one

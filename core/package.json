@@ -1,5 +1,5 @@
 {
-  "name": "@daedalus/core",
+  "name": "@s3r3/core",
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",

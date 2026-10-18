@@ -1,19 +1,19 @@
 import { randomUUID } from "node:crypto";
-import { createProviderForConfig } from "@daedalus/core";
+import { createProviderForConfig } from "@s3r3/core";
 import type {
   EventBus,
   LLMProvider,
   TaskStore,
   WorkbookSpec,
-} from "@daedalus/core";
+} from "@s3r3/core";
 // Contract types from the parallel core worker (core/src/sheets/analysis-*).
 // Type-only imports: erased at runtime, so the missing modules break
 // typecheck (expected until the core worker lands) but never break
 // runtime or tests. Value access goes through the lazy dynamic imports
 // in defaultAnalysisHooks() below.
-import type { AnalysisPlan } from "@daedalus/core/sheets/analysis-plan.ts";
-import type { DatasetProfile } from "@daedalus/core/sheets/analysis-profile.ts";
-import type { InsightReport } from "@daedalus/core/sheets/insight-report.ts";
+import type { AnalysisPlan } from "@s3r3/core/sheets/analysis-plan.ts";
+import type { DatasetProfile } from "@s3r3/core/sheets/analysis-profile.ts";
+import type { InsightReport } from "@s3r3/core/sheets/insight-report.ts";
 import type { AppContext } from "./app.ts";
 
 /**
@@ -30,7 +30,7 @@ import type { AppContext } from "./app.ts";
  *
  * Hard boundary (check.sh): this file must never import the coding
  * agent loop, a provider class, or the tool registry directly. All LLM
- * access flows through @daedalus/core — provider objects are built with
+ * access flows through @s3r3/core — provider objects are built with
  * the core's createProviderForConfig (the same pattern as the
  * /diff/review route), and the engine itself is constructed from the
  * core's SpreadsheetEngine via the AnalysisCoreHooks seam.
@@ -106,19 +106,19 @@ export type AnalysisCoreHooks = {
 export function defaultAnalysisHooks(): AnalysisCoreHooks {
   return {
     importCsv: async (title, text, opts) => {
-      const mod = await import("@daedalus/core/sheets/import.ts");
+      const mod = await import("@s3r3/core/sheets/import.ts");
       return mod.importCsvToWorkbook(title, text, opts);
     },
     importXlsx: async (title, buffer, opts) => {
-      const mod = await import("@daedalus/core/sheets/import.ts");
+      const mod = await import("@s3r3/core/sheets/import.ts");
       return mod.importXlsxToWorkbook(title, buffer, opts);
     },
     profileWorkbook: async (workbook) => {
-      const mod = await import("@daedalus/core/sheets/analysis-profile.ts");
+      const mod = await import("@s3r3/core/sheets/analysis-profile.ts");
       return mod.profileWorkbook(workbook);
     },
     classifyIntent: async ({ question, profiles, provider }) => {
-      const mod = await import("@daedalus/core/sheets/analysis-plan.ts");
+      const mod = await import("@s3r3/core/sheets/analysis-plan.ts");
       // Core signature is positional (provider, question, profiles).
       // The retry budget lives in the core's structuredCall (shared
       // MAX_STAGE_ATTEMPTS, final decision 2026-10-12) — nothing on the
@@ -127,13 +127,13 @@ export function defaultAnalysisHooks(): AnalysisCoreHooks {
       return { kind: "analysis", complexity };
     },
     generatePlan: async ({ question, profiles, provider }) => {
-      const mod = await import("@daedalus/core/sheets/analysis-plan.ts");
+      const mod = await import("@s3r3/core/sheets/analysis-plan.ts");
       return mod.generateAnalysisPlan(provider, question, profiles);
     },
     createEngine: async ({ provider, bus, store, workspaceRoot }) => {
       const [{ SpreadsheetEngine }, core] = await Promise.all([
-        import("@daedalus/core/sheets/engine.ts"),
-        import("@daedalus/core"),
+        import("@s3r3/core/sheets/engine.ts"),
+        import("@s3r3/core"),
       ]);
       const engine = new SpreadsheetEngine({
         provider,

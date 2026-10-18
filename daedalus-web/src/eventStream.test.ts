@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { EventStreamClient } from './api/eventStream'
-import type { Event } from '@daedalus/core'
+import type { Event } from '@s3r3/core'
 
 const OPEN = 1
 

@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import type { Event } from '@daedalus/core'
+import type { Event } from '@s3r3/core'
 import { useDaedalusStore } from './taskStore'
 
 /**

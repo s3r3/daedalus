@@ -4,7 +4,7 @@ import { accessSync, constants, existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { deckPaths, exportDeckToPptx, pptxTemplatesDir, validateDeck, type DeckSpec } from "@daedalus/core";
+import { deckPaths, exportDeckToPptx, pptxTemplatesDir, validateDeck, type DeckSpec } from "@s3r3/core";
 
 /**
  * Pratinjau Asli (True Preview): renders the .pptx that Export would

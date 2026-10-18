@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { DocumentState } from '@daedalus/core'
+import type { DocumentState } from '@s3r3/core'
 import { api } from '../../api/client'
 import { useDaedalusStore } from '../../state/taskStore'
 

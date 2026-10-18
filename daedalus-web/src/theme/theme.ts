@@ -1,5 +1,5 @@
-import { getPalette, type PaletteName } from '@daedalus/core/palette'
-import type { AgentMode } from '@daedalus/core'
+import { getPalette, type PaletteName } from '@s3r3/core/palette'
+import type { AgentMode } from '@s3r3/core'
 import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import { useDaedalusStore } from '../state/taskStore'
 
@@ -14,7 +14,7 @@ const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
  * literals in index.css remain only as var() fallbacks, and a test asserts they
  * match the palette, so the first paint and the steady state agree.
  *
- * The import is the `@daedalus/core/palette` subpath, not the package barrel:
+ * The import is the `@s3r3/core/palette` subpath, not the package barrel:
  * the barrel reaches node:fs, which cannot run in a client bundle.
  */
 export function applyPaletteVars(theme: PaletteName): void {

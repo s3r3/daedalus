@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import type { Event } from '@daedalus/core'
+import type { Event } from '@s3r3/core'
 import { chatTranscript } from './state/selectors'
 
 /**

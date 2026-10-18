@@ -15,8 +15,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@daedalus/core": "*",
-    "commander": "^13.1.0"
+    "commander": "^13.1.0",
+    "@s3r3/core": "*"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

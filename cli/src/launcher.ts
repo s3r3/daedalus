@@ -3,7 +3,7 @@ import { closeSync, openSync } from 'node:fs';
 import { chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadSettings, resolveDaedalusHome } from '@daedalus/core';
+import { loadSettings, resolveDaedalusHome } from '@s3r3/core';
 import { detectTray, type TrayStatus } from './tray.ts';
 
 const ANSI_PATTERN = /\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07/g;

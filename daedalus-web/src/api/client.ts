@@ -1,4 +1,4 @@
-import type { AgentMode, Attachment, DocumentState, Event, FinalReport, PermissionKey, SavedSchema, ThinkingLevel, ToolRules } from '@daedalus/core'
+import type { AgentMode, Attachment, DocumentState, Event, FinalReport, PermissionKey, SavedSchema, ThinkingLevel, ToolRules } from '@s3r3/core'
 import type {
   Conversation,
   FileChange,
@@ -652,7 +652,7 @@ export const api = {
   builtinTemplates: () => request<{ templates: BuiltinTemplateInfo[] }>('/slides/builtin-templates'),
 
   /** The workspace deck via the core-gated slide API (404 when no deck exists). */
-  deck: (root: string) => request<{ root: string; deck: import('@daedalus/core').DeckSpec }>(`/slides/deck${query({ root })}`),
+  deck: (root: string) => request<{ root: string; deck: import('@s3r3/core').DeckSpec }>(`/slides/deck${query({ root })}`),
 
   /** Imported PPT templates stored in this workspace (.daedalus/slide-templates/). */
   pptTemplates: (root: string) => request<{ root: string; templates: PptTemplateInfo[] }>(`/slides/ppt-templates${query({ root })}`),
@@ -680,37 +680,37 @@ export const api = {
 
   /** Apply a bundled or imported template (or accent/dark) to the open deck; the server validates and returns the fresh deck. */
   deckTheme: (root: string, input: { template_id?: string; custom_template_id?: string; design_id?: string; accent?: string; dark?: boolean }) =>
-    request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/theme', {
+    request<{ root: string; deck: import('@s3r3/core').DeckSpec }>('/slides/deck/theme', {
       method: 'POST',
       body: JSON.stringify({ root, ...input }),
     }),
 
   deckAddSlide: (root: string, input: { layout: string; content?: Record<string, unknown>; index?: number }) =>
-    request<{ root: string; deck: import('@daedalus/core').DeckSpec; slide_id: string }>('/slides/deck/slide/add', {
+    request<{ root: string; deck: import('@s3r3/core').DeckSpec; slide_id: string }>('/slides/deck/slide/add', {
       method: 'POST',
       body: JSON.stringify({ root, ...input }),
     }),
 
   deckRegenerateSlide: (root: string, slideId: string, input: { model?: string; provider_id?: string } = {}) =>
-    request<{ root: string; deck: import('@daedalus/core').DeckSpec; slide_id: string }>('/slides/deck/regenerate', {
+    request<{ root: string; deck: import('@s3r3/core').DeckSpec; slide_id: string }>('/slides/deck/regenerate', {
       method: 'POST',
       body: JSON.stringify({ root, slide_id: slideId, ...input }),
     }),
 
-  deckUpdateSlide: (root: string, slideId: string, input: { content?: Record<string, unknown>; layout?: string; positions?: Record<string, import('@daedalus/core').BlockPosition> | null; notes?: string | null }) =>
-    request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/slide/update', {
+  deckUpdateSlide: (root: string, slideId: string, input: { content?: Record<string, unknown>; layout?: string; positions?: Record<string, import('@s3r3/core').BlockPosition> | null; notes?: string | null }) =>
+    request<{ root: string; deck: import('@s3r3/core').DeckSpec }>('/slides/deck/slide/update', {
       method: 'POST',
       body: JSON.stringify({ root, slide_id: slideId, ...input }),
     }),
 
   deckDeleteSlide: (root: string, slideId: string) =>
-    request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/slide/delete', {
+    request<{ root: string; deck: import('@s3r3/core').DeckSpec }>('/slides/deck/slide/delete', {
       method: 'POST',
       body: JSON.stringify({ root, slide_id: slideId }),
     }),
 
   deckMoveSlide: (root: string, slideId: string, toIndex: number) =>
-    request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/slide/move', {
+    request<{ root: string; deck: import('@s3r3/core').DeckSpec }>('/slides/deck/slide/move', {
       method: 'POST',
       body: JSON.stringify({ root, slide_id: slideId, to_index: toIndex }),
     }),
@@ -733,7 +733,7 @@ export const api = {
    * archive is copied back over deck/.
    */
   deckArchiveRestore: (root: string, name: string) =>
-    request<{ root: string; deck: import('@daedalus/core').DeckSpec }>('/slides/deck/archive/restore', {
+    request<{ root: string; deck: import('@s3r3/core').DeckSpec }>('/slides/deck/archive/restore', {
       method: 'POST',
       body: JSON.stringify({ root, name }),
     }),
@@ -757,11 +757,11 @@ export const api = {
     }),
 
   /** The workspace workbook via the core-gated sheet API (404 when no workbook exists). */
-  workbook: (root: string) => request<{ root: string; workbook: import('@daedalus/core').WorkbookSpec }>(`/sheets/workbook${query({ root })}`),
+  workbook: (root: string) => request<{ root: string; workbook: import('@s3r3/core').WorkbookSpec }>(`/sheets/workbook${query({ root })}`),
 
   /** Persist a canvas-edited workbook; the server validates (422 writes nothing). */
-  workbookSave: (root: string, workbook: import('@daedalus/core').WorkbookSpec) =>
-    request<{ root: string; workbook: import('@daedalus/core').WorkbookSpec }>('/sheets/workbook', {
+  workbookSave: (root: string, workbook: import('@s3r3/core').WorkbookSpec) =>
+    request<{ root: string; workbook: import('@s3r3/core').WorkbookSpec }>('/sheets/workbook', {
       method: 'POST',
       body: JSON.stringify({ root, workbook }),
     }),
@@ -785,14 +785,14 @@ export const api = {
 
   /** Open a workspace .csv/.xlsx as the editable workbook (imported into workbook/workbook.json). */
   workbookOpen: (root: string, path: string) =>
-    request<{ root: string; workbook: import('@daedalus/core').WorkbookSpec }>('/sheets/workbook/open', {
+    request<{ root: string; workbook: import('@s3r3/core').WorkbookSpec }>('/sheets/workbook/open', {
       method: 'POST',
       body: JSON.stringify({ root, path }),
     }),
 
   /** On-demand export (grid toolbar): XLSX for the whole workbook or CSV per sheet. */
   workbookExport: (root: string, input: { format: 'xlsx' | 'csv'; sheet?: string }) =>
-    request<{ root: string; records: import('@daedalus/core').SheetExportRecord[] }>('/sheets/workbook/export', {
+    request<{ root: string; records: import('@s3r3/core').SheetExportRecord[] }>('/sheets/workbook/export', {
       method: 'POST',
       body: JSON.stringify({ root, format: input.format, ...(input.sheet ? { sheet: input.sheet } : {}) }),
     }),
@@ -806,14 +806,14 @@ export const api = {
    * present — persisted onto workbook.verify, no model call.
    */
   workbookVerify: (root: string) =>
-    request<{ root: string; verify: import('@daedalus/core').VerifyReport; record: import('@daedalus/core').SheetExportRecord }>(
+    request<{ root: string; verify: import('@s3r3/core').VerifyReport; record: import('@s3r3/core').SheetExportRecord }>(
       '/sheets/workbook/verify',
       { method: 'POST', body: JSON.stringify({ root }) },
     ),
 
   /** Workbook checkpoints: previous states of workbook.json (.daedalus/workbook-history). */
   workbookCheckpoints: (root: string) =>
-    request<{ checkpoints: import('@daedalus/core').WorkbookCheckpoint[]; count: number }>(
+    request<{ checkpoints: import('@s3r3/core').WorkbookCheckpoint[]; count: number }>(
       `/sheets/workbook/checkpoints${query({ root })}`,
     ),
 
@@ -822,7 +822,7 @@ export const api = {
    * current state is snapshotted into history first.
    */
   workbookRestore: (root: string, name: string) =>
-    request<{ root: string; name: string; workbook: import('@daedalus/core').WorkbookSpec }>('/sheets/workbook/restore', {
+    request<{ root: string; name: string; workbook: import('@s3r3/core').WorkbookSpec }>('/sheets/workbook/restore', {
       method: 'POST',
       body: JSON.stringify({ root, name }),
     }),

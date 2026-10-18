@@ -9,7 +9,7 @@ import {
   questionFallbackReply,
   type LLMProvider,
   type TaskStore,
-} from "@daedalus/core";
+} from "@s3r3/core";
 import type { AppContext } from "./app.ts";
 
 /**
@@ -100,7 +100,7 @@ export type FastPathRun = {
    * so a follow-up ("di mana plan-nya?") is answered with session memory
    * instead of starting cold. Absent for a fresh conversation.
    */
-  history?: import("@daedalus/core").Message[];
+  history?: import("@s3r3/core").Message[];
   /** Records the reply as the conversation's assistant turn. */
   onReply?: (text: string) => void;
   /** AbortSignal untuk cancel langsung (BUG-7: fast-path harus bisa di-cancel via activeRunners). */

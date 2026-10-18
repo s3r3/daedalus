@@ -1,4 +1,4 @@
-import type { Event } from "@daedalus/core";
+import type { Event } from "@s3r3/core";
 
 /**
  * Live-render helpers shared by the CLI's two human surfaces (the

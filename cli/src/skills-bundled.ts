@@ -13,7 +13,7 @@ import {
   workspaceSkillsDir,
   type SkillDirOptions,
   type SkillOrigin,
-} from '@daedalus/core';
+} from '@s3r3/core';
 
 /**
  * Bundled starter skills (Daedalus/skills/ in the repo — original content,

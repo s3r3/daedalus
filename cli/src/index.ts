@@ -42,7 +42,7 @@ import {
   type ModelStrategy,
   type PermissionKey,
   type UserQuestionInfo,
-} from "@daedalus/core";
+} from "@s3r3/core";
 import {
   createInPlaceFrameRenderer,
   ensureDaemon,
@@ -77,7 +77,7 @@ const SPINNER_INTERVAL_MS = 50;
  * Generate a cycling gradient for the spinner (Crush-inspired)
  * Simulates Crush's working gradient animation in CLI.
  */
-function cyclingGradient(char: string, frame: number, palette: typeof import("@daedalus/core").palette): string {
+function cyclingGradient(char: string, frame: number, palette: typeof import("@s3r3/core").palette): string {
   if (!supportsColor()) return char;
   const [r1, g1, b1] = rgb(palette.workingFrom);
   const [r2, g2, b2] = rgb(palette.workingTo);

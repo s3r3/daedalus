@@ -12,7 +12,7 @@ import {
   Paragraph,
   TextRun,
 } from "docx";
-import type { ResearchReport } from "@daedalus/core/research/types.ts";
+import type { ResearchReport } from "@s3r3/core/research/types.ts";
 
 function p(text: string, opts?: { bold?: boolean; size?: number; italic?: boolean }): Paragraph {
   return new Paragraph({

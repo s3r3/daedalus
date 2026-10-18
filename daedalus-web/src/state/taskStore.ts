@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { AgentMode, Attachment, Event, FinalReport, ToolRules } from '@daedalus/core'
+import type { AgentMode, Attachment, Event, FinalReport, ToolRules } from '@s3r3/core'
 import type { StreamStatus, TerminalWireMessage } from '../api/eventStream'
 import type { Conversation, ProviderModel, ProviderPreset, ProviderPublic, SessionState, TaskSummary, TerminalSession } from '../api/types'
 import type { AnalysisDataset, AnalysisPlan, AnalysisRunResult } from '../api/client'

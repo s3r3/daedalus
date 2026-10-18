@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { basename, join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import { buildDocumentDocxBytes, documentPaths, type DocumentState } from "@daedalus/core";
+import { buildDocumentDocxBytes, documentPaths, type DocumentState } from "@s3r3/core";
 import { findExecutableOnPath, executableCandidates } from "./slide-preview.ts";
 
 /**

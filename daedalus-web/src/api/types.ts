@@ -17,7 +17,7 @@ import type {
   ToolResult,
   UserQuestionInfo,
   ValidationResult,
-} from '@daedalus/core'
+} from '@s3r3/core'
 
 /**
  * Versioned wire contract for the gateway (PLAN.md §3.6 / Phase 8 risk note).
