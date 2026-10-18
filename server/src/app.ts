@@ -2970,6 +2970,22 @@ function reconcileWorkflowRun(ctx: AppContext, run: RunContext): boolean {
   let changed = false;
   for (const turn of run.turns) {
     if (turn.status !== "running") continue;
+    // B2: Turn rencana multi-engine — task_id-nya id PLAN (bukan task),
+    // jadi statusnya diturunkan dari eksekusi plan, bukan state task.
+    const stagedPlan = stagedTaskPlans.get(turn.task_id);
+    if (stagedPlan) {
+      const exec = stagedPlan.execution;
+      if (!exec || exec.status === "executing") continue; // menunggu [Jalankan] / sedang jalan
+      updateTurn(
+        run,
+        turn.turn_id,
+        exec.status === "done"
+          ? { status: "done" }
+          : { status: "failed", note: "sebagian sub-task gagal — lihat kartu rencana" },
+      );
+      changed = true;
+      continue;
+    }
     if (turn.engine === "research") {
       const reportId = getResearchRunReportId(turn.task_id);
       if (reportId) {
@@ -3000,8 +3016,23 @@ function reconcileWorkflowRun(ctx: AppContext, run: RunContext): boolean {
     }
     if (ctx.activeRunners.has(turn.task_id)) continue;
     const state = tasks.loadState<{ status?: string; last_error?: unknown }>(turn.task_id);
-    if (state?.status === "done") {
-      const report = tasks.loadReport<FinalReport>(turn.task_id);
+    const report = tasks.loadReport<FinalReport>(turn.task_id);
+    // B3: Status efektif — state terminal menang; kalau state masih "aktif"
+    // tapi runner sudah tiada DAN report ada, tugas itu jelas sudah selesai.
+    const fromReport =
+      report === undefined || report === null
+        ? undefined
+        : report.outcome === "success" || report.outcome === "partial"
+          ? "done"
+          : String(report.outcome) === "cancelled"
+            ? "cancelled"
+            : "failed";
+    const effective =
+      state?.status === "done" || state?.status === "failed" || state?.status === "cancelled"
+        ? state.status
+        : fromReport;
+
+    if (effective === "done") {
       updateTurn(run, turn.turn_id, {
         status: "done",
         artifacts: translateArtifacts({
@@ -3019,13 +3050,18 @@ function reconcileWorkflowRun(ctx: AppContext, run: RunContext): boolean {
         }),
       });
       changed = true;
-    } else if (state?.status === "failed") {
+    } else if (effective === "cancelled") {
+      updateTurn(run, turn.turn_id, { status: "cancelled" });
+      changed = true;
+    } else if (effective === "failed") {
       // Surface the task's own error on the turn so the companion can
       // show WHY it failed instead of a bare "Failed" badge.
       const err =
-        typeof state.last_error === "string" && state.last_error.trim()
+        typeof state?.last_error === "string" && state.last_error.trim()
           ? state.last_error.trim().slice(0, 300)
-          : undefined;
+          : String(report?.outcome) === "interrupted"
+            ? "server berhenti saat task berjalan"
+            : undefined;
       updateTurn(run, turn.turn_id, {
         status: "failed",
         ...(err ? { note: err } : {}),
@@ -3040,8 +3076,9 @@ function reconcileWorkflowRun(ctx: AppContext, run: RunContext): boolean {
       });
       changed = true;
     }
-    // 'created'/'pending'/'active' without a runner: left running — the
-    // runner registers before its first event; boot sweeps the rest.
+    // 'created'/'pending'/'active' without a runner & without report:
+    // left running — the runner registers before its first event;
+    // boot (B4/B5) sweeps the rest.
   }
   return changed;
 }
@@ -3075,6 +3112,11 @@ function presentWorkflowTurn(
         : "running",
       ...(paused ? { paused: true } : {}),
     };
+  }
+  // B2: plan multi-engine yang masih staged — pill tidak boleh "Antrian".
+  const stagedPlan = stagedTaskPlans.get(turn.task_id);
+  if (stagedPlan) {
+    return { ...base, live: stagedPlan.execution ? "running" : "staged_awaiting_gate", ...(paused ? { paused: true } : {}) };
   }
   const runner = ctx.activeRunners.get(turn.task_id);
   if (!runner) {
