@@ -1,0 +1,15 @@
+[Unit]
+Description=Dae Captain Server (headless)
+After=network.target
+
+[Service]
+Type=simple
+# Ganti dengan path repo di laptop-mu
+WorkingDirectory=%h/Ayid/xyconix11x/Skripsi/daedalus
+ExecStart=/usr/bin/node --experimental-strip-types server/src/main.ts
+Restart=on-failure
+RestartSec=3
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=default.target
