@@ -91,10 +91,20 @@ export function extractZipEntries(data: Buffer): ZipEntry[] {
     const localNameLength = data.readUInt16LE(localOffset + 26);
     const localExtraLength = data.readUInt16LE(localOffset + 28);
     const dataStart = localOffset + 30 + localNameLength + localExtraLength;
+    // B15: validasi batas sebelum subarray (header bisa bohong).
+    if (dataStart + compressedSize > data.length) throw new Error("invalid ZIP entry bounds");
     const compressed = data.subarray(dataStart, dataStart + compressedSize);
     let content: Buffer;
     if (compression === 0) content = Buffer.from(compressed);
-    else if (compression === 8) content = inflateRawSync(compressed);
+    else if (compression === 8) {
+      // B15: batasi output inflate — header uncompressedSize bisa dipalsukan
+      // (ZIP bomb); inflateRawSync melempar bila melebihi batas.
+      try {
+        content = inflateRawSync(compressed, { maxOutputLength: uncompressedSize + 1 });
+      } catch {
+        throw new Error(`ZIP entry too large or corrupt: ${safePath}`);
+      }
+    }
     else throw new Error(`unsupported ZIP compression method: ${compression}`);
     if (content.length !== uncompressedSize) throw new Error(`ZIP entry size mismatch: ${safePath}`);
     entries.push({ path: safePath, data: content });

@@ -635,15 +635,20 @@ function serveWebAsset(ctx: AppContext, res: ServerResponse, pathname: string, a
   }
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolveBody, rejectBody) => {
-    let body = "";
-    req.on("data", (chunk: Buffer) => {
-      body += chunk.toString("utf8");
-    });
-    req.on("end", () => resolveBody(body));
-    req.on("error", rejectBody);
-  });
+const MAX_JSON_BODY_BYTES = 32 * 1024 * 1024;
+
+// B15: kumpulkan sebagai Buffer dulu (dekode per-chunk merusak UTF-8 di batas
+// chunk), dengan batas ukuran agar body raksasa tak menghabiskan memori.
+async function readBody(req: IncomingMessage, maxBytes = MAX_JSON_BODY_BYTES): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.length;
+    if (total > maxBytes) throw new Error(`request body too large (limit ${maxBytes} bytes)`);
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function readJson(req: IncomingMessage): Promise<Record<string, unknown> | undefined> {
@@ -744,6 +749,17 @@ function emitAttachment(ctx: AppContext, attachment: Attachment): void {
   if (!attachment.taskId) return;
   emitEvent({ bus: ctx.bus, store: ctx.store }, attachment.taskId, undefined, "ATTACHMENT_ADDED", { attachment });
   void ctx.bus.drain();
+}
+
+/**
+ * B20: Content-Disposition yang aman untuk nama file non-Latin1.
+ * Header HTTP tak boleh berisi karakter di luar Latin1 — tanpa ini,
+ * "Skripsi — final.pptx" membuat writeHead melempar → 500.
+ */
+function contentDisposition(name: string): string {
+  const ascii = name.replace(/[^\x20-\x7e]/g, "_").replace(/["\\]/g, "_");
+  const star = encodeURIComponent(name).replace(/['()*]/g, (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase());
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${star}`;
 }
 
 function errorStatus(error: unknown): number {
@@ -4474,7 +4490,7 @@ export function createApp(ctx: AppContext) {
         const name = basename(absolute);
         res.writeHead(200, {
           "content-type": guessMimeType(name),
-          "content-disposition": `attachment; filename="${name}"`,
+          "content-disposition": contentDisposition(name),
           "content-length": data.length,
         });
         res.end(data);
@@ -5323,7 +5339,7 @@ export function createApp(ctx: AppContext) {
               ? "application/pdf"
               : "application/vnd.openxmlformats-officedocument.presentationml.presentation",
             "content-length": data.length,
-            "content-disposition": `attachment; filename="${basename(rel)}"`,
+            "content-disposition": contentDisposition(basename(rel)),
             ...CORS_HEADERS,
           });
           res.end(data);
@@ -6662,7 +6678,7 @@ export function createApp(ctx: AppContext) {
           res.writeHead(200, {
             "content-type": isXlsx ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" : "text/csv; charset=utf-8",
             "content-length": data.length,
-            "content-disposition": `attachment; filename="${basename(rel)}"`,
+            "content-disposition": contentDisposition(basename(rel)),
             ...CORS_HEADERS,
           });
           res.end(data);
@@ -7499,7 +7515,7 @@ export function createApp(ctx: AppContext) {
           const name = `laporan-riset-${report.reportId.slice(0, 8)}.docx`;
           res.writeHead(200, {
             "content-type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "content-disposition": `attachment; filename="${name}"`,
+            "content-disposition": contentDisposition(name),
             "content-length": bytes.length,
           });
           res.end(bytes);

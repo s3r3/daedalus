@@ -1,5 +1,5 @@
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /** Directories never worth listing in the workspace explorer. */
 export const IGNORED_DIRECTORIES = new Set([
@@ -60,11 +60,22 @@ export const MAX_RECENT_FILE_ENTRIES = 50;
 export const MAX_FLAT_FILE_ENTRIES = 2000;
 
 /** Reject any path that resolves outside the workspace root. */
+const escapesRoot = (rel: string): boolean => rel === ".." || rel.startsWith(".." + sep) || isAbsolute(rel);
+
 export function resolveInside(root: string, target: string): string {
   const absoluteRoot = resolve(root);
   const absoluteTarget = resolve(absoluteRoot, target);
-  const rel = relative(absoluteRoot, absoluteTarget);
-  if (rel.startsWith("..")) throw new Error("path escapes workspace root");
+  // B21: cek leksikal dulu (juga perbaiki false positive "..data").
+  if (escapesRoot(relative(absoluteRoot, absoluteTarget))) throw new Error("path escapes workspace root");
+  // B21: cek lagi setelah symlink diselesaikan, pada leluhur terdekat yang
+  // sudah ada (target boleh belum ada, mis. file baru).
+  let probe = absoluteTarget;
+  while (!existsSync(probe)) {
+    const parent = dirname(probe);
+    if (parent === probe) break;
+    probe = parent;
+  }
+  if (escapesRoot(relative(realpathSync(absoluteRoot), realpathSync(probe)))) throw new Error("path escapes workspace root");
   return absoluteTarget;
 }
 
