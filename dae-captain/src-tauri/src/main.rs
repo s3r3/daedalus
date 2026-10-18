@@ -419,6 +419,30 @@ fn spawn_server(
     repo_root: String,
     workspace: String,
 ) -> Result<SpawnInfo, String> {
+    // Verifikasi Node.js tersedia sebelum spawn - pesan Bahasa Indonesia yang jelas
+    let node_check = Command::new("node")
+        .arg("--version")
+        .output();
+    match node_check {
+        Ok(out) if out.status.success() => {
+            let ver = String::from_utf8_lossy(&out.stdout);
+            // Butuh Node 22+ untuk --experimental-strip-types
+            let major: u32 = ver.trim_start_matches('v').split('.').next()
+                .and_then(|s| s.parse().ok()).unwrap_or(0);
+            if major < 22 {
+                return Err(format!(
+                    "Node.js versi {} terdeteksi, butuh versi 22 atau lebih baru. Update Node.js dari https://nodejs.org",
+                    ver.trim()
+                ));
+            }
+        }
+        _ => {
+            return Err(
+                "Node.js tidak ditemukan. Install Node.js 22+ dari https://nodejs.org lalu restart Dae Captain.".to_string()
+            );
+        }
+    }
+
     let prefs = get_prefs(app.clone())?;
     let host = if prefs.server_host.is_empty() {
         "127.0.0.1".to_string()

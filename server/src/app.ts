@@ -3458,11 +3458,15 @@ export function createApp(ctx: AppContext) {
     }
 
     if (method === "GET" && url.pathname === "/tasks") {
-      const tasks = allTaskIds(ctx).flatMap((id) => {
-        const lookup = findTask(ctx, id);
-        return lookup ? [summarizeFrom(ctx, lookup, id)] : [];
-      });
-      sendJson(res, 200, { tasks, count: tasks.length });
+      try {
+        const tasks = allTaskIds(ctx).flatMap((id) => {
+          const lookup = findTask(ctx, id);
+          return lookup ? [summarizeFrom(ctx, lookup, id)] : [];
+        });
+        sendJson(res, 200, { tasks, count: tasks.length });
+      } catch (e) {
+        sendJson(res, 500, { error: `Gagal memuat daftar task: ${e instanceof Error ? e.message : String(e)}` });
+      }
       return;
     }
 
