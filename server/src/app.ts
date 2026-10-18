@@ -1703,6 +1703,14 @@ export function reconcileInterruptedTasks(ctx: AppContext): string[] {
         metrics: {},
       };
       store.saveReport(taskId, report);
+      // B5: state juga harus terminal, bukan cuma report — reconcileWorkflowRun
+      // membaca state untuk menentukan status turn.
+      store.saveState(taskId, {
+        ...state,
+        status: "failed",
+        last_error: "server berhenti saat task berjalan (terputus)",
+        updated_at: new Date().toISOString(),
+      });
       emitEvent({ bus: ctx.bus, store }, taskId, undefined, "TASK_COMPLETED", {
         outcome: "interrupted",
         reason: "interrupted",
@@ -1715,6 +1723,53 @@ export function reconcileInterruptedTasks(ctx: AppContext): string[] {
     ctx.log.info("reconciled interrupted tasks at startup", { count: reconciled.length, tasks: reconciled });
   }
   return reconciled;
+}
+
+const ACTIVE_TASK_STATUSES = ["created", "pending", "active", "running"];
+
+/**
+ * Selesaikan task yang MASIH tampak aktif di disk padahal runner-nya sudah
+ * tidak ada. Hanya menyentuh task tanpa report (kalau ada report, task itu
+ * sudah selesai dan reconcileWorkflowRun menurunkannya dari report).
+ * Tidak pernah melempar. Mengembalikan true bila ada yang diubah.
+ */
+function settleTaskIfStillActive(
+  ctx: AppContext,
+  store: TaskStore,
+  taskId: string,
+  input: { status: "failed" | "cancelled"; outcome: "failed" | "interrupted"; message: string },
+): boolean {
+  try {
+    const state = store.loadState<Record<string, unknown>>(taskId);
+    const status = typeof state?.status === "string" ? state.status : undefined;
+    if (!state || !status || !ACTIVE_TASK_STATUSES.includes(status)) return false;
+    if (store.loadReport(taskId)) return false;
+    const report: FinalReport = {
+      task_id: taskId,
+      outcome: input.outcome,
+      diff: "",
+      evidence: [input.message],
+      metrics: {},
+    };
+    store.saveReport(taskId, report);
+    store.saveState(taskId, {
+      ...state,
+      status: input.status,
+      last_error: input.message,
+      updated_at: new Date().toISOString(),
+    });
+    if (input.status === "failed") {
+      emitEvent({ bus: ctx.bus, store }, taskId, undefined, "TASK_COMPLETED", {
+        outcome: input.outcome,
+        reason: "runner_ended_without_result",
+        summary: input.message,
+      });
+    }
+    return true;
+  } catch (error) {
+    ctx.log.warn("settle task failed", { task_id: taskId, error: String(error) });
+    return false;
+  }
 }
 
 /**
@@ -2104,12 +2159,18 @@ async function createTaskCore(
       ...(isolation ? { isolation } : {}),
       created_at: new Date().toISOString(),
     };
-    taskStore.saveState(taskId, {
-      ...task,
-      plan: { id: `${taskId}-plan`, task_id: taskId, steps: [], version: 0, status: "draft" },
-      steps: [],
-      status: "created",
-    });
+    try {
+      taskStore.saveState(taskId, {
+        ...task,
+        plan: { id: `${taskId}-plan`, task_id: taskId, steps: [], version: 0, status: "draft" },
+        steps: [],
+        status: "created",
+      });
+    } catch (error) {
+      // B4: saveState gagal (disk penuh) — jangan tinggalkan runner yatim.
+      ctx.activeRunners.delete(taskId);
+      throw error;
+    }
     ctx.log.info("task created", { task_id: taskId, request_id: requestId, repo_path: repoPath, mode });
 
     const goalText = [goal, ...constraints.map((constraint) => `constraint: ${constraint}`), ...doneCriteria.map((criterion) => `done: ${criterion}`)].join("\n");
@@ -2146,7 +2207,16 @@ async function createTaskCore(
         ctx.log.error("task run error", { task_id: taskId, error: String(error) });
         appendAssistantTurn(taskSummaryText({ outcome: "failed", goal, evidence: [String(error)] }));
       })
-      .finally(() => ctx.activeRunners.delete(taskId));
+      .finally(() => {
+        ctx.activeRunners.delete(taskId);
+        // B4: Runner sudah selesai/crash — bila state masih "aktif" tanpa
+        // report, itu task hantu; tutup jujur sebagai gagal.
+        settleTaskIfStillActive(ctx, taskStore, taskId, {
+          status: "failed",
+          outcome: "failed",
+          message: "runner berhenti tanpa hasil akhir",
+        });
+      });
 
     return { taskId, status: 201, body: task };
   } catch (error) {
@@ -4598,6 +4668,15 @@ export function createApp(ctx: AppContext) {
       const lookup = findTask(ctx, taskId);
       (lookup?.store ?? ctx.store).requestCancel(taskId);
       runner?.cancel(taskId);
+      // B5: tanpa runner (task yatim), tutup state-nya langsung — jangan
+      // biarkan stuck 'running'. Event TASK_CANCELLED sudah dikirim di bawah.
+      if (!runner) {
+        settleTaskIfStillActive(ctx, lookup?.store ?? ctx.store, taskId, {
+          status: "cancelled",
+          outcome: "interrupted",
+          message: "dibatalkan pengguna (tidak ada runner aktif)",
+        });
+      }
       // Emit TASK_CANCELLED immediately so the UI updates instantly —
       // the user sees "Stopping..." without waiting for the loop to unwind.
       try {
