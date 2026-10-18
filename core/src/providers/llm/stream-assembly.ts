@@ -54,8 +54,13 @@ export class StreamMessageAssembler {
     if (typeof loose.index === "number") {
       buffer = this.#byIndex.get(loose.index) ?? { name: "", arguments: "" };
       this.#byIndex.set(loose.index, buffer);
+    } else if (partial.id) {
+      // No index but has id: provider fragments one call across chunks without index.
+      // Cari buffer anonymous yang id-nya sama, jangan bikin baru (cegah phantom tool calls).
+      buffer = this.#anonymous.find(b => b.id === partial.id) ?? { name: "", arguments: "" };
+      if (!this.#anonymous.includes(buffer)) this.#anonymous.push(buffer);
     } else {
-      // No index: the provider sends one whole call per chunk.
+      // No index, no id: the provider sends one whole call per chunk.
       buffer = { name: "", arguments: "" };
       this.#anonymous.push(buffer);
     }

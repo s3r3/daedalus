@@ -20,8 +20,10 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
 
 export function maskApiKey(apiKey: string | undefined): string {
   if (!apiKey) return '';
-  if (apiKey.length <= 8) return '••••';
-  return `${apiKey.slice(0, 4)}…${apiKey.slice(-4)}`;
+  // Hanya tampilkan 4 karakter terakhir untuk identifikasi, sembunyikan sisanya.
+  // Jangan tampilkan karakter awal (BUG-10: ekspos 8 karakter tidak perlu).
+  if (apiKey.length <= 4) return '••••';
+  return `••••${apiKey.slice(-4)}`;
 }
 
 export function toPublicProvider(provider: ProviderConfig): ProviderConfigPublic {
@@ -145,7 +147,8 @@ export class ProviderRegistry {
     if (!provider.baseUrl) return { ok: false, providerId: id, models: [], message: 'provider baseUrl is empty' };
     try {
       const models = await this.#discoverModels(provider);
-      if (models.length > 0) provider.models = [...new Set([...provider.models, ...models])];
+      // Jangan mutasi provider.models di sini (BUG-11): testConnection harus read-only.
+      // Caller yang memutuskan apakah akan menyimpan models yang ditemukan.
       return { ok: true, providerId: id, models, message: `Connection OK (${models.length} models)` };
     } catch (error) {
       return { ok: false, providerId: id, models: [], message: error instanceof Error ? error.message : String(error) };

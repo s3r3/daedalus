@@ -189,7 +189,14 @@ export class OpenAICompatProvider implements LLMProvider {
         signal,
       });
     } catch (error) {
-      if (signal.aborted) throw new LLMTimeoutError(`LLM request timed out after ${timeoutMs}ms`, { cause: error });
+      // Bedakan timeout vs user-cancel: jika parent signal aborted, itu user yang cancel,
+      // bukan timeout. Cek parent dulu sebelum lempar LLMTimeoutError.
+      if (signal.aborted) {
+        if (options.signal?.aborted) {
+          throw new LLMError("Permintaan dibatalkan pengguna", { cause: error, code: "cancelled" });
+        }
+        throw new LLMTimeoutError(`LLM request timed out after ${timeoutMs}ms`, { cause: error });
+      }
       throw new LLMError("LLM request failed", { cause: error, code: "network" });
     }
   }
@@ -222,7 +229,18 @@ export class OpenAICompatProvider implements LLMProvider {
 /** True when an error body blames the reasoning_effort parameter. */
 function reasoningEffortRejected(body: OpenAIResponse): boolean {
   const marker = `${body.error?.code ?? ""} ${body.error?.type ?? ""} ${body.error?.message ?? ""}`.toLowerCase();
-  return marker.includes("reasoning_effort") || marker.includes("unknown parameter") || marker.includes("unrecognized");
+  // Harus sebut reasoning_effort secara spesifik. Jangan retry untuk "unknown parameter"
+  // yang menyebut parameter lain (mis. "unknown parameter: foo" bukan reasoning_effort).
+  if (marker.includes("reasoning_effort")) return true;
+  // Generic "unknown/unrecognized parameter" tanpa nama parameter spesifik:
+  // asumsikan reasoning_effort (konteks pemanggil selalu set reasoningEffort).
+  // Tapi jika menyebut parameter lain secara eksplisit, jangan retry.
+  const generic = marker.includes("unknown parameter") || marker.includes("unrecognized");
+  if (!generic) return false;
+  // Ekstrak nama parameter dari pesan, mis. "unknown parameter: 'foo'"
+  const paramMatch = marker.match(/(?:unknown parameter|unrecognized)[\s:]+['"]?([a-z_]+)['"]?/);
+  if (paramMatch && paramMatch[1] !== "reasoning_effort") return false;
+  return true;
 }
 
 /**
