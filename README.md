@@ -179,7 +179,7 @@ npm run build
 npm publish --access public
 ```
 
-User install via: `npm install -g daedalus`
+User install via: `npm install -g @s3r3/daedalus`
 
 ### Dae Captain → AppImage (Linux)
 
