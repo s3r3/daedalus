@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { hostAllowed, isLoopbackBind, originAllowed } from "./security.ts";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { createHash, randomBytes } from "node:crypto";
@@ -3253,6 +3254,17 @@ export function createApp(ctx: AppContext) {
     const requestId = crypto.randomUUID();
     const url = new URL(req.url ?? "/", "http://localhost");
     const method = req.method ?? "GET";
+
+    // B1: tolak Origin/Host asing sebelum handler apa pun berjalan.
+    // Browser selalu mengirim Origin pada request lintas-origin; tanpa
+    // header ini browser tidak bisa membaca balasan 403 ini.
+    const origin = typeof req.headers.origin === "string" ? req.headers.origin : undefined;
+    const loopback = isLoopbackBind(ctx.settings.server.host);
+    if (!originAllowed(origin) || (loopback && !hostAllowed(req.headers.host))) {
+      res.writeHead(403, { "content-type": "application/json; charset=utf-8" });
+      res.end(JSON.stringify({ error: "forbidden_origin", request_id: requestId }));
+      return;
+    }
 
     if (method === "OPTIONS") {
       res.writeHead(204, CORS_HEADERS);

@@ -2,6 +2,7 @@ import type { Server } from "node:http";
 import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
 import type { AppContext } from "./app.ts";
+import { hostAllowed, isLoopbackBind, originAllowed } from "./security.ts";
 import type { Event } from "@s3r3/core";
 
 /**
@@ -34,7 +35,16 @@ export type EventChannel = {
 
 export function attachWebSocket(ctx: AppContext, server: Server): EventChannel {
   const sockets = new Set<WebSocket>();
-  const wss = new WebSocketServer({ server, path: "/tasks/events" });
+  const wss = new WebSocketServer({
+    server,
+    path: "/tasks/events",
+    // B1: CORS tidak berlaku untuk WebSocket — verifikasi manual.
+    verifyClient: ({ origin, req }: { origin: string; req: { headers: Record<string, string | string[] | undefined> } }) => {
+      const host = typeof req.headers.host === "string" ? req.headers.host : undefined;
+      const loopback = isLoopbackBind(ctx.settings.server.host);
+      return originAllowed(origin || undefined) && (!loopback || hostAllowed(host));
+    },
+  });
 
   wss.on("connection", (socket: WebSocket) => {
     sockets.add(socket);
