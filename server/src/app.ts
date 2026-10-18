@@ -750,6 +750,19 @@ function errorStatus(error: unknown): number {
   return 400;
 }
 
+/** Jalankan handler async; error apa pun jadi respons HTTP, bukan unhandledRejection. */
+function runRoute(ctx: AppContext, res: ServerResponse, requestId: string, fn: () => Promise<void>): void {
+  void fn().catch((error: unknown) => {
+    ctx.log.error("route failed", { request_id: requestId, error: String(error) });
+    try {
+      if (!res.headersSent) sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      else res.end();
+    } catch {
+      /* socket sudah putus */
+    }
+  });
+}
+
 function nextMode(current: AgentMode): AgentMode {
   const index = AGENT_MODES.indexOf(current);
   return AGENT_MODES[(index + 1 + AGENT_MODES.length) % AGENT_MODES.length] as AgentMode;
@@ -3236,7 +3249,7 @@ export function createApp(ctx: AppContext) {
     const repoPath = typeof state.repo_path === "string" ? state.repo_path : typeof state.spec?.repo_path === "string" ? state.spec.repo_path : undefined;
     return repoPath ? resolve(repoPath) : undefined;
   });
-  return createServer((req, res) => {
+  const handleRequest = (req: IncomingMessage, res: ServerResponse): void => {
     const requestId = crypto.randomUUID();
     const url = new URL(req.url ?? "/", "http://localhost");
     const method = req.method ?? "GET";
@@ -3327,7 +3340,7 @@ export function createApp(ctx: AppContext) {
     }
 
     if (method === "POST" && url.pathname === "/session/mode") {
-      void (async () => {
+      runRoute(ctx, res, requestId, async () => {
         const parsed = await readJson(req);
         if (!parsed) {
           sendJson(res, 400, { error: "invalid_json", request_id: requestId });
@@ -3340,12 +3353,12 @@ export function createApp(ctx: AppContext) {
         }
         ctx.session.mode = mode;
         sendJson(res, 200, { session: publicSession(ctx) });
-      })();
+      });
       return;
     }
 
     if (method === "POST" && url.pathname === "/session/auto-approve") {
-      void (async () => {
+      runRoute(ctx, res, requestId, async () => {
         const parsed = await readJson(req);
         if (!parsed || typeof parsed.enabled !== "boolean") {
           sendJson(res, 400, { error: "enabled_boolean_required", request_id: requestId });
@@ -3353,7 +3366,7 @@ export function createApp(ctx: AppContext) {
         }
         ctx.session.autoApprove = parsed.enabled;
         sendJson(res, 200, { session: publicSession(ctx) });
-      })();
+      });
       return;
     }
 
@@ -3485,7 +3498,7 @@ export function createApp(ctx: AppContext) {
     }
 
     if (method === "POST" && url.pathname === "/tasks") {
-      void (async () => {
+      runRoute(ctx, res, requestId, async () => {
         const parsed = await readJson(req);
         if (!parsed) {
           sendJson(res, 400, { error: "invalid_json", request_id: requestId });
@@ -3495,7 +3508,7 @@ export function createApp(ctx: AppContext) {
 
         const created = await createTaskCore(ctx, parsed, requestId);
         sendJson(res, created.status, created.body);
-      })();
+      });
       return;
     }
 
@@ -4146,27 +4159,31 @@ export function createApp(ctx: AppContext) {
     // Approval UndoStore: list snapshots for a run (the [📋 Versi] card and
     // the [↩️ Undo] button read this). Query: ?run_id=&workspace_root=.
     if (method === "GET" && url.pathname === "/captain/undo") {
-      const runId = url.searchParams.get("run_id") ?? "";
-      const root = resolveAllowedRoot(
-        ctx,
-        url.searchParams.get("workspace_root") ?? url.searchParams.get("root") ?? ctx.session.workspaceRoot,
-      );
-      const home = resolveDaedalusHome(ctx.settings.daedalusHome, root);
-      const entries = undoStoreFor(home)
-        .list()
-        .filter((e) => !runId || e.runId === runId)
-        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-        .map((e) => ({
-          undo_id: e.undoId,
-          run_id: e.runId,
-          engine: e.engine,
-          action_type: e.actionType,
-          summary: e.summary,
-          target: e.snapshot.target,
-          bytes: e.snapshot.bytes,
-          created_at: e.createdAt,
-        }));
-      sendJson(res, 200, { entries, request_id: requestId });
+      try {
+        const runId = url.searchParams.get("run_id") ?? "";
+        const root = resolveAllowedRoot(
+          ctx,
+          url.searchParams.get("workspace_root") ?? url.searchParams.get("root") ?? ctx.session.workspaceRoot,
+        );
+        const home = resolveDaedalusHome(ctx.settings.daedalusHome, root);
+        const entries = undoStoreFor(home)
+          .list()
+          .filter((e) => !runId || e.runId === runId)
+          .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+          .map((e) => ({
+            undo_id: e.undoId,
+            run_id: e.runId,
+            engine: e.engine,
+            action_type: e.actionType,
+            summary: e.summary,
+            target: e.snapshot.target,
+            bytes: e.snapshot.bytes,
+            created_at: e.createdAt,
+          }));
+        sendJson(res, 200, { entries, request_id: requestId });
+      } catch (error) {
+        sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
+      }
       return;
     }
 
@@ -4389,7 +4406,7 @@ export function createApp(ctx: AppContext) {
 
     const approveMatch = /^\/tasks\/([^/]+)\/approve$/.exec(url.pathname);
     if (method === "POST" && approveMatch?.[1] !== undefined) {
-      void (async () => {
+      runRoute(ctx, res, requestId, async () => {
         // Sensitive: require the local daemon token.
         if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
           sendJson(res, 401, { error: "unauthorized" });
@@ -4421,7 +4438,7 @@ export function createApp(ctx: AppContext) {
         }
         const success = runner.approvals.decide(pending.key, decision, remember);
         sendJson(res, 200, { success, decision, remember, key: pending.key });
-      })();
+      });
       return;
     }
 
@@ -4430,7 +4447,7 @@ export function createApp(ctx: AppContext) {
     // user's redirect text and, for commands, edited arguments.
     const decideMatch = /^\/tasks\/([^/]+)\/approvals\/([^/]+)$/.exec(url.pathname);
     if (method === "POST" && decideMatch?.[1] !== undefined && decideMatch[2] !== undefined) {
-      void (async () => {
+      runRoute(ctx, res, requestId, async () => {
         const taskId = decideMatch[1] as string;
         const approvalId = decideMatch[2] as string;
         const parsed = await readJson(req);
@@ -4457,7 +4474,7 @@ export function createApp(ctx: AppContext) {
           }
         }
         sendJson(res, success ? 200 : 404, { success, decision, approval_id: approvalId, ...(success ? {} : { error: "approval_not_pending" }) });
-      })();
+      });
       return;
     }
 
@@ -4466,7 +4483,7 @@ export function createApp(ctx: AppContext) {
     // own free text. Unknown question ids 404, like approvals.
     const questionMatch = /^\/tasks\/([^/]+)\/questions\/([^/]+)$/.exec(url.pathname);
     if (method === "POST" && questionMatch?.[1] !== undefined && questionMatch[2] !== undefined) {
-      void (async () => {
+      runRoute(ctx, res, requestId, async () => {
         const taskId = questionMatch[1] as string;
         const questionId = questionMatch[2] as string;
         const parsed = await readJson(req);
@@ -4513,7 +4530,7 @@ export function createApp(ctx: AppContext) {
           return;
         }
         sendJson(res, 404, { success: false, question_id: questionId, error: "question_not_pending" });
-      })();
+      });
       return;
     }
 
@@ -7050,7 +7067,7 @@ export function createApp(ctx: AppContext) {
     // riset" calls POST /research/run. Staged plans expire after 30
     // minutes (swept every 5).
     if (method === "POST" && url.pathname === "/research/plan") {
-      void (async () => {
+      runRoute(ctx, res, requestId, async () => {
         const parsed = await readJson(req);
         if (!parsed) {
           sendJson(res, 400, { error: "invalid_json", request_id: requestId });
@@ -7068,7 +7085,7 @@ export function createApp(ctx: AppContext) {
           requestId,
         );
         sendJson(res, staged.status, staged.body);
-      })();
+      });
       return;
     }
 
@@ -7536,6 +7553,19 @@ export function createApp(ctx: AppContext) {
     }
 
     sendJson(res, 404, { error: "not_found", request_id: requestId });
+  };
+  return createServer((req, res) => {
+    try {
+      handleRequest(req, res);
+    } catch (error) {
+      ctx.log.error("unhandled route error", { url: req.url, error: String(error) });
+      try {
+        if (!res.headersSent) sendJson(res, errorStatus(error), { error: errorMessage(error) });
+        else res.end();
+      } catch {
+        /* socket sudah putus */
+      }
+    }
   });
 }
 
