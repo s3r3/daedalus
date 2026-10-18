@@ -377,6 +377,8 @@ h3 { color: var(--dim); }
   background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, var(--accent) 6%), var(--panel) 42%);
   animation: dae-wd-in var(--t-slow) var(--ease) both;
 }
+/* Fix: hidden attribute harus menang atas display:flex agar panel benar-benar hilang dan tidak block klik */
+.wd[hidden] { display: none !important; }
 .wd.wd-out { animation: dae-wd-out var(--t-mid) ease both; }
 @keyframes dae-wd-in { from { opacity: 0; transform: translateY(12px) scale(.985); } to { opacity: 1; transform: none; } }
 @keyframes dae-wd-out { to { opacity: 0; transform: translateY(8px) scale(.99); } }
