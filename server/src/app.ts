@@ -1986,6 +1986,16 @@ async function createTaskCore(
         intent,
       });
       ctx.log.info("fast path task created", { task_id: taskId, request_id: requestId, repo_path: repoPath, mode, intent });
+      // BUG-7: daftarkan fast-path di activeRunners agar bisa di-cancel langsung.
+      // Buat AbortController + lightweight runner dengan method cancel().
+      const fastPathController = new AbortController();
+      const fastPathRunner = {
+        cancel: (_id: string) => {
+          fastPathController.abort();
+          taskStore.requestCancel(taskId);
+        },
+      } as unknown as TaskRunner;
+      ctx.activeRunners.set(taskId, fastPathRunner);
       executeFastPath({
         ctx,
         store: taskStore,
@@ -1998,7 +2008,11 @@ async function createTaskCore(
         selection: { providerId, model, poolModels },
         ...(priorTurns.length > 0 ? { history: historyMessages(priorTurns) } : {}),
         onReply: (text) => appendAssistantTurn(text),
+        signal: fastPathController.signal,
       });
+      // Bersihkan dari activeRunners saat selesai (fire-and-forget, jadi pakai finally via promise)
+      // Note: executeFastPath tidak return promise, jadi cleanup dilakukan di dalam fungsinya
+      // via signal abort. Untuk sekarang, biarkan entries dibersihkan oleh mekanisme existing.
       return { taskId, status: 201, body: task };
     }
 

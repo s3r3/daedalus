@@ -385,6 +385,8 @@ export class AgentLoop {
    */
   readonly #taskAbort = new Map<string, AbortController>();
   readonly #invalidActions = new Map<string, number>();
+  /** BUG-12: counter monotonik untuk synthetic tool call IDs (cegah collision dalam 1ms yang sama). */
+  #syntheticCallCounter = 0;
 
   constructor(options: AgentLoopOptions) {
     this.#provider = options.provider;
@@ -458,6 +460,10 @@ export class AgentLoop {
       this.#questionGates.delete(spec.id);
       this.#questionRoundsDone.delete(spec.id);
       this.#validationStalls.delete(spec.id);
+      // BUG-10: pastikan #invalidActions dan #pendingQuestions dibersihkan
+      // meskipun task keluar via exception path
+      this.#invalidActions.delete(spec.id);
+      this.#pendingQuestions.delete(spec.id);
       this.#planRepairs.delete(spec.id);
       this.#commandsSucceeded.delete(spec.id);
       this.#lastCommandFailure.delete(spec.id);
@@ -1121,7 +1127,7 @@ export class AgentLoop {
         const args = JSON.parse(rawCall.function.arguments || '{}') as unknown;
         parsedCalls.push({
           call: {
-            id: rawCall.id || `call-${Date.now()}`,
+            id: rawCall.id || this.#syntheticCallId(),
             task_id: state.id,
             turn_id: turnId,
             tool: rawCall.function.name,
@@ -1132,7 +1138,7 @@ export class AgentLoop {
       } catch {
         parsedCalls.push({
           parseError: {
-            call_id: rawCall.id || `call-${Date.now()}`,
+            call_id: rawCall.id || this.#syntheticCallId(),
             status: 'error' as const,
             output: `invalid JSON arguments for tool ${rawCall.function.name}`,
             truncated: false,
@@ -1346,6 +1352,11 @@ export class AgentLoop {
       store.set(taskId, counts);
     }
     return counts;
+  }
+
+  /** BUG-12: generate unique synthetic call ID dengan counter monotonik. */
+  #syntheticCallId(): string {
+    return `call-${Date.now()}-${this.#syntheticCallCounter++}`;
   }
 
   /** The declared input schema for a tool, when the loop knows it. */
@@ -2618,6 +2629,9 @@ function toSpec(state: TaskState): TaskSpec {
   };
 }
 
+/** BUG-12: module-level counter untuk parseAction (standalone function). */
+let syntheticCallCounter = 0;
+
 export function parseAction(state: TaskState, message: Message): Action {
   const calls = message.tool_calls ?? [];
   if (calls.length > 0) {
@@ -2625,7 +2639,7 @@ export function parseAction(state: TaskState, message: Message): Action {
     if (!first) return { kind: 'stop', reason: 'invalid_action' };
     let args: unknown = {};
     try { args = JSON.parse(first.function.arguments || '{}'); } catch { return { kind: 'stop', reason: 'invalid_action' }; }
-    return { kind: 'tool', call: { id: first.id || `call-${Date.now()}`, task_id: state.id, turn_id: '', tool: first.function.name, args, started_at: new Date().toISOString() } };
+    return { kind: 'tool', call: { id: first.id || `call-${Date.now()}-${syntheticCallCounter++}`, task_id: state.id, turn_id: '', tool: first.function.name, args, started_at: new Date().toISOString() } };
   }
   const text = typeof message.content === 'string' ? message.content : '';
   if (/^\s*done\b/i.test(text)) return { kind: 'complete', summary: text };

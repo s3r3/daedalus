@@ -401,6 +401,8 @@ export class ExecutionHarness {
   setApprovalCallback(callback: ApprovalCallback): void { this.#approval = callback; }
   getResourceUsage(): ResourceUsage { return { ...this.#usage }; }
   getAuditTrail(taskId: string): HarnessEvent[] { return [...(this.#audit.get(taskId) ?? [])]; }
+  /** BUG-9: hapus audit trail saat task selesai agar tidak leak. */
+  clearAuditTrail(taskId: string): void { this.#audit.delete(taskId); }
   cancelTask(taskId: string): void {
     this.#cancelled.add(taskId);
     // BUG-4 fix: abort ALL controllers for this task (parallel subagents
@@ -446,7 +448,15 @@ export class ExecutionHarness {
       return final;
     } catch (error) {
       const timedOut = controller.signal.aborted;
-      const result: ToolResult = { call_id: call.id, status: timedOut ? 'timeout' : 'error', output: timedOut ? 'execution cancelled or timed out' : String(error), truncated: false, meta: {} };
+      // BUG-11: jangan mask error asli. Sertakan pesan error asli agar debugging lebih mudah.
+      const originalError = error instanceof Error ? error.message : String(error);
+      const result: ToolResult = {
+        call_id: call.id,
+        status: timedOut ? 'timeout' : 'error',
+        output: timedOut ? `execution cancelled or timed out (${originalError})` : originalError,
+        truncated: false,
+        meta: {}
+      };
       if (timedOut) this.#record('timeout_enforced', context.taskId, tool.name, key.path);
       this.#record('tool_dispatch_completed', context.taskId, tool.name, key.path, { status: result.status });
       return result;
@@ -521,7 +531,11 @@ export class ExecutionHarness {
 
   #record(type: HarnessEventType, taskId: string, tool?: string, path?: string, details?: Record<string, unknown>): void {
     const event: HarnessEvent = { type, taskId, tool, path, details, timestamp: new Date().toISOString() };
-    const events = this.#audit.get(taskId) ?? []; events.push(event); this.#audit.set(taskId, events);
+    const events = this.#audit.get(taskId) ?? [];
+    events.push(event);
+    // BUG-9: batasi ukuran agar tidak tumbuh tanpa batas (safety net jika clearAuditTrail tidak dipanggil)
+    if (events.length > 1000) events.splice(0, events.length - 1000);
+    this.#audit.set(taskId, events);
   }
 
   /** Emit a typed Event on the bus (and append to the store log when both are wired). */

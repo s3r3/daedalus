@@ -1265,6 +1265,7 @@ export class TaskRunner {
       this.#activeLoops.delete(spec.id);
       this.#scaffoldChains.delete(spec.id);
       this.#toolRulesByTask.delete(spec.id);
+      this.#taskParents.delete(spec.id); // BUG-8: hapus agar tidak leak
       // A question still pending at task end (natural finish, error,
       // provider failure, harness throw — or an asker whose wait was
       // abandoned) settles as cancelled, so it can never outlive the

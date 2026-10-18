@@ -103,6 +103,8 @@ export type FastPathRun = {
   history?: import("@daedalus/core").Message[];
   /** Records the reply as the conversation's assistant turn. */
   onReply?: (text: string) => void;
+  /** AbortSignal untuk cancel langsung (BUG-7: fast-path harus bisa di-cancel via activeRunners). */
+  signal?: AbortSignal;
 };
 
 /**
@@ -114,9 +116,15 @@ export type FastPathRun = {
  * never spins forever.
  */
 export function executeFastPath(run: FastPathRun): void {
-  const { ctx, store, taskId, goal, intent, repoPath } = run;
+  const { ctx, store, taskId, goal, intent, repoPath, signal } = run;
   const target = { bus: ctx.bus, store };
   void (async () => {
+    // Cek cancel sebelum mulai (BUG-7)
+    if (signal?.aborted || store.isCancelRequested(taskId)) {
+      persistTerminal(run, "failed", "aborted");
+      emitEvent(target, taskId, undefined, "TASK_COMPLETED", { outcome: "failed", reason: "aborted", intent });
+      return;
+    }
     const provider = resolveFastPathProvider(ctx, run.selection);
     emitEvent(target, taskId, undefined, "MODEL_REQUEST_STARTED", {
       provider: provider?.name ?? "none",
@@ -148,7 +156,7 @@ export function executeFastPath(run: FastPathRun): void {
           : "Maaf, pertanyaan itu belum bisa saya jawab — koneksi ke model barusan gagal. Coba lagi sebentar.";
       ctx.log.error("fast path provider error", { task_id: taskId, intent, error: String(error) });
     }
-    if (store.isCancelRequested(taskId)) {
+    if (signal?.aborted || store.isCancelRequested(taskId)) {
       persistTerminal(run, "failed", "aborted");
       emitEvent(target, taskId, undefined, "TASK_COMPLETED", { outcome: "failed", reason: "aborted", intent });
       return;
@@ -169,6 +177,9 @@ export function executeFastPath(run: FastPathRun): void {
     } catch {
       /* the log line above is the record of last resort */
     }
+  }).finally(() => {
+    // BUG-7: bersihkan dari activeRunners saat selesai
+    ctx.activeRunners.delete(taskId);
   });
 }
 

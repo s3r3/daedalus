@@ -300,8 +300,15 @@ function timeoutSignal(parent: AbortSignal | undefined, timeoutMs: number): Abor
   // The abort deadline must not by itself keep a short-lived CLI process
   // alive after the provider has already answered.
   timer.unref?.();
-  parent?.addEventListener("abort", () => controller.abort(), { once: true });
-  controller.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+  // BUG-9: simpan referensi listener agar bisa dihapus saat settle.
+  // Tanpa ini, parent signal yang long-lived menumpuk listener per request.
+  const onParentAbort = () => controller.abort();
+  parent?.addEventListener("abort", onParentAbort, { once: true });
+  controller.signal.addEventListener("abort", () => {
+    clearTimeout(timer);
+    // Hapus listener dari parent agar tidak leak
+    parent?.removeEventListener("abort", onParentAbort);
+  }, { once: true });
   return controller.signal;
 }
 
