@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
   "exports": {
     ".": "./src/index.ts",
     "./palette": "./src/palette.ts",
@@ -52,7 +52,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.build.json",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -70,5 +70,9 @@
     "mammoth": "^1.13.0",
     "pdfjs-dist": "^4.10.38",
     "pptxgenjs": "^4.0.1"
-  }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/"
+  ]
 }
