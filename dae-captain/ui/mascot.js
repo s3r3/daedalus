@@ -6,6 +6,9 @@
  *   done, error) + thinking + sleep, + 5 engine (coding, slide, dokumen, spreadsheet, research).
  * - 12 dekor: default (kapten), spring, summer, autumn, winter, halloween, christmas,
  *   newyear, valentine, ramadan, eid, independence — otomatis menurut tanggal.
+ * - 10 kostum baju tradisional dunia (batik, kimono, hanbok, changshan, kurta, thobe,
+ *   jas, beret, sombrero, aloha) — hanya lewat pilihan manual (Panel Ganti Baju).
+ * - Animasi klik per dekor/kostum: triggerMascotAction() (visual saja, 1–2 detik).
  * - Mata mengikuti kursor, reaksi hover, tidur saat idle lama, animasi berhenti saat
  *   tab/jendela tersembunyi, DND, dan prefers-reduced-motion.
  *
@@ -51,26 +54,19 @@ export const DECOR_LABELS = {
 };
 export const DECOR_KEYS = Object.keys(DECOR_LABELS);
 
-/** Baju tradisional dunia — kostum manual, tidak terikat musim/tanggal. */
+/** Kostum baju tradisional (tidak terikat musim, hanya manual). */
 export const COSTUME_LABELS = {
-  batik: "Batik · Indonesia",
-  kimono: "Kimono · Jepang",
-  hanbok: "Hanbok · Korea",
-  changshan: "Changshan · Tiongkok",
-  kurta: "Kurta · India",
-  thobe: "Thobe · Arab",
-  jas: "Jas Bowler · Inggris",
-  beret: "Beret · Prancis",
-  sombrero: "Sombrero · Meksiko",
+  batik: "Batik · Indonesia", kimono: "Kimono · Jepang", hanbok: "Hanbok · Korea",
+  changshan: "Changshan · Tiongkok", kurta: "Kurta · India", thobe: "Thobe · Arab",
+  jas: "Setelan Jas · Inggris", beret: "Beret · Prancis", sombrero: "Sombrero · Meksiko",
   aloha: "Aloha · Hawaii",
 };
 export const COSTUME_KEYS = Object.keys(COSTUME_LABELS);
-
-/** Semua label dekorasi + kostum (untuk Panel Ganti Baju). */
 export const ALL_LABELS = { ...DECOR_LABELS, ...COSTUME_LABELS };
+export const ALL_KEYS = Object.keys(ALL_LABELS);
 
-/** Opsi untuk Settings: "auto" | "events" | "default" | salah satu DECOR_KEYS/COSTUME_KEYS. */
-export const DECOR_PREFS = ["auto", "events", ...DECOR_KEYS, ...COSTUME_KEYS];
+/** Opsi tersimpan: "auto" | "events" | dekor | kostum. */
+export const DECOR_PREFS = ["auto", "events", ...ALL_KEYS];
 
 /* ------------------------------------------------------------------ */
 /* Dekor otomatis menurut tanggal                                      */
@@ -114,17 +110,22 @@ export function seasonDecor(date = new Date()) {
   return "winter";
 }
 
+let memPref = null; // cadangan bila localStorage tak tersedia
+
 export function getDecorPref() {
   try {
     const v = localStorage.getItem(PREF_KEY);
     if (v && DECOR_PREFS.includes(v)) return v;
-  } catch { /* storage tak tersedia */ }
-  return "auto";
+    if (v === null && memPref) return memPref;
+  } catch {
+    if (memPref) return memPref;
+  }
+  return memPref ?? "auto";
 }
 
 /** Dekor yang berlaku sekarang. mode: "auto" (acara→musim), "events" (acara→kapten), atau kunci tetap. */
 export function currentDecor(date = new Date(), mode = getDecorPref()) {
-  if (DECOR_KEYS.includes(mode) || COSTUME_KEYS.includes(mode)) return mode;
+  if (ALL_KEYS.includes(mode)) return mode;
   const ev = eventDecor(date);
   if (ev) return ev;
   return mode === "events" ? "default" : seasonDecor(date);
@@ -196,6 +197,9 @@ function defsMarkup() {
 <linearGradient id="dm-eye" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9af0ff"/><stop offset="1" stop-color="#3fa2ff"/></linearGradient>
 <linearGradient id="dm-paw" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#a4b0ff"/><stop offset="1" stop-color="#6a5cff"/></linearGradient>
 <linearGradient id="dm-shd" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9a8bff"/><stop offset="1" stop-color="#5a46d8"/></linearGradient>
+<pattern id="dm-batik" width="14" height="14" patternUnits="userSpaceOnUse"><rect width="14" height="14" fill="#7a4a2e"/><circle cx="7" cy="7" r="3.4" fill="none" stroke="#e8b563" stroke-width="1.3"/><circle cx="0" cy="0" r="1.8" fill="#e8b563"/><circle cx="14" cy="0" r="1.8" fill="#e8b563"/><circle cx="0" cy="14" r="1.8" fill="#e8b563"/><circle cx="14" cy="14" r="1.8" fill="#e8b563"/></pattern>
+<pattern id="dm-kef" width="10" height="10" patternUnits="userSpaceOnUse"><rect width="10" height="10" fill="#f2f4ff"/><rect width="5" height="5" fill="#d9283c" opacity=".78"/><rect x="5" y="5" width="5" height="5" fill="#d9283c" opacity=".78"/></pattern>
+<pattern id="dm-aloha" width="24" height="24" patternUnits="userSpaceOnUse"><rect width="24" height="24" fill="#2bb3c0"/><circle cx="7" cy="7" r="4.2" fill="#ff7aa8"/><circle cx="7" cy="7" r="1.6" fill="#ffe27a"/><path d="M17 15q4-5 6 0q-3 4-6 0Z" fill="#1f8f6a"/><circle cx="19" cy="4" r="2" fill="#ffe27a"/></pattern>
 <radialGradient id="dm-sh"><stop offset="0" stop-color="#3a3fe0" stop-opacity=".42"/><stop offset="1" stop-color="#3a3fe0" stop-opacity="0"/></radialGradient>
 </defs>`;
 }
@@ -250,6 +254,9 @@ const FACE = {
   research: () => `${brows("M-44-22q14-10 28-3")}${brows("M14-30q16-10 30 0")}<g class="dm-bl"><g class="dm-look">${eyeC(-28, 2, 10)}${eyeC(32, 0, 15)}${hl(-31, -2, 3)}${hl(27, -5, 5)}</g></g><ellipse cx="0" cy="25" rx="5" ry="6" fill="none" stroke="#a5b4ff" stroke-width="2.5"/>`,
   spreadsheet: () => `${brows("M14-28q16-9 30 0")}<g class="dm-bl">${eyesPair(2, 29)}</g>${mouth("M-9 21q9 7 18 0")}`,
 };
+FACE.surprised = () => `${brows("M-46-26q14-10 28 0M18-26q14-10 28 0")}${eyeC(-28, 2, 16)}${eyeC(28, 2, 16)}${circ(-28, 2, 5, "#0a0a28")}${circ(28, 2, 5, "#0a0a28")}${hl(-32, -3, 4)}${hl(24, -3, 4)}<ellipse cx="0" cy="28" rx="7" ry="9" fill="#0a0a28" stroke="#a5b4ff" stroke-width="2.5"/>`;
+FACE.kiss = () => `${blush("#ff8fb8", 0.55)}${arcs(true)}<ellipse cx="0" cy="24" rx="4.5" ry="3.8" fill="#ff5c8a"/>`;
+FACE.wink = () => `${blush("#ff8fb8")}${eyeC(-30, 2)}${hl(-33, -2)}<path d="M18 4q12-12 24 0" stroke="#c7d2ff" stroke-width="4.5" fill="none" stroke-linecap="round"/>${mouth("M-12 19q12 14 24 0Z", "#7c5cff")}`;
 FACE.slide = FACE.sparkle;
 FACE.captain = FACE.ready;
 
@@ -258,8 +265,8 @@ const MOOD = {
   default: "ready", spring: "dreamy", summer: "grin", autumn: "cozy", halloween: "devious",
   winter: "shiver", christmas: "dreamy", newyear: "sparkle", valentine: "love",
   ramadan: "cozy", eid: "dreamy", independence: "ready",
-  batik: "ready", kimono: "cozy", hanbok: "dreamy", changshan: "ready", kurta: "cozy",
-  thobe: "ready", jas: "ready", beret: "dreamy", sombrero: "grin", aloha: "grin",
+  batik: "cozy", kimono: "cozy", hanbok: "dreamy", changshan: "ready", kurta: "dreamy",
+  thobe: "cozy", jas: "ready", beret: "dreamy", sombrero: "sparkle", aloha: "dreamy",
 };
 export function faceKeyFor(pose, decor) {
   if (pose === "idle") return MOOD[decor] ?? "idle";
@@ -374,51 +381,205 @@ const DECOR = {
     head: `<path d="M-84-28Q-50-62 0-62" stroke="#e8283c" stroke-width="12" fill="none"/><path d="M0-62Q50-62 84-28" stroke="#f4f4ff" stroke-width="12" fill="none"/>`,
     amb: `<rect x="100" y="-112" width="4" height="92" rx="2" fill="#cdd1ff"/>` + g("translate(104 -110)", `<g class="dm-wave"><rect width="44" height="14" fill="#e8283c"/><rect y="14" width="44" height="14" fill="#f4f4ff"/></g>`),
   },
-  /* ---------- kostum tradisional dunia (manual saja) ---------- */
+};
+
+
+/* ---------- kostum baju tradisional (hanya manual) ---------- */
+const robe = (fill, extra = "") => `<path d="M-62 44Q0 68 62 44L66 84Q0 100-66 84Z" fill="${fill}"${extra}/>`;
+const lantern = (x, y, c) => g(`translate(${x} ${y})`, `<g class="dm-sk"><path d="M0-22V-8" stroke="#b7bfff" stroke-width="2"/><path d="M-9-8h18l-3 22h-12Z" fill="${c}" stroke="#ffd66b" stroke-width="2"/><rect x="-6" y="14" width="12" height="4" fill="#ffd66b"/></g>`);
+const note = (x, y, ch, delay) => `<text class="dm-rise" x="${x}" y="${y}" font-size="22" font-weight="700" fill="#ffd66b" style="animation-delay:${delay}s">${ch}</text>`;
+
+const COSTUME = {
   batik: {
-    head: `<path d="M-60-50Q0-80 60-50L56-34Q0-60-56-34Z" fill="#6b4226"/><path d="M-56-52Q0-76 56-52" stroke="#e8b563" stroke-width="3" fill="none" stroke-dasharray="6 4"/><path d="M-52-44Q0-66 52-44" stroke="#e8b563" stroke-width="2" fill="none" stroke-dasharray="4 4"/>`,
-    amb: leaf(-100, -60, "#a8743a") + leaf(104, -70, "#e8b563", 1.5),
+    neck: `${robe("url(#dm-batik)")}<path d="M-24 46L0 76 24 46Z" fill="#f4e2b8"/><path d="M-62 44Q0 68 62 44" stroke="#e8b563" stroke-width="3" fill="none"/>`,
+    head: `<path d="M-38-58Q-38-86 0-88Q38-86 38-58Q38-50 0-52Q-38-50-38-58Z" fill="url(#dm-batik)" stroke="#3b2314" stroke-width="2"/><path d="M-38-60Q0-54 38-60" stroke="#3b2314" stroke-width="4" fill="none"/>`,
+    amb: star(-100, -50, "#e8b563", 0.8) + star(102, -44, "#e8b563", 0.7, 0.6),
   },
   kimono: {
-    head: g("translate(54 -62)", `<g transform="rotate(18)"><rect x="-3" y="-26" width="6" height="30" rx="3" fill="#8b7bff"/>${flower(0, -30, "#ff9ec7")}${flower(14, -22, "#ffe27a")}</g>`),
-    amb: petal(-100, -60, "#ff9ec7") + petal(104, -70, "#ffc2dc", 1.5),
+    neck: `${robe("#d94a6a")}<path d="M-26 46L2 84M26 46L-2 84" stroke="#f6f7ff" stroke-width="7" stroke-linecap="round"/><rect x="-66" y="68" width="132" height="14" rx="3" fill="#ffd66b" stroke="#e8a93a" stroke-width="2"/><rect x="34" y="62" width="22" height="24" rx="4" fill="#e8a93a"/>${circ(-44, 58, 2.4, "#ffd1e0")}${circ(-30, 62, 2.4, "#ffd1e0")}${circ(40, 54, 2.4, "#ffd1e0")}${circ(-52, 74, 2.4, "#ffd1e0")}`,
+    head: flower(58, -62, "#ffb7d1") + `<path d="M50-52L36-40" stroke="#ffd66b" stroke-width="3" stroke-linecap="round"/>`,
+    amb: petal(-100, -60, "#ffc2dc") + petal(104, -70, "#ffb7d1", 1.4) + petal(0, -104, "#ffc2dc", 2.5),
   },
   hanbok: {
-    head: g("translate(-54 -60)", `<g transform="rotate(-14)"><rect x="-3" y="-24" width="6" height="28" rx="3" fill="#b392f0"/>${flower(0, -28, "#ff8fb8")}</g>`)
-      + `<path d="M-70-40q-14 10-8 26" stroke="#ff8fb8" stroke-width="5" fill="none" stroke-linecap="round"/><path d="M-70-40q4 16 18 18" stroke="#ffe27a" stroke-width="5" fill="none" stroke-linecap="round"/>`,
-    amb: petal(-100, -70, "#ff8fb8") + petal(100, -60, "#ffe27a", 1.2),
+    neck: `<path d="M-64 62Q0 78 64 62L78 88Q0 106-78 88Z" fill="#ff8fb8"/><ellipse cx="-76" cy="60" rx="14" ry="20" fill="#ffe27a" stroke="#f4c14a" stroke-width="2"/><ellipse cx="76" cy="60" rx="14" ry="20" fill="#ffe27a" stroke="#f4c14a" stroke-width="2"/><path d="M-60 44Q0 66 60 44L58 66Q0 80-58 66Z" fill="#ffe27a" stroke="#f4c14a" stroke-width="2"/><path d="M-18 46L0 66 18 46" stroke="#fff" stroke-width="5" fill="none" stroke-linecap="round" stroke-linejoin="round"/><ellipse cx="-9" cy="62" rx="9" ry="5" transform="rotate(-20 -9 62)" fill="#e8283c"/><ellipse cx="9" cy="62" rx="9" ry="5" transform="rotate(20 9 62)" fill="#e8283c"/><path d="M0 64l-6 22M0 64l6 22" stroke="#e8283c" stroke-width="4" stroke-linecap="round"/>`,
+    head: `<g transform="translate(56 -58) rotate(18)"><ellipse cx="-8" cy="0" rx="9" ry="5.5" fill="#e8283c"/><ellipse cx="8" cy="0" rx="9" ry="5.5" fill="#e8283c"/>${circ(0, 0, 4, "#ffd66b")}<path d="M0 4l-5 18M0 4l5 18" stroke="#e8283c" stroke-width="3.5" stroke-linecap="round"/></g>`,
+    amb: petal(-100, -60, "#ff9ec7") + petal(104, -70, "#ffc2dc", 1.5),
   },
   changshan: {
-    neck: `<path d="M-44-50Q0-64 44-50" stroke="#e8283c" stroke-width="7" fill="none"/>${circ(0, -50, 5, "#ffd66b")}`,
-    head: `<path d="M-52-58Q0-80 52-58" stroke="#e8283c" stroke-width="4" fill="none" opacity=".85"/>`,
-    amb: `<g class="dm-pu">${star(-100, -60, "#ffd66b", 0.8)}</g>` + `<g class="dm-pu" style="animation-delay:.7s">${star(104, -66, "#ffd66b", 0.7)}</g>`,
+    neck: `${robe("#c9202f")}<path d="M-62 44Q0 68 62 44" stroke="#ffd66b" stroke-width="3" fill="none"/><path d="M-24 42Q0 54 24 42L22 56Q0 66-22 56Z" fill="#a8161f"/><path d="M-20 56L30 80" stroke="#ffd66b" stroke-width="3" stroke-linecap="round"/>${circ(-10, 62, 3, "#ffd66b")}${circ(6, 70, 3, "#ffd66b")}${circ(20, 77, 3, "#ffd66b")}`,
+    head: `<path d="M-34-58Q-34-84 0-84Q34-84 34-58Q0-52-34-58Z" fill="#14122e" stroke="#ffd66b" stroke-width="2"/>${circ(0, -86, 5, "#d9283c")}`,
+    amb: lantern(-100, -66, "#e8283c") + star(102, -48, "#ffd66b", 0.8, 0.5),
   },
   kurta: {
-    head: `<path d="M-36-54V-72Q-36-88 0-88Q36-88 36-72V-54Z" fill="#f4f4ff"/><path d="M-36-66Q0-74 36-66" stroke="#e8b563" stroke-width="3" fill="none"/>${circ(-16, -76, 2.5, "#e8b563")}${circ(0, -79, 2.5, "#e8b563")}${circ(16, -76, 2.5, "#e8b563")}`,
-    amb: petal(-100, -60, "#ffe27a") + petal(104, -70, "#ff9ec7", 1.5),
+    neck: `${robe("#1fa89a")}<path d="M-22 44Q0 56 22 44" stroke="#ffd66b" stroke-width="4" fill="none"/><path d="M0 54V84" stroke="#ffd66b" stroke-width="3"/>${circ(0, 62, 2.6, "#ffd66b")}${circ(0, 72, 2.6, "#ffd66b")}${circ(0, 82, 2.6, "#ffd66b")}<path d="M-56 48L30 82" stroke="#ff9d3f" stroke-width="10" stroke-linecap="round" opacity=".92"/><path d="M-56 48L30 82" stroke="#ffd66b" stroke-width="2" stroke-dasharray="3 5" stroke-linecap="round"/>`,
+    head: flower(52, -62, "#ff9d3f") + flower(66, -48, "#ffc13a"),
+    amb: petal(-100, -60, "#ff9d3f") + petal(104, -70, "#ffc13a", 1.4) + petal(0, -104, "#ff9d3f", 2.5),
   },
   thobe: {
-    head: `<path d="M-60-48Q0-94 60-48L56-28Q0-66-56-28Z" fill="#f6f7ff"/><rect x="-54" y="-60" width="108" height="11" rx="5.5" fill="#1a1a2e"/>`,
-    amb: `<g class="dm-pu">${star(-100, -64, "#c7ccf0", 0.8)}</g>`,
+    neck: `${robe("#f2f4ff")}<path d="M0 48V82" stroke="#c7ccf0" stroke-width="3"/><path d="M-20 44Q0 58 20 44" stroke="#c7ccf0" stroke-width="4" fill="none"/>${circ(0, 62, 2.2, "#c7ccf0")}${circ(0, 72, 2.2, "#c7ccf0")}`,
+    head: `<path d="M-86-14Q-84-84 0-88Q84-84 86-14L72 0Q64-44 0-52Q-64-44-72 0Z" fill="url(#dm-kef)" stroke="#c7ccf0" stroke-width="1.5"/><ellipse cx="0" cy="-70" rx="46" ry="9" fill="none" stroke="#14122e" stroke-width="6"/>`,
+    amb: star(-100, -50, "#ffd66b", 0.8) + star(102, -44, "#ffd66b", 0.7, 0.6),
   },
   jas: {
-    head: `<ellipse cx="0" cy="-70" rx="36" ry="10" fill="#1a1a2e"/><path d="M-25-70Q-25-104 0-104Q25-104 25-70Z" fill="#23233a"/><rect x="-25" y="-80" width="50" height="8" fill="#d9283c"/>`,
-    amb: `<g class="dm-pu">${star(-100, -60, "#8c93d9", 0.7)}</g>`,
+    neck: `${robe("#3a3f5c")}<path d="M-16 48L0 82 16 48Z" fill="#f6f7ff"/><path d="M-16 48L-34 64M16 48L34 64" stroke="#2a2e48" stroke-width="4" stroke-linecap="round"/><path d="M-4 56L4 56 6 78 0 84-6 78Z" fill="#d9283c"/>`,
+    head: `<ellipse cx="0" cy="-64" rx="54" ry="9" fill="#0d0d22"/><path d="M-36-62Q-36-98 0-98Q36-98 36-62Z" fill="#14122e"/><rect x="-36" y="-74" width="72" height="8" fill="#5a5f8a"/>`,
+    amb: "",
   },
   beret: {
-    head: `<g transform="rotate(-14 20 -72)"><ellipse cx="20" cy="-72" rx="36" ry="15" fill="#c0283c"/><rect x="17" y="-90" width="6" height="10" rx="3" fill="#c0283c"/></g>`,
-    amb: `<g class="dm-pu">${star(-100, -60, "#ff8fb8", 0.8)}</g>` + `<g class="dm-pu" style="animation-delay:.6s">${star(104, -70, "#8b7bff", 0.7)}</g>`,
+    neck: `${scarf("#3a5bd9", "#2a45b0")}<path d="M-40 56l6 14M-14 62l4 14M14 62l-4 14M40 56l-6 14" stroke="#fff" stroke-width="3" stroke-linecap="round"/>`,
+    head: `<g transform="rotate(-8)"><path d="M-44-62Q-42-94 6-94Q46-92 50-66Q50-60 0-58Q-44-58-44-62Z" fill="#d9283c"/><rect x="2" y="-101" width="6" height="9" rx="2" fill="#9a1623"/></g>`,
+    amb: star(-100, -50, "#ffd66b", 0.7) + star(102, -44, "#fff", 0.7, 0.6),
   },
   sombrero: {
-    head: `<ellipse cx="0" cy="-56" rx="64" ry="15" fill="#d9a45b"/><path d="M-27-56Q-27-94 0-94Q27-94 27-56Z" fill="#c98f3f"/><path d="M-27-66Q0-58 27-66" stroke="#e0523a" stroke-width="6" fill="none"/>`,
-    amb: `<g class="dm-pu" style="font-size:22px;font-weight:700" ><text x="96" y="-70" fill="#e8b24a">♪</text></g>`,
+    neck: `<path d="M-66 44Q0 68 66 44L78 90Q0 112-78 90Z" fill="#e0523a"/><path d="M-72 66Q0 90 72 66" stroke="#ffd66b" stroke-width="6" fill="none"/><path d="M-75 80Q0 104 75 80" stroke="#4fd1c5" stroke-width="6" fill="none"/>`,
+    head: `<ellipse cx="0" cy="-60" rx="80" ry="15" fill="#e8b24a" stroke="#b8862a" stroke-width="2"/><path d="M-28-62Q-26-104 0-106Q26-104 28-62Z" fill="#e8b24a" stroke="#b8862a" stroke-width="2"/><path d="M-28-70Q0-64 28-70" stroke="#d9283c" stroke-width="8" fill="none"/>${circ(-58, -58, 2.4, "#d9283c")}${circ(-36, -50, 2.4, "#d9283c")}${circ(36, -50, 2.4, "#d9283c")}${circ(58, -58, 2.4, "#d9283c")}`,
+    amb: note(-104, -40, "♪", 0) + note(104, -60, "♫", 1.2),
   },
   aloha: {
-    head: g("translate(56 -54) rotate(20)", flower(0, 0, "#ff5c8a")),
-    neck: `<path d="M-56 42Q0 72 56 42" stroke="#2bb3c0" stroke-width="6" fill="none" stroke-linecap="round"/>${circ(-36, 52, 5, "#ff5c8a")}${circ(-18, 58, 5, "#ffd66b")}${circ(0, 60, 5, "#ff5c8a")}${circ(18, 58, 5, "#ffd66b")}${circ(36, 52, 5, "#ff5c8a")}`,
-    amb: petal(-100, -60, "#ff8fb8") + petal(104, -70, "#2bb3c0", 1.5),
+    neck: `${robe("url(#dm-aloha)")}<path d="M-24 46L0 72 24 46Z" fill="#1d8f9b"/>`
+      + [-50, -34, -17, 0, 17, 34, 50].map((x, i) => circ(x, +(46 + (1 - (x / 54) ** 2) * 24).toFixed(1), 6, ["#ff5c8a", "#ffd66b", "#ff9d3f", "#fff"][i % 4])).join(""),
+    head: g("translate(58 -58) scale(1.4)", `<g fill="#ff5c8a"><circle cy="-6" r="5"/><circle cx="6" cy="-2" r="5"/><circle cx="4" cy="5" r="5"/><circle cx="-4" cy="5" r="5"/><circle cx="-6" cy="-2" r="5"/></g>${circ(0, 0, 3.5, "#ffe27a")}`),
+    amb: g("translate(108 -70)", `${circ(0, 0, 16, "#ffd04a")}<g class="dm-spin"><path d="M0-26v-8M0 26v8M-26 0h-8M26 0h8M18-18l6-6M-18 18l-6 6M18 18l6 6M-18-18l-6-6" stroke="#ffd04a" stroke-width="4" stroke-linecap="round"/></g>`)
+      + petal(-100, -60, "#ff9ec7"),
   },
 };
+Object.assign(DECOR, COSTUME);
+
+/* ------------------------------------------------------------------ */
+/* Animasi klik                                                        */
+/* ------------------------------------------------------------------ */
+
+const armLine = (x1, y1, x2, y2, w = 13) => `<path d="M${x1} ${y1}L${x2} ${y2}" stroke="url(#dm-hood)" stroke-width="${w}" stroke-linecap="round" fill="none"/>`;
+const pawC = (x, y, r = 13) => `${circ(x, y, r, "url(#dm-paw)")}${circ(x, y + r * 0.35, r * 0.4, "#6a5cff")}`;
+const pop = (inner, delay = 0) => `<g class="dm-pop" style="animation-delay:${delay}s">${inner}</g>`;
+const rotatingPaw = (tx, ty, inner) => g(`translate(${tx} ${ty})`, `<g class="dm-pawwave">${inner}</g>`);
+
+/** Percikan partikel dari tengah (deterministik, tanpa Math.random). */
+function burst(n, make, dist = 90, cy = -20) {
+  let out = "";
+  for (let i = 0; i < n; i++) {
+    const a = (i / n) * Math.PI * 2 + 0.35;
+    const d = dist * (0.72 + 0.28 * ((i * 7) % 5) / 4);
+    const dx = (Math.cos(a) * d).toFixed(0);
+    const dy = (Math.sin(a) * d * 0.85 - 12).toFixed(0);
+    const rot = ((i * 97) % 360) - 180;
+    out += make(i, `--dx:${dx}px;--dy:${dy}px;--rot:${rot}deg;animation-delay:${((i % 4) * 0.04).toFixed(2)}s`);
+  }
+  return g(`translate(0 ${cy})`, out);
+}
+const confettiBurst = () => burst(16, (i, st) =>
+  `<rect class="dm-burst" x="-3" y="-2" width="7" height="4" rx="1" fill="${["#ff6b81", "#ffd66b", "#4fd1c5", "#8b7bff", "#fff"][i % 5]}" style="${st}"/>`);
+const dropBurst = () => burst(10, (i, st) => `<circle class="dm-burst" r="4" fill="${i % 2 ? "#7ad7ff" : "#bfeeff"}" style="${st}"/>`, 80);
+const leafBurst = () => burst(10, (i, st) => `<path class="dm-burst" d="${LEAF}" fill="${["#ff8a2a", "#e0523a", "#ffc13a"][i % 3]}" style="${st}"/>`);
+const petalBurst = () => burst(12, (i, st) => `<ellipse class="dm-burst" rx="6" ry="3" fill="${["#ff9ec7", "#ffc2dc", "#ffe27a", "#fff"][i % 4]}" style="${st}"/>`, 95);
+const snowBurst = () => burst(12, (i, st) => `<circle class="dm-burst" r="${3 + (i % 3)}" fill="#e8efff" style="${st}"/>`, 100);
+const twinkles = () => [[-96, -70], [98, -76], [-70, -108], [74, -112], [-108, -10], [110, -20]]
+  .map(([x, y], i) => g(`translate(${x} ${y})`, `<path class="dm-twfx" d="${STAR}" fill="#ffd66b" style="animation-delay:${(i * 0.12).toFixed(2)}s"/>`)).join("");
+const flyBat = (y, d) => g(`translate(0 ${y})`, `<g class="dm-fxbat" style="animation-delay:${d}s"><g class="dm-flap"><path d="M-14-4Q-7-10 0 0Q7-10 14-4Q8 0 7 6Q0 2-7 6Q-8 0-14-4Z" fill="#1a1240" stroke="#8b7bff" stroke-width="1.5"/></g></g>`);
+const fallingSnow = () => [-104, -80, -52, -24, 6, 34, 62, 88, 108, -66].map((x, i) =>
+  `<circle class="dm-fall" cx="${x}" cy="-112" r="${3 + (i % 3)}" fill="#e8efff" style="animation-duration:1.7s;animation-delay:${(i * 0.09).toFixed(2)}s"/>`).join("");
+const rising = (items) => items.map(([x, y, c, s, d]) => riseHeart(x, y, c, s, d)).join("");
+const joinedPaws = (y) => `${circ(-8, y, 14, "url(#dm-paw)")}${circ(8, y, 14, "url(#dm-paw)")}<path d="M0 ${y - 10}v20" stroke="#6a5cff" stroke-width="2"/>`;
+
+/**
+ * Tiap aksi: s=detik, face=wajah sementara, paws=tangan dasar saat aksi,
+ * hideAcc=sembunyikan aksesori pose, fxb=efek menempel badan, fxa=efek di luar badan.
+ */
+const ACTIONS = {
+  salute: { s: 1.5, face: "ready", paws: "left", hideAcc: true,
+    fxb: () => pop(armLine(66, 24, 52, -48) + pawC(50, -54)) + star(64, -78, "#ffd66b", 1, 0.3) },
+  tiphat: { s: 1.6, face: "ready", paws: "left", hideAcc: true,
+    fxb: () => pop(armLine(66, 24, 52, -48) + pawC(50, -54)) },
+  twirl: { s: 1.5, face: "dreamy", fxa: petalBurst },
+  splash: { s: 1.5, face: "grin", fxa: dropBurst },
+  leaves: { s: 1.6, face: "cozy", fxa: leafBurst },
+  shiverfx: { s: 1.5, face: "shiver", fxa: snowBurst },
+  startle: { s: 1.7, face: "surprised", fxa: () => flyBat(-92, 0) + flyBat(-62, 0.15) + flyBat(-112, 0.3) },
+  sway: { s: 1.8, face: "dreamy", fxa: fallingSnow },
+  jump: { s: 1.5, face: "sparkle", fxa: confettiBurst },
+  kiss: { s: 1.6, face: "kiss",
+    fxa: () => g("translate(12 24)", `<path class="dm-fxheart" d="${HEART}" fill="#ff5c8a"/>`)
+      + rising([[-90, 10, "#ff8fb8", 1, 0.1], [96, 0, "#ff5c8a", 1.2, 0.5], [-60, -50, "#ff8fb8", 0.8, 0.9]]) },
+  nod: { s: 1.8, face: "cozy", fxa: twinkles },
+  wave: { s: 1.7, face: "ready", paws: "left", hideAcc: true,
+    fxb: () => pop(rotatingPaw(62, 38, `${armLine(0, 0, 24, -48)}${pawC(24, -52, 14)}`)) },
+  sembah: { s: 1.8, face: "cozy", paws: "none", hideAcc: true,
+    fxb: () => pop(joinedPaws(34)) + star(0, 8, "#e8b563", 0.8, 0.5) },
+  ojigi: { s: 1.9, face: "cozy", fxa: () => petalBurst() },
+  sleeve: { s: 1.7, face: "dreamy", paws: "left", hideAcc: true,
+    fxb: () => pop(rotatingPaw(60, 50, `<path d="M0-10L52-48Q70-28 54 10Z" fill="#ffe27a" stroke="#f4c14a" stroke-width="2"/>${pawC(56, -42, 12)}`)),
+    fxa: petalBurst },
+  gongshou: { s: 1.8, face: "ready", paws: "none", hideAcc: true,
+    fxb: () => pop(`<rect x="-10" y="26" width="26" height="22" rx="10" fill="url(#dm-paw)"/>${circ(-12, 38, 11, "#8c9bff", ' stroke="#6a5cff" stroke-width="2"')}`) },
+  namaste: { s: 1.8, face: "dreamy", paws: "none", hideAcc: true,
+    fxb: () => pop(joinedPaws(40)),
+    fxa: () => burst(8, (i, st) => `<ellipse class="dm-burst" rx="5" ry="3" fill="${i % 2 ? "#ff9d3f" : "#ffc13a"}" style="${st}"/>`, 85) },
+  greet: { s: 1.7, face: "cozy", paws: "left", hideAcc: true,
+    fxb: () => pop(rotatingPaw(62, 40, `${armLine(0, 0, 26, -46)}${pawC(28, -52, 15)}`)) + star(98, -74, "#ffd66b", 0.9, 0.4) },
+  wink: { s: 1.5, face: "wink",
+    fxa: () => rising([[70, -20, "#ff8fb8", 0.9, 0.1], [-84, 0, "#ff5c8a", 1, 0.5]]) + star(52, -2, "#fff", 0.8, 0.1) },
+  mariachi: { s: 1.8, face: "sparkle",
+    fxa: () => note(-104, -30, "♪", 0) + note(100, -50, "♫", 0.3) + note(-76, -80, "♫", 0.6) + note(78, -96, "♪", 0.9) },
+  shaka: { s: 1.8, face: "dreamy", paws: "left", hideAcc: true,
+    fxb: () => pop(rotatingPaw(62, 38, `${armLine(0, 0, 24, -46)}${pawC(26, -52, 14)}${circ(38, -58, 5, "#a4b0ff")}${circ(14, -64, 5, "#a4b0ff")}`)),
+    fxa: petalBurst },
+};
+ACTIONS.hop = { s: 1.2, face: null };
+
+export const ACTION_OF = {
+  default: "salute", spring: "twirl", summer: "splash", autumn: "leaves", winter: "shiverfx",
+  halloween: "startle", christmas: "sway", newyear: "jump", valentine: "kiss", ramadan: "nod",
+  eid: "nod", independence: "wave", batik: "sembah", kimono: "ojigi", hanbok: "sleeve",
+  changshan: "gongshou", kurta: "namaste", thobe: "greet", jas: "tiphat", beret: "wink",
+  sombrero: "mariachi", aloha: "shaka",
+};
+
+/** Gerak badan per aksi: [keyframes, detik, transform-origin]. */
+const O_BOT = "0px 70px";
+const MOTION = {
+  salute: ["0%,100%{transform:none}30%,70%{transform:rotate(-3deg)}", 1.5, O_BOT],
+  tiphat: ["0%,100%{transform:none}30%,70%{transform:rotate(-3deg)}", 1.6, O_BOT],
+  twirl: ["0%,100%{transform:scale(1,1)}50%{transform:scale(-1,1) translateY(-14px)}", 1.5, "0px 0px"],
+  splash: ["0%,100%{transform:none}25%{transform:translateY(-14px) rotate(-5deg)}50%{transform:rotate(5deg)}75%{transform:translateY(-8px) rotate(-3deg)}", 1.5, O_BOT],
+  leaves: ["0%,100%{transform:rotate(0)}25%{transform:rotate(-5deg)}60%{transform:rotate(5deg)}", 1.6, O_BOT],
+  shiverfx: ["0%,100%{transform:translateX(0)}10%{transform:translateX(-3px)}20%{transform:translateX(3px)}30%{transform:translateX(-3px)}40%{transform:translateX(3px)}50%{transform:translateX(-3px)}60%{transform:translateX(3px)}70%{transform:translateX(-2px)}80%{transform:translateX(2px)}", 1.5, O_BOT],
+  startle: ["0%{transform:none}12%{transform:translate(-10px,-8px) scale(1.08)}30%{transform:translate(-6px,-3px) scale(1.05)}100%{transform:none}", 1.7, O_BOT],
+  sway: ["0%,100%{transform:rotate(0)}20%{transform:rotate(-6deg)}50%{transform:rotate(6deg)}80%{transform:rotate(-4deg)}", 1.8, O_BOT],
+  jump: ["0%,100%{transform:none}20%{transform:translateY(-30px) scale(.97,1.04)}40%{transform:translateY(0) scale(1.05,.94)}60%{transform:translateY(-30px) scale(.97,1.04)}80%{transform:translateY(0) scale(1.05,.94)}", 1.5, O_BOT],
+  kiss: ["0%,100%{transform:none}30%,60%{transform:rotate(-6deg) translateX(-4px)}", 1.6, O_BOT],
+  nod: ["0%,100%{transform:rotate(0)}35%,60%{transform:rotate(9deg) translateY(4px)}", 1.8, O_BOT],
+  wave: ["0%,100%{transform:rotate(0)}25%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}75%{transform:rotate(-3deg)}", 1.7, O_BOT],
+  sembah: ["0%,100%{transform:none}30%,65%{transform:rotate(14deg) translate(6px,6px)}", 1.8, O_BOT],
+  ojigi: ["0%,100%{transform:none}30%,70%{transform:rotate(22deg) translate(8px,10px)}", 1.9, O_BOT],
+  sleeve: ["0%,100%{transform:rotate(0)}30%{transform:rotate(-4deg)}65%{transform:rotate(4deg)}", 1.7, O_BOT],
+  gongshou: ["0%,100%{transform:none}30%,65%{transform:rotate(9deg) translate(3px,3px)}", 1.8, O_BOT],
+  namaste: ["0%,100%{transform:none}30%,65%{transform:rotate(7deg) translate(2px,3px)}", 1.8, O_BOT],
+  greet: ["0%,100%{transform:none}25%{transform:translateY(-8px)}50%{transform:rotate(3deg)}", 1.7, O_BOT],
+  wink: ["0%,100%{transform:none}40%,70%{transform:rotate(-7deg)}", 1.5, O_BOT],
+  mariachi: ["0%,100%{transform:rotate(0)}12%{transform:rotate(-8deg)}25%{transform:rotate(8deg)}37%{transform:rotate(-8deg)}50%{transform:rotate(8deg)}62%{transform:rotate(-8deg)}75%{transform:rotate(8deg)}87%{transform:rotate(-4deg)}", 1.8, O_BOT],
+  shaka: ["0%,100%{transform:rotate(0)}30%{transform:rotate(-5deg)}65%{transform:rotate(5deg)}", 1.8, O_BOT],
+  hop: ["0%,100%{transform:none}30%{transform:translateY(-12px) scale(1.04)}60%{transform:translateY(1px)}", 1.2, O_BOT],
+};
+const CSS_ACT = Object.entries(MOTION).map(([n, [kf, sec, org]]) =>
+  `@keyframes dm-m-${n}{${kf}}.dae-m[data-act="${n}"] .dm-rx{transform-origin:${org};animation:dm-m-${n} ${sec}s ease both}`).join("")
+  + `.dm-pop{transform-box:fill-box;transform-origin:center;animation:dm-pop .28s cubic-bezier(.2,1.3,.4,1) both}
+@keyframes dm-pop{from{transform:scale(0);opacity:0}to{transform:scale(1);opacity:1}}
+.dm-burst{transform-box:fill-box;transform-origin:center;animation:dm-burst 1.3s cubic-bezier(.2,.8,.3,1) both}
+@keyframes dm-burst{0%{transform:translate(0,0) rotate(0) scale(.3);opacity:0}12%{opacity:1}100%{transform:translate(var(--dx),var(--dy)) rotate(var(--rot)) scale(1);opacity:0}}
+.dm-fxbat{animation:dm-fxbat 1.6s linear both}
+@keyframes dm-fxbat{0%{transform:translate(-190px,0);opacity:0}10%{opacity:1}100%{transform:translate(190px,-26px);opacity:1}}
+.dm-fxheart{transform-box:fill-box;transform-origin:center;animation:dm-fxheart 1.4s ease-out both}
+@keyframes dm-fxheart{0%{transform:translate(0,0) scale(.4);opacity:0}15%{opacity:1}100%{transform:translate(90px,-50px) scale(1.4);opacity:0}}
+.dm-twfx{transform-box:fill-box;transform-origin:center;animation:dm-twfx 1.2s ease-in-out both}
+@keyframes dm-twfx{0%{transform:scale(0) rotate(0)}40%{transform:scale(1.5) rotate(45deg)}100%{transform:scale(0) rotate(90deg)}}
+.dm-pawwave{transform-origin:0 0;animation:dm-pawwave .5s ease-in-out infinite alternate}
+@keyframes dm-pawwave{from{transform:rotate(-16deg)}to{transform:rotate(16deg)}}
+.dae-m[data-act="tiphat"] [data-slot="head"]{transform-box:fill-box;transform-origin:center;animation:dm-lift 1.6s ease both}
+.dae-m[data-act="salute"] [data-slot="head"]{transform-box:fill-box;transform-origin:center;animation:dm-lift2 1.5s ease both}
+@keyframes dm-lift{0%,100%{transform:none}25%,70%{transform:translate(12px,-22px) rotate(14deg)}}
+@keyframes dm-lift2{0%,100%{transform:none}25%,70%{transform:translateY(-8px)}}
+.dae-m[data-act="wave"] .dm-wave{animation-duration:.5s}
+`;
 
 /* ------------------------------------------------------------------ */
 /* CSS (animasi + pill)                                                */
@@ -471,24 +632,16 @@ const CSS_ANIM = `
 @keyframes dm-beat{50%{transform:scale(1.18)}}
 .dm-wave{transform-box:fill-box;transform-origin:left center;animation:dm-wave 1.6s ease-in-out infinite}
 @keyframes dm-wave{50%{transform:skewY(7deg) scaleX(.93)}}
-.dm-act-bow{animation:dm-act-bow 1.2s ease!important}
-@keyframes dm-act-bow{25%{transform:rotate(7deg) translateY(7px)}55%{transform:rotate(0) translateY(2px)}100%{transform:none}}
-.dm-act-jump{animation:dm-act-jump 1.1s ease!important}
-@keyframes dm-act-jump{30%{transform:translateY(-24px) scale(1.05)}55%{transform:translateY(0) scale(.97)}78%{transform:translateY(-9px) scale(1.01)}100%{transform:none}}
-.dm-act-shake{animation:dm-act-shake .9s ease!important}
-@keyframes dm-act-shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px) rotate(-4deg)}45%{transform:translateX(7px) rotate(3deg)}70%{transform:translateX(-4px)}}
-.dm-act-spin{animation:dm-act-spin 1.2s ease!important}
-@keyframes dm-act-spin{60%{transform:rotate(360deg) scale(1.07)}100%{transform:rotate(720deg) scale(1)}}
 .dm-react .dm-rx{animation:dm-hop .55s ease}
 @keyframes dm-hop{30%{transform:translateY(-10px) scale(1.04)}60%{transform:translateY(1px)}}
 .dae-m[data-size="sm"] .dm-amb{display:none}
 .dae-m.dm-frozen *,.dm-away .dae-m *{animation-play-state:paused!important}
 @media (prefers-reduced-motion:reduce){.dae-m *{animation:none!important}}
-`;
+${CSS_ACT}`;
 
 /** Penyesuaian pill/header supaya maskot tampil utuh (menimpa styles.css lama). */
 const CSS_LAYOUT = `
-.pill .mascot.mascot-sm,.pill-ring .mascot.mascot-sm{width:26px!important;height:26px!important;border-radius:0!important;overflow:visible!important;outline:none!important;animation:none!important}
+.pill .mascot.mascot-sm,.pill-ring .mascot.mascot-sm{width:30px!important;height:30px!important;border-radius:0!important;overflow:visible!important;outline:none!important;animation:none!important}
 .identity .mascot{width:44px;height:44px}
 .pill.pill-dnd .dae-m *{animation-play-state:paused!important}
 `;
@@ -520,11 +673,11 @@ function layers({ pose, decor, ctx }) {
  */
 export function mascotSvgString(o = {}) {
   const pose = o.pose ?? resolvePose(o.status ?? "idle", o.engine);
-  const decor = DECOR_KEYS.includes(o.decor) ? o.decor : currentDecor();
+  const decor = ALL_KEYS.includes(o.decor) ? o.decor : currentDecor();
   const size = VIEWBOX[o.size] ? o.size : "lg";
   const l = layers({ pose, decor, ctx: { count: o.count } });
   return `<svg xmlns="${NS}" class="dae-m" viewBox="${VIEWBOX[size]}" data-size="${size}" data-pose="${pose}" data-decor="${decor}">`
-    + `<style>${CSS_ANIM}</style>${defsMarkup()}`
+    + (o.bare ? "" : `<style>${CSS_ANIM}</style>${defsMarkup()}`)
     + `<g class="dm-amb">${l.amb}</g><ellipse class="dm-shw" cx="0" cy="72" rx="100" ry="16" fill="url(#dm-sh)"/>`
     + `<g class="dm-rx"><g class="dm-fl">${BODY}${l.neck}${l.paws}<g class="dm-gz">${l.face}</g>${l.eyes}${l.head}${l.acc}</g></g></svg>`;
 }
@@ -576,17 +729,21 @@ class Mascot {
     host.innerHTML = `<svg xmlns="${NS}" class="dae-m" viewBox="${VIEWBOX[this.size] ?? VIEWBOX.lg}" data-size="${this.size}" aria-hidden="true" focusable="false">`
       + `<g class="dm-amb" data-slot="amb"></g><ellipse class="dm-shw" cx="0" cy="72" rx="100" ry="16" fill="url(#dm-sh)"/>`
       + `<g class="dm-rx"><g class="dm-fl">${BODY}<g data-slot="neck"></g><g data-slot="paws"></g><g class="dm-gz" data-slot="face"></g>`
-      + `<g data-slot="eyes"></g><g data-slot="head"></g><g data-slot="acc"></g></g></g></svg>`;
+      + `<g data-slot="eyes"></g><g data-slot="head"></g><g data-slot="acc"></g><g data-slot="fxb"></g></g></g><g data-slot="fxa"></g></svg>`;
     this.svg = host.firstElementChild;
     this.slots = {};
     this.svg.querySelectorAll("[data-slot]").forEach((n) => { this.slots[n.dataset.slot] = n; });
     this._onEnter = () => this._react();
+    this._onClick = () => this.act();
     host.addEventListener("pointerenter", this._onEnter);
+    host.addEventListener("click", this._onClick);
   }
 
   destroy() {
     clearTimeout(this.sleepTimer);
+    clearTimeout(this._actT);
     this.host.removeEventListener("pointerenter", this._onEnter);
+    this.host.removeEventListener("click", this._onClick);
   }
 
   _put(slot, key, html) {
@@ -627,7 +784,7 @@ class Mascot {
   }
 
   _pose(pose, decor, count) {
-    const d = DECOR_KEYS.includes(decor) ? decor : this.decor ?? "default";
+    const d = ALL_KEYS.includes(decor) ? decor : this.decor ?? "default";
     const c = Number.isFinite(count) ? count : this.count;
     const same = pose === this.pose && d === this.decor && c === this.count;
     if (same) return;
@@ -641,12 +798,46 @@ class Mascot {
     this.host.dataset.decor = d;
     this._put("amb", `amb:${d}`, l.amb);
     this._put("neck", `neck:${d}`, l.neck);
-    this._put("paws", `paws:${POSE_PAWS[pose] ?? "base"}`, l.paws);
-    this._put("face", `face:${faceKeyFor(pose, d)}`, l.face);
     this._put("eyes", `eyes:${d}`, l.eyes);
     this._put("head", `head:${d}`, l.head);
-    this._put("acc", `acc:${pose}:${pose === "queued" ? c : ""}`, l.acc);
+    if (!this._acting) this._putBase(l);
     this.slots.face.style.transform = "";
+  }
+
+  /** Slot yang bergantung pada pose (dilewati selama animasi klik, dipulihkan sesudahnya). */
+  _putBase(l) {
+    const { pose, decor: d, count: c } = this;
+    this._put("paws", `paws:${POSE_PAWS[pose] ?? "base"}`, l.paws);
+    this._put("face", `face:${faceKeyFor(pose, d)}`, l.face);
+    this._put("acc", `acc:${pose}:${pose === "queued" ? c : ""}`, l.acc);
+  }
+
+  /** Animasi klik sesuai dekor/kostum aktif (visual saja, 1–2 detik). */
+  act(name) {
+    if (this._acting || prefersReducedMotion()) return false;
+    if (this._asleep) { this._asleep = false; this.apply(globalState_as(this)); }
+    const key = name && ACTIONS[name] ? name : ACTION_OF[this.decor] ?? "hop";
+    const a = ACTIONS[key];
+    this._acting = true;
+    this.svg.dataset.act = key;
+    if (a.face) this._put("face", `fx:${key}`, FACE[a.face]());
+    if (a.paws) this._put("paws", `fx:${key}`, PAWS[a.paws]);
+    if (a.hideAcc) this._put("acc", `fx:${key}`, "");
+    this._put("fxb", `fx:${key}`, a.fxb ? a.fxb() : "");
+    this._put("fxa", `fx:${key}`, a.fxa ? a.fxa() : "");
+    clearTimeout(this._actT);
+    this._actT = setTimeout(() => this._endAct(), Math.round(a.s * 1000) + 120);
+    return true;
+  }
+
+  _endAct() {
+    this._acting = false;
+    delete this.svg.dataset.act;
+    this._put("fxb", "", "");
+    this._put("fxa", "", "");
+    const l = layers({ pose: this.pose, decor: this.decor, ctx: { count: this.count } });
+    this.cur.paws = null; this.cur.face = null; this.cur.acc = null;
+    this._putBase(l);
   }
 
   _react() {
@@ -666,22 +857,27 @@ function globalState_as(inst) {
   return { status: globalState.status, engine: globalState.engine, decor: inst.decor, count: globalState.count };
 }
 
-let lastDecor = "";
+let previewKey = null;
+
+function prefersReducedMotion() {
+  try { return globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true; } catch { return false; }
+}
+
+/** Tandai <html data-decor> supaya CSS tema ikut berganti + beri tahu panel lain. */
+function syncRootDecor(decor) {
+  const root = document.documentElement;
+  if (root.dataset.decor === decor) return;
+  root.dataset.decor = decor;
+  root.dataset.decorKind = COSTUME_KEYS.includes(decor) ? "costume" : "season";
+  try {
+    window.dispatchEvent(new CustomEvent("dae:decor", { detail: { decor, kind: root.dataset.decorKind, pref: getDecorPref() } }));
+  } catch { /* abaikan */ }
+}
+
 function applyAll() {
   const decor = previewKey ?? currentDecor();
+  syncRootDecor(decor);
   instances.forEach((m) => m.apply({ ...globalState, decor }));
-  // Sinkron ke <html data-decor> agar theme-mascot.css mengikuti.
-  if (typeof document !== "undefined") {
-    if (document.documentElement.dataset.decor !== decor) {
-      document.documentElement.dataset.decor = decor;
-    }
-    if (decor !== lastDecor) {
-      lastDecor = decor;
-      try {
-        window.dispatchEvent(new CustomEvent("dae:decor", { detail: { decor } }));
-      } catch { /* abaikan */ }
-    }
-  }
 }
 
 /* ---------- gaze: mata mengikuti kursor ---------- */
@@ -787,67 +983,52 @@ export function setMascotStatus(status, engine = "", count = 0) {
   applyAll();
 }
 
-/** Simpan pilihan dekor ("auto" | "events" | "default" | kunci dekor/kostum) lalu terapkan. */
+/** Simpan pilihan dekor ("auto" | "events" | "default" | kunci dekor) lalu terapkan. */
 export function setMascotDecor(pref = "auto") {
   if (!DECOR_PREFS.includes(pref)) throw new Error(`dekor tidak dikenal: ${pref}`);
+  memPref = pref;
   try { localStorage.setItem(PREF_KEY, pref); } catch { /* abaikan */ }
+  previewKey = null;
   if (booted) applyAll();
   return currentDecor();
 }
 
-/* Pratinjau sementara (tidak disimpan). previewMascotDecor(null) = kembali. */
-let previewKey = null;
-export function previewMascotDecor(key) {
-  previewKey = key && (DECOR_KEYS.includes(key) || COSTUME_KEYS.includes(key)) ? key : null;
+/** Pastikan CSS + sprite gradient terpasang (dipakai panel yang menampilkan SVG bare). */
+export function ensureMascotAssets() {
+  ensureAssets();
+}
+
+/** Info dekor yang sedang berlaku. */
+export function getDecorInfo() {
+  const pref = getDecorPref();
+  const decor = previewKey ?? currentDecor();
+  const isCostume = COSTUME_KEYS.includes(decor);
+  return {
+    pref, decor, auto: pref === "auto" || pref === "events", previewing: previewKey !== null,
+    kind: isCostume ? "costume" : eventDecor() === decor ? "event" : "season",
+    label: ALL_LABELS[decor] ?? decor,
+  };
+}
+
+/** Pratinjau sementara (tidak disimpan). previewMascotDecor(null) mengembalikan pilihan tersimpan. */
+export function previewMascotDecor(key = null) {
+  if (key !== null && !ALL_KEYS.includes(key)) throw new Error(`dekor tidak dikenal: ${key}`);
+  previewKey = key;
   if (booted) applyAll();
 }
 
-/** Info dekorasi aktif untuk Panel Ganti Baju. */
-export function getDecorInfo() {
-  const pref = getDecorPref();
-  const key = previewKey ?? currentDecor();
-  const label = ALL_LABELS[key] ?? key;
-  const kind = COSTUME_KEYS.includes(key) ? "costume"
-    : ["halloween", "christmas", "newyear", "valentine", "ramadan", "eid", "independence"].includes(key) ? "event"
-    : "season";
-  return { key, label, kind, pref, previewing: previewKey !== null, auto: pref === "auto" || pref === "events" };
-}
-
-/** Pastikan aset maskot ada (dipakai wardrobe.js sebelum mountMascots). */
-export function ensureMascotAssets() {
-  ensureAssets();
-  boot();
-}
-
-/* Animasi aksi saat maskot diklik — sesuai dekorasi aktif. */
-const ACT_ANIM = {
-  default: "bow", spring: "spin", summer: "jump", autumn: "spin", winter: "jump",
-  halloween: "shake", christmas: "jump", newyear: "jump", valentine: "jump",
-  ramadan: "bow", eid: "jump", independence: "jump",
-  batik: "bow", kimono: "bow", hanbok: "spin", changshan: "bow", kurta: "bow",
-  thobe: "jump", jas: "bow", beret: "spin", sombrero: "spin", aloha: "jump",
-};
-
 /**
- * Picu animasi aksi klik pada semua maskot.
- * Dipakai tombol maskot di header & panel ganti baju.
+ * Mainkan animasi aksi (visual saja). Tanpa argumen: semua maskot yang terlihat
+ * memainkan aksi sesuai dekor aktif. name = nama aksi tertentu (lihat ACTION_OF).
  */
-export function triggerMascotAction() {
-  ensureMascotAssets();
-  const decor = previewKey ?? currentDecor();
-  const anim = ACT_ANIM[decor] ?? "jump";
-  const cls = "dm-act-" + anim;
-  const svgs = document.querySelectorAll(".dae-m");
-  if (!svgs.length) return;
-  svgs.forEach((svg) => {
-    svg.classList.remove("dm-act-bow", "dm-act-jump", "dm-act-shake", "dm-act-spin");
+export function triggerMascotAction(name) {
+  if (!booted) return false;
+  let any = false;
+  instances.forEach((m) => {
+    if (!m.host.isConnected || !m.host.getClientRects().length) return;
+    if (m.act(name)) any = true;
   });
-  // paksa reflow agar animasi bisa di-restart
-  void document.body.offsetHeight;
-  svgs.forEach((svg) => {
-    svg.classList.add(cls);
-    setTimeout(() => svg.classList.remove(cls), 1500);
-  });
+  return any;
 }
 
 /** Lepas observer/timer (untuk uji atau hot-reload). */
@@ -858,5 +1039,6 @@ export function disposeMascots() {
   pillObserver = null;
   pillEl = null;
   clearInterval(decorTimer);
+  previewKey = null;
   booted = false;
 }

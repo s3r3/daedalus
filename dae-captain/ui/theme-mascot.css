@@ -98,7 +98,7 @@ button { transition: transform var(--t-fast) var(--ease), background-color var(-
 /* ---------- 5. PILL (dynamic island) ---------- */
 .pill {
   --st: var(--accent);
-  position: relative; gap: 10px; min-height: 46px; padding: 5px 16px 5px 5px;
+  position: relative; gap: 10px; min-height: 48px; padding: 4px 16px 4px 4px;
   border: 1.5px solid transparent; border-radius: 999px; color: var(--text);
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--panel) 96%, #fff 4%), var(--panel)) padding-box,
@@ -116,7 +116,9 @@ button { transition: transform var(--t-fast) var(--ease), background-color var(-
 .pill[data-status="error"]            { --st: #ff6b81; }
 .pill:hover { transform: translateY(-1px); box-shadow: 0 16px 40px rgba(4, 4, 24, .7), 0 0 32px -8px var(--st); }
 .pill:active { transform: scale(.97); }
-.pill-ring { width: 38px; height: 38px; }
+.pill-ring { width: 40px; height: 40px; }
+.pill-ring .ring-svg { pointer-events: none; } /* klik harus sampai ke maskot (animasi klik) */
+.pill-ring .mascot { position: relative; z-index: 1; }
 .ring-track { stroke: color-mix(in srgb, var(--st, var(--accent)) 24%, transparent); opacity: 1; }
 .ring-fill { stroke: var(--st, var(--accent)); stroke-width: 3; transition: stroke-dasharray var(--t-mid) var(--ease), opacity var(--t-fast) ease, stroke var(--t-slow) ease; }
 .pill .pill-dot {
@@ -174,7 +176,7 @@ button { transition: transform var(--t-fast) var(--ease), background-color var(-
   border-bottom: 1px solid var(--line);
 }
 .panel-header::before { /* siluet simbol dekorasi, sangat samar */
-  content: var(--glyph); position: absolute; right: 108px; top: 50%; transform: translateY(-50%) rotate(-10deg);
+  content: var(--glyph); position: absolute; right: 205px; top: 50%; transform: translateY(-50%) rotate(-10deg);
   font-size: 34px; opacity: .12; pointer-events: none; transition: opacity var(--t-slow) ease;
 }
 .panel-header::after { /* garis aksen */
@@ -222,7 +224,7 @@ h3 { color: var(--dim); }
 .composer { border-top: 1px solid var(--line); padding-top: 10px; }
 .composer-row { gap: 10px; }
 .composer-row textarea {
-  background: var(--card); border: 1.5px solid var(--line); border-radius: 22px; padding: 11px 18px;
+  background: var(--card); border: 1.5px solid var(--line); border-radius: 22px; padding: 10px 16px; min-height: 42px;
   transition: border-color var(--t-mid) ease, box-shadow var(--t-mid) ease, background var(--t-mid) ease;
 }
 .composer-row textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); outline: none; }
@@ -295,12 +297,17 @@ h3 { color: var(--dim); }
 .set-group > .section-header:first-child { margin-top: 12px; }
 .section-header::after { content: ""; flex: 1; height: 2px; border-radius: 2px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 55%, transparent), transparent); }
 .field label { color: var(--dim); font-weight: 600; }
-.field input, .field select, .tier select, .ws-search-row input {
+.field input, .field select, .tier input, .tier select, .ws-search-row input {
   background: var(--ground); border: 1.5px solid var(--line); border-radius: 14px; padding: 9px 12px;
   transition: border-color var(--t-mid) ease, box-shadow var(--t-mid) ease;
 }
-.field input:focus, .field select:focus, .tier select:focus, .ws-search-row input:focus {
+.field input:focus, .field select:focus, .tier input:focus, .tier select:focus, .ws-search-row input:focus {
   border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); outline: none;
+}
+.tier input { width: 100%; }
+/* input teks polos (mis. folder workspace) yang belum punya kelas .field */
+:where(section) input:where([type="text"], [type="password"], [type="search"], :not([type])) {
+  background: var(--ground); color: var(--text); border: 1.5px solid var(--line); border-radius: 14px; padding: 9px 12px;
 }
 .tier, .engine-toggle-row { background: var(--ground); border: 1px solid var(--line); border-radius: 14px; }
 .toggle { border-radius: 999px; transition: background-color var(--t-mid) ease, color var(--t-mid) ease; }
@@ -376,6 +383,7 @@ h3 { color: var(--dim); }
 .wd-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
 .wd-head h2 { flex: 1; margin: 0; font-size: 15px; font-weight: 800; }
 .wd-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.wd-body > * { flex: none; }
 .wd-stage {
   position: relative; display: flex; align-items: center; gap: 16px; padding: 14px 16px; border-radius: 22px;
   background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%), var(--card);
@@ -422,29 +430,8 @@ h3 { color: var(--dim); }
   .pill-text { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 }
 
-/* ---------- 15. GERAK (keyframes global + aksesibilitas gerak) ---------- */
-@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .55; transform: scale(.82); } }
-@keyframes island-expand { from { opacity: 0; transform: scale(.96) translateY(10px); } to { opacity: 1; transform: none; } }
-
-/* transisi warna saat dekorasi berganti — halus, tidak kedip */
-.pill, .panel, .bubble, .action-btn, .primary-btn, .ghost-btn, .card-btn,
-.wf-row, .run-card, .approval-card, .artifact-card, .dc-card, .set-group,
-.filter-chip, .engine-chips button, .composer-row textarea, .field input, .field select {
-  transition-property: background-color, border-color, color, box-shadow;
-  transition-duration: var(--t-slow);
-  transition-timing-function: ease;
-}
-
-html { scroll-behavior: smooth; }
-.transcript, .wd-body, .runs-list { scroll-behavior: smooth; }
-
-/* hormati preferensi gerak pengguna */
+/* ---------- 15. GERAK ---------- */
 @media (prefers-reduced-motion: reduce) {
-  html, .transcript, .wd-body, .runs-list { scroll-behavior: auto; }
-  *, *::before, *::after {
-    animation-duration: .01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: .01ms !important;
-  }
-  .pill::after, .panel-header::before, .wd-stage::after { display: none; }
+  .pill::after, .set-group, .wd, .preview-box, .preview-overlay { animation: none !important; }
+  .pill, .panel, .wd-card, .wf-row, .ws-item { transition-duration: .01ms !important; }
 }
