@@ -153,6 +153,9 @@ export class TerminalManager {
       child,
     };
     this.#sessions.set(session.id, session);
+    // B10: EPIPE pada stdin bila shell mati di antara cek writable dan write
+    // adalah event 'error' tanpa listener (= crash proses).
+    child.stdin?.on("error", () => undefined);
     const consume = (chunk: Buffer): void => this.#append(session, chunk.toString());
     child.stdout?.on("data", consume);
     child.stderr?.on("data", consume);
@@ -250,6 +253,22 @@ export class TerminalManager {
     this.#sessions.clear();
     this.#agentByRoot.clear();
     this.#listeners.clear();
+  }
+
+  /**
+   * Shutdown yang menunggu: SIGTERM, lalu SIGKILL untuk yang masih hidup
+   * SEBELUM exit. B10: dispose() lama menjadwalkan SIGKILL via timer unref()
+   * yang tak pernah jalan bila process.exit() dipanggil duluan — shell yatim.
+   */
+  async disposeAndWait(graceMs = KILL_GRACE_MS + 300): Promise<void> {
+    const running = [...this.#sessions.values()].filter((s) => s.child && s.status === "running");
+    this.dispose();
+    if (running.length === 0) return;
+    const deadline = Date.now() + graceMs;
+    while (Date.now() < deadline && running.some((s) => s.status === "running")) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    for (const s of running) if (s.status === "running") signalProcess(s, "SIGKILL");
   }
 
   #agentSession(root: string): Session | undefined {

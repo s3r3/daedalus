@@ -1773,6 +1773,25 @@ function settleTaskIfStillActive(
 }
 
 /**
+ * Sapu turn "running" basi di SEMUA home yang dikenal (bukan hanya cwd).
+ * B6: main.ts lama memakai process.cwd() yang bisa salah folder bila
+ * server di-spawn tanpa cwd yang benar.
+ */
+export function sweepStaleWorkflowRuns(ctx: AppContext): number {
+  const homes = new Set<string>();
+  for (const root of allowedRoots(ctx)) homes.add(resolveDaedalusHome(ctx.settings.daedalusHome, root));
+  let total = 0;
+  for (const home of homes) {
+    try {
+      total += new WorkflowRunStore(home).markStaleRunningInterrupted();
+    } catch (error) {
+      ctx.log.warn("stale run cleanup failed", { home, error: String(error) });
+    }
+  }
+  return total;
+}
+
+/**
  * Shared task-creation core behind POST /tasks and POST /workflow/chat
  * (Dae Captain). Behavior-identical to the original inline route body:
  * validates the payload, saves state, and starts the runner or fast
