@@ -1,0 +1,450 @@
+/* ==========================================================================
+   Dae Captain — tema selaras maskot v2  (muat SETELAH styles.css)
+   Hanya CSS: tidak mengubah logic JS. Dekorasi mengikuti <html data-decor="...">
+   yang diatur otomatis oleh mascot.js (currentDecor / Panel Ganti Baju).
+   Nilai aksen per dekorasi ada di bagian "PALET DEKORASI" — ubah di sana saja.
+   ========================================================================== */
+
+/* ---------- 1. TOKEN DASAR (gelap) ---------- */
+:root {
+  --hue: #6f8bff;          /* warna aksen dekorasi aktif */
+  --hue2: #8b7bff;         /* pasangan gradien */
+  --on: #ffffff;           /* teks di atas aksen */
+  --glyph: "✦";            /* simbol dekorasi (pill + header chat) */
+
+  --ground: #070818;
+  --panel: #0c0d26;
+  --card: #12133a;
+  --line: #262a6e;
+  --text: #e4e6ff;
+  --dim: #8c93d9;
+  --accent: var(--hue);
+  --accent2: var(--hue2);
+  --on-accent: var(--on);
+  --bubble-user: #3a45d8;
+  --bubble-assistant: #12133a;
+  --green: #5bd18a;
+  --amber: #ffc13a;
+  --blue: #8fb0ff;
+  --red: #ff7a8e;
+  --purple: #b392f0;
+  --bg: var(--panel);
+  --bg-soft: var(--card);
+  --radius: 26px;
+
+  --ease: cubic-bezier(.2, .9, .25, 1);
+  --t-fast: 200ms;
+  --t-mid: 300ms;
+  --t-slow: 400ms;
+  color-scheme: dark;
+}
+
+/* ---------- 2. TOKEN TERANG ---------- */
+body[data-theme="light"] {
+  --ground: #f3f2ff;
+  --panel: #ffffff;
+  --card: #f1f0ff;
+  --line: #d8d7f6;
+  --text: #1b1a3a;
+  --dim: #66679a;
+  --accent: color-mix(in srgb, var(--hue) 72%, #1b1a3a);
+  --accent2: color-mix(in srgb, var(--hue2) 72%, #1b1a3a);
+  --on-accent: #ffffff;
+  --bubble-user: #dfe4ff;
+  --bubble-assistant: #f1f0ff;
+  --green: #1e9e5a;
+  --amber: #b97a0a;
+  --blue: #3b5bd4;
+  --red: #d33f5a;
+  --bg: var(--panel);
+  --bg-soft: var(--card);
+  color-scheme: light;
+}
+
+/* ---------- 3. PALET DEKORASI (ikut maskot) ---------- */
+:root[data-decor="default"]      { --hue:#6f8bff; --hue2:#8b7bff; --on:#fff;     --glyph:"✦"; }
+:root[data-decor="spring"]       { --hue:#ff8fc0; --hue2:#ffc2dc; --on:#3a0f2c;  --glyph:"🌸"; }
+:root[data-decor="summer"]       { --hue:#ffc933; --hue2:#ff9d3f; --on:#2a1d00;  --glyph:"☀️"; }
+:root[data-decor="autumn"]       { --hue:#ff9d3f; --hue2:#e0523a; --on:#2b1100;  --glyph:"🍂"; }
+:root[data-decor="winter"]       { --hue:#7ab8ff; --hue2:#a5d4ff; --on:#06142b;  --glyph:"❄️"; }
+:root[data-decor="halloween"]    { --hue:#ff8a1f; --hue2:#8b5cf6; --on:#1d0d00;  --glyph:"🎃"; }
+:root[data-decor="christmas"]    { --hue:#ff5c6c; --hue2:#3fbf7f; --on:#fff;     --glyph:"🎄"; }
+:root[data-decor="newyear"]      { --hue:#ffd66b; --hue2:#ff8fb8; --on:#2a1d00;  --glyph:"🎉"; }
+:root[data-decor="valentine"]    { --hue:#ff6b9a; --hue2:#ff9ec7; --on:#fff;     --glyph:"💗"; }
+:root[data-decor="ramadan"]      { --hue:#ffc13a; --hue2:#4fb870; --on:#1d1500;  --glyph:"🌙"; }
+:root[data-decor="eid"]          { --hue:#4fd18a; --hue2:#ffd66b; --on:#05210f;  --glyph:"✨"; }
+:root[data-decor="independence"] { --hue:#ff4d5e; --hue2:#f4f4ff; --on:#fff;     --glyph:"★"; }
+/* kostum tradisional */
+:root[data-decor="batik"]        { --hue:#e8b563; --hue2:#a8743a; --on:#2a1a00;  --glyph:"❀"; }
+:root[data-decor="kimono"]       { --hue:#ff7a9a; --hue2:#ffd1e0; --on:#2a0614;  --glyph:"🌸"; }
+:root[data-decor="hanbok"]       { --hue:#ff8fb8; --hue2:#ffe27a; --on:#2a0a1a;  --glyph:"✿"; }
+:root[data-decor="changshan"]    { --hue:#e8283c; --hue2:#ffd66b; --on:#fff;     --glyph:"🏮"; }
+:root[data-decor="kurta"]        { --hue:#1fa89a; --hue2:#ff9d3f; --on:#fff;     --glyph:"🌼"; }
+:root[data-decor="thobe"]        { --hue:#c7ccf0; --hue2:#d9283c; --on:#0a0a28;  --glyph:"☪"; }
+:root[data-decor="jas"]          { --hue:#8c93d9; --hue2:#d9283c; --on:#fff;     --glyph:"☂"; }
+:root[data-decor="beret"]        { --hue:#ff5c6c; --hue2:#3a5bd9; --on:#fff;     --glyph:"⚜"; }
+:root[data-decor="sombrero"]     { --hue:#e8b24a; --hue2:#e0523a; --on:#2a1a00;  --glyph:"♪"; }
+:root[data-decor="aloha"]        { --hue:#2bb3c0; --hue2:#ff7aa8; --on:#04222a;  --glyph:"🌺"; }
+
+/* ---------- 4. DASAR ---------- */
+html, body { font-family: Inter, "Segoe UI", -apple-system, sans-serif; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+::selection { background: color-mix(in srgb, var(--accent) 40%, transparent); }
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--dim) 45%, transparent) transparent; }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+button { transition: transform var(--t-fast) var(--ease), background-color var(--t-fast) ease,
+  border-color var(--t-fast) ease, color var(--t-fast) ease, box-shadow var(--t-mid) ease, opacity var(--t-fast) ease; }
+
+/* ---------- 5. PILL (dynamic island) ---------- */
+.pill {
+  --st: var(--accent);
+  position: relative; gap: 10px; min-height: 46px; padding: 5px 16px 5px 5px;
+  border: 1.5px solid transparent; border-radius: 999px; color: var(--text);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--panel) 96%, #fff 4%), var(--panel)) padding-box,
+    linear-gradient(120deg, var(--st), var(--accent2) 55%, var(--st)) border-box;
+  box-shadow: 0 12px 34px rgba(4, 4, 24, .62), 0 0 26px -10px var(--st);
+  transition: box-shadow var(--t-slow) ease, background var(--t-slow) ease, transform var(--t-fast) var(--ease), opacity var(--t-mid) ease;
+}
+.pill[data-status="working"]          { --st: #6f8bff; }
+.pill[data-status="verifying"]        { --st: #4fd1c5; }
+.pill[data-status="fixing"]           { --st: #ffb84a; }
+.pill[data-status="waiting_approval"] { --st: #ffc13a; }
+.pill[data-status="paused"]           { --st: #8c93d9; }
+.pill[data-status="queued"]           { --st: #8c93d9; }
+.pill[data-status="done"]             { --st: #5bd18a; }
+.pill[data-status="error"]            { --st: #ff6b81; }
+.pill:hover { transform: translateY(-1px); box-shadow: 0 16px 40px rgba(4, 4, 24, .7), 0 0 32px -8px var(--st); }
+.pill:active { transform: scale(.97); }
+.pill-ring { width: 38px; height: 38px; }
+.ring-track { stroke: color-mix(in srgb, var(--st, var(--accent)) 24%, transparent); opacity: 1; }
+.ring-fill { stroke: var(--st, var(--accent)); stroke-width: 3; transition: stroke-dasharray var(--t-mid) var(--ease), opacity var(--t-fast) ease, stroke var(--t-slow) ease; }
+.pill .pill-dot {
+  width: 8px; height: 8px; background: var(--st) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--st) 24%, transparent);
+  transition: background var(--t-slow) ease, box-shadow var(--t-slow) ease;
+}
+.pill-text { font-size: 13px; font-weight: 600; letter-spacing: .01em; color: var(--text); }
+.pill-btn {
+  border-color: color-mix(in srgb, var(--st) 45%, transparent); color: var(--text);
+  background: color-mix(in srgb, var(--st) 14%, transparent); height: 26px; min-width: 26px;
+}
+.pill-btn:hover { background: color-mix(in srgb, var(--st) 30%, transparent); border-color: var(--st); color: var(--text); }
+.pill-btn-text { background: linear-gradient(135deg, var(--st), var(--accent2)); border-color: transparent; color: #0a0a28; font-weight: 700; }
+.pill-btn-text:hover { color: #0a0a28; filter: brightness(1.08); }
+/* simbol dekorasi di sudut pill */
+.pill::after {
+  content: var(--glyph); position: absolute; top: -10px; right: 16px; font-size: 14px; line-height: 1;
+  color: var(--accent); pointer-events: none; filter: drop-shadow(0 2px 4px rgba(0, 0, 0, .55));
+  animation: dae-glyph-bob 3.4s ease-in-out infinite;
+}
+@keyframes dae-glyph-bob { 50% { transform: translateY(-2px) rotate(6deg); } }
+
+/* animasi masuk status (dipicu saat atribut data-status berganti) */
+.pill[data-status="done"]             { animation: dae-pill-pop .5s cubic-bezier(.2, 1.4, .4, 1); }
+.pill[data-status="error"]            { animation: dae-pill-shake .45s ease; }
+.pill[data-status="waiting_approval"] { animation: dae-pill-nudge .55s ease; }
+.pill.pill-pulse[data-status="done"],
+.pill.pill-pulse[data-status="waiting_approval"] { animation: dae-pill-pop .5s cubic-bezier(.2, 1.4, .4, 1), pill-throb 1.6s ease-in-out .5s infinite; }
+.pill.pill-pulse { animation: pill-throb 1.6s ease-in-out infinite; }
+@keyframes dae-pill-pop { 0% { transform: scale(.94); } 55% { transform: scale(1.06); } 100% { transform: scale(1); } }
+@keyframes dae-pill-shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-5px); } 45% { transform: translateX(4px); } 70% { transform: translateX(-2px); } }
+@keyframes dae-pill-nudge { 0%, 100% { transform: translateY(0); } 35% { transform: translateY(-4px); } 65% { transform: translateY(1px); } }
+@keyframes pill-throb {
+  0%, 100% { box-shadow: 0 12px 34px rgba(4, 4, 24, .62), 0 0 26px -10px var(--st); }
+  50% { box-shadow: 0 12px 34px rgba(4, 4, 24, .62), 0 0 0 6px color-mix(in srgb, var(--st) 28%, transparent), 0 0 34px -4px var(--st); }
+}
+.pill.pill-dnd { filter: saturate(.7); }
+.pill.pill-offline { opacity: .8; }
+
+/* ---------- 6. PANEL & HEADER ---------- */
+.panel {
+  position: relative; width: 480px; border: 1.5px solid transparent; border-radius: var(--radius);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, var(--accent) 8%), var(--panel) 38%) padding-box,
+    linear-gradient(140deg, color-mix(in srgb, var(--accent) 75%, transparent), transparent 38%, color-mix(in srgb, var(--accent2) 55%, transparent)) border-box;
+  box-shadow: 0 26px 70px rgba(2, 2, 20, .68), 0 0 60px -26px var(--accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .panel { animation: island-expand .34s var(--ease); }
+}
+.panel-header {
+  position: relative; overflow: hidden; padding: 12px 14px;
+  background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 16%, transparent), transparent 62%);
+  border-bottom: 1px solid var(--line);
+}
+.panel-header::before { /* siluet simbol dekorasi, sangat samar */
+  content: var(--glyph); position: absolute; right: 108px; top: 50%; transform: translateY(-50%) rotate(-10deg);
+  font-size: 34px; opacity: .12; pointer-events: none; transition: opacity var(--t-slow) ease;
+}
+.panel-header::after { /* garis aksen */
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; pointer-events: none;
+  background: linear-gradient(90deg, var(--accent), var(--accent2), transparent 85%);
+}
+.identity { gap: 12px; }
+.identity .mascot { width: 44px; height: 44px; filter: drop-shadow(0 4px 10px color-mix(in srgb, var(--accent) 35%, transparent)); cursor: pointer; }
+.identity-title { font-size: 15px; font-weight: 800; letter-spacing: .01em; }
+.identity-sub { color: var(--accent); font-weight: 600; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; }
+.identity-status { color: var(--dim); }
+.icon-btn { border-radius: 12px; width: 32px; height: 32px; color: var(--dim); }
+.icon-btn:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); }
+section { padding: 12px 14px; }
+h2 { font-size: 15px; font-weight: 700; }
+h3 { color: var(--dim); }
+
+/* ---------- 7. CHAT ---------- */
+.transcript { gap: 10px; max-height: 340px; padding: 4px 2px; }
+.bubble { padding: 10px 14px; border-radius: 20px; line-height: 1.5; }
+.bubble.user {
+  background: linear-gradient(135deg, var(--accent), var(--accent2)); color: var(--on-accent);
+  border-bottom-right-radius: 6px; box-shadow: 0 8px 20px -10px var(--accent);
+}
+.bubble.assistant {
+  background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 6px;
+  box-shadow: 0 6px 18px -12px rgba(0, 0, 0, .6);
+}
+.bubble.assistant a { color: var(--accent); }
+.bubble .who { color: var(--accent); letter-spacing: .02em; }
+.bubble.user .msg-time { color: color-mix(in srgb, var(--on-accent) 70%, transparent); }
+.bubble.assistant.error, .bubble.error { border-color: color-mix(in srgb, var(--red) 45%, transparent); background: color-mix(in srgb, var(--red) 8%, var(--card)); }
+.inline-code { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.code-block { background: var(--ground); border-color: var(--line); border-radius: 14px; }
+.jump-btn { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: var(--on-accent); }
+
+.action-row { gap: 8px; }
+.action-btn { background: var(--card); border: 1px solid var(--line); border-radius: 999px; padding: 8px 0; color: var(--text); }
+.action-btn:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--card)); }
+.action-btn.active { color: var(--accent); border-color: var(--accent); }
+.chat-engine-pill, .engine-pill { background: var(--card); border: 1px solid var(--line); border-radius: 999px; }
+.engine-chips button { border-radius: 999px; }
+.engine-chips button.active { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: var(--accent); color: var(--text); }
+
+.composer { border-top: 1px solid var(--line); padding-top: 10px; }
+.composer-row { gap: 10px; }
+.composer-row textarea {
+  background: var(--card); border: 1.5px solid var(--line); border-radius: 22px; padding: 11px 18px;
+  transition: border-color var(--t-mid) ease, box-shadow var(--t-mid) ease, background var(--t-mid) ease;
+}
+.composer-row textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); outline: none; }
+.send-btn {
+  width: 42px; height: 42px; background: linear-gradient(135deg, var(--accent), var(--accent2)); color: var(--on-accent);
+  box-shadow: 0 10px 22px -10px var(--accent);
+}
+.send-btn:hover:not(:disabled) { transform: translateY(-1px) scale(1.05); filter: none; box-shadow: 0 14px 26px -10px var(--accent); }
+.stop-btn { width: 42px; height: 42px; background: linear-gradient(135deg, #ff6b81, #e0523a); box-shadow: 0 10px 22px -10px #ff6b81; }
+.slash-menu { background: var(--card); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 16px 40px rgba(2, 2, 20, .6); }
+.slash-item.active { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.attach-chip { background: var(--card); border-radius: 999px; }
+
+/* ---------- 8. TOMBOL UMUM ---------- */
+.primary-btn {
+  background: linear-gradient(135deg, var(--accent), var(--accent2)); color: var(--on-accent);
+  border-radius: 14px; padding: 9px 16px; box-shadow: 0 10px 22px -12px var(--accent);
+}
+.primary-btn:hover:not(:disabled) { filter: none; box-shadow: 0 14px 26px -12px var(--accent); }
+.ghost-btn { background: var(--card); border: 1px solid var(--line); border-radius: 14px; color: var(--text); }
+.ghost-btn:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--card)); }
+.deny-btn { border-radius: 14px; }
+.deny-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 14%, transparent); }
+
+/* ---------- 9. ANTREAN ---------- */
+.filter-chips { gap: 8px; }
+.filter-chip { border-radius: 999px; padding: 7px 15px; }
+.filter-chip.active { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: var(--on-accent); border-color: transparent; }
+.wf-rows, .runs-list { gap: 10px; }
+.wf-row, .run-card {
+  --st: var(--blue); position: relative; overflow: hidden;
+  background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 12px 14px 12px 20px;
+  transition: border-color var(--t-mid) ease, transform var(--t-mid) var(--ease), box-shadow var(--t-mid) ease;
+}
+.wf-row::before, .run-card::before {
+  content: ""; position: absolute; left: 0; top: 12px; bottom: 12px; width: 4px; border-radius: 0 4px 4px 0;
+  background: var(--st); box-shadow: 0 0 14px color-mix(in srgb, var(--st) 70%, transparent);
+}
+.wf-row:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--st) 55%, var(--line)); box-shadow: 0 12px 26px -16px var(--st); }
+.wf-row:has(.badge.green) { --st: var(--green); }
+.wf-row:has(.badge.amber) { --st: var(--amber); }
+.wf-row:has(.badge.red) { --st: var(--red); }
+.wf-row:has(.badge.gray) { --st: var(--dim); }
+.run-card:has(.dot.green) { --st: var(--green); }
+.run-card:has(.dot.amber) { --st: var(--amber); }
+.badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; font-size: 11px; }
+.badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.badge.blue::before { animation: pulse 1.2s ease-in-out infinite; }
+.badge.blue { background: color-mix(in srgb, #6f8bff 18%, transparent); color: var(--blue); }
+.badge.green { background: color-mix(in srgb, var(--green) 18%, transparent); }
+.badge.amber { background: color-mix(in srgb, var(--amber) 18%, transparent); }
+.badge.red { background: color-mix(in srgb, var(--red) 18%, transparent); }
+.wf-engine { text-transform: capitalize; }
+.wf-feed, .scan-out { background: var(--ground); border: 1px solid var(--line); border-radius: 12px; }
+
+/* ---------- 10. PENGATURAN ---------- */
+.settings-single { gap: 0; }
+.settings-title { font-size: 17px; font-weight: 800; margin-bottom: 14px; }
+.set-group {
+  background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 2px 16px 14px; margin-bottom: 14px;
+  animation: dae-rise-in var(--t-slow) var(--ease) both;
+}
+.set-group:nth-of-type(2) { animation-delay: 40ms; } .set-group:nth-of-type(3) { animation-delay: 80ms; }
+.set-group:nth-of-type(4) { animation-delay: 120ms; } .set-group:nth-of-type(n+5) { animation-delay: 160ms; }
+@keyframes dae-rise-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.section-header {
+  display: flex; align-items: center; gap: 8px; margin: 14px 0 12px; padding-bottom: 10px;
+  font-size: 12px; font-weight: 800; letter-spacing: .08em; color: var(--text); border-bottom: 1px solid var(--line);
+}
+.set-group > .section-header:first-child { margin-top: 12px; }
+.section-header::after { content: ""; flex: 1; height: 2px; border-radius: 2px; background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 55%, transparent), transparent); }
+.field label { color: var(--dim); font-weight: 600; }
+.field input, .field select, .tier select, .ws-search-row input {
+  background: var(--ground); border: 1.5px solid var(--line); border-radius: 14px; padding: 9px 12px;
+  transition: border-color var(--t-mid) ease, box-shadow var(--t-mid) ease;
+}
+.field input:focus, .field select:focus, .tier select:focus, .ws-search-row input:focus {
+  border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); outline: none;
+}
+.tier, .engine-toggle-row { background: var(--ground); border: 1px solid var(--line); border-radius: 14px; }
+.toggle { border-radius: 999px; transition: background-color var(--t-mid) ease, color var(--t-mid) ease; }
+.toggle.on { background: color-mix(in srgb, var(--green) 20%, transparent); color: var(--green); }
+.prov-row, .approval-row, .reminder-row, .memory-row { border-bottom-color: var(--line); }
+.status-dot.dot-green { box-shadow: 0 0 8px var(--green); }
+.status-dot.dot-red { box-shadow: 0 0 8px var(--red); }
+.hint { color: var(--dim); }
+.saved { color: var(--green); }
+.set-wardrobe { display: flex; align-items: center; gap: 14px; padding: 12px 0 4px; }
+.set-wardrobe .mascot { width: 64px; height: 64px; flex: none; cursor: pointer; }
+.set-wardrobe p { margin: 0 0 8px; }
+
+/* ---------- 11. WORKSPACE ---------- */
+.ws-search-row input { border-radius: 999px; padding: 10px 16px; }
+.ws-list, .ws-tree { gap: 2px; }
+.ws-item { border-radius: 12px; padding: 7px 12px; transition: background-color var(--t-fast) ease, transform var(--t-mid) var(--ease); }
+.ws-item:hover { background: color-mix(in srgb, var(--accent) 13%, transparent); transform: translateX(2px); }
+.ws-dir { color: var(--text); }
+.ws-caret { transition: transform var(--t-fast) ease; }
+.tag-cap { color: var(--accent2); }
+.ws-git { color: var(--dim); }
+
+/* ---------- 12. KARTU (approval, deliverable, outline, dll.) ---------- */
+.approval-card {
+  position: relative; overflow: hidden; border: 1px solid color-mix(in srgb, var(--amber) 55%, transparent);
+  border-radius: 18px; padding: 14px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--amber) 11%, transparent), transparent 70%), var(--card);
+}
+.approval-card::before { content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 4px; border-radius: 0 4px 4px 0; background: var(--amber); box-shadow: 0 0 14px var(--amber); }
+.approval-card .approval-header { color: var(--amber); }
+.artifact-card, .dc-card, .tool-row, .change-row {
+  background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+}
+.artifact-card { padding: 10px 12px; transition: transform var(--t-mid) var(--ease), border-color var(--t-mid) ease, box-shadow var(--t-mid) ease; }
+.artifact-card:hover { transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); box-shadow: 0 12px 26px -16px var(--accent); }
+.artifact-icon { filter: drop-shadow(0 2px 6px color-mix(in srgb, var(--accent) 40%, transparent)); }
+.dc-card { margin-top: 12px; overflow: hidden; }
+.dc-card-head {
+  padding: 11px 14px; font-weight: 700; border-bottom: 1px solid var(--line);
+  background: linear-gradient(120deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 70%);
+}
+.dc-badge { background: color-mix(in srgb, var(--accent) 14%, transparent); color: var(--accent); }
+.dc-row, .dc-field-row { border-bottom-color: var(--line); }
+.card-btn { background: var(--ground); border: 1px solid var(--line); border-radius: 12px; color: var(--text); padding: 8px 15px; }
+.card-btn:hover:not(:disabled) { filter: none; border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--ground)); }
+.card-btn.dc-primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: var(--on-accent); border-color: transparent; box-shadow: 0 10px 22px -12px var(--accent); }
+.card-btn.dc-primary:hover:not(:disabled) { background: linear-gradient(135deg, var(--accent), var(--accent2)); filter: brightness(1.06); }
+.card-btn.dc-chip.selected { border-color: var(--accent); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.card-btn.dc-link { background: none; border: none; color: var(--accent); box-shadow: none; }
+.dc-input { background: var(--ground); border-radius: 12px; border: 1.5px solid var(--line); transition: border-color var(--t-mid) ease, box-shadow var(--t-mid) ease; }
+.dc-input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); }
+.dc-editor, .dc-trace-item { border-color: var(--line); border-radius: 12px; }
+.dc-progress { height: 8px; background: color-mix(in srgb, var(--accent) 14%, transparent); border-radius: 999px; }
+.dc-progress-fill { background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 999px; transition: width .4s var(--ease); }
+.tool-chip, .tool-badge { border-radius: 999px; }
+.tool-row { padding: 8px 12px; }
+.preview-overlay { background: rgba(3, 3, 20, .74); backdrop-filter: blur(6px); animation: dae-fade var(--t-mid) ease both; }
+.preview-box { background: var(--panel); border: 1px solid var(--line); border-radius: 22px; box-shadow: 0 30px 80px rgba(2, 2, 20, .7); animation: dae-rise-in var(--t-slow) var(--ease) both; }
+.preview-head { border-bottom-color: var(--line); }
+@keyframes dae-fade { from { opacity: 0; } to { opacity: 1; } }
+.quit-dialog { background: var(--card); border-top: 1px solid var(--line); border-radius: 0 0 var(--radius) var(--radius); }
+
+/* ---------- 13. PANEL GANTI BAJU (wardrobe.js) ---------- */
+.wd {
+  position: absolute; inset: 0; z-index: 30; display: flex; flex-direction: column; border-radius: inherit;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, var(--accent) 6%), var(--panel) 42%);
+  animation: dae-wd-in var(--t-slow) var(--ease) both;
+}
+.wd.wd-out { animation: dae-wd-out var(--t-mid) ease both; }
+@keyframes dae-wd-in { from { opacity: 0; transform: translateY(12px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes dae-wd-out { to { opacity: 0; transform: translateY(8px) scale(.99); } }
+.wd-head { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.wd-head h2 { flex: 1; margin: 0; font-size: 15px; font-weight: 800; }
+.wd-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+.wd-stage {
+  position: relative; display: flex; align-items: center; gap: 16px; padding: 14px 16px; border-radius: 22px;
+  background: radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 60%), var(--card);
+  border: 1px solid var(--line); overflow: hidden;
+}
+.wd-stage::after { content: var(--glyph); position: absolute; right: 14px; top: 8px; font-size: 38px; opacity: .14; pointer-events: none; }
+.wd-stage .mascot { width: 128px; height: 128px; flex: none; cursor: pointer; filter: drop-shadow(0 10px 18px color-mix(in srgb, var(--accent) 35%, transparent)); }
+.wd-info { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.wd-info strong { font-size: 16px; }
+.wd-info small { color: var(--dim); }
+.wd-tag { align-self: flex-start; font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.wd-seg { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; border-radius: 999px; background: var(--ground); border: 1px solid var(--line); }
+.wd-seg button { border: 0; border-radius: 999px; padding: 9px 12px; background: transparent; color: var(--dim); font-weight: 700; }
+.wd-seg button[aria-pressed="true"] { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: var(--on-accent); box-shadow: 0 8px 18px -10px var(--accent); }
+.wd-opt { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); }
+.wd-title { margin: 0; font-size: 11px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--dim); display: flex; align-items: center; gap: 8px; }
+.wd-title::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.wd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 10px; }
+.wd-card {
+  position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 6px 10px;
+  background: var(--card); border: 1.5px solid var(--line); border-radius: 18px; color: var(--text); text-align: center;
+  transition: transform var(--t-mid) var(--ease), border-color var(--t-mid) ease, box-shadow var(--t-mid) ease, background-color var(--t-mid) ease;
+}
+.wd-card:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--accent) 60%, var(--line)); }
+.wd-card[aria-pressed="true"] { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--card)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent), 0 12px 24px -14px var(--accent); }
+.wd-card[aria-pressed="true"]::after { content: "✓"; position: absolute; top: 6px; right: 8px; font-size: 11px; font-weight: 800; color: var(--accent); }
+.wd-thumb { width: 78px; height: 78px; display: block; }
+.wd-thumb .dae-m { width: 100%; height: 100%; }
+.wd-card:hover .dae-m.dm-frozen * { animation-play-state: running !important; }
+.wd-name { font-size: 11px; font-weight: 700; line-height: 1.25; }
+.wd-now { position: absolute; top: 6px; left: 6px; font-size: 9px; font-weight: 800; padding: 2px 6px; border-radius: 999px; background: var(--accent); color: var(--on-accent); }
+.wd-foot { padding: 10px 14px 14px; border-top: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+.wd-foot .hint { flex: 1; margin: 0; }
+
+/* ---------- 14. RESPONSIF ---------- */
+@media (max-width: 520px) {
+  .panel { width: calc(100vw - 16px); border-radius: 22px; }
+  .identity-sub { display: none; }
+  .wd-stage { flex-direction: column; text-align: center; }
+  .wd-info { align-items: center; }
+  .wd-tag { align-self: center; }
+}
+@media (max-width: 380px) {
+  .pill-text { max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+/* ---------- 15. GERAK (keyframes global + aksesibilitas gerak) ---------- */
+@keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .55; transform: scale(.82); } }
+@keyframes island-expand { from { opacity: 0; transform: scale(.96) translateY(10px); } to { opacity: 1; transform: none; } }
+
+/* transisi warna saat dekorasi berganti — halus, tidak kedip */
+.pill, .panel, .bubble, .action-btn, .primary-btn, .ghost-btn, .card-btn,
+.wf-row, .run-card, .approval-card, .artifact-card, .dc-card, .set-group,
+.filter-chip, .engine-chips button, .composer-row textarea, .field input, .field select {
+  transition-property: background-color, border-color, color, box-shadow;
+  transition-duration: var(--t-slow);
+  transition-timing-function: ease;
+}
+
+html { scroll-behavior: smooth; }
+.transcript, .wd-body, .runs-list { scroll-behavior: smooth; }
+
+/* hormati preferensi gerak pengguna */
+@media (prefers-reduced-motion: reduce) {
+  html, .transcript, .wd-body, .runs-list { scroll-behavior: auto; }
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+  .pill::after, .panel-header::before, .wd-stage::after { display: none; }
+}

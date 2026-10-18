@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dae Captain</title>
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="theme-mascot.css">
 </head>
 <body>
   <!-- Compact pill (dynamic island, collapsed). Managed by PillController (pill.js). -->
@@ -64,6 +65,7 @@
         </div>
       </div>
       <span class="header-actions">
+        <button id="btn-wardrobe" class="icon-btn" title="Ganti baju maskot">👕</button>
         <button id="btn-workspace" class="icon-btn" data-i18n-title="nav.workspace" title="Pilih workspace">📁</button>
         <button id="btn-settings" class="icon-btn" data-i18n-title="nav.settings" title="Pengaturan">⚙</button>
         <button id="btn-collapse" class="icon-btn" data-i18n-title="nav.collapse" title="Kecilkan">–</button>
@@ -211,6 +213,13 @@
         <div class="field"><label data-i18n="set.theme">Tema</label>
           <select id="set-theme"><option value="dark" data-i18n="set.themeDark">Gelap</option><option value="light" data-i18n="set.themeLight">Terang</option></select>
         </div>
+        <div class="set-wardrobe">
+          <span class="mascot" aria-hidden="true"></span>
+          <div style="flex:1;min-width:0">
+            <p><strong>Ganti baju maskot</strong></p>
+            <button id="btn-open-wardrobe" class="ghost-btn" type="button">👕 Buka panel ganti baju</button>
+          </div>
+        </div>
         <div class="field"><label data-i18n="set.thinking">Berpikir (reasoning effort)</label>
           <select id="set-thinking">
             <option value="off" data-i18n="set.thinkOff">Mati — tercepat, tanpa penalaran</option>
@@ -286,5 +295,6 @@
 <script src="vendor/docx-preview.min.js"></script>
 <script src="vendor/xlsx.min.js"></script>
 <script type="module" src="app.js"></script>
+<script type="module" src="wardrobe.js"></script>
 </body>
 </html>

@@ -51,8 +51,26 @@ export const DECOR_LABELS = {
 };
 export const DECOR_KEYS = Object.keys(DECOR_LABELS);
 
-/** Opsi untuk Settings: "auto" | "events" | "default" | salah satu DECOR_KEYS. */
-export const DECOR_PREFS = ["auto", "events", ...DECOR_KEYS];
+/** Baju tradisional dunia — kostum manual, tidak terikat musim/tanggal. */
+export const COSTUME_LABELS = {
+  batik: "Batik · Indonesia",
+  kimono: "Kimono · Jepang",
+  hanbok: "Hanbok · Korea",
+  changshan: "Changshan · Tiongkok",
+  kurta: "Kurta · India",
+  thobe: "Thobe · Arab",
+  jas: "Jas Bowler · Inggris",
+  beret: "Beret · Prancis",
+  sombrero: "Sombrero · Meksiko",
+  aloha: "Aloha · Hawaii",
+};
+export const COSTUME_KEYS = Object.keys(COSTUME_LABELS);
+
+/** Semua label dekorasi + kostum (untuk Panel Ganti Baju). */
+export const ALL_LABELS = { ...DECOR_LABELS, ...COSTUME_LABELS };
+
+/** Opsi untuk Settings: "auto" | "events" | "default" | salah satu DECOR_KEYS/COSTUME_KEYS. */
+export const DECOR_PREFS = ["auto", "events", ...DECOR_KEYS, ...COSTUME_KEYS];
 
 /* ------------------------------------------------------------------ */
 /* Dekor otomatis menurut tanggal                                      */
@@ -106,7 +124,7 @@ export function getDecorPref() {
 
 /** Dekor yang berlaku sekarang. mode: "auto" (acara→musim), "events" (acara→kapten), atau kunci tetap. */
 export function currentDecor(date = new Date(), mode = getDecorPref()) {
-  if (DECOR_KEYS.includes(mode)) return mode;
+  if (DECOR_KEYS.includes(mode) || COSTUME_KEYS.includes(mode)) return mode;
   const ev = eventDecor(date);
   if (ev) return ev;
   return mode === "events" ? "default" : seasonDecor(date);
@@ -240,6 +258,8 @@ const MOOD = {
   default: "ready", spring: "dreamy", summer: "grin", autumn: "cozy", halloween: "devious",
   winter: "shiver", christmas: "dreamy", newyear: "sparkle", valentine: "love",
   ramadan: "cozy", eid: "dreamy", independence: "ready",
+  batik: "ready", kimono: "cozy", hanbok: "dreamy", changshan: "ready", kurta: "cozy",
+  thobe: "ready", jas: "ready", beret: "dreamy", sombrero: "grin", aloha: "grin",
 };
 export function faceKeyFor(pose, decor) {
   if (pose === "idle") return MOOD[decor] ?? "idle";
@@ -354,6 +374,50 @@ const DECOR = {
     head: `<path d="M-84-28Q-50-62 0-62" stroke="#e8283c" stroke-width="12" fill="none"/><path d="M0-62Q50-62 84-28" stroke="#f4f4ff" stroke-width="12" fill="none"/>`,
     amb: `<rect x="100" y="-112" width="4" height="92" rx="2" fill="#cdd1ff"/>` + g("translate(104 -110)", `<g class="dm-wave"><rect width="44" height="14" fill="#e8283c"/><rect y="14" width="44" height="14" fill="#f4f4ff"/></g>`),
   },
+  /* ---------- kostum tradisional dunia (manual saja) ---------- */
+  batik: {
+    head: `<path d="M-60-50Q0-80 60-50L56-34Q0-60-56-34Z" fill="#6b4226"/><path d="M-56-52Q0-76 56-52" stroke="#e8b563" stroke-width="3" fill="none" stroke-dasharray="6 4"/><path d="M-52-44Q0-66 52-44" stroke="#e8b563" stroke-width="2" fill="none" stroke-dasharray="4 4"/>`,
+    amb: leaf(-100, -60, "#a8743a") + leaf(104, -70, "#e8b563", 1.5),
+  },
+  kimono: {
+    head: g("translate(54 -62)", `<g transform="rotate(18)"><rect x="-3" y="-26" width="6" height="30" rx="3" fill="#8b7bff"/>${flower(0, -30, "#ff9ec7")}${flower(14, -22, "#ffe27a")}</g>`),
+    amb: petal(-100, -60, "#ff9ec7") + petal(104, -70, "#ffc2dc", 1.5),
+  },
+  hanbok: {
+    head: g("translate(-54 -60)", `<g transform="rotate(-14)"><rect x="-3" y="-24" width="6" height="28" rx="3" fill="#b392f0"/>${flower(0, -28, "#ff8fb8")}</g>`)
+      + `<path d="M-70-40q-14 10-8 26" stroke="#ff8fb8" stroke-width="5" fill="none" stroke-linecap="round"/><path d="M-70-40q4 16 18 18" stroke="#ffe27a" stroke-width="5" fill="none" stroke-linecap="round"/>`,
+    amb: petal(-100, -70, "#ff8fb8") + petal(100, -60, "#ffe27a", 1.2),
+  },
+  changshan: {
+    neck: `<path d="M-44-50Q0-64 44-50" stroke="#e8283c" stroke-width="7" fill="none"/>${circ(0, -50, 5, "#ffd66b")}`,
+    head: `<path d="M-52-58Q0-80 52-58" stroke="#e8283c" stroke-width="4" fill="none" opacity=".85"/>`,
+    amb: `<g class="dm-pu">${star(-100, -60, "#ffd66b", 0.8)}</g>` + `<g class="dm-pu" style="animation-delay:.7s">${star(104, -66, "#ffd66b", 0.7)}</g>`,
+  },
+  kurta: {
+    head: `<path d="M-36-54V-72Q-36-88 0-88Q36-88 36-72V-54Z" fill="#f4f4ff"/><path d="M-36-66Q0-74 36-66" stroke="#e8b563" stroke-width="3" fill="none"/>${circ(-16, -76, 2.5, "#e8b563")}${circ(0, -79, 2.5, "#e8b563")}${circ(16, -76, 2.5, "#e8b563")}`,
+    amb: petal(-100, -60, "#ffe27a") + petal(104, -70, "#ff9ec7", 1.5),
+  },
+  thobe: {
+    head: `<path d="M-60-48Q0-94 60-48L56-28Q0-66-56-28Z" fill="#f6f7ff"/><rect x="-54" y="-60" width="108" height="11" rx="5.5" fill="#1a1a2e"/>`,
+    amb: `<g class="dm-pu">${star(-100, -64, "#c7ccf0", 0.8)}</g>`,
+  },
+  jas: {
+    head: `<ellipse cx="0" cy="-70" rx="36" ry="10" fill="#1a1a2e"/><path d="M-25-70Q-25-104 0-104Q25-104 25-70Z" fill="#23233a"/><rect x="-25" y="-80" width="50" height="8" fill="#d9283c"/>`,
+    amb: `<g class="dm-pu">${star(-100, -60, "#8c93d9", 0.7)}</g>`,
+  },
+  beret: {
+    head: `<g transform="rotate(-14 20 -72)"><ellipse cx="20" cy="-72" rx="36" ry="15" fill="#c0283c"/><rect x="17" y="-90" width="6" height="10" rx="3" fill="#c0283c"/></g>`,
+    amb: `<g class="dm-pu">${star(-100, -60, "#ff8fb8", 0.8)}</g>` + `<g class="dm-pu" style="animation-delay:.6s">${star(104, -70, "#8b7bff", 0.7)}</g>`,
+  },
+  sombrero: {
+    head: `<ellipse cx="0" cy="-56" rx="64" ry="15" fill="#d9a45b"/><path d="M-27-56Q-27-94 0-94Q27-94 27-56Z" fill="#c98f3f"/><path d="M-27-66Q0-58 27-66" stroke="#e0523a" stroke-width="6" fill="none"/>`,
+    amb: `<g class="dm-pu" style="font-size:22px;font-weight:700" ><text x="96" y="-70" fill="#e8b24a">♪</text></g>`,
+  },
+  aloha: {
+    head: g("translate(56 -54) rotate(20)", flower(0, 0, "#ff5c8a")),
+    neck: `<path d="M-56 42Q0 72 56 42" stroke="#2bb3c0" stroke-width="6" fill="none" stroke-linecap="round"/>${circ(-36, 52, 5, "#ff5c8a")}${circ(-18, 58, 5, "#ffd66b")}${circ(0, 60, 5, "#ff5c8a")}${circ(18, 58, 5, "#ffd66b")}${circ(36, 52, 5, "#ff5c8a")}`,
+    amb: petal(-100, -60, "#ff8fb8") + petal(104, -70, "#2bb3c0", 1.5),
+  },
 };
 
 /* ------------------------------------------------------------------ */
@@ -407,6 +471,14 @@ const CSS_ANIM = `
 @keyframes dm-beat{50%{transform:scale(1.18)}}
 .dm-wave{transform-box:fill-box;transform-origin:left center;animation:dm-wave 1.6s ease-in-out infinite}
 @keyframes dm-wave{50%{transform:skewY(7deg) scaleX(.93)}}
+.dm-act-bow{animation:dm-act-bow 1.2s ease!important}
+@keyframes dm-act-bow{25%{transform:rotate(7deg) translateY(7px)}55%{transform:rotate(0) translateY(2px)}100%{transform:none}}
+.dm-act-jump{animation:dm-act-jump 1.1s ease!important}
+@keyframes dm-act-jump{30%{transform:translateY(-24px) scale(1.05)}55%{transform:translateY(0) scale(.97)}78%{transform:translateY(-9px) scale(1.01)}100%{transform:none}}
+.dm-act-shake{animation:dm-act-shake .9s ease!important}
+@keyframes dm-act-shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-8px) rotate(-4deg)}45%{transform:translateX(7px) rotate(3deg)}70%{transform:translateX(-4px)}}
+.dm-act-spin{animation:dm-act-spin 1.2s ease!important}
+@keyframes dm-act-spin{60%{transform:rotate(360deg) scale(1.07)}100%{transform:rotate(720deg) scale(1)}}
 .dm-react .dm-rx{animation:dm-hop .55s ease}
 @keyframes dm-hop{30%{transform:translateY(-10px) scale(1.04)}60%{transform:translateY(1px)}}
 .dae-m[data-size="sm"] .dm-amb{display:none}
@@ -594,9 +666,22 @@ function globalState_as(inst) {
   return { status: globalState.status, engine: globalState.engine, decor: inst.decor, count: globalState.count };
 }
 
+let lastDecor = "";
 function applyAll() {
-  const decor = currentDecor();
+  const decor = previewKey ?? currentDecor();
   instances.forEach((m) => m.apply({ ...globalState, decor }));
+  // Sinkron ke <html data-decor> agar theme-mascot.css mengikuti.
+  if (typeof document !== "undefined") {
+    if (document.documentElement.dataset.decor !== decor) {
+      document.documentElement.dataset.decor = decor;
+    }
+    if (decor !== lastDecor) {
+      lastDecor = decor;
+      try {
+        window.dispatchEvent(new CustomEvent("dae:decor", { detail: { decor } }));
+      } catch { /* abaikan */ }
+    }
+  }
 }
 
 /* ---------- gaze: mata mengikuti kursor ---------- */
@@ -702,12 +787,67 @@ export function setMascotStatus(status, engine = "", count = 0) {
   applyAll();
 }
 
-/** Simpan pilihan dekor ("auto" | "events" | "default" | kunci dekor) lalu terapkan. */
+/** Simpan pilihan dekor ("auto" | "events" | "default" | kunci dekor/kostum) lalu terapkan. */
 export function setMascotDecor(pref = "auto") {
   if (!DECOR_PREFS.includes(pref)) throw new Error(`dekor tidak dikenal: ${pref}`);
   try { localStorage.setItem(PREF_KEY, pref); } catch { /* abaikan */ }
   if (booted) applyAll();
   return currentDecor();
+}
+
+/* Pratinjau sementara (tidak disimpan). previewMascotDecor(null) = kembali. */
+let previewKey = null;
+export function previewMascotDecor(key) {
+  previewKey = key && (DECOR_KEYS.includes(key) || COSTUME_KEYS.includes(key)) ? key : null;
+  if (booted) applyAll();
+}
+
+/** Info dekorasi aktif untuk Panel Ganti Baju. */
+export function getDecorInfo() {
+  const pref = getDecorPref();
+  const key = previewKey ?? currentDecor();
+  const label = ALL_LABELS[key] ?? key;
+  const kind = COSTUME_KEYS.includes(key) ? "costume"
+    : ["halloween", "christmas", "newyear", "valentine", "ramadan", "eid", "independence"].includes(key) ? "event"
+    : "season";
+  return { key, label, kind, pref, previewing: previewKey !== null, auto: pref === "auto" || pref === "events" };
+}
+
+/** Pastikan aset maskot ada (dipakai wardrobe.js sebelum mountMascots). */
+export function ensureMascotAssets() {
+  ensureAssets();
+  boot();
+}
+
+/* Animasi aksi saat maskot diklik — sesuai dekorasi aktif. */
+const ACT_ANIM = {
+  default: "bow", spring: "spin", summer: "jump", autumn: "spin", winter: "jump",
+  halloween: "shake", christmas: "jump", newyear: "jump", valentine: "jump",
+  ramadan: "bow", eid: "jump", independence: "jump",
+  batik: "bow", kimono: "bow", hanbok: "spin", changshan: "bow", kurta: "bow",
+  thobe: "jump", jas: "bow", beret: "spin", sombrero: "spin", aloha: "jump",
+};
+
+/**
+ * Picu animasi aksi klik pada semua maskot.
+ * Dipakai tombol maskot di header & panel ganti baju.
+ */
+export function triggerMascotAction() {
+  ensureMascotAssets();
+  const decor = previewKey ?? currentDecor();
+  const anim = ACT_ANIM[decor] ?? "jump";
+  const cls = "dm-act-" + anim;
+  const svgs = document.querySelectorAll(".dae-m");
+  if (!svgs.length) return;
+  svgs.forEach((svg) => {
+    svg.classList.remove("dm-act-bow", "dm-act-jump", "dm-act-shake", "dm-act-spin");
+  });
+  // paksa reflow agar animasi bisa di-restart
+  void document.body.offsetHeight;
+  svgs.forEach((svg) => {
+    svg.classList.add(cls);
+    setTimeout(() => svg.classList.remove(cls), 1500);
+  });
 }
 
 /** Lepas observer/timer (untuk uji atau hot-reload). */
