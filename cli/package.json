@@ -7,10 +7,10 @@
     "node": ">=22"
   },
   "bin": {
-    "daedalus": "./src/index.ts"
+    "daedalus": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.build.json",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
@@ -23,5 +23,10 @@
     "@types/node": "^24.13.3",
     "typescript": "~6.0.2",
     "vitest": "^3.2.4"
-  }
+  },
+  "files": [
+    "dist/",
+    "assets/",
+    "tray/"
+  ]
 }
