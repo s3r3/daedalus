@@ -185,7 +185,6 @@ fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     Ok(path.map(|p| p.to_string()))
 }
 
-#[tauri::command]
 /// B17: baca token dari workspace dulu, baru ~/.daedalus (kompatibilitas lama).
 /// Argumen workspace opsional agar UI lama tetap berfungsi.
 #[tauri::command]
