@@ -160,3 +160,34 @@ Live mode is run only when a provider endpoint is reachable; see [docs/evaluatio
 - **Server port already in use**: reuse the running daemon with `daedalus status`, stop it with `daedalus stop`, or choose another `DAEDALUS_PORT`.
 - **Workspace path rejected**: tasks and workspace APIs are confined to allowed workspace roots and relative paths; `..`, absolute upload paths, and oversized uploads are rejected.
 - **`.env` security warning**: `Daedalus/.env` is tracked in this repository's git history. Do not copy a real key into docs, issues, logs, or screenshots. Rotating the exposed key and removing it from tracking/history is an owner decision that has not been performed by the documentation work.
+
+## Distribusi
+
+### Daedalus CLI → npm
+
+```bash
+npm login  # sekali saja
+
+# 1. Publish @daedalus/core dulu
+cd core
+npm run build
+npm publish --access public
+
+# 2. Update cli/package.json: ganti "@daedalus/core": "*" dengan versi yang baru dipublish
+cd ../cli
+npm run build
+npm publish --access public
+```
+
+User install via: `npm install -g daedalus`
+
+### Dae Captain → AppImage (Linux)
+
+Prerequisites: Rust, Node.js 22+, system deps Tauri (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, dll).
+
+```bash
+cd dae-captain/src-tauri
+cargo tauri build
+```
+
+Hasil di `target/release/bundle/appimage/` — file `.AppImage` siap didistribusikan. Untuk `.deb`: `target/release/bundle/deb/`.
