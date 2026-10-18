@@ -48,9 +48,13 @@ export function attachWebSocket(ctx: AppContext, server: Server): EventChannel {
 
   wss.on("connection", (socket: WebSocket) => {
     sockets.add(socket);
+    alive.set(socket, true);
+    socket.on("pong", () => alive.set(socket, true));
     send(socket, { kind: "hello", protocol: EVENT_PROTOCOL, version: EVENT_PROTOCOL_VERSION, server_ts: new Date().toISOString() });
 
     socket.on("message", (raw: unknown) => {
+      // B23: exception dari handler = uncaught tanpa ini.
+      try {
       let parsed: { kind?: unknown; task_id?: unknown; since_seq?: unknown };
       try {
         parsed = JSON.parse(String(raw)) as typeof parsed;
@@ -91,6 +95,9 @@ export function attachWebSocket(ctx: AppContext, server: Server): EventChannel {
         replayed: replay.length,
         last_seq: taskId === "*" ? 0 : (ctx.store.replay(taskId).at(-1)?.seq ?? sinceSeq),
       });
+      } catch {
+        send(socket, { kind: "error", error: "internal_error" });
+      }
     });
 
     const drop = (): void => {
@@ -114,9 +121,18 @@ export function attachWebSocket(ctx: AppContext, server: Server): EventChannel {
     }
   });
 
+  // B23: lacak pong — koneksi setengah-mati (laptop tidur) di-terminate,
+  // bukan menumpuk selamanya.
+  const alive = new WeakMap<WebSocket, boolean>();
   const heartbeat = setInterval(() => {
     for (const socket of sockets) {
-      if (socket.readyState === socket.OPEN) socket.ping();
+      if (socket.readyState !== socket.OPEN) continue;
+      if (alive.get(socket) === false) {
+        socket.terminate();
+        continue;
+      }
+      alive.set(socket, false);
+      socket.ping();
     }
   }, 30_000);
   heartbeat.unref();

@@ -540,9 +540,14 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
 }
 
 export async function ensureProvidersLoaded(ctx: AppContext): Promise<void> {
+  // B25: jangan cache promise yang gagal — satu kegagalan baca provider
+  // tak boleh meracuni semua request sampai restart.
   ctx.providersReady ??= (async () => {
     await ctx.providerStore.load(seedProviderFromSettings(ctx.settings));
-  })();
+  })().catch((error) => {
+    ctx.providersReady = undefined; // izinkan retry pada request berikutnya
+    throw error;
+  });
   await ctx.providersReady;
 }
 
@@ -3938,7 +3943,9 @@ export function createApp(ctx: AppContext) {
             connection: "keep-alive",
             ...CORS_HEADERS,
           });
+          // B11: res.write pada socket mati tidak melempar — cek eksplisit.
           const send = (obj: unknown): boolean => {
+            if (res.destroyed || res.writableEnded) return false;
             try {
               res.write(`data: ${JSON.stringify(obj)}\n\n`);
               return true;
@@ -3954,16 +3961,14 @@ export function createApp(ctx: AppContext) {
             res.end();
             return;
           }
-          // Client disconnect (/stop, closing the app) aborts the model call.
+          // B11: Client disconnect (/stop, tutup app) membatalkan model call.
+          // req 'close' sejak Node 16 berarti "request selesai dibaca", bukan
+          // "koneksi putus" — pakai res 'close'.
           const controller = new AbortController();
           const onClose = (): void => {
-            try {
-              controller.abort();
-            } catch {
-              /* already settled */
-            }
+            if (!res.writableEnded) controller.abort();
           };
-          req.on("close", onClose);
+          res.on("close", onClose);
           let text = "";
           let failed = false;
           let usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number } | undefined;
@@ -3980,7 +3985,7 @@ export function createApp(ctx: AppContext) {
             ctx.log.error("workflow chat stream failed", { error: String(error) });
             failed = true;
           } finally {
-            req.removeListener("close", onClose);
+            res.removeListener("close", onClose);
           }
           if (failed || !text.trim()) {
             // What-you-see-is-what-history-gets: a partial answer is still

@@ -17,7 +17,8 @@ export type GitFileStatus = { path: string; status: GitFileStatusKind };
 export type WorkspaceGitStatus = { isRepo: boolean; branch: string | null; files: GitFileStatus[] };
 
 async function git(root: string, args: string[]): Promise<string> {
-  const { stdout } = await run("git", ["-C", root, ...args], { timeout: 10_000, maxBuffer: 1024 * 1024 });
+  // B24: quotepath=false agar nama non-ASCII tak di-escape; buffer 8MB untuk repo besar.
+  const { stdout } = await run("git", ["-C", root, "-c", "core.quotepath=false", ...args], { timeout: 10_000, maxBuffer: 8 * 1024 * 1024 });
   return stdout;
 }
 
