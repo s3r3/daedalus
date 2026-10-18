@@ -139,6 +139,7 @@ body { display: flex; justify-content: center; align-items: flex-start; }
 
 /* ---- Expanded panel ---- */
 .panel {
+  position: relative;
   width: 460px; max-width: calc(100vw - 24px); max-height: 680px; margin-top: 6px;
   background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
   box-shadow: 0 18px 60px rgba(0,0,0,.6);
