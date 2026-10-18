@@ -99,6 +99,31 @@ async function fetchWithTimeout(url: string, accept: string, userAgent?: string)
   }
 }
 
+type FetchedText = { ok: boolean; status: number; contentType: string; text: string };
+
+/**
+ * B22: fetch dengan timeout yang mencakup header DAN body.
+ * fetchWithTimeout lama hanya membatasi waktu header — server yang mengirim
+ * header lalu diam membuat riset menggantung selamanya.
+ */
+async function fetchTextWithTimeout(url: string, accept: string, userAgent?: string): Promise<FetchedText | null> {
+  try {
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+      headers: {
+        "User-Agent": userAgent ?? "Daedalus-Research/1.0 (research agent; contact: research)",
+        Accept: accept,
+        "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
+      },
+      redirect: "follow",
+    });
+    const text = await res.text();
+    return { ok: res.ok, status: res.status, contentType: res.headers.get("content-type") ?? "", text };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Preview sumber "kek pembaca pdf": semua tipe dokumen (PDF, DOCX/DOC/ODT,
  * halaman web, dll) disajikan sebagai PDF ke klien, yang me-render-nya
@@ -144,18 +169,18 @@ export type ResearchDocHooks = {
 async function defaultFetchBytes(url: string): Promise<{ bytes: Buffer; contentType: string } | null> {
   if (!/^https?:\/\//i.test(url)) return null;
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 60_000);
     const res = await fetch(url, {
-      signal: ctrl.signal,
+      // B22: timeout mencakup body; tolak lebih awal bila content-length kebesaran.
+      signal: AbortSignal.timeout(60_000),
       headers: {
         "User-Agent": "Daedalus-Research/1.0 (research agent; contact: research)",
         "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
       },
       redirect: "follow",
     });
-    clearTimeout(timer);
     if (!res.ok) return null;
+    const contentLength = Number(res.headers.get("content-length") ?? "0");
+    if (contentLength > MAX_DOC_BYTES) return null;
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length === 0 || buf.length > MAX_DOC_BYTES) return null;
     return { bytes: buf, contentType: res.headers.get("content-type") ?? "" };
@@ -179,8 +204,12 @@ async function defaultOfficeToPdf(bytes: Buffer, ext: string): Promise<Buffer | 
   try {
     const input = join(dir, `input.${ext || "docx"}`);
     await writeFile(input, bytes);
+    // B22: profil terpisah per panggilan — dua konversi bersamaan atau LO GUI
+    // milik user tak lagi berebut satu profil.
+    const { pathToFileURL } = await import("node:url");
     await execFileAsync("soffice", [
-      "--headless", "--nologo", "--nolockcheck",
+      "-env:UserInstallation=" + pathToFileURL(join(dir, "profile")).href,
+      "--headless", "--norestore", "--nologo", "--nolockcheck",
       "--convert-to", "pdf", "--outdir", dir, input,
     ], DOC_CONVERT_TIMEOUT_MS);
     const pdf = await readFile(join(dir, "input.pdf"));
@@ -811,6 +840,9 @@ function ensureSweepRunning(): void {
 export function sweepStagedResearchPlans(now: number = Date.now()): number {
   let dropped = 0;
   for (const [planId, staged] of stagedPlans) {
+    // B8: jangan hapus plan yang sedang dijalankan — TTL dihitung sejak
+    // staging, termasuk waktu user berpikir sebelum menekan Jalankan.
+    if (researchRunsInProgress.has(planId)) continue;
     if (now - staged.createdAt >= STAGED_RESEARCH_PLAN_TTL_MS) {
       stagedPlans.delete(planId);
       dropped += 1;
@@ -830,7 +862,7 @@ export function stageResearchPlan(input: Omit<StagedResearchPlan, "planId" | "cr
 export function peekStagedResearchPlan(planId: string): StagedResearchPlan | undefined {
   const staged = stagedPlans.get(planId);
   if (!staged) return undefined;
-  if (Date.now() - staged.createdAt >= STAGED_RESEARCH_PLAN_TTL_MS) {
+  if (Date.now() - staged.createdAt >= STAGED_RESEARCH_PLAN_TTL_MS && !researchRunsInProgress.has(planId)) {
     stagedPlans.delete(planId);
     return undefined;
   }
@@ -939,6 +971,12 @@ function sweepCompletedReports(now: number = Date.now()): void {
       completedReports.delete(id);
       progressLog.delete(id);
     }
+  }
+  // B8: progressLog bocor bila riset gagal (clearResearchProgress tak pernah
+  // dipanggil) — sapu berdasarkan umur event terakhir.
+  for (const [key, events] of progressLog) {
+    const last = events.at(-1)?.at ?? 0;
+    if (now - last >= REPORT_TTL_MS) progressLog.delete(key);
   }
 }
 

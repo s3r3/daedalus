@@ -2322,45 +2322,50 @@ async function runStagedResearchPlanCore(
   if (!tryStartResearchRun(planId)) {
     return { status: 409, body: { error: "already_running", message: "riset untuk rencana ini sudah berjalan", request_id: requestId } };
   }
-  const hooks = await resolveResearchHooks(ctx);
-  await ensureProvidersLoaded(ctx);
-  const provider = researchProviderFromRequest(ctx, parsed);
-  if (!provider) {
-    finishResearchRun(planId);
-    return { status: 400, body: { error: "no_provider_configured", request_id: requestId } };
-  }
-  const engine = await hooks.createEngine({
-    provider,
-    fetch: { searchWeb: hooks.searchWeb, fetchPage: hooks.fetchPage },
-    elsevierApiKey: process.env.ELSEVIER_API_KEY || undefined,
-    onProgress: (stage, detail) => appendResearchProgress(planId, stage, detail),
-    // Cooperative pause (Dae Captain pill ⏸): POST /tasks/:planId/pause
-    // suspends the pipeline at the next stage boundary.
-    waitWhilePaused: () => ctx.store.waitWhilePaused(planId),
-  });
-  let result;
+  // B7: lock HARUS selalu dilepas — bungkus semua await sebelum run dalam
+  // try/finally. Semantik lama dipertahankan: plan tidak dikonsumsi bila
+  // gagal sebelum run mulai (bisa retry).
   try {
-    result = await engine.runResearch(staged.plan);
-  } catch (error) {
-    const issues = researchVerifyIssues(error);
-    if (issues) {
-      return { status: 422, body: { error: "verify_failed", issues, request_id: requestId } };
+    const hooks = await resolveResearchHooks(ctx);
+    await ensureProvidersLoaded(ctx);
+    const provider = researchProviderFromRequest(ctx, parsed);
+    if (!provider) {
+      return { status: 400, body: { error: "no_provider_configured", request_id: requestId } };
     }
-    throw error;
+    const engine = await hooks.createEngine({
+      provider,
+      fetch: { searchWeb: hooks.searchWeb, fetchPage: hooks.fetchPage },
+      elsevierApiKey: process.env.ELSEVIER_API_KEY || undefined,
+      onProgress: (stage, detail) => appendResearchProgress(planId, stage, detail),
+      // Cooperative pause (Dae Captain pill ⏸): POST /tasks/:planId/pause
+      // suspends the pipeline at the next stage boundary.
+      waitWhilePaused: () => ctx.store.waitWhilePaused(planId),
+    });
+    let result;
+    try {
+      result = await engine.runResearch(staged.plan);
+    } catch (error) {
+      const issues = researchVerifyIssues(error);
+      if (issues) {
+        return { status: 422, body: { error: "verify_failed", issues, request_id: requestId } };
+      }
+      throw error;
+    } finally {
+      // Single-use gate: plan dikonsumsi saat run selesai (sukses/gagal).
+      takeStagedResearchPlan(planId);
+    }
+    storeResearchReport(result.report);
+    rememberResearchRunReport(planId, result.report.reportId);
+    return {
+      status: 200,
+      body: {
+        report: result.report,
+        request_id: requestId,
+      },
+    };
   } finally {
-    // Single-use gate: plan dikonsumsi saat run selesai (sukses/gagal).
-    takeStagedResearchPlan(planId);
-    finishResearchRun(planId);
+    finishResearchRun(planId); // idempoten; selalu dilepas, apa pun jalurnya
   }
-  storeResearchReport(result.report);
-  rememberResearchRunReport(planId, result.report.reportId);
-  return {
-    status: 200,
-    body: {
-      report: result.report,
-      request_id: requestId,
-    },
-  };
 }
 
 /**
@@ -3076,6 +3081,8 @@ function reconcileWorkflowRun(ctx: AppContext, run: RunContext): boolean {
       continue;
     }
     if (turn.engine === "research") {
+      // B8: jangan tandai failed bila run masih berjalan (plan >30 menit).
+      if (isResearchRunInProgress(turn.task_id)) continue;
       const reportId = getResearchRunReportId(turn.task_id);
       if (reportId) {
         const report = getResearchReport(reportId) as
