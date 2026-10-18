@@ -2921,6 +2921,31 @@ function loadOrCreateChatRun(
  * (which returns this identical JSON when the message turns out to be
  * work). Returns { status, body } — the caller sends the HTTP response.
  */
+/**
+ * B13: Muat ulang run tepat sebelum mengubahnya; `run` yang dipegang
+ * lintas await bisa basi dan menimpa turn yang ditambahkan pihak lain.
+ */
+const rootJobsInFlight = new Set<string>();
+
+/**
+ * B14: Klaim eksklusif untuk job fallback slide/sheet per workspace.
+ * Double-klik [Buat Slide]/[Buat Workbook] tanpa ini menjalankan 2 build
+ * paralel pada deck/workbook yang sama.
+ */
+function claimRootJob(kind: "slide-fill" | "sheet-build", root: string): (() => void) | undefined {
+  const key = `${kind}:${resolve(root)}`;
+  if (rootJobsInFlight.has(key)) return undefined;
+  rootJobsInFlight.add(key);
+  return () => { rootJobsInFlight.delete(key); };
+}
+
+function mutateRun(runs: WorkflowRunStore, run: RunContext, fn: (fresh: RunContext) => void): RunContext {
+  const fresh = runs.loadRun(run.run_id) ?? run;
+  fn(fresh);
+  runs.saveRun(fresh);
+  return fresh;
+}
+
 async function dispatchChatTurn(
   ctx: AppContext,
   input: {
@@ -2999,14 +3024,16 @@ async function dispatchChatTurn(
         workspaceRoot: root,
         createdAt: Date.now(),
       });
-      const turn = appendTurn(run, {
-        engine,
-        task_id: taskPlan.id,
-        goal: message,
-        status: "running",
-        note: "rencana multi-engine staged — menunggu 'Jalankan'",
+      let turn!: ReturnType<typeof appendTurn>;
+      mutateRun(runs, run, (fresh) => {
+        turn = appendTurn(fresh, {
+          engine,
+          task_id: taskPlan.id,
+          goal: message,
+          status: "running",
+          note: "rencana multi-engine staged — menunggu 'Jalankan'",
+        });
       });
-      runs.saveRun(run);
       return {
         status: 200,
         body: {
@@ -5447,6 +5474,13 @@ export function createApp(ctx: AppContext) {
             sendJson(res, 409, { error: "no_staged_outline", message: "Tidak ada outline yang menunggu dibuat di workspace ini — deck sudah terisi penuh.", request_id: requestId });
             return;
           }
+          // B14: tolak double-submit — satu build per workspace dalam satu waktu.
+          const releaseSlide = claimRootJob("slide-fill", root);
+          if (!releaseSlide) {
+            sendJson(res, 409, { error: "slide_run_in_progress", message: "Tugas slide sedang berjalan di workspace ini — tunggu selesai sebelum menekan Buat.", request_id: requestId });
+            return;
+          }
+          try {
           const runner = new TaskRunner({
             workspaceRoot: root,
             bus: ctx.bus,
@@ -5467,6 +5501,9 @@ export function createApp(ctx: AppContext) {
               ? `Deck valid tapi export gagal: ${fill.exportError}. Deck tersimpan di deck/deck.json.`
               : `Sebagian deck belum selesai (${fill.deck.slides.length - fill.failures.length}/${fill.deck.slides.length} slide terisi) dan belum ter-export — tekan Buat lagi untuk melanjutkan pengisian.`;
           sendJson(res, 200, { root, outcome, summary, exported, failures: fill.failures });
+          } finally {
+            releaseSlide();
+          }
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
@@ -6704,6 +6741,13 @@ export function createApp(ctx: AppContext) {
             sendJson(res, 409, { error: "no_staged_blueprint", message: "Tidak ada blueprint yang menunggu dibangun di workspace ini.", request_id: requestId });
             return;
           }
+          // B14: tolak double-submit.
+          const releaseSheet = claimRootJob("sheet-build", root);
+          if (!releaseSheet) {
+            sendJson(res, 409, { error: "sheet_run_in_progress", message: "Tugas spreadsheet sedang berjalan di workspace ini — tunggu selesai sebelum menekan Buat.", request_id: requestId });
+            return;
+          }
+          try {
           const runner = new TaskRunner({
             workspaceRoot: root,
             bus: ctx.bus,
@@ -6717,6 +6761,9 @@ export function createApp(ctx: AppContext) {
             return;
           }
           sendJson(res, 200, { root, outcome: built.outcome, summary: built.summary, exported: null });
+          } finally {
+            releaseSheet();
+          }
         } catch (error) {
           sendJson(res, errorStatus(error), { error: errorMessage(error), request_id: requestId });
         }
