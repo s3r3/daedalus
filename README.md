@@ -18,6 +18,15 @@ The CLI and Web UI are thin interfaces over the same `@s3r3/core`. **Dae Captain
 
 ## Quickstart
 
+### Install (global)
+
+```bash
+npm install -g @s3r3/daedalus@latest
+daedalus --version
+```
+
+### From source
+
 Prerequisites: Node.js 22+ and npm.
 
 ```bash
