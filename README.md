@@ -16,6 +16,22 @@ Five domain engines share one core — each engine is a fully separate system wi
 
 The CLI and Web UI are thin interfaces over the same `@s3r3/core`. **Dae Captain** is the desktop companion (Tauri): a chat-first, always-on-top assistant that drives every engine from a floating pill.
 
+## Screenshots
+
+### Web UI
+
+![Daedalus Web UI — Coding engine](docs/images/web-ui-coding.png)
+
+### Dae Captain
+
+| Pill | Panel |
+|---|---|
+| ![Dae Captain pill](docs/images/dae-captain-pill.png) | ![Dae Captain panel](docs/images/dae-captain-panel.png) |
+
+| Wardrobe | Settings | Workspace |
+|---|---|---|
+| ![Dae Captain wardrobe](docs/images/dae-captain-wardrobe.png) | ![Dae Captain settings](docs/images/dae-captain-settings.png) | ![Dae Captain workspace](docs/images/dae-captain-workspace.png) |
+
 ## Quickstart
 
 ### Install (global)
