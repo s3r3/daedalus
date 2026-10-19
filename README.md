@@ -26,7 +26,7 @@ The CLI and Web UI are thin interfaces over the same `@s3r3/core`. **Dae Captain
 
 | Pill | Panel |
 |---|---|
-| ![Dae Captain pill](docs/images/dae-captain-pill.png) | ![Dae Captain panel](docs/images/dae-captain-panel.png) |
+| ![Dae Captain pill](docs/images/dae-captain-pill-v2.png) | ![Dae Captain panel](docs/images/dae-captain-panel.png) |
 
 | Wardrobe | Settings | Workspace |
 |---|---|---|
