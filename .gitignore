@@ -8,9 +8,8 @@ dist/
 # Daedalus runtime state (tasks, conversations, plans, attachments)
 .daedalus/
 
-# core + server: lokal saja, tidak di-push ke GitHub (keputusan Farid 2026-10-20)
-/core/
-/server/
+# core + server: DIBUKA LAGI 2026-10-20 malam (laptop Farid terlanjur pull versi tertutup).
+# JANGAN ditutup sampai Farid sendiri bilang "tutup" — kembalikan /core/ dan /server/ saat menutup.
 
 # local test workspace
 tesvite/
