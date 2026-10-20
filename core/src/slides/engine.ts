@@ -1,0 +1,721 @@
+import { readFile } from 'node:fs/promises';
+import type { Plan, PlanStep, TaskSpec, TaskState, TokenBudget, ValidationResult } from '../contracts.ts';
+import { TokenBudgetExhaustedError, isTokenBudgetExhausted } from '../contracts.ts';
+import { emitEvent, type EventBus } from '../events.ts';
+import type { TaskStore } from '../persistence.ts';
+import type { QuestionBroker } from '../interaction/questions.ts';
+import type { ChatOptions, LLMProvider, Message } from '../providers/llm/types.ts';
+import type { SlideTaskParams } from '../agent/context.ts';
+import { deckPaths, type DeckSpec, type Slide } from './deck.ts';
+import { diffLines, changedLineCounts, renderPatch } from '../tools/filesystem/diff.ts';
+import { readDeck, newSlideId, validateDeck, writeDeck } from './store.ts';
+import { DeckValidator } from './deck-validator.ts';
+import { getLayout, LAYOUTS } from './layouts.ts';
+import { getSlideTemplate, SLIDE_TEMPLATES } from './templates.ts';
+import { exportDeckToPptx } from './export-pptx.ts';
+import {
+  fillDeckSlidesStage,
+  generateDeckOutlineStage,
+  structuredCall,
+  SlidePipelineError,
+  MAX_STAGE_ATTEMPTS,
+  type DeckBrief,
+  type OutlineItem,
+} from './pipeline.ts';
+
+/**
+ * SlideEngine: the Slide domain's own task executor. Slide tasks never
+ * enter the agentic-coding machinery — no AgentLoop, no tool registry
+ * or mode policy, no loop completion gate (Farid's mandate: "desain
+ * saja bukan backend" — Slide borrows Agentic Coding's design, none of
+ * its systems). Sequencing lives here and in slides/pipeline.ts:
+ * generation runs the code-sequenced stages, edits run ONE structured
+ * model call returning a closed vocabulary of deck ops, and completion
+ * is the engine's own verdict (exported file, or valid applied ops).
+ *
+ * The engine speaks the event contract the Web already renders
+ * (TASK_STARTED, PLAN_CREATED, THOUGHT, MODEL_REQUEST events,
+ * QUESTION events, VALIDATION events, TASK_COMPLETED — same payload
+ * shapes), so the
+ * chat, question cards, validation lines, and token accounting work
+ * unchanged. Token usage is the provider's own, relayed per call —
+ * never estimated.
+ */
+
+export type SlideEngineDeps = {
+  provider: LLMProvider;
+  bus: EventBus;
+  store: TaskStore;
+  questions: QuestionBroker;
+  workspaceRoot: string;
+  /**
+   * Domain-effective model options (temperature / reasoning effort /
+   * prompt caching) merged into every engine model call — per-call
+   * values win, these fill the gaps.
+   */
+  chatOptions?: ChatOptions;
+  /**
+   * Hard token budget for the run: checked before every model call
+   * and fed the provider-reported usage after; exhaustion ends the
+   * run through the normal partial-completion path.
+   */
+  tokenBudget?: TokenBudget;
+};
+
+export type SlideEngineOutcome = 'success' | 'partial' | 'failed';
+
+export type SlideEngineRunResult = {
+  state: TaskState;
+  outcome: SlideEngineOutcome;
+  /** Plain-language closing line (the task's final observation). */
+  summary: string;
+  validation?: ValidationResult;
+  exported?: { path: string; bytes: number; slides: number };
+};
+
+type StageStep = { id: string; intent: string };
+
+const GENERATION_STEPS: StageStep[] = [
+  { id: 'outline', intent: 'Generate the deck outline with the slide pipeline (skeleton deck persisted)' },
+  { id: 'checkpoint', intent: 'Stage the outline in the Outline panel — the Buat button there starts generation' },
+  { id: 'fill', intent: 'Fill every slide with the pipeline (resumable per slide)' },
+  { id: 'validate', intent: 'Validate the deck' },
+  { id: 'export', intent: 'Export the .pptx' },
+];
+
+/**
+ * How a staged Standard run leaves the staging gate: the Outline
+ * panel's Buat button releases it into generation (with the template
+ * settled in the panel), a newer prompt supersedes the staged outline,
+ * or a stop cancels the wait.
+ */
+type StagedDecision =
+  | { kind: 'generate'; templateId?: string; designId?: string }
+  | { kind: 'superseded' }
+  | { kind: 'cancelled' };
+
+const EDIT_STEPS: StageStep[] = [
+  { id: 'ops', intent: 'Compute and apply the deck edit operations' },
+  { id: 'validate', intent: 'Validate the deck' },
+  { id: 'export', intent: 'Export the .pptx when requested' },
+];
+
+class EngineAborted extends Error {
+  constructor() {
+    super('aborted');
+    this.name = 'EngineAborted';
+  }
+}
+
+function isObj(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function clone<T>(v: T): T {
+  return JSON.parse(JSON.stringify(v)) as T;
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export class SlideEngine {
+  readonly #deps: SlideEngineDeps;
+  readonly #abort = new AbortController();
+  #taskId = '';
+  #provider: LLMProvider;
+  #requests = 0;
+  /** The staging gate of a Standard run waiting on the Outline panel's Buat button (null otherwise). */
+  #staged: { settle: (decision: StagedDecision) => void } | null = null;
+  /** Sequence for deck FILE_CHANGED evidence emitted by this run. */
+  #deckChangeSeq = 0;
+  /** The current run's own completion, so a released staged run can be awaited by its releaser. */
+  #completion: Promise<SlideEngineRunResult> | null = null;
+
+  constructor(deps: SlideEngineDeps) {
+    this.#deps = deps;
+    this.#provider = this.#observingProvider(deps.provider);
+  }
+
+  /** Workspace this engine serves (staged runs are matched to deck endpoints by root). */
+  get workspaceRoot(): string {
+    return this.#deps.workspaceRoot;
+  }
+
+  /** The task this engine is executing (empty until run starts). */
+  get taskId(): string {
+    return this.#taskId;
+  }
+
+  /** True while a Standard run is staged: outline persisted, waiting for the panel's Buat button. */
+  get isStaged(): boolean {
+    return this.#staged !== null;
+  }
+
+  /**
+   * The Outline panel's Buat button, delivered through the runtime:
+   * release the staged outline into fill → validate → export with the
+   * template settled in the panel. Fill re-reads deck.json, so titles,
+   * layouts, and order edited in the panel meanwhile are what gets
+   * generated. Returns the run's own completion — the original task
+   * finishes through its normal path — or null when this engine is
+   * not waiting at the staging gate.
+   */
+  generateStagedDeck(input: { templateId?: string; designId?: string }): Promise<SlideEngineRunResult> | null {
+    if (!this.#staged || !this.#completion) return null;
+    this.#staged.settle({ kind: 'generate', ...(input.templateId ? { templateId: input.templateId } : {}), ...(input.designId ? { designId: input.designId } : {}) });
+    return this.#completion;
+  }
+
+  /**
+   * A newer prompt supersedes a staged outline: settle the gate so the
+   * waiting run ends honestly (failed, staged_superseded) instead of
+   * parking forever on a deck the user has moved on from. True when a
+   * staged run was waiting.
+   */
+  abandonStagedDeck(): boolean {
+    if (!this.#staged) return false;
+    this.#staged.settle({ kind: 'superseded' });
+    return true;
+  }
+
+  /** Stop the run: in-flight provider calls abort and a staged wait settles as cancelled. */
+  stop(): void {
+    this.#abort.abort();
+    if (this.#taskId) this.#deps.questions.cancelTasks([this.#taskId]);
+  }
+
+  /**
+   * The run's provider, observed: every chat is relayed as a
+   * MODEL_REQUEST_STARTED/FINISHED pair (usage passed through verbatim
+   * when the provider reports it) so the Web's token accounting reads
+   * engine runs exactly like loop runs. Message content stays empty —
+   * stage JSON is not chat text; the human summary rides THOUGHT and
+   * the final state instead.
+   */
+  /**
+   * Engine model-call options: the run's domain-effective chat options
+   * merged under any per-call values (per-call wins).
+   */
+  #modelChatOptions(options: ChatOptions | undefined): ChatOptions | undefined {
+    const configured = this.#deps.chatOptions;
+    if (!configured) return options;
+    return { ...configured, ...options };
+  }
+
+  #observingProvider(inner: LLMProvider): LLMProvider {
+    const self = this;
+    return {
+      name: inner.name,
+      async chat(messages: Message[], tools, options) {
+        const budget = self.#deps.tokenBudget;
+        if (budget?.exhausted) throw new TokenBudgetExhaustedError(budget);
+        self.#requests += 1;
+        self.#emit('MODEL_REQUEST_STARTED', { provider: inner.name, messages: messages.length, tools: 0 });
+        try {
+          const response = await inner.chat(messages, tools, self.#modelChatOptions(options));
+          budget?.add(response.usage);
+          self.#emit('MODEL_REQUEST_FINISHED', {
+            message: { content: '' },
+            ...(response.usage ? { usage: response.usage } : {}),
+            ...(response.finish_reason ? { finish_reason: response.finish_reason } : {}),
+          });
+          return response;
+        } catch (error) {
+          self.#emit('MODEL_REQUEST_FAILED', { error: errorText(error) });
+          throw error;
+        }
+      },
+      stream(messages: Message[], tools, options) {
+        return inner.stream(messages, tools, options);
+      },
+    };
+  }
+
+  #emit(type: Parameters<typeof emitEvent>[3], payload: unknown): void {
+    emitEvent({ bus: this.#deps.bus, store: this.#deps.store }, this.#taskId, undefined, type, payload);
+  }
+
+  /** Raw deck.json text on disk (null when no deck file exists yet). */
+  async #deckFileText(root: string): Promise<string | null> {
+    try {
+      return await readFile(deckPaths(root).file, 'utf8');
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The deck is a workspace file, and the Web refreshes its deck
+   * surfaces (canvas, Outline panel, file tree) off FILE_CHANGED —
+   * the signal the coding runtime emits for its writes. Pipeline
+   * stages write deck.json directly through the filesystem, so the
+   * engine must announce those writes itself: without this event a
+   * staged Standard outline exists on disk yet no panel ever re-reads
+   * it, the Buat button never renders, and the staging gate waits
+   * forever (field incident 2026-10-09). Emitted only when the file
+   * actually changed, with the same diff payload shape the runtime
+   * emits for tool writes.
+   */
+  async #emitDeckChanged(root: string, before: string | null): Promise<void> {
+    const after = await this.#deckFileText(root);
+    if (after === null || after === before) return;
+    const lines = diffLines(before ?? '', after);
+    if (lines.length === 0) return;
+    const counts = changedLineCounts(lines);
+    this.#deckChangeSeq += 1;
+    this.#emit('FILE_CHANGED', {
+      call_id: `slide-deck-${this.#deckChangeSeq}`,
+      path: 'deck/deck.json',
+      tool: 'slide-engine',
+      operation: before === null ? 'created' : 'modified',
+      added: counts.added,
+      removed: counts.removed,
+      lines,
+      patch: renderPatch('deck/deck.json', lines),
+    });
+  }
+
+  #throwIfAborted(): void {
+    if (this.#abort.signal.aborted || this.#deps.store.isCancelRequested(this.#taskId)) throw new EngineAborted();
+  }
+
+  /**
+   * Cooperative pause (Dae Captain pill ⏸): suspend at this safe
+   * checkpoint until the pause marker is cleared. Deck state is untouched —
+   * resume continues from here.
+   */
+  async #waitIfPaused(): Promise<void> {
+    if (this.#taskId) await this.#deps.store.waitWhilePaused(this.#taskId);
+  }
+
+  run(spec: TaskSpec, slide?: SlideTaskParams): Promise<SlideEngineRunResult> {
+    const completion = this.#runTask(spec, slide);
+    this.#completion = completion;
+    return completion;
+  }
+
+  async #runTask(spec: TaskSpec, slide?: SlideTaskParams): Promise<SlideEngineRunResult> {
+    this.#taskId = spec.id;
+    const root = this.#deps.workspaceRoot;
+    const existing = await readDeck(root).catch(() => null);
+    const route: 'generate' | 'resume' | 'edit' =
+      !existing || existing.slides.length === 0 ? 'generate' : existing.slides.some((s) => s.status === 'skeleton') ? 'resume' : 'edit';
+    const stepDefs = route === 'edit' ? EDIT_STEPS : GENERATION_STEPS;
+    const plan: Plan = {
+      id: `${spec.id}-plan`,
+      task_id: spec.id,
+      steps: stepDefs.map((step, index) => ({ id: `${spec.id}-step-${index + 1}`, intent: step.intent, status: index === 0 ? 'active' : 'pending', evidence: [] }) as PlanStep),
+      version: 1,
+      status: 'active',
+    };
+    let state: TaskState = { ...spec, plan, steps: plan.steps, status: 'active', mode: 'auto', turns: 0 };
+    const save = (patch: Partial<TaskState>): void => {
+      state = { ...state, ...patch, turns: this.#requests };
+      this.#deps.store.saveState(spec.id, state);
+    };
+    save({});
+    const setStep = (id: string, status: PlanStep['status']): void => {
+      const defIndex = stepDefs.findIndex((s) => s.id === id);
+      if (defIndex < 0) return;
+      plan.steps = plan.steps.map((step, i) => (i === defIndex ? { ...step, status } : step));
+      state = { ...state, plan, steps: plan.steps, current_step_id: `${spec.id}-step-${defIndex + 1}` };
+      this.#deps.store.saveState(spec.id, state);
+    };
+
+    this.#emit('TASK_STARTED', { spec });
+    this.#emit('PLAN_CREATED', { plan });
+
+    try {
+      this.#throwIfAborted();
+      await this.#waitIfPaused();
+      const result =
+        route === 'edit'
+          ? await this.#runEdit(spec, { setStep, save })
+          : await this.#runGeneration(spec, slide, route, { setStep, save });
+      save({ status: result.state.status, last_observation: result.summary, ...(result.state.last_error ? { last_error: result.state.last_error } : {}) });
+      this.#emit('TASK_COMPLETED', { state, outcome: result.outcome, reason: result.reason });
+      return { state, outcome: result.outcome, summary: result.summary, ...(result.validation ? { validation: result.validation } : {}), ...(result.exported ? { exported: result.exported } : {}) };
+    } catch (error) {
+      if (error instanceof EngineAborted || this.#abort.signal.aborted || this.#deps.store.isCancelRequested(spec.id)) {
+        save({ status: 'failed', last_error: 'aborted', last_observation: 'Berhenti sebelum selesai: tugas dihentikan.' });
+        this.#emit('TASK_COMPLETED', { state, outcome: 'failed', reason: 'aborted' });
+        return { state, outcome: 'failed', summary: 'Berhenti sebelum selesai: tugas dihentikan.' };
+      }
+      // Token budget exhausted: the normal partial-completion path —
+      // deck.json already holds every finished unit of work, so the run
+      // ends partial with honest evidence instead of failing.
+      if (isTokenBudgetExhausted(error)) {
+        const summary = `${error.message} Deck parsial tersimpan di deck/deck.json — kirim prompt lanjutan untuk melanjutkan pengisian.`;
+        save({ status: 'failed', last_error: 'budget_exhausted', last_observation: summary });
+        this.#emit('TASK_COMPLETED', { state, outcome: 'partial', reason: 'budget_exhausted' });
+        return { state, outcome: 'partial', summary };
+      }
+      const message = errorText(error);
+      save({ status: 'failed', last_error: message, last_observation: `Gagal: ${message}` });
+      this.#emit('TASK_COMPLETED', { state, outcome: 'failed', reason: 'slide_engine_error' });
+      return { state, outcome: 'failed', summary: `Gagal: ${message}` };
+    }
+  }
+
+  /* ------------------------------------------------------ generation */
+
+  async #runGeneration(
+    spec: TaskSpec,
+    slide: SlideTaskParams | undefined,
+    route: 'generate' | 'resume',
+    ctx: { setStep: (id: string, status: PlanStep['status']) => void; save: (patch: Partial<TaskState>) => void },
+  ): Promise<{ state: Partial<TaskState>; outcome: SlideEngineOutcome; reason: string; summary: string; validation?: ValidationResult; exported?: { path: string; bytes: number; slides: number } }> {
+    const root = this.#deps.workspaceRoot;
+    const signal = this.#abort.signal;
+    const brief: DeckBrief = {
+      topic: spec.goal,
+      ...(slide?.slideCount ? { slideCount: slide.slideCount } : {}),
+      ...(slide?.language ? { language: slide.language } : {}),
+      ...(slide?.templateId ? { templateId: slide.templateId } : {}),
+      ...(slide?.designId ? { designId: slide.designId } : {}),
+      ...(slide?.customTemplateId ? { customTemplateId: slide.customTemplateId } : {}),
+    };
+    let outline: OutlineItem[] = [];
+    let stagedFill = false;
+
+    if (route === 'generate') {
+      ctx.setStep('outline', 'active');
+      const deckTextBeforeOutline = await this.#deckFileText(root);
+      const outlineResult = await generateDeckOutlineStage(this.#provider, root, brief, { signal });
+      outline = outlineResult.outline;
+      ctx.setStep('outline', 'done');
+      // The skeleton is on disk now — announce it so the Web's deck
+      // surfaces re-read and the Outline panel can offer Buat.
+      await this.#emitDeckChanged(root, deckTextBeforeOutline);
+      this.#emit('THOUGHT', {
+        text: `Outline tersusun (${outline.length} slide) dan tersimpan sebagai deck kerangka:\n${outline.map((item, i) => `${i + 1}. [${item.layoutId}] ${item.title}`).join('\n')}`,
+      });
+      this.#throwIfAborted();
+      await this.#waitIfPaused();
+
+      const generation = slide?.generation ?? 'standard';
+      if (generation === 'smart') {
+        ctx.setStep('checkpoint', 'skipped');
+      } else {
+        // Outline-first staging (Farid's flow): the skeleton is already
+        // persisted and rendered by the Outline panel; the run PAUSES
+        // here — not completed, not failed — until the panel's Buat
+        // button releases it with the template settled in the panel.
+        ctx.setStep('checkpoint', 'active');
+        this.#emit('THOUGHT', {
+          text: `Outline selesai dan tersimpan sebagai kerangka deck (${outline.length} slide) — sudah tampil di panel Outline. Periksa judul, layout, dan urutannya, atur warna & font di panel Warna & Font bila perlu, lalu tekan tombol Buat di panel Outline untuk mulai mengisi slide dan export .pptx.`,
+        });
+        const decision = await this.#awaitGenerate();
+        if (decision.kind === 'superseded') {
+          const summary = 'Outline ini tidak jadi dibuat: prompt baru menggantikannya sebelum tombol Buat ditekan. Yang berlaku sekarang adalah kerangka deck terbaru di panel Outline.';
+          this.#emit('THOUGHT', { text: summary });
+          return { state: { status: 'failed', last_error: 'staged_superseded' }, outcome: 'failed', reason: 'staged_superseded', summary };
+        }
+        if (decision.kind === 'cancelled') throw new EngineAborted();
+        ctx.setStep('checkpoint', 'done');
+        if (decision.templateId) brief.templateId = decision.templateId;
+        if (decision.designId) brief.designId = decision.designId;
+        stagedFill = true;
+        this.#throwIfAborted();
+        await this.#waitIfPaused();
+      }
+    } else {
+      ctx.setStep('outline', 'done');
+      ctx.setStep('checkpoint', 'done');
+      const deck = await readDeck(root);
+      this.#emit('THOUGHT', {
+        text: `Deck sebelumnya ditemukan (${deck?.slides.length ?? 0} slide, sebagian masih kerangka) — pengisian dilanjutkan dari slide yang belum terisi; slide yang sudah diedit tidak ditimpa.`,
+      });
+    }
+
+    ctx.setStep('fill', 'active');
+    const deckTextBeforeFill = await this.#deckFileText(root);
+    const fill = await fillDeckSlidesStage(this.#provider, root, {
+      ...(brief.language ? { language: brief.language } : {}),
+      ...(brief.templateId ? { templateId: brief.templateId } : {}),
+      ...(brief.designId ? { designId: brief.designId } : {}),
+      // A Buat-released fill generates the deck as it now stands in the
+      // panel (hand-edited skeletons are adopted, not overwritten).
+      ...(stagedFill ? { stagedGenerate: true } : {}),
+      signal,
+      // Per-slide progress (spec 2026-10-09): no silent minutes — the
+      // filmstrip moves on FILE_CHANGED, and the chat narrates every
+      // slide start, retry, completion, and failure as THOUGHT.
+      onProgress: (event) => {
+        const where = `slide ${event.index + 1}/${event.total}`;
+        if (event.type === 'slide-started') {
+          this.#emit('THOUGHT', { text: `Mengisi ${where}: "${event.title}"…` });
+        } else if (event.type === 'slide-retry') {
+          this.#emit('THOUGHT', { text: `${where}: percobaan ${event.attempt}/${event.maxAttempts} — mencoba lagi…` });
+        } else if (event.type === 'slide-done') {
+          this.#emit('THOUGHT', { text: `${where} selesai: "${event.title}".` });
+        } else {
+          this.#emit('THOUGHT', { text: `${where} gagal setelah ${MAX_STAGE_ATTEMPTS} percobaan: ${event.issues.join('; ')}` });
+        }
+      },
+    });
+    await this.#emitDeckChanged(root, deckTextBeforeFill);
+    ctx.setStep('fill', fill.failures.length === 0 ? 'done' : 'active');
+    this.#throwIfAborted();
+    await this.#waitIfPaused();
+
+    ctx.setStep('validate', 'active');
+    const validation = await this.#validateAndEmit();
+    const passed = validation.checks.every((check) => check.status === 'pass');
+    ctx.setStep('validate', passed ? 'done' : 'active');
+
+    if (fill.exported) {
+      ctx.setStep('export', 'done');
+      const summary = `done: ${fill.exported.slides} slide selesai dan ter-export ke ${fill.exported.path} (${Math.round(fill.exported.bytes / 1024)} KB) — deck valid, file .pptx bisa diunduh dari deck workspace.${fill.exported.note ? ` ${fill.exported.note}` : ''}`;
+      this.#emit('THOUGHT', { text: summary });
+      return { state: { status: 'done' }, outcome: 'success', reason: 'completed', summary, validation, exported: fill.exported };
+    }
+    if (fill.exportError) {
+      const summary = `Deck valid tapi export gagal: ${fill.exportError}. Deck tersimpan di deck/deck.json — jalankan export lagi dari panel deck.`;
+      return { state: { status: 'failed', last_error: 'export_failed' }, outcome: 'failed', reason: 'export_failed', summary, validation };
+    }
+    const failedList = fill.failures.map((f) => `- ${f.slideId} [${f.layout}] "${f.title}": ${f.issues.join('; ')}`).join('\n');
+    const summary = `Sebagian deck belum selesai (${fill.deck.slides.length - fill.failures.length}/${fill.deck.slides.length} slide terisi) dan BELUM ter-export — deck parsial tidak pernah dilaporkan selesai. Slide yang gagal:\n${failedList}\nKerangka deck tersimpan; kirim prompt lanjutan untuk melanjutkan pengisian slide tersebut.`;
+    this.#emit('THOUGHT', { text: summary });
+    return { state: { status: 'failed', last_error: 'slide_partial' }, outcome: 'partial', reason: 'slide_partial', summary, validation };
+  }
+
+  /**
+   * The staging gate: parks the run until the Outline panel's Buat
+   * button releases it (generateStagedDeck), a newer prompt supersedes
+   * the staged outline (abandonStagedDeck), or the run is stopped —
+   * which settles the wait as cancelled. No timeout: a staged outline
+   * waits for an explicit decision, like a document waits to be built.
+   */
+  #awaitGenerate(): Promise<StagedDecision> {
+    return new Promise<StagedDecision>((resolvePromise) => {
+      let settled = false;
+      const settle = (decision: StagedDecision): void => {
+        if (settled) return;
+        settled = true;
+        if (this.#staged?.settle === settle) this.#staged = null;
+        resolvePromise(decision);
+      };
+      this.#staged = { settle };
+      if (this.#abort.signal.aborted) settle({ kind: 'cancelled' });
+      else this.#abort.signal.addEventListener('abort', () => settle({ kind: 'cancelled' }), { once: true });
+    });
+  }
+
+  /* ------------------------------------------------------------ edit */
+
+  async #runEdit(
+    spec: TaskSpec,
+    ctx: { setStep: (id: string, status: PlanStep['status']) => void; save: (patch: Partial<TaskState>) => void },
+  ): Promise<{ state: Partial<TaskState>; outcome: SlideEngineOutcome; reason: string; summary: string; validation?: ValidationResult; exported?: { path: string; bytes: number; slides: number } }> {
+    const root = this.#deps.workspaceRoot;
+    const signal = this.#abort.signal;
+    const deck = await readDeck(root);
+    if (!deck) throw new SlidePipelineError('no deck exists in this workspace (deck/deck.json) — nothing to edit yet');
+
+    ctx.setStep('ops', 'active');
+    const system = [
+      'You are the EDIT stage of a slide engine. Answer with ONLY a JSON object — no prose, no markdown fences: {"ops": [ ... ]}.',
+      'Each op is one object from this closed vocabulary (no other ops exist):',
+      '- {"op":"update_slide","slide_id":"<id>","content":{...partial content fields to merge...},"layout":"<optional layout id>"}',
+      '- {"op":"add_slide","layout":"<layout id>","content":{...},"index":<optional 0-based position>}',
+      '- {"op":"delete_slide","slide_id":"<id>"}',
+      '- {"op":"move_slide","slide_id":"<id>","to_index":<0-based position>}',
+      '- {"op":"set_theme","templateId":"<bundled template id>"}',
+      '- {"op":"export"} — include when the user asks for the .pptx / export / download.',
+      'Rules: change ONLY what the instruction asks; every other slide stays byte-identical. Use the exact slide ids from the deck summary. Content must satisfy the target layout schema. Never invent facts beyond what the instruction and the existing deck support.',
+      'Slides with layout "template-page" carry a "templateRef": their design (background, boxes, fonts) belongs to an imported PPT template and CANNOT change. To change their words, update_slide with content {"slots": {...}} using that slide\'s existing slot keys and short text that fits; never set their layout, and never invent new slot keys.',
+      `Layout ids: ${LAYOUTS.map((layout) => layout.id).join(', ')}.`,
+      `Bundled template ids: ${SLIDE_TEMPLATES.map((t) => t.id).join(', ')}.`,
+    ].join('\n');
+    const summarySlides = deck.slides.map((s, i) => ({ n: i + 1, id: s.id, layout: s.layout, status: s.status, ...(s.templateRef ? { templateRef: s.templateRef } : {}), content: s.content }));
+    const user = [
+      `instruction: ${spec.goal}`,
+      ...(spec.constraints.length > 0 ? [`constraints: ${spec.constraints.join(' | ')}`] : []),
+      `current deck (title: ${deck.title}):`,
+      JSON.stringify({ slides: summarySlides }, null, 1),
+      'Return {"ops":[...]} now.',
+    ].join('\n');
+
+    let exportRequested = /(export|ekspor|pptx|powerpoint|unduh|download)/i.test(spec.goal);
+    const next = await structuredCall(
+      this.#provider,
+      system,
+      user,
+      (value) => {
+        const applied = applyDeckOps(deck, value);
+        if (!applied.ok) return applied;
+        if (applied.value.exportRequested) exportRequested = true;
+        const errors = validateDeck(applied.value.deck, { root }).filter((issue) => issue.severity === 'error');
+        if (errors.length > 0) return { ok: false, issues: errors.map((issue) => issue.message) };
+        return applied;
+      },
+      signal,
+    );
+    this.#throwIfAborted();
+    await this.#waitIfPaused();
+
+    const deckTextBeforeEdit = await this.#deckFileText(root);
+    await writeDeck(root, next.deck);
+    await this.#emitDeckChanged(root, deckTextBeforeEdit);
+    ctx.setStep('ops', 'done');
+    this.#emit('THOUGHT', { text: `Perubahan diterapkan ke deck (${next.opsApplied} operasi, ${next.deck.slides.length} slide) dan tersimpan di deck/deck.json.` });
+
+    ctx.setStep('validate', 'active');
+    const validation = await this.#validateAndEmit();
+    const passed = validation.checks.every((check) => check.status === 'pass');
+    ctx.setStep('validate', passed ? 'done' : 'active');
+    if (!passed) {
+      const summary = 'Deck tersimpan tapi validasi deck gagal — lihat isu validasi di atas; deck tidak diubah lebih lanjut dan tidak di-export.';
+      return { state: { status: 'failed', last_error: 'deck_validation_failed' }, outcome: 'failed', reason: 'deck_validation_failed', summary, validation };
+    }
+
+    if (exportRequested) {
+      ctx.setStep('export', 'active');
+      try {
+        const fresh = (await readDeck(root)) ?? next.deck;
+        const result = await exportDeckToPptx(fresh, root);
+        ctx.setStep('export', 'done');
+        const exported = { path: result.relativePath, bytes: result.bytes, slides: result.slideCount, ...(result.note ? { note: result.note } : {}) };
+        const summary = `done: perubahan diterapkan (${next.opsApplied} operasi) dan deck ter-export ke ${exported.path} (${exported.slides} slide).${result.note ? ` ${result.note}` : ''}`;
+        this.#emit('THOUGHT', { text: summary });
+        return { state: { status: 'done' }, outcome: 'success', reason: 'completed', summary, validation, exported };
+      } catch (error) {
+        const summary = `Perubahan diterapkan dan deck valid, tapi export gagal: ${errorText(error)}. Deck tersimpan di deck/deck.json — jalankan export lagi dari panel deck.`;
+        return { state: { status: 'failed', last_error: 'export_failed' }, outcome: 'failed', reason: 'export_failed', summary, validation };
+      }
+    }
+    ctx.setStep('export', 'skipped');
+    const summary = `done: perubahan diterapkan ke deck (${next.opsApplied} operasi, ${next.deck.slides.length} slide) dan tersimpan. Export .pptx belum diminta — tombol Export .pptx di panel deck selalu tersedia.`;
+    this.#emit('THOUGHT', { text: summary });
+    return { state: { status: 'done' }, outcome: 'success', reason: 'completed', summary, validation };
+  }
+
+  async #validateAndEmit(): Promise<ValidationResult> {
+    this.#emit('VALIDATION_STARTED', { task_id: this.#taskId });
+    const result = await new DeckValidator().validate({ workspaceRoot: this.#deps.workspaceRoot });
+    const passed = result.checks.every((check) => check.status === 'pass');
+    this.#emit(passed ? 'VALIDATION_PASSED' : 'VALIDATION_FAILED', { result });
+    return result;
+  }
+}
+
+/* -------------------------------------------------------- deck ops */
+
+type AppliedOps = { deck: DeckSpec; opsApplied: number; exportRequested: boolean };
+
+function slideIndexOf(deck: DeckSpec, id: unknown, opIndex: number, issues: string[]): number {
+  if (typeof id !== 'string' || id.length === 0) {
+    issues.push(`op ${opIndex + 1}: slide_id must be a non-empty string`);
+    return -1;
+  }
+  const index = deck.slides.findIndex((slide) => slide.id === id);
+  if (index < 0) issues.push(`op ${opIndex + 1}: slide_id "${id}" does not exist in this deck`);
+  return index;
+}
+
+/**
+ * Apply the closed op vocabulary to a CLONE of the deck. Any invalid
+ * op invalidates the whole batch (issues returned verbatim for the
+ * retry): the real deck is written only from a fully validated clone,
+ * so a bad edit round leaves the deck byte-identical.
+ */
+export function applyDeckOps(deck: DeckSpec, value: unknown): { ok: true; value: AppliedOps } | { ok: false; issues: string[] } {
+  if (!isObj(value) || !Array.isArray(value.ops)) {
+    return { ok: false, issues: ['output must be a JSON object {"ops":[...]} with a non-empty ops array'] };
+  }
+  if (value.ops.length === 0) return { ok: false, issues: ['ops array is empty — return at least one operation'] };
+  const issues: string[] = [];
+  const next = clone(deck);
+  let exportRequested = false;
+  let applied = 0;
+  value.ops.forEach((raw, opIndex) => {
+    if (!isObj(raw) || typeof raw.op !== 'string') {
+      issues.push(`op ${opIndex + 1}: each op must be an object with an "op" field`);
+      return;
+    }
+    switch (raw.op) {
+      case 'update_slide': {
+        const index = slideIndexOf(next, raw.slide_id, opIndex, issues);
+        if (index < 0) return;
+        const slide = next.slides[index]!;
+        if (raw.layout !== undefined) {
+          if (typeof raw.layout !== 'string' || !getLayout(raw.layout)) {
+            issues.push(`op ${opIndex + 1}: unknown layout "${String(raw.layout)}"`);
+            return;
+          }
+          if (slide.templateRef && raw.layout !== 'template-page') {
+            // A template slide's design is the template page itself;
+            // re-skinning it into a catalog layout would orphan the
+            // templateRef (validateDeck errors) and destroy the design.
+            issues.push(`op ${opIndex + 1}: slide "${slide.id}" is a template page (templateRef ${slide.templateRef.templateId} page ${slide.templateRef.page}) — its layout cannot change; edit its words via content {"slots": {...}} instead`);
+            return;
+          }
+          slide.layout = raw.layout;
+        }
+        if (!isObj(raw.content)) {
+          issues.push(`op ${opIndex + 1}: update_slide needs a "content" object (partial fields merged into the slide)`);
+          return;
+        }
+        slide.content = { ...slide.content, ...clone(raw.content) };
+        slide.status = 'filled';
+        applied += 1;
+        return;
+      }
+      case 'add_slide': {
+        if (typeof raw.layout !== 'string' || !getLayout(raw.layout)) {
+          issues.push(`op ${opIndex + 1}: add_slide needs a valid "layout" id`);
+          return;
+        }
+        if (raw.layout === 'template-page') {
+          issues.push(`op ${opIndex + 1}: layout "template-page" cannot be added directly — template slides are created by generating with an imported PPT template`);
+          return;
+        }
+        const layout = getLayout(raw.layout)!;
+        const content = isObj(raw.content) ? { ...clone(layout.defaults), ...clone(raw.content) } : clone(layout.defaults);
+        const slide: Slide = { id: newSlideId(), layout: raw.layout, content, status: 'filled' };
+        const at = typeof raw.index === 'number' && Number.isFinite(raw.index) ? Math.max(0, Math.min(next.slides.length, Math.floor(raw.index))) : next.slides.length;
+        next.slides = [...next.slides.slice(0, at), slide, ...next.slides.slice(at)];
+        applied += 1;
+        return;
+      }
+      case 'delete_slide': {
+        const index = slideIndexOf(next, raw.slide_id, opIndex, issues);
+        if (index < 0) return;
+        next.slides = next.slides.filter((_, i) => i !== index);
+        applied += 1;
+        return;
+      }
+      case 'move_slide': {
+        const index = slideIndexOf(next, raw.slide_id, opIndex, issues);
+        if (index < 0) return;
+        const toRaw = typeof raw.to_index === 'number' && Number.isFinite(raw.to_index) ? Math.floor(raw.to_index) : index;
+        const to = Math.max(0, Math.min(next.slides.length - 1, toRaw));
+        const [slide] = next.slides.splice(index, 1);
+        next.slides.splice(to, 0, slide!);
+        applied += 1;
+        return;
+      }
+      case 'set_theme': {
+        const template = typeof raw.templateId === 'string' ? getSlideTemplate(raw.templateId) : undefined;
+        if (!template) {
+          issues.push(`op ${opIndex + 1}: set_theme needs a bundled templateId (${SLIDE_TEMPLATES.map((t) => t.id).join(', ')})`);
+          return;
+        }
+        next.theme = { ...template.theme, templateId: template.id };
+        applied += 1;
+        return;
+      }
+      case 'export': {
+        exportRequested = true;
+        applied += 1;
+        return;
+      }
+      default:
+        issues.push(`op ${opIndex + 1}: unknown op "${raw.op}" — allowed: update_slide, add_slide, delete_slide, move_slide, set_theme, export`);
+    }
+  });
+  if (issues.length > 0) return { ok: false, issues };
+  return { ok: true, value: { deck: next, opsApplied: applied, exportRequested } };
+}
