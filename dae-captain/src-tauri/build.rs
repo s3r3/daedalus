@@ -7,6 +7,7 @@ fn main() {
             "compositor_info",
             "daemon_token",
             "pick_folder",
+            "position_island",
             "open_file",
             "reveal_in_folder",
             "get_prefs",
@@ -22,7 +23,6 @@ fn main() {
             "validate_workspace",
             "list_dir",
             "create_dir",
-            "position_island",
         ])),
     )
     .expect("failed to run tauri-build")

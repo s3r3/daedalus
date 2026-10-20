@@ -13,7 +13,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -23,6 +23,12 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 // ---------------------------------------------------------------------------
 // State
 // ---------------------------------------------------------------------------
+
+/// Kunci mutex tanpa panik bila thread lain pernah panik saat memegangnya (poisoned):
+/// state di sini hanya handle proses & flag, aman dipakai lagi.
+fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 struct AppState {
     /// Child process handle when THIS app spawned the server.
@@ -39,7 +45,7 @@ struct AppState {
 // ---------------------------------------------------------------------------
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(default)]
+#[serde(default)] // prefs.json dari versi lama (tanpa field baru) tetap bisa dibaca
 struct Prefs {
     repo_root: String,
     workspace_root: String,
@@ -97,7 +103,9 @@ fn get_prefs(app: AppHandle) -> Result<Prefs, String> {    let path = prefs_path
         return Ok(Prefs::default());
     }
     let raw = fs::read_to_string(&path).map_err(|e| format!("read prefs: {e}"))?;
-    // B19: prefs korup bukan lagi fatal — backup lalu pakai default.
+    // prefs.json korup (mis. terpotong saat crash) tidak boleh membuat seluruh app gagal permanen:
+    // get_prefs dipakai oleh setup, position_island, spawn_server, dll. Simpan salinan untuk diperiksa,
+    // lalu pakai nilai bawaan.
     let mut prefs: Prefs = match serde_json::from_str(&raw) {
         Ok(p) => p,
         Err(_) => {
@@ -174,6 +182,8 @@ fn position_island(app: AppHandle, corner: String, expanded: bool) -> Result<Str
 
 /// Open a native folder picker dialog. Returns the selected path, or None
 /// if the user cancelled.
+// `async`: command sinkron di Tauri 2 berjalan di MAIN THREAD; blocking_pick_folder tidak boleh dipanggil di sana
+// (risiko deadlock/UI beku). `(async)` memindahkannya ke thread pool tanpa mengubah isi fungsi.
 #[tauri::command(async)]
 fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -185,8 +195,10 @@ fn pick_folder(app: AppHandle) -> Result<Option<String>, String> {
     Ok(path.map(|p| p.to_string()))
 }
 
-/// B17: baca token dari workspace dulu, baru ~/.daedalus (kompatibilitas lama).
-/// Argumen workspace opsional agar UI lama tetap berfungsi.
+/// Token API daemon. Server menulisnya ke `daemon.json` di home daemon-nya — `<workspace>/.daedalus` secara default
+/// (lihat `daemon_home`), BUKAN `~/.daedalus`. Versi lama hanya membaca `~/.daedalus/daemon.json`, sehingga token
+/// tidak pernah ditemukan dan UI tak bisa memanggil route bertoken. Urutan: argumen `workspace` → workspace di prefs
+/// → `~/.daedalus` (kompatibilitas lama). Argumen opsional, jadi UI lama tanpa argumen tetap berfungsi.
 #[tauri::command]
 fn daemon_token(app: AppHandle, workspace: Option<String>) -> Result<String, String> {
     let ws = workspace
@@ -217,25 +229,6 @@ fn daemon_token(app: AppHandle, workspace: Option<String>) -> Result<String, Str
     Err(last_err)
 }
 
-/// B17: tulis daemon.json dengan merge (bukan timpa) + atomik.
-/// Field `token` milik server tidak disentuh.
-fn write_daemon_json(path: &Path, fields: serde_json::Value) -> Result<(), String> {
-    let mut doc = fs::read_to_string(path)
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .filter(|v| v.is_object())
-        .unwrap_or_else(|| serde_json::json!({}));
-    if let (Some(dst), Some(src)) = (doc.as_object_mut(), fields.as_object()) {
-        for (k, v) in src {
-            dst.insert(k.clone(), v.clone());
-        }
-    }
-    let tmp = path.with_extension("json.tmp");
-    fs::write(&tmp, serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?)
-        .map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
-}
-
 #[tauri::command]
 fn set_prefs(app: AppHandle, prefs: Prefs) -> Result<(), String> {
     if prefs.keep_alive != "ask" && prefs.keep_alive != "keep" && prefs.keep_alive != "stop" {
@@ -246,7 +239,7 @@ fn set_prefs(app: AppHandle, prefs: Prefs) -> Result<(), String> {
     }
     let path = prefs_path(&app)?;
     let raw = serde_json::to_string_pretty(&prefs).map_err(|e| format!("encode prefs: {e}"))?;
-    // B19: tulis atomik — crash saat tulis tak lagi memotong file.
+    // Tulis atomik: file sementara lalu rename, supaya crash di tengah tulis tidak meninggalkan JSON terpotong.
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, raw).map_err(|e| format!("write prefs: {e}"))?;
     fs::rename(&tmp, &path).map_err(|e| format!("replace prefs: {e}"))?;
@@ -461,6 +454,47 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+/// Tulis `daemon.json` dengan MENGGABUNG field baru ke isi yang sudah ada (token milik server tidak disentuh), secara
+/// atomik. Versi lama memakai `fs::write` yang menimpa seluruh isi: bila server sudah menulis `token` lebih dulu, token
+/// itu hilang dari disk sementara server tetap memegangnya di memori → UI tidak bisa mengambil token sampai restart.
+fn write_daemon_json(path: &Path, fields: serde_json::Value) -> Result<(), String> {
+    let mut doc = fs::read_to_string(path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    if let (Some(dst), Some(src)) = (doc.as_object_mut(), fields.as_object()) {
+        for (k, v) in src {
+            dst.insert(k.clone(), v.clone());
+        }
+    }
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(&doc).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    fs::rename(&tmp, path).map_err(|e| e.to_string())
+}
+
+/// Hentikan child dengan sopan: SIGTERM dulu agar server sempat menutup terminal & socket, SIGKILL bila tak berhenti.
+/// `child.kill()` langsung (SIGKILL) melewati handler SIGTERM server sehingga semua shell terminal menjadi yatim.
+fn terminate_gracefully(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status();
+        let deadline = Instant::now() + Duration::from_secs(4);
+        while Instant::now() < deadline {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+// spawn_server menunggu hingga 12 dtk; di main thread itu membekukan UI.
 #[tauri::command(async)]
 fn spawn_server(
     app: AppHandle,
@@ -468,30 +502,6 @@ fn spawn_server(
     repo_root: String,
     workspace: String,
 ) -> Result<SpawnInfo, String> {
-    // Verifikasi Node.js tersedia sebelum spawn - pesan Bahasa Indonesia yang jelas
-    let node_check = Command::new("node")
-        .arg("--version")
-        .output();
-    match node_check {
-        Ok(out) if out.status.success() => {
-            let ver = String::from_utf8_lossy(&out.stdout);
-            // Butuh Node 22+ untuk --experimental-strip-types
-            let major: u32 = ver.trim_start_matches('v').split('.').next()
-                .and_then(|s| s.parse().ok()).unwrap_or(0);
-            if major < 22 {
-                return Err(format!(
-                    "Node.js versi {} terdeteksi, butuh versi 22 atau lebih baru. Update Node.js dari https://nodejs.org",
-                    ver.trim()
-                ));
-            }
-        }
-        _ => {
-            return Err(
-                "Node.js tidak ditemukan. Install Node.js 22+ dari https://nodejs.org lalu restart Dae Captain.".to_string()
-            );
-        }
-    }
-
     let prefs = get_prefs(app.clone())?;
     let host = if prefs.server_host.is_empty() {
         "127.0.0.1".to_string()
@@ -540,14 +550,15 @@ fn spawn_server(
         .map_err(|e| format!("open log: {e}"))?;
     let log_err = log_file.try_clone().map_err(|e| format!("clone log: {e}"))?;
 
-    // B19: set cwd agar process.cwd() server = workspace (lihat B6).
     let mut child = Command::new("node")
-        .current_dir(&workspace)
         .arg("--experimental-strip-types")
         .arg(&server_main)
         .env("DAEDALUS_HOST", &host)
         .env("DAEDALUS_PORT", port.to_string())
         .env("DAEDALUS_WORKSPACE", &workspace)
+        // cwd = workspace: server menganggap cwd sebagai salah satu root yang diizinkan; mewarisi cwd aplikasi Tauri
+        // (mis. $HOME) membuka seluruh home ke API file.
+        .current_dir(&workspace)
         .stdin(Stdio::null())
         .stdout(log_file)
         .stderr(log_err)
@@ -566,9 +577,8 @@ fn spawn_server(
         "server_url": url,
         "workspace": workspace,
     });
-    // B17: merge (bukan timpa) agar token milik server tak hilang; tulis atomik.
-    // B19: bila tulis gagal, bunuh child agar tak yatim.
     if let Err(e) = write_daemon_json(&daemon_json_path, state_doc) {
+        // Child sudah berjalan: jangan biarkan jadi proses yatim yang memegang port.
         let _ = child.kill();
         let _ = child.wait();
         return Err(format!("write daemon.json: {e}"));
@@ -594,7 +604,7 @@ fn spawn_server(
         std::thread::sleep(Duration::from_millis(150));
     }
     if !healthy {
-        let _ = child.kill();
+        terminate_gracefully(&mut child);
         let _ = fs::remove_file(&daemon_json_path);
         return Err(format!(
             "server did not become healthy at {url} within 12s; see {}",
@@ -602,9 +612,9 @@ fn spawn_server(
         ));
     }
 
-    *state.server_child.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
-    *state.server_managed.lock().unwrap_or_else(|e| e.into_inner()) = true;
-    *state.daemon_json.lock().unwrap_or_else(|e| e.into_inner()) = Some(daemon_json_path);
+    *lock(&state.server_child) = Some(child);
+    *lock(&state.server_managed) = true;
+    *lock(&state.daemon_json) = Some(daemon_json_path);
 
     Ok(SpawnInfo {
         started: true,
@@ -614,33 +624,17 @@ fn spawn_server(
     })
 }
 
-/// B19: SIGTERM dulu agar server sempat menutup terminal & socket (main.ts
-/// graceful shutdown); SIGKILL hanya bila masih hidup setelah 4 detik.
-fn terminate_gracefully(child: &mut Child) {
-    #[cfg(unix)]
-    {
-        let _ = Command::new("kill").args(["-TERM", &child.id().to_string()]).status();
-        let deadline = Instant::now() + Duration::from_secs(4);
-        while Instant::now() < deadline {
-            if matches!(child.try_wait(), Ok(Some(_))) { return; }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-    }
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
 #[tauri::command(async)]
 fn stop_server(state: State<AppState>) -> Result<bool, String> {
     let mut stopped = false;
-    if *state.server_managed.lock().unwrap_or_else(|e| e.into_inner()) {
-        if let Some(mut child) = state.server_child.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    if *lock(&state.server_managed) {
+        if let Some(mut child) = lock(&state.server_child).take() {
             terminate_gracefully(&mut child);
             stopped = true;
         }
-        *state.server_managed.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        *lock(&state.server_managed) = false;
     }
-    if let Some(path) = state.daemon_json.lock().unwrap_or_else(|e| e.into_inner()).take() {
+    if let Some(path) = lock(&state.daemon_json).take() {
         let _ = fs::remove_file(path);
     }
     Ok(stopped)
@@ -648,7 +642,7 @@ fn stop_server(state: State<AppState>) -> Result<bool, String> {
 
 #[tauri::command]
 fn server_managed(state: State<AppState>) -> Result<bool, String> {
-    Ok(*state.server_managed.lock().unwrap_or_else(|e| e.into_inner()))
+    Ok(*lock(&state.server_managed))
 }
 
 // ---------------------------------------------------------------------------
@@ -695,51 +689,68 @@ fn open_web(url: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Open a file with the OS default application.
-/// Only allows files inside the current workspace root (validated by caller).
-#[tauri::command]
-fn open_file(path: String) -> Result<(), String> {
-    // Basic safety: must be an absolute path, no null bytes
+/// Pastikan path (setelah symlink diselesaikan) berada di dalam workspace aktif atau salah satu workspace terakhir.
+/// Komentar lama berkata "validated by caller", tetapi tidak ada pemanggil yang memvalidasi: webview bisa meminta
+/// `xdg-open` untuk path absolut apa pun (mis. berkas .desktop atau skrip).
+fn ensure_in_workspace(app: &AppHandle, path: &str) -> Result<PathBuf, String> {
     if !path.starts_with('/') || path.contains('\0') {
-        return Err("open_file requires an absolute path".to_string());
+        return Err("path harus absolut".to_string());
     }
-    Command::new("xdg-open")
-        .arg(&path)
+    let canon = fs::canonicalize(path).map_err(|e| format!("path tidak ditemukan: {e}"))?;
+    let prefs = get_prefs(app.clone())?;
+    let mut roots: Vec<String> = prefs.recent_workspaces.clone();
+    roots.push(prefs.workspace_root.clone());
+    let allowed = roots
+        .into_iter()
+        .filter(|r| !r.is_empty())
+        .filter_map(|r| fs::canonicalize(r).ok())
+        .any(|r| canon.starts_with(&r));
+    if allowed {
+        Ok(canon)
+    } else {
+        Err("file di luar workspace — tidak dibuka".to_string())
+    }
+}
+
+/// Jalankan proses lepas (tanpa menunggu) tetapi tetap di-`wait()` di thread lain supaya tidak jadi zombie.
+fn spawn_detached(cmd: &mut Command) -> std::io::Result<()> {
+    let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("xdg-open failed: {e}"))?;
+        .spawn()?;
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
     Ok(())
 }
 
-/// Reveal a file in the system file manager (select it).
+/// Open a file with the OS default application.
+/// Hanya berkas di dalam workspace (divalidasi di sini, bukan oleh pemanggil).
 #[tauri::command]
-fn reveal_in_folder(path: String) -> Result<(), String> {
-    if !path.starts_with('/') || path.contains('\0') {
-        return Err("reveal_in_folder requires an absolute path".to_string());
-    }
-    // Try file manager with --select, fall back to opening parent dir
-    let parent = std::path::Path::new(&path).parent()
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-    // xdg-open doesn't support --select; try common file managers
-    for fm in ["nautilus", "dolphin", "thunar", "pcmanfm"] {
-        if Command::new(fm).arg("--select").arg(&path)
-            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null())
-            .spawn().is_ok() {
+fn open_file(app: AppHandle, path: String) -> Result<(), String> {
+    let canon = ensure_in_workspace(&app, &path)?;
+    spawn_detached(Command::new("xdg-open").arg(&canon)).map_err(|e| format!("xdg-open failed: {e}"))
+}
+
+/// Reveal a file in the system file manager (select it). Hanya berkas di dalam workspace.
+#[tauri::command]
+fn reveal_in_folder(app: AppHandle, path: String) -> Result<(), String> {
+    let canon = ensure_in_workspace(&app, &path)?;
+    let parent = canon
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| canon.clone());
+    // Hanya file manager yang mendukung --select (thunar/pcmanfm tidak: argumennya akan dibuka sebagai folder).
+    for fm in ["nautilus", "dolphin"] {
+        let mut cmd = Command::new(fm);
+        cmd.arg("--select");
+        if spawn_detached(cmd.arg(&canon)).is_ok() {
             return Ok(());
         }
     }
-    // Fallback: open parent directory
-    Command::new("xdg-open")
-        .arg(&parent)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("xdg-open failed: {e}"))?;
-    Ok(())
+    // Fallback: buka folder induknya.
+    spawn_detached(Command::new("xdg-open").arg(&parent)).map_err(|e| format!("xdg-open failed: {e}"))
 }
 
 #[tauri::command]

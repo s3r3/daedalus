@@ -21,10 +21,10 @@
     "allow-create-dir",
     "allow-daemon-token",
     "allow-pick-folder",
+    "allow-position-island",
     "dialog:allow-open",
     "allow-open-file",
-    "allow-reveal-in-folder",
-    "allow-position-island"
+    "allow-reveal-in-folder"
   ],
   "windows": [
     "main"
