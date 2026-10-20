@@ -8,8 +8,9 @@ dist/
 # Daedalus runtime state (tasks, conversations, plans, attachments)
 .daedalus/
 
-# core + server: DIBUKA SEMENTARA 2026-10-20 (usul Farid: buka → laptop git pull → tutup lagi).
-# Baris ignore dihapus selama jendela ini; kembalikan /core/ dan /server/ saat menutup.
+# core + server: lokal saja, tidak di-push ke GitHub (keputusan Farid 2026-10-20)
+/core/
+/server/
 
 # local test workspace
 tesvite/
