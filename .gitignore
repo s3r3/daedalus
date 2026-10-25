@@ -8,10 +8,8 @@ dist/
 # Daedalus runtime state (tasks, conversations, plans, attachments)
 .daedalus/
 
-# server: lokal saja, tidak di-push ke GitHub (keputusan Farid 2026-10-20)
-# core DIBUKA kembali 2026-10-25 atas perintah Farid ("push aja ke repo daedalus")
-# untuk perbaikan agent loop — server tetap tertutup.
-/server/
+# core + server DIBUKA kembali 2026-10-25 atas perintah Farid ("push semuanya")
+# — sebelumnya lokal saja per keputusan 2026-10-20.
 
 # local test workspace
 tesvite/
