@@ -1,0 +1,13 @@
+[package]
+name = "dae-island"
+version = "0.1.0"
+edition = "2021"
+description = "Dae Captain island — native Rust layer-shell (tanpa webview). Fase 1: skeleton."
+license = "MIT"
+
+[dependencies]
+# gtk4-layer-shell 0.7 mensyaratkan gtk 0.10 (dikonfirmasi resolver cargo).
+# gtk 0.10 butuh GTK sistem yang lebih baru dari 4.14 — bila build script
+# menolak, turunkan layer-shell ke 0.6/0.5 (era gtk 0.9) atau naikkan GTK.
+gtk4 = "0.10"
+gtk4-layer-shell = "0.7"
