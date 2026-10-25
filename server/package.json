@@ -1,6 +1,7 @@
 {
   "name": "@daedalus/server",
   "version": "0.1.0",
+  "license": "UNLICENSED",
   "private": true,
   "type": "module",
   "main": "./src/index.ts",

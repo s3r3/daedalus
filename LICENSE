@@ -1,0 +1,14 @@
+Proprietary License
+
+Copyright (c) 2026 Farid Arian. All rights reserved.
+
+The source code in the `core/` and `server/` directories of this
+repository is proprietary. No permission is granted to copy, modify,
+merge, publish, distribute, sublicense, or sell copies of the code
+in those directories, in whole or in part, or to use it for any
+purpose, without the prior written permission of the copyright
+holder.
+
+This license applies to the `core/` and `server/` directories only.
+No license is granted for any other part of this repository by
+this file.
