@@ -181,9 +181,14 @@ describe('apply command', () => {
 describe('packaging', () => {
   test('root and CLI package.json both expose the daedalus bin', () => {
     const rootPkg = JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')) as { bin?: Record<string, string>; files?: string[] };
-    const cliPkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as { bin?: Record<string, string> };
+    const cliPkg = JSON.parse(readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8')) as { bin?: Record<string, string>; files?: string[] };
     expect(rootPkg.bin?.daedalus).toBe('./cli/src/index.ts');
-    expect(cliPkg.bin?.daedalus).toBe('./src/index.ts');
+    // The published CLI package ships dist/ (not src/), so its bin must
+    // point at the built output — the published @s3r3/daedalus install
+    // proves this works. (An older expectation of ./src/index.ts predates
+    // the publish setup and would break the installed package.)
+    expect(cliPkg.bin?.daedalus).toBe('./dist/index.js');
+    expect(cliPkg.files).toContain('dist/');
     expect(rootPkg.files).toContain('skills');
     expect(rootPkg.files?.some((entry) => entry.includes('node_modules'))).toBe(false);
   });
