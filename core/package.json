@@ -92,7 +92,7 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
-    "docx": "^9.9.0",
+    "docx": "^9.14.0",
     "exceljs": "^4.4.0",
     "jszip": "^3.10.1",
     "mailparser": "^3.9.38",
