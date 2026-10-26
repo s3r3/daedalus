@@ -1,0 +1,18 @@
+# Dependabot: weekly dependency updates for Daedalus.
+# npm covers the root lockfile and all workspaces (core, cli, server,
+# daedalus-web). Cargo covers the native Rust island (dae-island/).
+# Security updates are enabled separately in Settings > Code security.
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+
+  - package-ecosystem: cargo
+    directory: "/dae-island"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

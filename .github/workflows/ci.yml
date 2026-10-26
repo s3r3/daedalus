@@ -1,0 +1,35 @@
+# CI for Daedalus: run the repo's own verification gate on every push
+# to main and every pull request targeting main.
+#
+# The gate is scripts/check.sh: workspace builds, the shared
+# @daedalus/core link check, the scope check (no agent/tool/LLM logic
+# outside core), and vitest for core, cli, server, daedalus-web.
+# Node >= 22 is required by the root package.json engines field.
+# The @daedalus/core link is created by `npm install` itself via the
+# "file:../core" dependency in server/package.json, so no manual
+# symlink step is needed in CI.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run check.sh
+        run: bash scripts/check.sh
