@@ -208,11 +208,14 @@ describe('server', () => {
     expect(ctx.store.isCancelRequested('t4')).toBe(true)
   })
 
-  test('POST /tasks/{id}/cancel requires the daemon token', async () => {
+  test('POST /tasks/{id}/cancel does not require the daemon token (low-risk by design)', async () => {
     const { base } = await listen()
     await fetch(new URL('/health', base))
+    // Cancel is deliberately open: the route comment notes the Tauri
+    // token bridge is unreliable and cancel only stops the user's own
+    // task. Approve/restore keep their token checks.
     const res = await fetch(new URL('/tasks/t4b/cancel', base), { method: 'POST' })
-    expect(res.status).toBe(401)
+    expect(res.status).toBe(200)
   })
 
   // Dae Captain pill ⏸ (Fase 6): cooperative pause — the marker is recorded
@@ -235,11 +238,11 @@ describe('server', () => {
     expect(ctx.store.isPauseRequested('t6')).toBe(false)
   })
 
-  test('POST /tasks/{id}/pause requires the daemon token', async () => {
+  test('POST /tasks/{id}/pause does not require the daemon token (same as cancel)', async () => {
     const { base } = await listen()
     await fetch(new URL('/health', base))
     const res = await fetch(new URL('/tasks/t7/pause', base), { method: 'POST' })
-    expect(res.status).toBe(401)
+    expect(res.status).toBe(200)
   })
 
   test('POST /tasks/{id}/approve decides a pending approval', async () => {

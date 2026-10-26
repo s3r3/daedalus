@@ -29,7 +29,7 @@ afterEach(async () => {
   store = undefined
 })
 
-async function listen(): Promise<string> {
+async function listen(): Promise<{ base: string; token: string }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-ckpt-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-ckpt-ws-'))
   mkdirSync(join(workspace!, 'src'), { recursive: true })
@@ -39,7 +39,9 @@ async function listen(): Promise<string> {
   server = createApp(ctx)
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
-  return `http://127.0.0.1:${port}`
+  // createApp mints the daemon token; restore is a sensitive route and
+  // requires it (unlike cancel/pause, which are open by design).
+  return { base: `http://127.0.0.1:${port}`, token: ctx.daemonToken ?? '' }
 }
 
 function seedTask(taskId: string, withRepo = true): void {
@@ -53,10 +55,10 @@ async function get(base: string, path: string): Promise<{ status: number; body: 
   return { status: res.status, body: (await res.json()) as Record<string, unknown> }
 }
 
-async function post(base: string, path: string, body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
+async function post(base: string, path: string, body: Record<string, unknown>, token?: string): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(new URL(path, base), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify(body),
   })
   return { status: res.status, body: (await res.json()) as Record<string, unknown> }
@@ -64,7 +66,7 @@ async function post(base: string, path: string, body: Record<string, unknown>): 
 
 describe('task checkpoints', () => {
   test('GET lists the recorded backups; unknown tasks 404', async () => {
-    const base = await listen()
+    const { base } = await listen()
     seedTask('task-1')
 
     const found = await get(base, '/tasks/task-1/checkpoints')
@@ -81,13 +83,13 @@ describe('task checkpoints', () => {
   })
 
   test('POST restore rewinds the task files and touches nothing else', async () => {
-    const base = await listen()
+    const { base, token } = await listen()
     seedTask('task-1')
     writeFileSync(join(workspace!, 'src', 'index.ts'), 'agent edit\n')
     writeFileSync(join(workspace!, 'new-file.txt'), 'brand new\n')
     writeFileSync(join(workspace!, 'untouched.txt'), 'leave me alone\n')
 
-    const res = await post(base, '/tasks/task-1/restore', { root: workspace })
+    const res = await post(base, '/tasks/task-1/restore', { root: workspace }, token)
     expect(res.status).toBe(200)
     expect(res.body.restored).toEqual(['src/index.ts'])
     expect(res.body.deleted).toEqual(['new-file.txt'])
@@ -97,26 +99,35 @@ describe('task checkpoints', () => {
   })
 
   test('POST restore falls back to the task-recorded root when no root is given', async () => {
-    const base = await listen()
+    const { base, token } = await listen()
     seedTask('task-1')
     writeFileSync(join(workspace!, 'src', 'index.ts'), 'agent edit\n')
 
-    const res = await post(base, '/tasks/task-1/restore', {})
+    const res = await post(base, '/tasks/task-1/restore', {}, token)
     expect(res.status).toBe(200)
     expect(res.body.restored).toEqual(['src/index.ts'])
     expect(readFileSync(join(workspace!, 'src', 'index.ts'), 'utf8')).toBe('export const a = 1\n')
   })
 
   test('POST restore 404s unknown tasks and 400s when no root is resolvable', async () => {
-    const base = await listen()
+    const { base, token } = await listen()
 
-    const missing = await post(base, '/tasks/nope/restore', { root: workspace })
+    const missing = await post(base, '/tasks/nope/restore', { root: workspace }, token)
     expect(missing.status).toBe(404)
     expect(missing.body.error).toBe('not_found')
 
     seedTask('task-2', false)
-    const noRoot = await post(base, '/tasks/task-2/restore', {})
+    const noRoot = await post(base, '/tasks/task-2/restore', {}, token)
     expect(noRoot.status).toBe(400)
     expect(noRoot.body.error).toBe('restore_failed')
+  })
+
+  test('POST restore requires the daemon token', async () => {
+    const { base } = await listen()
+    seedTask('task-1')
+
+    const res = await post(base, '/tasks/task-1/restore', { root: workspace })
+    expect(res.status).toBe(401)
+    expect(res.body.error).toBe('unauthorized')
   })
 })

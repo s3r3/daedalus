@@ -44,5 +44,10 @@ jobs:
       - name: Build sheet sidecar
         run: bash sheet-sidecar/build.sh
 
+      # The sheet-preview tests shell out to the real pdftoppm
+      # (poppler-utils), which is not preinstalled on the runner.
+      - name: Install poppler-utils
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
+
       - name: Run check.sh
         run: bash scripts/check.sh
