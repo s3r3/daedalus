@@ -2,6 +2,8 @@
 
 This document describes the architecture implemented in `Daedalus/` as audited on 2026-10-05. It records the current system, not the final thesis freeze: Phase 10 live evaluation remains pending while the configured provider endpoint is unreachable, and Phase 11 final freeze/tag has not been performed.
 
+**Update (2026-10-26):** since the 2026-10-05 audit, the following changed on main — core/ and server/ were closed on GitHub (2026-10-20) and reopened (2026-10-25); core/ and server/ are now under a proprietary LICENSE (all rights reserved, `UNLICENSED` in both package.json files); the agent-loop reliability fixes F1–F10 plus Q6/Q7 were applied to core/ and verified (61/0 suite + smoke, 0 new typecheck errors); the native Rust Dae island Fase 1 skeleton (GTK4 + gtk4-layer-shell) was merged to main (live-test on Hyprland pending); CI (scripts/check.sh), CodeQL, and Dependabot are active on main; audit-v2 S-series status is S9 done, S6/S1/S10 partial, S7/S5/S4 pending, and the Q1/Q5/Q8 server-contract round is still pending. The rest of this document still describes the 2026-10-05 audit.
+
 ## 1. Architectural principle
 
 Daedalus is **one core with two thin interfaces**:

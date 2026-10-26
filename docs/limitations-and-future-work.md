@@ -2,6 +2,8 @@
 
 This document separates verified limitations from aspirations. It is part of the Phase 11 documentation preparation and must be updated after the live Phase 10 evaluation; it is not a final freeze statement.
 
+**Update (2026-10-26):** repository state since the 2026-10-12 pass — core/ and server/ are back on GitHub main (reopened 2026-10-25) under a proprietary LICENSE covering core/ and server/ only; agent-loop reliability fixes F1–F10 plus Q6/Q7 are applied and verified; CI (scripts/check.sh), CodeQL, and Dependabot run on main; the native Rust Dae island Fase 1 skeleton is merged to main with its Hyprland live-test still pending; still open from audit v2 are S7/S5/S4, the partial S6/S1/S10 completions, and the Q1/Q5/Q8 server-contract round.
+
 ## Current blockers and unverified items
 
 ### Live evaluation result is model-limited
