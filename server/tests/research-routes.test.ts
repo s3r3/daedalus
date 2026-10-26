@@ -565,34 +565,49 @@ describe('curlFetchPage fallback', () => {
 })
 
 describe('keyless search backends', () => {
+  // Live public APIs, not mocks: arXiv/OpenAlex rate-limit shared CI
+  // runner IPs, so a backend occasionally answers [] on the first try
+  // (arxiv failed one run, openAlex the next, then both passed). Retry
+  // twice with a delay before failing — the assertion itself is
+  // unchanged: after 3 attempts, 0 hits is still a failure.
+  async function liveHits<T>(fn: () => Promise<T[]>): Promise<T[]> {
+    let last: T[] = []
+    for (let attempt = 0; attempt < 3; attempt++) {
+      last = await fn()
+      if (last.length > 0) return last
+      if (attempt < 2) await new Promise((r) => setTimeout(r, 5000))
+    }
+    return last
+  }
+
   test('bingRssSearchWeb mengembalikan hits web umum', async () => {
     const { bingRssSearchWeb } = await import('../src/research.ts')
-    const hits = await bingRssSearchWeb('machine learning journal')
+    const hits = await liveHits(() => bingRssSearchWeb('machine learning journal'))
     expect(hits.length).toBeGreaterThan(0)
     expect(hits[0]!.url).toMatch(/^https?:\/\//)
     expect(hits[0]!.title.length).toBeGreaterThan(0)
-  }, 30000)
+  }, 120000)
 
   test('openAlexSearchWeb mengembalikan karya ilmiah via DOI', async () => {
     const { openAlexSearchWeb } = await import('../src/research.ts')
-    const hits = await openAlexSearchWeb('deep learning image classification')
+    const hits = await liveHits(() => openAlexSearchWeb('deep learning image classification'))
     expect(hits.length).toBeGreaterThan(0)
     expect(hits[0]!.url).toContain('doi.org')
-  }, 30000)
+  }, 120000)
 
   test('crossrefSearchWeb mengembalikan karya ilmiah', async () => {
     const { crossrefSearchWeb } = await import('../src/research.ts')
-    const hits = await crossrefSearchWeb('neural network optimization')
+    const hits = await liveHits(() => crossrefSearchWeb('neural network optimization'))
     expect(hits.length).toBeGreaterThan(0)
     expect(hits[0]!.title.length).toBeGreaterThan(0)
-  }, 30000)
+  }, 120000)
 
   test('arxivSearchWeb mengembalikan preprint', async () => {
     const { arxivSearchWeb } = await import('../src/research.ts')
-    const hits = await arxivSearchWeb('transformer')
+    const hits = await liveHits(() => arxivSearchWeb('transformer'))
     expect(hits.length).toBeGreaterThan(0)
     expect(hits[0]!.url).toContain('arxiv.org')
-  }, 30000)
+  }, 120000)
 })
 
 describe('probeFrameable', () => {
