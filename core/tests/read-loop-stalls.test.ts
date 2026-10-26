@@ -477,8 +477,8 @@ describe('stall definition (fix 2)', () => {
     expect(result.state.status).toBe('failed');
     expect(result.state.last_error).toBe('no_progress');
     expect(result.report.outcome).toBe('partial');
-    expect(result.report.evidence.join('\n')).toContain('stuck:');
-    expect(result.report.evidence.join('\n')).toContain('no file change, no successful command, no download, no new information');
+    expect(result.report.evidence.join('\n')).toContain('Macet:');
+    expect(result.report.evidence.join('\n')).toContain('tidak ada perubahan file, perintah yang berhasil, unduhan, atau informasi baru');
     // Nowhere near the incident's 14 requests: the stall backstop
     // stops the run after a handful of turns.
     expect(result.events.filter((event) => event.type === 'MODEL_REQUEST_FINISHED').length).toBeLessThanOrEqual(10);
@@ -610,7 +610,7 @@ describe('input-token budget (P0-5)', () => {
     const state = await loop.run({ id: 'budget-task', goal: 'look around', constraints: [], done_criteria: ['result reported'], repo_path: ws, status: 'draft' });
     expect(state.status).toBe('failed');
     expect(state.last_error).toBe('input_token_budget');
-    expect(state.last_observation).toMatch(/input token budget reached: \d+ input tokens spent on this task \(budget 25000\)/);
+    expect(state.last_observation).toMatch(/Anggaran token input tercapai: \d+ token input terpakai pada task ini \(anggaran 25000\)/);
     const budgetWarnings = store.replay('budget-task').filter((event) => event.type === 'LOOP_WARNING' && (event.payload as { kind?: string }).kind === 'token_budget');
     expect(budgetWarnings).toHaveLength(1);
   });
@@ -934,7 +934,7 @@ describe('hard-pause vs token budget ordering (live bug 2026-10-07)', () => {
     const state = await runPromise;
     expect(state.status).toBe('failed');
     expect(state.last_error).toBe('input_token_budget');
-    expect(state.last_observation).toContain('input token budget reached');
+    expect(state.last_observation).toContain('Anggaran token input tercapai');
     // Repeats 1–3 executed, the 4th was suppressed, the 5th executed
     // after the user's continue re-armed it.
     expect(executions()).toBe(4);

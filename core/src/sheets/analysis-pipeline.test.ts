@@ -91,6 +91,8 @@ describe('FORMULA_CATALOG re-export', () => {
 });
 
 describe('runAnalysisPipeline happy path', () => {
+  // The pipeline does real workbook work; on shared CI runners it runs
+  // just over vitest's 5s default (5.1s observed), so allow 10s.
   test('stages run in order: compute → verify → synthesize → export', async () => {
     const seen: string[] = [];
     const provider = scriptedProvider({ report: reportJson(), seen });
@@ -123,7 +125,7 @@ describe('runAnalysisPipeline happy path', () => {
     // export: xlsx written to the workspace
     expect(result.exported?.bytes).toBeGreaterThan(0);
     expect(existsSync(result.exported?.path ?? '')).toBe(true);
-  });
+  }, 10_000);
 
   test('invalid staged plan throws before any model call', async () => {
     const seen: string[] = [];

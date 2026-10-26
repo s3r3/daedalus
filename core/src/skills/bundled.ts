@@ -74,7 +74,19 @@ export async function ensureBundledSkillsInstalled(
     } catch {
       // missing — install below
     }
-    await cp(join(bundledSkillsDir(), name), join(targetDir, name), { recursive: true });
+    try {
+      await cp(join(bundledSkillsDir(), name), join(targetDir, name), { recursive: true });
+    } catch (error) {
+      // Race: another process/worker installed this skill between the
+      // stat above and the copy (parallel test files, concurrent CLI
+      // runs). The target now exists with identical content, so treat
+      // it as skipped instead of failing the whole run.
+      if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+        skipped.push(name);
+        continue;
+      }
+      throw error;
+    }
     installed.push(name);
   }
   return { installed, skipped, targetDir };

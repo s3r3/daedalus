@@ -207,7 +207,7 @@ describe('changeset-scoped validation — end to end', () => {
     const result = await runner.run({ goal: 'coba buat kan landing page dalam html buat di folder ayid buatkan folder juga\n\ndone: ayid/index.html exists' });
     expect(result.outcome).toBe('success');
     expect(eventTypes(result.events)).toContain('VALIDATION_PASSED');
-    expect(result.report.evidence.some((line) => line.startsWith("validation skipped: changes are outside the project's packages"))).toBe(true);
+    expect(result.report.evidence.some((line) => line.startsWith("validasi dilewati: changes are outside the project's packages"))).toBe(true);
     expect(result.report.metrics.checks_failed).toBe(0);
   });
 

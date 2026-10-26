@@ -218,7 +218,7 @@ describe('Phase 9 — LLM fault injection', () => {
       expect(result.state.last_error, item.name).toContain(item.marker);
       if (item.name !== 'malformed') {
         expect(result.events.some((event) => event.type === 'MODEL_REQUEST_FAILED'), item.name).toBe(true);
-        expect(result.report.evidence.some((line) => line.startsWith('model failure:')), item.name).toBe(true);
+        expect(result.report.evidence.some((line) => line.startsWith('kegagalan model:')), item.name).toBe(true);
       }
       expect(result.report.outcome, item.name).toBe('failed');
     }

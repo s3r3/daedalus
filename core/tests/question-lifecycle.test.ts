@@ -107,7 +107,7 @@ describe('loop-pause question answered over a blown budget', () => {
     expect(result.state.status).toBe('failed');
     expect(result.state.last_error).toBe('input_token_budget');
     expect(result.report.outcome).toBe('partial');
-    expect(result.report.evidence.join('\n')).toContain('input token budget');
+    expect(result.report.evidence.join('\n')).toContain('Anggaran token input tercapai');
 
     // The card closed: the broker holds nothing for this task, a second
     // answer goes nowhere, and the log carries the closing event BEFORE

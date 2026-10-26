@@ -505,7 +505,7 @@ describe('feature 3: validation profile', () => {
     const runner = new TaskRunner({ workspaceRoot: workspace, store: new TaskStore(home), provider: scriptedProvider(threeWrites()), approvalPolicy: 'auto', maxIterations: 8 });
     const result = await runner.run({ goal: 'verify the workspace as-is' });
     expect(result.report.validation_source).toBe('default');
-    expect(result.report.evidence.some((line) => line.startsWith('validation profile warning:'))).toBe(true);
+    expect(result.report.evidence.some((line) => line.startsWith('peringatan profil validasi:'))).toBe(true);
   });
 });
 
