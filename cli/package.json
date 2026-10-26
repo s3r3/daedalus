@@ -16,7 +16,8 @@
   },
   "dependencies": {
     "commander": "^13.1.0",
-    "@s3r3/core": "*"
+    "@s3r3/core": "*",
+    "@daedalus/core": "file:../core"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

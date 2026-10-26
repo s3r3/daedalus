@@ -25,7 +25,8 @@
     "react-dom": "^19.2.8",
     "tailwind-merge": "^3.7.0",
     "zustand": "^5.0.15",
-    "@s3r3/core": "*"
+    "@s3r3/core": "*",
+    "@daedalus/core": "file:../core"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
