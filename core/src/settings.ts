@@ -67,6 +67,16 @@ export type Settings = {
    */
   maxIterations?: number;
   /**
+   * Batas global task yang berjalan bersamaan (DAEDALUS_MAX_CONCURRENT_TASKS). Unset = 5 (lihat concurrency.ts);
+   * 0 = tanpa batas. Task anak (subagent) tidak dihitung.
+   */
+  maxConcurrentTasks?: number;
+  /**
+   * Ambang task macet dalam ms (DAEDALUS_TASK_STALL_MS): task tanpa progres selama ini dihentikan watchdog (S4).
+   * Unset = 600000 (10 menit); 0 = watchdog nonaktif.
+   */
+  taskStallMs?: number;
+  /**
    * Model per peran — 2 tier (Dae Captain v2, Fase 5). Opsional dan
    * additive: unset = semua peran pakai `llm.model` (smart default, 1
    * model = semua peran). `strong`/`light` override per tier; string
@@ -168,6 +178,8 @@ export function loadSettings(env: Env = process.env): Settings {
     outputCompression: parseBoolean(env.DAEDALUS_OUTPUT_COMPRESSION, true, "DAEDALUS_OUTPUT_COMPRESSION"),
     questionGate: parseBoolean(env.DAEDALUS_QUESTION_GATE, false, "DAEDALUS_QUESTION_GATE"),
     maxIterations: parseOptionalPositiveInt(env.DAEDALUS_MAX_ITERATIONS, "DAEDALUS_MAX_ITERATIONS"),
+    maxConcurrentTasks: parseOptionalNonNegativeInt(env.DAEDALUS_MAX_CONCURRENT_TASKS, "DAEDALUS_MAX_CONCURRENT_TASKS"),
+    taskStallMs: parseOptionalNonNegativeInt(env.DAEDALUS_TASK_STALL_MS, "DAEDALUS_TASK_STALL_MS"),
     daedalusHome: env.DAEDALUS_HOME?.trim() || ".daedalus",
   };
 }
@@ -267,6 +279,15 @@ function parseOptionalTemperature(value: string | undefined, name: string): numb
 }
 
 /** Optional positive-integer variant for domain overrides: empty = unset. */
+function parseOptionalNonNegativeInt(value: string | undefined, name: string): number | undefined {
+  if (value === undefined || value.trim() === "") return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid ${name}: ${value} (expected a non-negative integer; 0 = unlimited)`);
+  }
+  return parsed;
+}
+
 function parseOptionalPositiveInt(value: string | undefined, name: string): number | undefined {
   if (value === undefined || value.trim() === "") return undefined;
   const parsed = Number(value);

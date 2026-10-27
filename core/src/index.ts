@@ -77,6 +77,8 @@ export {
 } from "./settings.ts";
 
 export { TaskStore } from "./persistence.ts";
+export { TaskLimiter, TaskConcurrencyError, DEFAULT_MAX_CONCURRENT_TASKS } from "./concurrency.ts";
+export { TaskWatchdog, type StallInfo, type WatchdogOptions } from "./watchdog.ts";
 
 export {
   MAX_PINS,

@@ -4,6 +4,7 @@ import { EventBus, emitEvent } from './events.ts';
 import { TaskStore } from './persistence.ts';
 import { AgentLoop } from './agent/agent-loop.ts';
 import { explainTermination } from './agent/termination.ts';
+import { TaskConcurrencyError, type TaskLimiter } from './concurrency.ts';
 import type { ToolOutputLimits } from './agent/tool-output.ts';
 import { DefaultContextManager, presentationCreationGoal, type DokumenTaskParams, type SlideTaskParams } from './agent/context.ts';
 import { interpretTask } from './agent/interpreter.ts';
@@ -151,6 +152,11 @@ export type TaskRunnerOptions = {
   maxIterations?: number;
   /** Urutkan system prompt agar bagian yang berubah tiap turn berada di akhir (prefix cache penyedia bisa kena). Default false (urutan lama). */
   cacheFriendlyPrompt?: boolean;
+  /**
+   * Batas global task bersamaan yang dibagi antar-runner (S5). Task tingkat-atas yang tak mendapat slot ditolak dengan
+   * `TaskConcurrencyError` SEBELUM ada state yang dibuat; task anak (`parentTaskId`) tidak dihitung.
+   */
+  limiter?: TaskLimiter;
   /** Jadwal jeda retry untuk kegagalan sementara penyedia (rate limit/5xx/jaringan). Lihat AgentLoopOptions.providerBackoff. */
   providerBackoff?: { baseMs?: number; maxMs?: number; retryAfterCapMs?: number };
   modelTimeoutMs?: number;
@@ -786,7 +792,7 @@ export class TaskRunner {
     }
   }
 
-  cancel(taskId: string): void {
+  cancel(taskId: string, reason: 'user' | 'watchdog' = 'user'): void {
     this.harness.cancelTask(taskId);
     // Background jobs belong to the task: a stopped run leaves no
     // install or server process running behind it.
@@ -804,7 +810,7 @@ export class TaskRunner {
     this.questions.cancelTasks([taskId]);
     // A runner executes one user task at a time (plus its orchestrator
     // children), so cancelling it stops every loop currently active here.
-    for (const [activeTaskId, loop] of this.#activeLoops) loop.stop(activeTaskId);
+    for (const [activeTaskId, loop] of this.#activeLoops) loop.stop(activeTaskId, reason);
     // Slide-engine tasks stop through their own engine (provider abort +
     // pending checkpoint question settled by the cancelTasks call above).
     for (const engine of this.#activeEngines.values()) engine.stop();
@@ -814,6 +820,21 @@ export class TaskRunner {
   }
 
   async run(options: RunOptions): Promise<RunResult> {
+    // Batas global task bersamaan: diambil SINKRON di awal (sebelum `await` pertama) agar pengecekan server
+    // (`hasCapacity`) dan pengambilan slot tidak bisa disela task lain. Dilepas di `finally`.
+    const slotKey = options.taskId ?? `run-${randomUUID()}`;
+    const releaseSlot = options.parentTaskId || !this.#options.limiter ? undefined : this.#options.limiter.tryAcquire(slotKey);
+    if (!options.parentTaskId && this.#options.limiter && !releaseSlot) {
+      throw new TaskConcurrencyError(this.#options.limiter.max, this.#options.limiter.active);
+    }
+    try {
+      return await this.#runInner(options);
+    } finally {
+      releaseSlot?.();
+    }
+  }
+
+  async #runInner(options: RunOptions): Promise<RunResult> {
     const startedAt = Date.now();
     // File-defined subagent (.daedalus/agents/<name>.md): an unknown name is
     // a clear error, never a silent fallback to a default agent. A worktree
