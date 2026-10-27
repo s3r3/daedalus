@@ -22,6 +22,7 @@ async function shutdown(reason: string, code = 0): Promise<void> {
   ctx.log.info("shutting down", { reason, active_tasks: ctx.activeRunners.size });
   const hard = setTimeout(() => process.exit(code), 5_000); // batas keras
   hard.unref();
+  ctx.watchdog?.stop();
   try {
     channel?.close();
   } catch {

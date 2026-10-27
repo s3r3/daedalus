@@ -24,6 +24,11 @@ import {
   PROVIDER_PRESETS,
   ProviderRegistryStore,
   TaskStore,
+  TaskLimiter,
+  TaskWatchdog,
+  type StallInfo,
+  TaskConcurrencyError,
+  DEFAULT_MAX_CONCURRENT_TASKS,
   TaskRunner,
   answerDataQuestion,
   buildQuickDashboard,
@@ -200,6 +205,10 @@ import {
   getResearchProgress,
   getResearchReport,
   getResearchRunReportId,
+  configureResearchPersistence,
+  hasPersistedResearchRun,
+  loadPersistedResearchReports,
+  getResearchPersistenceStatus,
   getResearchSourceContent,
   getResearchSourceDocument,
   isResearchRunInProgress,
@@ -439,6 +448,10 @@ export type AppContext = {
   startedAt: number;
   cwd: string;
   activeRunners: Map<string, TaskRunner>;
+  /** Batas global task bersamaan (S5), dibagi semua TaskRunner yang dibuat server; ditegakkan juga oleh core. */
+  taskLimiter: TaskLimiter;
+  /** Watchdog task macet (S4); undefined sebelum createApp dijalankan. */
+  watchdog?: TaskWatchdog;
   /**
    * Session-scoped remembered approvals (pattern key → decision), shared by
    * every runner this server creates. In-memory only: restarting the
@@ -523,6 +536,7 @@ export function createContext(overrides: Partial<AppContext> = {}): AppContext {
     startedAt: overrides.startedAt ?? Date.now(),
     cwd,
     activeRunners: overrides.activeRunners ?? new Map<string, TaskRunner>(),
+    taskLimiter: overrides.taskLimiter ?? new TaskLimiter(settings.maxConcurrentTasks ?? DEFAULT_MAX_CONCURRENT_TASKS),
     approvalMemory: overrides.approvalMemory ?? new Map<string, ApprovalDecision>(),
     terminals: overrides.terminals ?? new TerminalManager(),
     settings,
@@ -1577,7 +1591,7 @@ function summarizeFrom(ctx: AppContext, lookup: TaskLookup, taskId: string): Rec
   const fingerprint = taskFileFingerprint(store, taskId);
   const cached = ctx.taskSummaryCache.get(cacheKey);
   if (cached && cached.fingerprint === fingerprint) {
-    return { ...cached.summary, running: ctx.activeRunners.has(taskId) || cached.summary.running === true };
+    return { ...cached.summary, running: ctx.activeRunners.has(taskId) || cached.summary.running === true, ...stalledOverlay(ctx, taskId) };
   }
   const spec = (state.spec && typeof state.spec === "object" ? state.spec : state) as Record<string, unknown>;
   // Cheap first/last-line stats, NOT a full replay: replay()
@@ -1603,6 +1617,7 @@ function summarizeFrom(ctx: AppContext, lookup: TaskLookup, taskId: string): Rec
     last_event: stats.lastType,
     updated_at: stats.lastTs ?? (typeof spec.created_at === "string" ? spec.created_at : null),
     running: activeStatus && !report,
+    ...persistedStalled(store, taskId, state, activeStatus),
     store_root: store.root,
   };
   ctx.taskSummaryCache.set(cacheKey, { fingerprint, summary });
@@ -1612,7 +1627,7 @@ function summarizeFrom(ctx: AppContext, lookup: TaskLookup, taskId: string): Rec
     const oldest = ctx.taskSummaryCache.keys().next().value;
     if (oldest !== undefined) ctx.taskSummaryCache.delete(oldest);
   }
-  return { ...summary, running: ctx.activeRunners.has(taskId) || summary.running === true };
+  return { ...summary, running: ctx.activeRunners.has(taskId) || summary.running === true, ...stalledOverlay(ctx, taskId) };
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
@@ -1722,6 +1737,127 @@ async function extensionStatus(ctx: AppContext, rootValue: unknown): Promise<Ext
  * Runs inside createApp — every server embedding boots through it, and
  * at that moment no runner of this process can exist yet.
  */
+/** Teks durasi untuk pengguna ("12 menit" / "45 detik"). */
+function durationText(ms: number): string {
+  if (ms < 120_000) return `${Math.max(1, Math.round(ms / 1000))} detik`;
+  return `${Math.round(ms / 60_000)} menit`;
+}
+
+/**
+ * Status macet yang TAHAN LAMA, diturunkan dari event TASK_STALLED di log task (bukan flag memori yang hilang begitu
+ * task berhenti): task yang dihentikan watchdog tetap tampil `stalled: true` di GET /tasks sesudah selesai.
+ * Hanya dibaca untuk task berakhir dengan jejak penghentian (aborted / "Task macet…"), jadi murah.
+ */
+function persistedStalled(store: TaskStore, taskId: string, state: Record<string, unknown>, activeStatus: boolean): Record<string, unknown> {
+  const lastError = state.last_error;
+  if (activeStatus || !(lastError === "aborted" || (typeof lastError === "string" && lastError.startsWith("Task macet")))) return {};
+  const event = [...store.replay(taskId)].reverse().find((e) => e.type === "TASK_STALLED");
+  if (!event) return {};
+  const payload = event.payload as { idle_ms?: unknown; message?: unknown };
+  return {
+    stalled: true,
+    ...(typeof payload.idle_ms === "number" ? { stalled_idle_ms: payload.idle_ms } : {}),
+    stalled_message: typeof payload.message === "string" ? payload.message : "Task macet; dihentikan otomatis oleh watchdog.",
+  };
+}
+
+/** Overlay status macet (hidup, tidak di-cache bersama ringkasan): terlihat di GET /tasks dan detail task. */
+function stalledOverlay(ctx: AppContext, taskId: string): Record<string, unknown> {
+  const flag = ctx.watchdog?.getFlag(taskId);
+  if (!flag) return {};
+  return {
+    stalled: true,
+    stalled_idle_ms: flag.idleMs,
+    stalled_message: `Task macet: tidak ada progres selama ${durationText(flag.idleMs)}. Sedang dihentikan otomatis oleh watchdog.`,
+  };
+}
+
+const DEFAULT_TASK_STALL_MS = 10 * 60_000;
+const childIndexCache = new WeakMap<TaskStore, { at: number; map: Map<string, string[]> }>();
+
+/** parent → id anak (task subagent), di-cache 5 dtk per store agar pemindaian tidak membaca ulang semua state. */
+function childTaskIds(store: TaskStore, parentId: string): string[] {
+  const cached = childIndexCache.get(store);
+  if (cached && Date.now() - cached.at < 5_000) return cached.map.get(parentId) ?? [];
+  const map = new Map<string, string[]>();
+  for (const id of store.listTasks()) {
+    const parent = store.loadState<{ parent_task_id?: string }>(id)?.parent_task_id;
+    if (parent) map.set(parent, [...(map.get(parent) ?? []), id]);
+  }
+  childIndexCache.set(store, { at: Date.now(), map });
+  return map.get(parentId) ?? [];
+}
+
+/** Progres terakhir task = aktivitas terbaru task itu ATAU task anaknya (induk yang menunggu anak tidak macet). */
+export function taskProgressAt(ctx: AppContext, taskId: string): number | undefined {
+  const store = findTask(ctx, taskId)?.store ?? ctx.store;
+  let latest = store.lastActivityAt(taskId);
+  for (const child of childTaskIds(store, taskId)) {
+    const t = store.lastActivityAt(child);
+    if (t !== undefined && (latest === undefined || t > latest)) latest = t;
+  }
+  return latest;
+}
+
+/** Task sengaja menunggu (jeda, persetujuan, pertanyaan untuk pengguna): bukan macet. */
+export function taskIsWaiting(ctx: AppContext, taskId: string): boolean {
+  const store = findTask(ctx, taskId)?.store ?? ctx.store;
+  if (store.isPauseRequested(taskId)) return true;
+  const runner = ctx.activeRunners.get(taskId);
+  if (!runner) return false;
+  for (const id of [taskId, ...childTaskIds(store, taskId)]) {
+    if (runner.approvals.pending(id).length > 0 || runner.questions.pending(id).length > 0) return true;
+  }
+  return false;
+}
+
+/** Laporkan task macet (event + log), hentikan dengan bersih, dan paksa selesai bila ia tak bisa dihentikan. */
+export function handleStalledTask(ctx: AppContext, info: StallInfo, forceMs: number): void {
+  const message = `Task macet: tidak ada progres selama ${durationText(info.idleMs)} (ambang ${durationText(info.stallMs)}). Dihentikan otomatis oleh watchdog.`;
+  const store = findTask(ctx, info.taskId)?.store ?? ctx.store;
+  ctx.log.warn("task stalled", { task_id: info.taskId, idle_ms: info.idleMs, stall_ms: info.stallMs });
+  try {
+    emitEvent({ bus: ctx.bus, store }, info.taskId, undefined, "TASK_STALLED", {
+      task_id: info.taskId,
+      idle_ms: info.idleMs,
+      stall_ms: info.stallMs,
+      message,
+      action: "cancel",
+    });
+  } catch (error) {
+    ctx.log.warn("emit TASK_STALLED failed", { task_id: info.taskId, error: String(error) });
+  }
+  const runner = ctx.activeRunners.get(info.taskId);
+  runner?.cancel(info.taskId, "watchdog");
+  // Jaring terakhir: tugas yang menggantung di tempat yang tak bisa di-abort tidak boleh menahan status "berjalan" dan
+  // slot concurrency selamanya. Tutup jujur sebagai gagal dan lepaskan; promise yang menggantung hanya terabaikan.
+  setTimeout(() => {
+    if (ctx.activeRunners.get(info.taskId) !== runner) return; // sudah berhenti sendiri
+    ctx.log.warn("stalled task did not stop; forcing settle", { task_id: info.taskId });
+    settleTaskIfStillActive(ctx, store, info.taskId, { status: "failed", outcome: "failed", message });
+    ctx.activeRunners.delete(info.taskId);
+    ctx.taskLimiter.release(info.taskId);
+  }, forceMs).unref();
+}
+
+function startTaskWatchdog(ctx: AppContext): TaskWatchdog {
+  const stallMs = ctx.settings.taskStallMs ?? DEFAULT_TASK_STALL_MS;
+  const forceMs = Number(process.env.DAEDALUS_WATCHDOG_FORCE_MS) > 0 ? Number(process.env.DAEDALUS_WATCHDOG_FORCE_MS) : 30_000;
+  const intervalMs = Number(process.env.DAEDALUS_WATCHDOG_INTERVAL_MS) > 0 ? Number(process.env.DAEDALUS_WATCHDOG_INTERVAL_MS) : undefined;
+  const watchdog = new TaskWatchdog({
+    stallMs,
+    ...(intervalMs ? { intervalMs } : {}),
+    activeTaskIds: () => [...ctx.activeRunners.keys()],
+    lastProgressAt: (id) => taskProgressAt(ctx, id),
+    isWaiting: (id) => taskIsWaiting(ctx, id),
+    onStall: (info) => handleStalledTask(ctx, info, forceMs),
+    onError: (error) => ctx.log.warn("watchdog error", { error: String(error) }),
+  });
+  watchdog.start();
+  ctx.watchdog = watchdog;
+  return watchdog;
+}
+
 const ACTIVE_TASK_STATUSES = ["created", "pending", "active", "running"];
 
 /**
@@ -1817,13 +1953,29 @@ export function reconcileInterruptedTasks(ctx: AppContext): string[] {
  * saat boot, sebelum server menerima request. Home ditentukan per workspace
  * (`<workspace>/.daedalus` secara default), jadi menyapu satu folder saja melewatkan run di workspace lain.
  */
+/**
+ * Aktifkan persistensi laporan riset di home pengguna (`~/.daedalus/research`) dan muat kembali dari disk.
+ * Idempoten; dipanggil dari boot (sebelum sapuan) dan dari createApp.
+ */
+export function initResearchPersistence(ctx: AppContext): { reports: number; runs: number } | undefined {
+  const dir = join(resolveUserHome(), "research");
+  if (!configureResearchPersistence(dir)) {
+    ctx.log.warn("research persistence unavailable", { dir });
+    return undefined;
+  }
+  return loadPersistedResearchReports();
+}
+
 export function sweepStaleWorkflowRuns(ctx: AppContext): number {
+  // Muat laporan riset lebih dulu: turn riset yang laporannya SUDAH tersimpan tidak boleh ditandai "terputus".
+  const loaded = initResearchPersistence(ctx);
+  if (loaded && (loaded.reports > 0 || loaded.runs > 0)) ctx.log.info("research reports loaded from disk", loaded);
   const homes = new Set<string>();
   for (const root of allowedRoots(ctx)) homes.add(resolveDaedalusHome(ctx.settings.daedalusHome, root));
   let total = 0;
   for (const home of homes) {
     try {
-      total += new WorkflowRunStore(home).markStaleRunningInterrupted();
+      total += new WorkflowRunStore(home).markStaleRunningInterrupted((turn) => turn.engine === "research" && hasPersistedResearchRun(turn.task_id));
     } catch (error) {
       ctx.log.warn("stale run cleanup failed", { home, error: String(error) });
     }
@@ -2130,8 +2282,20 @@ async function createTaskCore(
       return { taskId, status: 201, body: task };
     }
 
+    // Batas global task bersamaan (S5). Pra-cek di sini supaya klien mendapat 429 yang jelas SEBELUM ada state task
+    // yang dibuat; core menegakkannya lagi di TaskRunner.run() (slot diambil sinkron, jadi tak ada celah balapan).
+    if (!ctx.taskLimiter.hasCapacity()) {
+      const limitError = new TaskConcurrencyError(ctx.taskLimiter.max, ctx.taskLimiter.active);
+      ctx.log.warn("task rejected: concurrency limit", { request_id: requestId, limit: limitError.limit, active: limitError.active });
+      appendAssistantTurn(limitError.message);
+      return {
+        status: 429,
+        body: { error: "too_many_tasks", message: limitError.message, limit: limitError.limit, active: limitError.active, request_id: requestId },
+      };
+    }
     const runner = new TaskRunner({
       workspaceRoot: repoPath,
+      limiter: ctx.taskLimiter,
       approvalPolicy: autoApprove ? "auto" : "ask",
       approvalMemory: ctx.approvalMemory,
       // Dae Captain v2 Fase 8: per-type approval (file baru / ubah-hapus /
@@ -2254,6 +2418,7 @@ async function createTaskCore(
       })
       .finally(() => {
         ctx.activeRunners.delete(taskId);
+        ctx.watchdog?.clear(taskId);
         // Runner sudah selesai/crash. Bila state masih "aktif" tanpa report, itu task hantu
         // (runner reject, atau selesai tanpa menulis hasil) — tutup jujur sebagai gagal.
         settleTaskIfStillActive(ctx, taskStore, taskId, {
@@ -2480,7 +2645,8 @@ async function runCaptainSubTask(
         requestId,
       );
       if (created.status !== 201 || !created.taskId) {
-        throw new Error(`dispatch gagal (${created.status})`);
+        const reason = (created.body as { message?: unknown } | undefined)?.message;
+        throw new Error(typeof reason === "string" && reason ? reason : `dispatch gagal (${created.status})`);
       }
       sub.task_id = created.taskId;
       appendPlanSubTaskTurn(ctx, staged, sub);
@@ -3275,7 +3441,14 @@ function reconcileWorkflowRun(ctx: AppContext, run: RunContext): boolean {
     // batal oleh user = failed + last_error "aborted". Kalau runner sudah tiada tetapi state masih
     // "active" sementara report SUDAH ada (outcome partial/stopped/…), task itu jelas sudah selesai;
     // dulu turn-nya tertinggal "running" selamanya.
-    const cancelled = lastError === "aborted" || (state?.status === "failed" && tasks.isCancelRequested(turn.task_id));
+    // Task yang dihentikan WATCHDOG (S4) juga berakhir sebagai failed+aborted, tetapi bukan pembatalan pengguna: turn-nya
+    // gagal dengan catatan "macet" (ada event TASK_STALLED), bukan "cancelled".
+    const stalledEvent =
+      lastError === "aborted" || report
+        ? [...tasks.replay(turn.task_id)].reverse().find((event) => event.type === "TASK_STALLED")
+        : undefined;
+    const stalledNote = stalledEvent ? String((stalledEvent.payload as { message?: unknown }).message ?? "Task macet; dihentikan otomatis oleh watchdog.") : undefined;
+    const cancelled = !stalledEvent && (lastError === "aborted" || (state?.status === "failed" && tasks.isCancelRequested(turn.task_id)));
     const outcome = String(report?.outcome ?? "");
     let effective: "done" | "failed" | "cancelled" | undefined;
     if (state?.status === "done") effective = "done";
@@ -3307,7 +3480,7 @@ function reconcileWorkflowRun(ctx: AppContext, run: RunContext): boolean {
     } else if (effective === "failed") {
       // Surface the task's own error on the turn so the companion can
       // show WHY it failed instead of a bare "Failed" badge.
-      const note = lastError ?? (outcome === "interrupted" ? "terputus: server berhenti saat task berjalan" : undefined);
+      const note = stalledNote ?? lastError ?? (outcome === "interrupted" ? "terputus: server berhenti saat task berjalan" : undefined);
       updateTurn(run, turn.turn_id, {
         status: "failed",
         ...(note ? { note } : {}),
@@ -3349,6 +3522,7 @@ function presentWorkflowTurn(
   // Cooperative pause (Dae Captain pill ⏸): the marker survives even
   // without a live runner, so the pill can show "paused" honestly.
   const paused = tasks.isPauseRequested(turn.task_id);
+  const stalled = ctx.watchdog?.isFlagged(turn.task_id) ? { stalled: true } : {};
   const stagedPlan = stagedTaskPlans.get(turn.task_id);
   if (stagedPlan) {
     return { ...base, live: stagedPlan.execution ? "running" : "staged_awaiting_gate", ...(paused ? { paused: true } : {}) };
@@ -3374,6 +3548,7 @@ function presentWorkflowTurn(
       ...base,
       ...(paused ? { paused: true } : {}),
       ...(queued ? { queued: true } : {}),
+      ...stalled,
     };
   }
   const stats = tasks.eventStats(turn.task_id);
@@ -3381,6 +3556,7 @@ function presentWorkflowTurn(
   return {
     ...base,
     live: "running",
+    ...stalled,
     ...(stats.lastType ? { last_event: stats.lastType } : {}),
     ...(stats.lastTs ? { last_event_ts: stats.lastTs } : {}),
     // Engine's own latest narration ("Mengisi slide 8/12…") — the pill's
@@ -3510,6 +3686,8 @@ export function createApp(ctx: AppContext) {
   // fired reminders into ctx.firedReminders for UI polling via
   // GET /captain/reminders/due.
   {
+    initResearchPersistence(ctx); // idempoten (juga dipanggil di boot sebelum sapuan)
+    if (!ctx.watchdog) startTaskWatchdog(ctx);
     const migrated = migrateUserData(ctx, ctx.session.workspaceRoot ?? ctx.cwd);
     if (migrated > 0) ctx.log.info("migrated per-user data to global home", { files: migrated, home: resolveUserHome() });
     const home = resolveUserHome();
@@ -3569,6 +3747,8 @@ export function createApp(ctx: AppContext) {
         service: "daedalus-server",
         uptime_ms: Date.now() - ctx.startedAt,
         active_tasks: ctx.activeRunners.size,
+        max_concurrent_tasks: ctx.taskLimiter.max,
+        stalled_tasks: ctx.watchdog?.flagged().length ?? 0,
         workspace_root: ctx.session.workspaceRoot,
         request_id: requestId,
       });
@@ -7527,8 +7707,8 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
-    // Agentic Research: fetch a completed report by id. 404 when unknown
-    // or expired (reports live 24h).
+    // Agentic Research: fetch a completed report by id. 404 when unknown.
+    // Cache memori 24 jam; laporan juga tersimpan di disk (research.ts) dan dibaca ulang setelah restart.
     const researchReportMatch = /^\/research\/report\/([^/]+)$/.exec(url.pathname);
     if (method === "GET" && researchReportMatch) {
       const report = getResearchReport(researchReportMatch[1] ?? "");

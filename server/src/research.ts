@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -890,6 +891,138 @@ export function finishResearchRun(planId: string): void {
   researchRunsInProgress.delete(planId);
 }
 
+/* ------------------------------------------- persistensi ke disk (S7) */
+
+/**
+ * Laporan riset dan pemetaan planId→reportId ditulis ke disk supaya tidak hilang saat server restart (dulu hanya di
+ * memori: TTL 24 jam/1 jam, dan turn riset berubah "gagal" setelah restart). Format laporan TIDAK berubah — berkas
+ * adalah JSON `ResearchReport` apa adanya. Memori tetap menjadi cache: berkas dibaca ulang bila entri memori sudah
+ * kedaluwarsa atau server baru dinyalakan.
+ *
+ *   <dir>/reports/<reportId>.json   laporan
+ *   <dir>/runs/<planId>.json        { reportId, at }
+ */
+const SAFE_ID = /^[A-Za-z0-9_-]{1,100}$/;
+const RESEARCH_DISK_RETENTION = Math.max(10, Number(process.env.DAEDALUS_RESEARCH_RETENTION ?? 500) || 500);
+const RESEARCH_PRELOAD_LIMIT = 50;
+let researchStoreDir: string | undefined;
+const persistenceStatus: { dir?: string; lastError?: string; lastErrorAt?: number } = {};
+
+/** Status untuk /ready: apakah penyimpanan laporan terkonfigurasi dan terakhir kali menulis tanpa galat. */
+export function getResearchPersistenceStatus(): { configured: boolean; dir?: string; lastError?: string } {
+  return { configured: researchStoreDir !== undefined, ...(researchStoreDir ? { dir: researchStoreDir } : {}), ...(persistenceStatus.lastError ? { lastError: persistenceStatus.lastError } : {}) };
+}
+
+function noteDiskError(error: unknown): void {
+  persistenceStatus.lastError = error instanceof Error ? error.message : String(error);
+  persistenceStatus.lastErrorAt = Date.now();
+}
+
+function atomicWrite(file: string, data: string): void {
+  const tmp = `${file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+  try {
+    writeFileSync(tmp, data, "utf8");
+    renameSync(tmp, file);
+  } catch (error) {
+    try { unlinkSync(tmp); } catch { /* tmp belum ada */ }
+    throw error;
+  }
+}
+
+function reportFile(id: string): string | undefined {
+  return researchStoreDir && SAFE_ID.test(id) ? join(researchStoreDir, "reports", `${id}.json`) : undefined;
+}
+function runFile(id: string): string | undefined {
+  return researchStoreDir && SAFE_ID.test(id) ? join(researchStoreDir, "runs", `${id}.json`) : undefined;
+}
+
+function readReportFromDisk(id: string): ResearchReport | undefined {
+  const file = reportFile(id);
+  if (!file) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<ResearchReport> | null;
+    // Berkas terpotong/korup atau bukan laporan: lewati (jangan melempar ke route).
+    if (!parsed || typeof parsed !== "object" || parsed.reportId !== id || !Array.isArray((parsed as { sources?: unknown }).sources)) return undefined;
+    return parsed as ResearchReport;
+  } catch {
+    return undefined;
+  }
+}
+
+function pruneDisk(): void {
+  if (!researchStoreDir) return;
+  for (const sub of ["reports", "runs"]) {
+    const dir = join(researchStoreDir, sub);
+    try {
+      const files = readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs })).sort((a, b) => b.t - a.t);
+      for (const old of files.slice(RESEARCH_DISK_RETENTION)) rmSync(join(dir, old.f), { force: true });
+    } catch { /* direktori belum ada */ }
+  }
+}
+
+/** Aktifkan persistensi ke `dir` (dibuat bila belum ada). Idempoten. Mengembalikan false bila direktori tak bisa dipakai. */
+export function configureResearchPersistence(dir: string | undefined): boolean {
+  if (!dir) { researchStoreDir = undefined; return false; }
+  try {
+    mkdirSync(join(dir, "reports"), { recursive: true });
+    mkdirSync(join(dir, "runs"), { recursive: true });
+    researchStoreDir = dir;
+    persistenceStatus.dir = dir;
+    delete persistenceStatus.lastError;
+    return true;
+  } catch (error) {
+    researchStoreDir = undefined;
+    noteDiskError(error);
+    return false;
+  }
+}
+
+/**
+ * Muat kembali dari disk saat startup: seluruh pemetaan plan→laporan (kecil) dan `RESEARCH_PRELOAD_LIMIT` laporan
+ * terbaru ke cache memori; sisanya dibaca saat diminta. Mengembalikan jumlah laporan yang dimuat.
+ */
+export function loadPersistedResearchReports(): { reports: number; runs: number } {
+  if (!researchStoreDir) return { reports: 0, runs: 0 };
+  let runs = 0;
+  try {
+    const dir = join(researchStoreDir, "runs");
+    for (const f of readdirSync(dir).filter((x) => x.endsWith(".json")).slice(0, 1000)) {
+      try {
+        const parsed = JSON.parse(readFileSync(join(dir, f), "utf8")) as { reportId?: unknown; at?: unknown };
+        const planId = f.slice(0, -5);
+        if (SAFE_ID.test(planId) && typeof parsed.reportId === "string" && SAFE_ID.test(parsed.reportId)) {
+          researchRunReports.set(planId, { reportId: parsed.reportId, at: typeof parsed.at === "number" ? parsed.at : Date.now() });
+          runs++;
+        }
+      } catch { /* berkas korup: lewati */ }
+    }
+  } catch { /* belum ada */ }
+  let reports = 0;
+  try {
+    const dir = join(researchStoreDir, "reports");
+    const newest = readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs })).sort((a, b) => b.t - a.t).slice(0, RESEARCH_PRELOAD_LIMIT);
+    for (const { f, t } of newest) {
+      const id = f.slice(0, -5);
+      const report = readReportFromDisk(id);
+      if (report) { completedReports.set(id, { report, createdAt: t }); reports++; }
+    }
+  } catch { /* belum ada */ }
+  return { reports, runs };
+}
+
+/** Khusus test: kosongkan seluruh keadaan memori (meniru proses baru); berkas di disk tidak disentuh. */
+export function __resetResearchStateForTests(): void {
+  completedReports.clear();
+  researchRunReports.clear();
+  progressLog.clear();
+}
+
+/** Apakah ada laporan tersimpan untuk plan ini (memori atau disk)? Dipakai sapuan boot agar turn riset yang sudah selesai tak ditandai gagal. */
+export function hasPersistedResearchRun(planId: string): boolean {
+  const reportId = getResearchRunReportId(planId);
+  return reportId !== undefined && getResearchReport(reportId) !== undefined;
+}
+
 /**
  * reportId per planId yang run-nya selesai — untuk recovery client
  * yang request-nya putus di tengah jalan (timeout/proxy). TTL 1 jam.
@@ -899,6 +1032,10 @@ const RESEARCH_RUN_REPORT_TTL_MS = 60 * 60 * 1000;
 
 export function rememberResearchRunReport(planId: string, reportId: string): void {
   researchRunReports.set(planId, { reportId, at: Date.now() });
+  const file = runFile(planId);
+  if (file) {
+    try { atomicWrite(file, JSON.stringify({ reportId, at: Date.now() })); } catch (error) { noteDiskError(error); }
+  }
   if (researchRunReports.size > 100) {
     const oldest = [...researchRunReports.entries()].sort((a, b) => a[1].at - b[1].at)[0];
     if (oldest) researchRunReports.delete(oldest[0]);
@@ -907,12 +1044,20 @@ export function rememberResearchRunReport(planId: string, reportId: string): voi
 
 export function getResearchRunReportId(planId: string): string | undefined {
   const entry = researchRunReports.get(planId);
-  if (!entry) return undefined;
-  if (Date.now() - entry.at >= RESEARCH_RUN_REPORT_TTL_MS) {
-    researchRunReports.delete(planId);
-    return undefined;
-  }
-  return entry.reportId;
+  if (entry && Date.now() - entry.at < RESEARCH_RUN_REPORT_TTL_MS) return entry.reportId;
+  if (entry) researchRunReports.delete(planId);
+  // TTL memori (1 jam) hanya untuk recovery request yang putus; pemetaan di disk tidak kedaluwarsa, supaya turn riset
+  // lama (dan turn yang selesai tepat sebelum restart) tetap bisa menemukan laporannya.
+  const file = runFile(planId);
+  if (!file) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as { reportId?: unknown; at?: unknown };
+    if (typeof parsed.reportId === "string" && SAFE_ID.test(parsed.reportId)) {
+      researchRunReports.set(planId, { reportId: parsed.reportId, at: Date.now() });
+      return parsed.reportId;
+    }
+  } catch { /* tidak ada / korup */ }
+  return undefined;
 }
 
 /**
@@ -969,17 +1114,29 @@ function sweepCompletedReports(now: number = Date.now()): void {
 export function storeResearchReport(report: ResearchReport): void {
   sweepCompletedReports();
   completedReports.set(report.reportId, { report, createdAt: Date.now() });
+  const file = reportFile(report.reportId);
+  if (file) {
+    try {
+      atomicWrite(file, JSON.stringify(report));
+      pruneDisk();
+    } catch (error) {
+      // Gagal menulis tidak boleh menggagalkan riset yang sudah selesai: laporan tetap ada di memori; /ready melaporkannya.
+      noteDiskError(error);
+    }
+  }
 }
 
 export function getResearchReport(reportId: string): ResearchReport | undefined {
   const entry = completedReports.get(reportId);
-  if (!entry) return undefined;
-  if (Date.now() - entry.createdAt >= REPORT_TTL_MS) {
+  if (entry && Date.now() - entry.createdAt < REPORT_TTL_MS) return entry.report;
+  if (entry) {
     completedReports.delete(reportId);
     progressLog.delete(reportId);
-    return undefined;
   }
-  return entry.report;
+  // Cache memori kosong/kedaluwarsa (mis. server baru dinyalakan): baca dari disk lalu cache ulang.
+  const fromDisk = readReportFromDisk(reportId);
+  if (fromDisk) completedReports.set(reportId, { report: fromDisk, createdAt: Date.now() });
+  return fromDisk;
 }
 
 /** Konten sumber untuk preview inline di panel tengah (embed browser / mode baca). */
