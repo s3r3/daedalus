@@ -1,8 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { basename, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 // Dae Captain v2 Fase 7 — chat cards: decompose plans, approval UndoStore,
@@ -568,7 +568,7 @@ export async function ensureProvidersLoaded(ctx: AppContext): Promise<void> {
 
 const CORS_HEADERS = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
   "access-control-allow-headers": "content-type, authorization",
 };
 
@@ -3658,6 +3658,28 @@ export function ensureDaemonToken(daedalusHome: string): string {
   return token;
 }
 
+const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+/**
+ * Route mutasi yang boleh TANPA token. Sengaja kosong: semua POST/PUT/PATCH/DELETE butuh token daemon yang sama
+ * dengan yang sudah dipakai approve/restore (S6). GET dan OPTIONS (preflight) tidak pernah butuh token.
+ */
+const TOKEN_EXEMPT_MUTATIONS: RegExp[] = [];
+
+/** Penegakan token pada semua route mutasi. Matikan HANYA untuk rollout bertahap: DAEDALUS_ENFORCE_TOKEN=0. */
+function tokenEnforced(): boolean {
+  const flag = (process.env.DAEDALUS_ENFORCE_TOKEN ?? "").trim().toLowerCase();
+  return !(flag === "0" || flag === "off" || flag === "false");
+}
+
+/** Bandingkan token dalam waktu konstan (hindari tebakan token lewat selisih waktu). */
+function tokenMatches(presented: string | undefined, expected: string | undefined): boolean {
+  if (!presented || !expected) return false;
+  const a = createHash("sha256").update(presented).digest();
+  const b = createHash("sha256").update(expected).digest();
+  return timingSafeEqual(a, b);
+}
+
 function bearerToken(req: IncomingMessage): string | undefined {
   const h = req.headers.authorization;
   if (typeof h !== "string") return undefined;
@@ -3739,6 +3761,21 @@ export function createApp(ctx: AppContext) {
       res.writeHead(204, CORS_HEADERS);
       res.end();
       return;
+    }
+
+    // S6 — token daemon untuk SEMUA route mutasi (POST/PUT/PATCH/DELETE). Sebelumnya hanya approve & restore;
+    // cancel/pause/resume sengaja terbuka karena jembatan token Tauri dulu tak andal (sudah diperbaiki: daemon_token
+    // membaca daemon.json workspace). Dicek SEBELUM routing, jadi path yang tidak dikenal pun tidak bisa di-probe tanpa token.
+    if (MUTATING_METHODS.has(method) && tokenEnforced() && !TOKEN_EXEMPT_MUTATIONS.some((p) => p.test(url.pathname))) {
+      if (!tokenMatches(bearerToken(req), ctx.daemonToken)) {
+        res.setHeader("www-authenticate", 'Bearer realm="daedalus"');
+        sendJson(res, 401, {
+          error: "unauthorized",
+          message: "Token tidak ada atau tidak valid. Kirim header Authorization: Bearer <token> (token ada di daemon.json workspace atau lewat perintah daemon_token).",
+          request_id: requestId,
+        });
+        return;
+      }
     }
 
     if (method === "GET" && url.pathname === "/health") {
@@ -5056,9 +5093,8 @@ export function createApp(ctx: AppContext) {
 
     const cancelMatch = /^\/tasks\/([^/]+)\/cancel$/.exec(url.pathname);
     if (method === "POST" && cancelMatch?.[1] !== undefined) {
-      // Note: no daemon token required for cancel — the Tauri token bridge
-      // is unreliable and cancel is low-risk (stops the user's own task).
-      // Approve/restore keep their token checks.
+      // Token daemon diwajibkan oleh guard global semua route mutasi (S6); sebelumnya cancel sengaja terbuka
+      // karena jembatan token Tauri dulu tak andal.
       const taskId = cancelMatch[1] as string;
       const runner = ctx.activeRunners.get(taskId);
       const lookup = findTask(ctx, taskId);
@@ -5098,7 +5134,7 @@ export function createApp(ctx: AppContext) {
     // cancel, no state is lost. Sensitive: same daemon token as cancel.
     const pauseMatch = /^\/tasks\/([^/]+)\/pause$/.exec(url.pathname);
     if (method === "POST" && pauseMatch?.[1] !== undefined) {
-      // No daemon token required (see cancel above).
+      // Token daemon: dijaga guard global (lihat cancel di atas).
       const taskId = pauseMatch[1] as string;
       const lookup = findTask(ctx, taskId);
       (lookup?.store ?? ctx.store).requestPause(taskId);
@@ -5111,7 +5147,7 @@ export function createApp(ctx: AppContext) {
 
     const resumeMatch = /^\/tasks\/([^/]+)\/resume$/.exec(url.pathname);
     if (method === "POST" && resumeMatch?.[1] !== undefined) {
-      // No daemon token required (see cancel above).
+      // Token daemon: dijaga guard global (lihat cancel di atas).
       const taskId = resumeMatch[1] as string;
       const lookup = findTask(ctx, taskId);
       (lookup?.store ?? ctx.store).clearPause(taskId);
