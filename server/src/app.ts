@@ -3729,10 +3729,13 @@ export function ensureDaemonToken(daedalusHome: string): string {
 const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 /**
- * Route mutasi yang boleh TANPA token. Sengaja kosong: semua POST/PUT/PATCH/DELETE butuh token daemon yang sama
- * dengan yang sudah dipakai approve/restore (S6). GET dan OPTIONS (preflight) tidak pernah butuh token.
+ * Route mutasi yang boleh TANPA token. Satu-satunya pengecualian adalah cancel: tombol Stop adalah jalur
+ * keselamatan (safety-critical) yang TIDAK BOLEH gagal dengan 401 — pengguna yang tak bisa menghentikan task
+ * yang lepas kendali lebih berbahaya daripada risiko cancel lokal tanpa token (cancel hanya menghentikan task
+ * milik pengguna sendiri, tidak ada state yang hilang). Pause/resume tetap dijaga token. GET dan OPTIONS
+ * (preflight) tidak pernah butuh token.
  */
-const TOKEN_EXEMPT_MUTATIONS: RegExp[] = [];
+const TOKEN_EXEMPT_MUTATIONS: RegExp[] = [/^\/tasks\/([^/]+)\/cancel$/];
 
 /** Penegakan token pada semua route mutasi. Matikan HANYA untuk rollout bertahap: DAEDALUS_ENFORCE_TOKEN=0. */
 function tokenEnforced(): boolean {
@@ -5171,8 +5174,7 @@ export function createApp(ctx: AppContext) {
 
     const cancelMatch = /^\/tasks\/([^/]+)\/cancel$/.exec(url.pathname);
     if (method === "POST" && cancelMatch?.[1] !== undefined) {
-      // Token daemon diwajibkan oleh guard global semua route mutasi (S6); sebelumnya cancel sengaja terbuka
-      // karena jembatan token Tauri dulu tak andal.
+      // Guard global S6 mengecualikan cancel (lihat TOKEN_EXEMPT_MUTATIONS): Stop tak boleh gagal 401.
       const taskId = cancelMatch[1] as string;
       const runner = ctx.activeRunners.get(taskId);
       const lookup = findTask(ctx, taskId);
