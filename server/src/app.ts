@@ -209,6 +209,7 @@ import {
   hasPersistedResearchRun,
   loadPersistedResearchReports,
   getResearchPersistenceStatus,
+  onResearchSsrfBlocked,
   getResearchSourceContent,
   getResearchSourceDocument,
   isResearchRunInProgress,
@@ -3776,6 +3777,7 @@ export function createApp(ctx: AppContext) {
   // GET /captain/reminders/due.
   {
     initResearchPersistence(ctx); // idempoten (juga dipanggil di boot sebelum sapuan)
+    onResearchSsrfBlocked((info) => ctx.log.warn("research source blocked (SSRF guard)", info));
     if (!ctx.watchdog) startTaskWatchdog(ctx);
     const migrated = migrateUserData(ctx, ctx.session.workspaceRoot ?? ctx.cwd);
     if (migrated > 0) ctx.log.info("migrated per-user data to global home", { files: migrated, home: resolveUserHome() });

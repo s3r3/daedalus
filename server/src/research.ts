@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
+import { checkPublicUrl, guardedFetch, isBlockedIp, SsrfBlockedError } from "./ssrf.ts";
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -81,25 +82,41 @@ function stripToText(html: string): { title: string; text: string } {
   return { title, text: text.slice(0, 60_000) };
 }
 
-async function fetchWithTimeout(url: string, accept: string, userAgent?: string): Promise<Response | null> {
+/** Dipanggil setiap kali guard SSRF menolak sebuah URL sumber (server mencatatnya sebagai peringatan). */
+let ssrfBlockedListener: ((info: { url: string; reason: string; detail: string }) => void) | undefined;
+export function onResearchSsrfBlocked(listener: ((info: { url: string; reason: string; detail: string }) => void) | undefined): void {
+  ssrfBlockedListener = listener;
+}
+function reportSsrfBlocked(url: string, error: unknown): void {
+  if (error instanceof SsrfBlockedError) {
+    try { ssrfBlockedListener?.({ url, reason: error.reason, detail: error.message }); } catch { /* pendengar tak boleh mengganggu fetch */ }
+  }
+}
+
+/**
+ * `guard: true` = URL milik SUMBER/LAPORAN (dikendalikan pihak luar): wajib lolos guard SSRF di setiap hop redirect.
+ * Panggilan ke API pencarian yang di-hardcode (Bing RSS, DuckDuckGo, arXiv, OpenAlex, Crossref) tetap tanpa guard.
+ */
+async function fetchWithTimeout(url: string, accept: string, userAgent?: string, guard = false): Promise<Response | null> {
   try {
     // AbortSignal.timeout menutup HEADER *dan* BODY. Versi lama meng-clearTimeout begitu header datang, lalu
     // pemanggil `await res.text()` tanpa batas waktu: server yang mengirim header lalu diam membuat satu tahap
     // riset (dan seluruh run) menggantung selamanya. Body dibaca di sini, di bawah timeout yang sama.
-    const res = await fetch(url, {
+    const init: RequestInit = {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: {
         "User-Agent": userAgent ?? "Daedalus-Research/1.0 (research agent; contact: research)",
         Accept: accept,
         "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
       },
-      redirect: "follow",
-    });
+    };
+    const res = guard ? await guardedFetch(url, init) : await fetch(url, { ...init, redirect: "follow" });
     const nullBody = res.status === 101 || res.status === 204 || res.status === 205 || res.status === 304;
     const body = nullBody ? null : await res.arrayBuffer();
     if (body && body.byteLength > MAX_FETCH_BODY_BYTES) return null;
     return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
-  } catch {
+  } catch (error) {
+    reportSsrfBlocked(url, error);
     return null;
   }
 }
@@ -152,13 +169,12 @@ async function defaultFetchBytes(url: string): Promise<{ bytes: Buffer; contentT
   if (!/^https?:\/\//i.test(url)) return null;
   try {
     // Timeout mencakup unduhan body (bukan hanya header) dan ukuran dicek dari content-length SEBELUM mengunduh.
-    const res = await fetch(url, {
+    const res = await guardedFetch(url, {
       signal: AbortSignal.timeout(60_000),
       headers: {
         "User-Agent": "Daedalus-Research/1.0 (research agent; contact: research)",
         "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
       },
-      redirect: "follow",
     });
     if (!res.ok) return null;
     const declared = Number(res.headers.get("content-length") ?? "0");
@@ -169,7 +185,8 @@ async function defaultFetchBytes(url: string): Promise<{ bytes: Buffer; contentT
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length === 0 || buf.length > MAX_DOC_BYTES) return null;
     return { bytes: buf, contentType: res.headers.get("content-type") ?? "" };
-  } catch {
+  } catch (error) {
+    reportSsrfBlocked(url, error);
     return null;
   }
 }
@@ -209,9 +226,47 @@ async function defaultOfficeToPdf(bytes: Buffer, ext: string): Promise<Buffer | 
 async function defaultHtmlToPdf(url: string): Promise<Buffer | null> {
   let browser: { close(): Promise<void> } | null = null;
   try {
+    // Guard SSRF: halaman awal harus publik, dan SETIAP request browser (redirect, iframe, gambar, skrip) diperiksa
+    // lewat route handler — navigasi yang dialihkan ke host privat dibatalkan, bukan sekadar URL awalnya yang dicek.
+    const first = await checkPublicUrl(url);
+    if (!first.ok) { reportSsrfBlocked(url, new SsrfBlockedError(first.reason, first.detail)); return null; }
     const { chromium } = await import("playwright");
     browser = await chromium.launch({ headless: true });
     const page = await (browser as import("playwright").Browser).newPage();
+    const verdictByHost = new Map<string, boolean>();
+    const hostOk = async (target: string): Promise<boolean> => {
+      let host = "";
+      try { host = new URL(target).hostname; } catch { return false; }
+      let ok = verdictByHost.get(host);
+      if (ok === undefined) { ok = (await checkPublicUrl(target)).ok; verdictByHost.set(host, ok); }
+      return ok;
+    };
+    await page.route("**/*", async (route) => {
+      const target = route.request().url();
+      if (!/^https?:/i.test(target)) return route.continue();   // data:, blob:, about: aman
+      if (!(await hostOk(target))) {
+        reportSsrfBlocked(target, new SsrfBlockedError("private_host", `Ditolak (guard SSRF) saat render halaman: ${target.slice(0, 120)}`));
+        return route.abort("blockedbyclient");
+      }
+      // Playwright TIDAK memanggil handler ini lagi untuk hop redirect (terbukti: navigasi 302 ke 127.0.0.1 lolos bila
+      // hanya route.continue()). Maka tiap request di-fetch dengan maxRedirects=0 dan `Location` divalidasi di sini; browser
+      // yang kemudian mengikuti redirect itu akan mengirim request baru yang lewat handler ini lagi.
+      try {
+        const response = await route.fetch({ maxRedirects: 0, timeout: 25_000 });
+        const location = response.status() >= 300 && response.status() < 400 ? response.headers()["location"] : undefined;
+        if (location) {
+          let next: string;
+          try { next = new URL(location, target).href; } catch { return route.abort("blockedbyclient"); }
+          if (!/^https?:/i.test(next) || !(await hostOk(next))) {
+            reportSsrfBlocked(next, new SsrfBlockedError("private_host", `Ditolak (guard SSRF): redirect ke ${next.slice(0, 120)}`));
+            return route.abort("blockedbyclient");
+          }
+        }
+        return route.fulfill({ response });
+      } catch {
+        return route.abort("failed");
+      }
+    });
     const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => null);
     if (!res || !res.ok()) {
       await page.close().catch(() => undefined);
@@ -321,13 +376,13 @@ export async function probeFrameable(url: string): Promise<boolean> {
     const timer = setTimeout(() => ctrl.abort(), 10_000);
     let res: Response | null = null;
     try {
-      res = await fetch(url, {
+      res = await guardedFetch(url, {
         method: "HEAD",
         signal: ctrl.signal,
         headers: { "User-Agent": "Daedalus-Research/1.0" },
-        redirect: "follow",
       });
-    } catch {
+    } catch (error) {
+      reportSsrfBlocked(url, error);
       res = null;
     } finally {
       clearTimeout(timer);
@@ -637,29 +692,60 @@ async function defaultSearchWeb(query: string): Promise<ResearchSearchHit[]> {
  * saat Node fetch gagal. Exported untuk test. Nonaktif via env
  * DAEDALUS_RESEARCH_CURL=0.
  */
+/** Satu panggilan curl TANPA mengikuti redirect: mengembalikan status, target redirect, dan body. */
+function curlOnce(url: string, pin?: { host: string; port: string; ip: string }): Promise<{ status: number; redirect: string; body: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "curl",
+      [
+        "-s", "--max-time", "25", "--proto", "=http,https", "--max-redirs", "0",
+        "-A", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "-H", "Accept-Language: id-ID,id;q=0.9,en;q=0.8",
+        "--compressed",
+        // Pin ke IP yang SUDAH divalidasi guard: curl tidak me-resolve ulang, jadi DNS-rebinding tak bisa menyelip.
+        ...(pin ? ["--resolve", `${pin.host}:${pin.port}:${pin.ip.includes(":") ? `[${pin.ip}]` : pin.ip}`] : []),
+        "-w", "\n__DAE_CURL__%{http_code} %{redirect_url}",
+        url,
+      ],
+      { maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout) => {
+        if (err && !stdout) return reject(err);
+        const marker = stdout.lastIndexOf("\n__DAE_CURL__");
+        if (marker < 0) return reject(err ?? new Error("curl: tanpa penanda status"));
+        const [code, redirect = ""] = stdout.slice(marker + "\n__DAE_CURL__".length).trim().split(" ");
+        resolve({ status: Number(code) || 0, redirect, body: stdout.slice(0, marker) });
+      },
+    );
+  });
+}
+
 export async function curlFetchPage(url: string): Promise<FetchedPage | null> {
   if (!/^https?:\/\//i.test(url)) return null;
   try {
-    const html = await new Promise<string>((resolve, reject) => {
-      execFile(
-        "curl",
-        [
-          "-sL", "--max-time", "25",
-          "-A", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-          "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "-H", "Accept-Language: id-ID,id;q=0.9,en;q=0.8",
-          "--compressed",
-          url,
-        ],
-        { maxBuffer: 8 * 1024 * 1024 },
-        (err, stdout) => (err ? reject(err) : resolve(stdout)),
-      );
-    });
+    // Redirect diikuti MANUAL (maks 5) dengan guard SSRF di setiap hop; `curl -L` mengikuti redirect ke host privat tanpa bertanya.
+    let current = url;
+    let html = "";
+    for (let hop = 0; hop <= 5; hop++) {
+      const verdict = await checkPublicUrl(current);
+      if (!verdict.ok) throw new SsrfBlockedError(verdict.reason, verdict.detail);
+      const port = verdict.url.port || (verdict.url.protocol === "https:" ? "443" : "80");
+      const pinIp = verdict.addresses[0];
+      const result = await curlOnce(verdict.url.href, pinIp ? { host: verdict.url.hostname, port, ip: pinIp } : undefined);
+      if (result.status >= 300 && result.status < 400 && result.redirect) {
+        current = new URL(result.redirect, verdict.url).href;
+        if (hop === 5) throw new SsrfBlockedError("too_many_redirects", `Terlalu banyak redirect (>5) mulai dari ${url.slice(0, 120)}`);
+        continue;
+      }
+      html = result.body;
+      break;
+    }
     if (!html || html.length < 500) return null;
     const { title, text } = stripToText(html);
     if (!text) return null;
     return { url, status: 200, title, text };
-  } catch {
+  } catch (error) {
+    reportSsrfBlocked(url, error);
     return null;
   }
 }
@@ -672,7 +758,7 @@ export async function curlFetchPage(url: string): Promise<FetchedPage | null> {
  */
 async function defaultFetchPage(url: string): Promise<FetchedPage | null> {
   if (!/^https?:\/\//i.test(url)) return null;
-  const res = await fetchWithTimeout(url, "text/html,application/xhtml+xml");
+  const res = await fetchWithTimeout(url, "text/html,application/xhtml+xml", undefined, true);
   if (res && res.status === 200) {
     const contentType = res.headers.get("content-type") ?? "";
     if (!contentType || /text\/html|application\/xhtml/i.test(contentType)) {
