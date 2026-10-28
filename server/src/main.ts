@@ -19,6 +19,7 @@ let shuttingDown = false;
 async function shutdown(reason: string, code = 0): Promise<void> {
   if (shuttingDown) return;
   shuttingDown = true;
+  ctx.shuttingDown = true; // /ready → 503 selama berhenti
   ctx.log.info("shutting down", { reason, active_tasks: ctx.activeRunners.size });
   const hard = setTimeout(() => process.exit(code), 5_000); // batas keras
   hard.unref();

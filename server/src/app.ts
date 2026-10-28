@@ -452,6 +452,8 @@ export type AppContext = {
   taskLimiter: TaskLimiter;
   /** Watchdog task macet (S4); undefined sebelum createApp dijalankan. */
   watchdog?: TaskWatchdog;
+  /** True sejak shutdown dimulai: /ready menjawab 503 supaya klien berhenti mengirim pekerjaan baru. */
+  shuttingDown?: boolean;
   /**
    * Session-scoped remembered approvals (pattern key → decision), shared by
    * every runner this server creates. In-memory only: restarting the
@@ -613,7 +615,7 @@ function runRoute(ctx: AppContext, res: ServerResponse, requestId: string, fn: (
   });
 }
 
-const WEB_API_PREFIXES = ["/health", "/settings", "/session", "/providers", "/models", "/tasks", "/workflow", "/workspace", "/slides", "/dokumen", "/sheets", "/uploads", "/upload", "/attachments", "/extensions", "/review", "/terminals"];
+const WEB_API_PREFIXES = ["/health", "/ready", "/settings", "/session", "/providers", "/models", "/tasks", "/workflow", "/workspace", "/slides", "/dokumen", "/sheets", "/uploads", "/upload", "/attachments", "/extensions", "/review", "/terminals"];
 
 function webContentType(path: string): string {
   switch (extname(path).toLowerCase()) {
@@ -1953,6 +1955,71 @@ export function reconcileInterruptedTasks(ctx: AppContext): string[] {
  * saat boot, sebelum server menerima request. Home ditentukan per workspace
  * (`<workspace>/.daedalus` secara default), jadi menyapu satu folder saja melewatkan run di workspace lain.
  */
+type ReadinessComponent = { ok: boolean; required: boolean; detail: string };
+
+/**
+ * Kesiapan (readiness) server — berbeda dari liveness `/health` ("proses hidup"). Siap = core terjangkau dan dependensi
+ * yang DIBUTUHKAN untuk menjalankan task tersedia. Komponen `required: false` hanya informasi dan tidak memengaruhi
+ * status keseluruhan (mis. kapasitas penuh bukan "tidak siap": server hidup dan akan membalas 429 yang jelas).
+ */
+export async function computeReadiness(ctx: AppContext): Promise<{ ready: boolean; components: Record<string, ReadinessComponent> }> {
+  const components: Record<string, ReadinessComponent> = {};
+
+  components.shutdown = ctx.shuttingDown
+    ? { ok: false, required: true, detail: "Server sedang berhenti; jangan kirim pekerjaan baru." }
+    : { ok: true, required: true, detail: "Server menerima pekerjaan." };
+
+  try {
+    const count = ctx.store.listTasks().length;
+    components.core = { ok: true, required: true, detail: `Core terjangkau; penyimpanan task terbaca (${count} task).` };
+  } catch (error) {
+    components.core = { ok: false, required: true, detail: `Core/penyimpanan task tidak terbaca: ${error instanceof Error ? error.message : String(error)}` };
+  }
+
+  // Probe tulis: disk penuh / folder data read-only membuat task tidak bisa menyimpan state.
+  try {
+    const probe = join(ctx.store.root, `.ready-probe-${process.pid}`);
+    mkdirSync(ctx.store.root, { recursive: true });
+    writeFileSync(probe, "ok");
+    rmSync(probe, { force: true });
+    components.data_dir = { ok: true, required: true, detail: "Folder data dapat ditulis." };
+  } catch (error) {
+    components.data_dir = { ok: false, required: true, detail: `Folder data tidak dapat ditulis: ${error instanceof Error ? error.message : String(error)}` };
+  }
+
+  try {
+    await Promise.race([ensureProvidersLoaded(ctx), new Promise((_resolve, reject) => setTimeout(() => reject(new Error("memuat provider melebihi 3 detik")), 3_000).unref())]);
+    const usable = ctx.providerStore.registry.list().filter((p) => p.enabled && (p.defaultModel || p.models.length > 0));
+    components.providers = usable.length > 0
+      ? { ok: true, required: true, detail: `${usable.length} provider model siap dipakai.` }
+      : { ok: false, required: true, detail: "Belum ada provider model yang aktif dan punya model. Tambahkan provider di Pengaturan." };
+  } catch (error) {
+    components.providers = { ok: false, required: true, detail: `Provider gagal dimuat: ${error instanceof Error ? error.message : String(error)}` };
+  }
+
+  const research = getResearchPersistenceStatus();
+  components.research_store = research.configured && !research.lastError
+    ? { ok: true, required: false, detail: "Penyimpanan laporan riset siap." }
+    : { ok: false, required: false, detail: research.lastError ? `Penulisan laporan riset terakhir gagal: ${research.lastError}` : "Penyimpanan laporan riset belum aktif; laporan hanya di memori." };
+
+  components.capacity = {
+    ok: ctx.taskLimiter.hasCapacity(),
+    required: false,
+    detail: ctx.taskLimiter.max === 0
+      ? `${ctx.taskLimiter.active} task berjalan (tanpa batas).`
+      : `${ctx.taskLimiter.active} dari ${ctx.taskLimiter.max} slot task terpakai${ctx.taskLimiter.hasCapacity() ? "" : "; task baru akan ditolak (429) sampai ada yang selesai"}.`,
+  };
+  const stalled = ctx.watchdog?.flagged().length ?? 0;
+  components.watchdog = {
+    ok: stalled === 0,
+    required: false,
+    detail: ctx.watchdog?.enabled ? (stalled === 0 ? "Tidak ada task macet." : `${stalled} task macet sedang dihentikan watchdog.`) : "Watchdog nonaktif.",
+  };
+
+  const ready = Object.values(components).every((c) => c.ok || !c.required);
+  return { ready, components };
+}
+
 /**
  * Aktifkan persistensi laporan riset di home pengguna (`~/.daedalus/research`) dan muat kembali dari disk.
  * Idempoten; dipanggil dari boot (sebelum sapuan) dan dari createApp.
@@ -3788,6 +3855,15 @@ export function createApp(ctx: AppContext) {
         stalled_tasks: ctx.watchdog?.flagged().length ?? 0,
         workspace_root: ctx.session.workspaceRoot,
         request_id: requestId,
+      });
+      return;
+    }
+
+    // Readiness (S1): 200 saat siap, 503 + penjelasan per komponen saat belum. Publik (GET), tanpa token.
+    if (method === "GET" && url.pathname === "/ready") {
+      runRoute(ctx, res, requestId, async () => {
+        const { ready, components } = await computeReadiness(ctx);
+        sendJson(res, ready ? 200 : 503, { status: ready ? "ready" : "not_ready", ready, components, request_id: requestId });
       });
       return;
     }
