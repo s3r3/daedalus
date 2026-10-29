@@ -28,11 +28,15 @@ afterEach(async () => {
   workspace = undefined
 })
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(): Promise<{ base: string; root: string }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-fasec-srv-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-fasec-ws-'))
   const ctx = createContext({ store: new TaskStore(join(tmp, 'state')), bus: new EventBus(), cwd: workspace })
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   channel = attachWebSocket(ctx, server)
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as { port: number }
@@ -42,7 +46,7 @@ async function listen(): Promise<{ base: string; root: string }> {
 async function req(base: string, method: string, path: string, body?: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(new URL(path, base), {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   })
   const text = await res.text()
@@ -141,7 +145,7 @@ describe('Fase C3 — POST /dokumen/batch-extract (desain 4.3)', () => {
   async function postBatch(base: string, root: string, docIds: string[]): Promise<{ status: number; events: Array<Record<string, unknown>> }> {
     const res = await fetch(new URL('/dokumen/batch-extract', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root, docIds }),
     })
     const text = await res.text()

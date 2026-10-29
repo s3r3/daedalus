@@ -89,12 +89,15 @@ export class WorkflowRunStore {
    * "running" selamanya). Satu-satunya cara yang bertahan adalah menambah
    * event `task_end` lewat `updateTurn()`.
    */
-  markStaleRunningInterrupted(): number {
+  markStaleRunningInterrupted(keepRunning?: (turn: RunTurn) => boolean): number {
     let marked = 0;
     for (const run of this.listRuns()) {
       let dirty = false;
       for (const turn of [...(run.turns ?? [])]) {
         if (turn?.status !== "running") continue;
+        // Turn yang masih bisa diselesaikan tanpa proses lama (mis. riset yang laporannya sudah tersimpan di disk)
+        // dibiarkan: reconcile saat poll pertama yang menutupnya sebagai selesai.
+        if (keepRunning?.(turn)) continue;
         const updated = updateTurn(run, turn.turn_id, {
           status: "failed",
           note: "terputus: server berhenti saat task berjalan",

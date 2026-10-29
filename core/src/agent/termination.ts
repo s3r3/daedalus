@@ -47,12 +47,12 @@ function lastModelError(events: Event[]): { reason?: string; consecutive?: numbe
 }
 
 /** Siapa yang menghentikan: 'user' (tombol Stop), 'model' (balasan diawali "stop"), atau tidak diketahui. */
-function cancelledBy(events: Event[]): 'user' | 'model' | undefined {
+function cancelledBy(events: Event[]): 'user' | 'model' | 'watchdog' | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
     if (event?.type !== 'TASK_COMPLETED') continue;
     const by = (event.payload as { cancelled_by?: unknown }).cancelled_by;
-    return by === 'user' || by === 'model' ? by : undefined;
+    return by === 'user' || by === 'model' || by === 'watchdog' ? by : undefined;
   }
   return undefined;
 }
@@ -75,6 +75,12 @@ export function explainTermination(input: TerminationInput): string | undefined 
   const code = (state.last_error ?? '').trim();
   const where = whereText(state);
 
+  if ((code === 'aborted' || code === 'stop requested') && cancelledBy(input.events) === 'watchdog') {
+    const stalled = [...input.events].reverse().find((event) => event.type === 'TASK_STALLED');
+    const idle = Number((stalled?.payload as { idle_ms?: unknown } | undefined)?.idle_ms);
+    const span = !Number.isFinite(idle) || idle <= 0 ? undefined : idle < 120_000 ? `${Math.max(1, Math.round(idle / 1000))} detik` : `±${Math.round(idle / 60_000)} menit`;
+    return `Task macet: tidak ada progres${span ? ` selama ${span}` : ''} (${where}). Dihentikan otomatis oleh watchdog, bukan oleh pengguna. Pekerjaan yang sudah tersimpan tetap ada; coba lagi dengan tugas yang lebih kecil atau model lain.`;
+  }
   if ((code === 'aborted' || code === 'stop requested') && cancelledBy(input.events) === 'model') {
     return `Model memutuskan berhenti sendiri (membalas "stop:") sebelum tujuan tercapai (${where}). Ini keputusan model, bukan Stop dari pengguna; coba lagi dengan tujuan yang lebih jelas atau model lain.`;
   }

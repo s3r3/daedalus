@@ -41,6 +41,9 @@ afterEach(async () => {
   providerHome = undefined;
 });
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(): Promise<{ base: string; ctx: ReturnType<typeof createContext> }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-shared-server-'));
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-shared-ws-'));
@@ -62,6 +65,7 @@ async function listen(): Promise<{ base: string; ctx: ReturnType<typeof createCo
     providerStore: new ProviderRegistryStore(providerHome),
   });
   server = createApp(ctx);
+  daemonToken = ctx.daemonToken ?? '';
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
   return { base: `http://127.0.0.1:${port}`, ctx };
@@ -229,7 +233,7 @@ describe('shared local core, Web prompts, extensions, and shared workspace', () 
 
     const saved = await fetch(new URL('/workspace/file', base), {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: workspace, path: 'from-cli.txt', content: 'edited through Web IDE\n' }),
     });
     expect(saved.status).toBe(200);
@@ -334,14 +338,14 @@ describe('shared local core, Web prompts, extensions, and shared workspace', () 
     const modelBase = await startModelServer();
     const provider = await fetch(new URL('/providers', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ id: 'fake', name: 'Fake', baseUrl: modelBase, apiKey: 'fake-key', models: ['fake-model'] }),
     });
     expect(provider.status).toBe(201);
 
     const createdRes = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({
         goal: 'Use the workspace extensions\ndone: skill read\ndone: mcp echo called\ndone: web file created\ndone: inspect diagnostics',
         repo_path: workspace,
@@ -378,7 +382,7 @@ describe('shared local core, Web prompts, extensions, and shared workspace', () 
     expect(initial.session.thinking).toBe(true);
     const updated = await fetch(new URL('/session', base), {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ thinking: false }),
     });
     expect((await json<{ session: { thinking: boolean } }>(updated)).session.thinking).toBe(false);

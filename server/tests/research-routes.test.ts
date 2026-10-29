@@ -117,6 +117,9 @@ afterEach(async () => {
   workspace = undefined
 })
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(hooks: ResearchCoreHooks): Promise<{ base: string; root: string }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-research-srv-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-research-ws-'))
@@ -132,6 +135,7 @@ async function listen(hooks: ResearchCoreHooks): Promise<{ base: string; root: s
     },
   })
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
   return { base: `http://127.0.0.1:${port}`, root: workspace }
@@ -145,7 +149,7 @@ async function req(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(new URL(path, base), {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   })
   const text = await res.text()
@@ -304,6 +308,7 @@ describe('GET /research/report/:reportId/source/:sourceId/document', () => {
       },
     })
     server = createApp(ctx)
+    daemonToken = ctx.daemonToken ?? ''
     await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
     const { port } = server.address() as AddressInfo
     return `http://127.0.0.1:${port}`
@@ -516,6 +521,10 @@ describe('curlFetchPage fallback', () => {
     })
     await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r))
     const port = (srv.address() as { port: number }).port
+    // Fixture loopback: guard SSRF (S10) sengaja dilonggarkan lewat escape hatch
+    // DAEDALUS_SSRF_ALLOW_HOSTS — tes ini mengukur mekanisme curl, bukan pemblokiran SSRF.
+    const prevAllow = process.env.DAEDALUS_SSRF_ALLOW_HOSTS
+    process.env.DAEDALUS_SSRF_ALLOW_HOSTS = '127.0.0.1,localhost'
     try {
       const { curlFetchPage } = await import('../src/research.ts')
       const page = await curlFetchPage(`http://127.0.0.1:${port}/artikel`)
@@ -523,6 +532,8 @@ describe('curlFetchPage fallback', () => {
       expect(page!.title).toContain('Halo Curl')
       expect(page!.text.length).toBeGreaterThan(500)
     } finally {
+      if (prevAllow === undefined) delete process.env.DAEDALUS_SSRF_ALLOW_HOSTS
+      else process.env.DAEDALUS_SSRF_ALLOW_HOSTS = prevAllow
       srv.close()
     }
   })
@@ -538,12 +549,17 @@ describe('curlFetchPage fallback', () => {
     const port = (srv.address() as { port: number }).port
     const origFetch = globalThis.fetch
     globalThis.fetch = (async () => { throw new Error('node fetch diblokir'); }) as typeof fetch
+    // Fixture loopback: lihat komentar tes curlFetchPage di atas (escape hatch S10).
+    const prevAllow = process.env.DAEDALUS_SSRF_ALLOW_HOSTS
+    process.env.DAEDALUS_SSRF_ALLOW_HOSTS = '127.0.0.1,localhost'
     try {
       clearFetchedPageCacheForTest()
       const page = await defaultResearchHooks().fetchPage(`http://127.0.0.1:${port}/fallback`)
       expect(page).not.toBeNull()
       expect(page!.title).toContain('Via Curl')
     } finally {
+      if (prevAllow === undefined) delete process.env.DAEDALUS_SSRF_ALLOW_HOSTS
+      else process.env.DAEDALUS_SSRF_ALLOW_HOSTS = prevAllow
       globalThis.fetch = origFetch
       srv.close()
     }
@@ -622,6 +638,10 @@ describe('probeFrameable', () => {
     await new Promise<void>((resolve) => srv.listen(0, '127.0.0.1', resolve))
     const port = (srv.address() as AddressInfo).port
     const base = `http://127.0.0.1:${port}`
+    // Fixture loopback: guard SSRF (S10) dilonggarkan lewat escape hatch — tes ini
+    // mengukur pembacaan header frame, bukan pemblokiran SSRF.
+    const prevAllow = process.env.DAEDALUS_SSRF_ALLOW_HOSTS
+    process.env.DAEDALUS_SSRF_ALLOW_HOSTS = '127.0.0.1,localhost'
     try {
       expect(await probeFrameable(`${base}/deny`)).toBe(false)
       expect(await probeFrameable(`${base}/same`)).toBe(false)
@@ -629,6 +649,8 @@ describe('probeFrameable', () => {
       expect(await probeFrameable(`${base}/open`)).toBe(true)
       expect(await probeFrameable('bukan-url')).toBe(false)
     } finally {
+      if (prevAllow === undefined) delete process.env.DAEDALUS_SSRF_ALLOW_HOSTS
+      else process.env.DAEDALUS_SSRF_ALLOW_HOSTS = prevAllow
       srv.close()
     }
   })

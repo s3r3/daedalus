@@ -23,6 +23,9 @@ afterEach(async () => {
   workspace = undefined
 })
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(): Promise<{ base: string; wsUrl: string; ctx: ReturnType<typeof createContext> }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-server-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-server-ws-'))
@@ -31,6 +34,7 @@ async function listen(): Promise<{ base: string; wsUrl: string; ctx: ReturnType<
   writeFileSync(join(workspace, 'README.md'), '# fixture\n')
   const ctx = createContext({ store: new TaskStore(join(tmp, 'state')), bus: new EventBus(), cwd: workspace })
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   channel = attachWebSocket(ctx, server)
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
@@ -51,7 +55,7 @@ describe('server', () => {
     const { base } = await listen()
     const created = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ goal: 'add health endpoint' }),
     })
     expect(created.status).toBe(201)
@@ -69,7 +73,7 @@ describe('server', () => {
     const { base } = await listen()
     const res = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({}),
     })
     expect(res.status).toBe(400)
@@ -79,7 +83,7 @@ describe('server', () => {
     const { base } = await listen()
     const created = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ goal: 'pool task', models: ['model-a', 'model-b'], model_strategy: 'round-robin' }),
     })
     expect(created.status).toBe(201)
@@ -100,7 +104,7 @@ describe('server', () => {
     const { base } = await listen()
     const res = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ goal: 'pool task', models: ['model-a', 'model-b'], model_strategy: 'random' }),
     })
     expect(res.status).toBe(400)
@@ -238,11 +242,21 @@ describe('server', () => {
     expect(ctx.store.isPauseRequested('t6')).toBe(false)
   })
 
-  test('POST /tasks/{id}/pause does not require the daemon token (same as cancel)', async () => {
-    const { base } = await listen()
+  test('POST /tasks/{id}/pause requires the daemon token (S6; only cancel is exempt)', async () => {
+    const { base, ctx } = await listen()
+    ctx.store.saveState('t7', { status: 'active' })
+    // Without a token the guard answers 401; with the token the pause
+    // marker is recorded and resume clears it.
     await fetch(new URL('/health', base))
-    const res = await fetch(new URL('/tasks/t7/pause', base), { method: 'POST' })
-    expect(res.status).toBe(200)
+    const denied = await fetch(new URL('/tasks/t7/pause', base), { method: 'POST' })
+    expect(denied.status).toBe(401)
+    const auth = { authorization: `Bearer ${ctx.daemonToken ?? ''}` }
+    const pauseRes = await fetch(new URL('/tasks/t7/pause', base), { method: 'POST', headers: auth })
+    expect(pauseRes.status).toBe(200)
+    expect(ctx.store.isPauseRequested('t7')).toBe(true)
+    const resumeRes = await fetch(new URL('/tasks/t7/resume', base), { method: 'POST', headers: auth })
+    expect(resumeRes.status).toBe(200)
+    expect(ctx.store.isPauseRequested('t7')).toBe(false)
   })
 
   test('POST /tasks/{id}/approve decides a pending approval', async () => {
@@ -285,7 +299,7 @@ describe('server', () => {
     const decision = runner.approvals.request(info)
     const res = await fetch(new URL('/tasks/t7/approvals/approval-7', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ decision: 'decline', note: 'run the watcher instead' }),
     })
     expect(res.status).toBe(200)
@@ -312,13 +326,13 @@ describe('server', () => {
     const decision = runner.approvals.request(info)
     const missing = await fetch(new URL('/tasks/t8/approvals/nope', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ decision: 'allow' }),
     })
     expect(missing.status).toBe(404)
     const res = await fetch(new URL('/tasks/t8/approvals/approval-8', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ decision: 'allow_remember', editedArgs: { content: 'y' } }),
     })
     const body = (await res.json()) as { success: boolean; decision: string }

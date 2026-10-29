@@ -91,6 +91,29 @@ export class TaskStore {
   }
 
   /**
+   * Waktu (epoch ms) aktivitas terakhir task: yang terbaru dari mtime events.jsonl dan state.json. Dipakai watchdog
+   * (S4) sebagai penanda progres; undefined bila task belum menulis apa pun.
+   */
+  lastActivityAt(taskId: string): number | undefined {
+    let dir: string;
+    try {
+      dir = this.taskDir(taskId);
+    } catch {
+      return undefined;
+    }
+    let latest: number | undefined;
+    for (const name of ['events.jsonl', 'state.json']) {
+      try {
+        const t = statSync(join(dir, name)).mtimeMs;
+        if (latest === undefined || t > latest) latest = t;
+      } catch {
+        /* berkas belum ada */
+      }
+    }
+    return latest;
+  }
+
+  /**
    * Replay all events for a task in file (seq) order. Baris rusak (mis. terpotong karena
    * proses mati saat menulis) dilewati — dulu SATU baris rusak membuat seluruh log "kosong".
    */

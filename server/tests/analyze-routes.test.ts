@@ -84,6 +84,9 @@ afterEach(async () => {
   workspace = undefined
 })
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(hooks: AnalysisCoreHooks): Promise<{ base: string; root: string }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-analis-srv-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-analis-ws-'))
@@ -99,6 +102,7 @@ async function listen(hooks: AnalysisCoreHooks): Promise<{ base: string; root: s
     },
   })
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
   return { base: `http://127.0.0.1:${port}`, root: workspace }
@@ -112,7 +116,7 @@ async function req(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(new URL(path, base), {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   })
   const text = await res.text()

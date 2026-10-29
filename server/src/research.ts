@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
+import { checkPublicUrl, guardedFetch, isBlockedIp, SsrfBlockedError } from "./ssrf.ts";
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -80,25 +82,41 @@ function stripToText(html: string): { title: string; text: string } {
   return { title, text: text.slice(0, 60_000) };
 }
 
-async function fetchWithTimeout(url: string, accept: string, userAgent?: string): Promise<Response | null> {
+/** Dipanggil setiap kali guard SSRF menolak sebuah URL sumber (server mencatatnya sebagai peringatan). */
+let ssrfBlockedListener: ((info: { url: string; reason: string; detail: string }) => void) | undefined;
+export function onResearchSsrfBlocked(listener: ((info: { url: string; reason: string; detail: string }) => void) | undefined): void {
+  ssrfBlockedListener = listener;
+}
+function reportSsrfBlocked(url: string, error: unknown): void {
+  if (error instanceof SsrfBlockedError) {
+    try { ssrfBlockedListener?.({ url, reason: error.reason, detail: error.message }); } catch { /* pendengar tak boleh mengganggu fetch */ }
+  }
+}
+
+/**
+ * `guard: true` = URL milik SUMBER/LAPORAN (dikendalikan pihak luar): wajib lolos guard SSRF di setiap hop redirect.
+ * Panggilan ke API pencarian yang di-hardcode (Bing RSS, DuckDuckGo, arXiv, OpenAlex, Crossref) tetap tanpa guard.
+ */
+async function fetchWithTimeout(url: string, accept: string, userAgent?: string, guard = false): Promise<Response | null> {
   try {
     // AbortSignal.timeout menutup HEADER *dan* BODY. Versi lama meng-clearTimeout begitu header datang, lalu
     // pemanggil `await res.text()` tanpa batas waktu: server yang mengirim header lalu diam membuat satu tahap
     // riset (dan seluruh run) menggantung selamanya. Body dibaca di sini, di bawah timeout yang sama.
-    const res = await fetch(url, {
+    const init: RequestInit = {
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
       headers: {
         "User-Agent": userAgent ?? "Daedalus-Research/1.0 (research agent; contact: research)",
         Accept: accept,
         "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
       },
-      redirect: "follow",
-    });
+    };
+    const res = guard ? await guardedFetch(url, init) : await fetch(url, { ...init, redirect: "follow" });
     const nullBody = res.status === 101 || res.status === 204 || res.status === 205 || res.status === 304;
     const body = nullBody ? null : await res.arrayBuffer();
     if (body && body.byteLength > MAX_FETCH_BODY_BYTES) return null;
     return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
-  } catch {
+  } catch (error) {
+    reportSsrfBlocked(url, error);
     return null;
   }
 }
@@ -151,13 +169,12 @@ async function defaultFetchBytes(url: string): Promise<{ bytes: Buffer; contentT
   if (!/^https?:\/\//i.test(url)) return null;
   try {
     // Timeout mencakup unduhan body (bukan hanya header) dan ukuran dicek dari content-length SEBELUM mengunduh.
-    const res = await fetch(url, {
+    const res = await guardedFetch(url, {
       signal: AbortSignal.timeout(60_000),
       headers: {
         "User-Agent": "Daedalus-Research/1.0 (research agent; contact: research)",
         "Accept-Language": "id-ID,id;q=0.9,en;q=0.8",
       },
-      redirect: "follow",
     });
     if (!res.ok) return null;
     const declared = Number(res.headers.get("content-length") ?? "0");
@@ -168,7 +185,8 @@ async function defaultFetchBytes(url: string): Promise<{ bytes: Buffer; contentT
     const buf = Buffer.from(await res.arrayBuffer());
     if (buf.length === 0 || buf.length > MAX_DOC_BYTES) return null;
     return { bytes: buf, contentType: res.headers.get("content-type") ?? "" };
-  } catch {
+  } catch (error) {
+    reportSsrfBlocked(url, error);
     return null;
   }
 }
@@ -208,9 +226,47 @@ async function defaultOfficeToPdf(bytes: Buffer, ext: string): Promise<Buffer | 
 async function defaultHtmlToPdf(url: string): Promise<Buffer | null> {
   let browser: { close(): Promise<void> } | null = null;
   try {
+    // Guard SSRF: halaman awal harus publik, dan SETIAP request browser (redirect, iframe, gambar, skrip) diperiksa
+    // lewat route handler — navigasi yang dialihkan ke host privat dibatalkan, bukan sekadar URL awalnya yang dicek.
+    const first = await checkPublicUrl(url);
+    if (!first.ok) { reportSsrfBlocked(url, new SsrfBlockedError(first.reason, first.detail)); return null; }
     const { chromium } = await import("playwright");
     browser = await chromium.launch({ headless: true });
     const page = await (browser as import("playwright").Browser).newPage();
+    const verdictByHost = new Map<string, boolean>();
+    const hostOk = async (target: string): Promise<boolean> => {
+      let host = "";
+      try { host = new URL(target).hostname; } catch { return false; }
+      let ok = verdictByHost.get(host);
+      if (ok === undefined) { ok = (await checkPublicUrl(target)).ok; verdictByHost.set(host, ok); }
+      return ok;
+    };
+    await page.route("**/*", async (route) => {
+      const target = route.request().url();
+      if (!/^https?:/i.test(target)) return route.continue();   // data:, blob:, about: aman
+      if (!(await hostOk(target))) {
+        reportSsrfBlocked(target, new SsrfBlockedError("private_host", `Ditolak (guard SSRF) saat render halaman: ${target.slice(0, 120)}`));
+        return route.abort("blockedbyclient");
+      }
+      // Playwright TIDAK memanggil handler ini lagi untuk hop redirect (terbukti: navigasi 302 ke 127.0.0.1 lolos bila
+      // hanya route.continue()). Maka tiap request di-fetch dengan maxRedirects=0 dan `Location` divalidasi di sini; browser
+      // yang kemudian mengikuti redirect itu akan mengirim request baru yang lewat handler ini lagi.
+      try {
+        const response = await route.fetch({ maxRedirects: 0, timeout: 25_000 });
+        const location = response.status() >= 300 && response.status() < 400 ? response.headers()["location"] : undefined;
+        if (location) {
+          let next: string;
+          try { next = new URL(location, target).href; } catch { return route.abort("blockedbyclient"); }
+          if (!/^https?:/i.test(next) || !(await hostOk(next))) {
+            reportSsrfBlocked(next, new SsrfBlockedError("private_host", `Ditolak (guard SSRF): redirect ke ${next.slice(0, 120)}`));
+            return route.abort("blockedbyclient");
+          }
+        }
+        return route.fulfill({ response });
+      } catch {
+        return route.abort("failed");
+      }
+    });
     const res = await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => null);
     if (!res || !res.ok()) {
       await page.close().catch(() => undefined);
@@ -320,13 +376,13 @@ export async function probeFrameable(url: string): Promise<boolean> {
     const timer = setTimeout(() => ctrl.abort(), 10_000);
     let res: Response | null = null;
     try {
-      res = await fetch(url, {
+      res = await guardedFetch(url, {
         method: "HEAD",
         signal: ctrl.signal,
         headers: { "User-Agent": "Daedalus-Research/1.0" },
-        redirect: "follow",
       });
-    } catch {
+    } catch (error) {
+      reportSsrfBlocked(url, error);
       res = null;
     } finally {
       clearTimeout(timer);
@@ -636,29 +692,60 @@ async function defaultSearchWeb(query: string): Promise<ResearchSearchHit[]> {
  * saat Node fetch gagal. Exported untuk test. Nonaktif via env
  * DAEDALUS_RESEARCH_CURL=0.
  */
+/** Satu panggilan curl TANPA mengikuti redirect: mengembalikan status, target redirect, dan body. */
+function curlOnce(url: string, pin?: { host: string; port: string; ip: string }): Promise<{ status: number; redirect: string; body: string }> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "curl",
+      [
+        "-s", "--max-time", "25", "--proto", "=http,https", "--max-redirs", "0",
+        "-A", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+        "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "-H", "Accept-Language: id-ID,id;q=0.9,en;q=0.8",
+        "--compressed",
+        // Pin ke IP yang SUDAH divalidasi guard: curl tidak me-resolve ulang, jadi DNS-rebinding tak bisa menyelip.
+        ...(pin ? ["--resolve", `${pin.host}:${pin.port}:${pin.ip.includes(":") ? `[${pin.ip}]` : pin.ip}`] : []),
+        "-w", "\n__DAE_CURL__%{http_code} %{redirect_url}",
+        url,
+      ],
+      { maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout) => {
+        if (err && !stdout) return reject(err);
+        const marker = stdout.lastIndexOf("\n__DAE_CURL__");
+        if (marker < 0) return reject(err ?? new Error("curl: tanpa penanda status"));
+        const [code, redirect = ""] = stdout.slice(marker + "\n__DAE_CURL__".length).trim().split(" ");
+        resolve({ status: Number(code) || 0, redirect, body: stdout.slice(0, marker) });
+      },
+    );
+  });
+}
+
 export async function curlFetchPage(url: string): Promise<FetchedPage | null> {
   if (!/^https?:\/\//i.test(url)) return null;
   try {
-    const html = await new Promise<string>((resolve, reject) => {
-      execFile(
-        "curl",
-        [
-          "-sL", "--max-time", "25",
-          "-A", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
-          "-H", "Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "-H", "Accept-Language: id-ID,id;q=0.9,en;q=0.8",
-          "--compressed",
-          url,
-        ],
-        { maxBuffer: 8 * 1024 * 1024 },
-        (err, stdout) => (err ? reject(err) : resolve(stdout)),
-      );
-    });
+    // Redirect diikuti MANUAL (maks 5) dengan guard SSRF di setiap hop; `curl -L` mengikuti redirect ke host privat tanpa bertanya.
+    let current = url;
+    let html = "";
+    for (let hop = 0; hop <= 5; hop++) {
+      const verdict = await checkPublicUrl(current);
+      if (!verdict.ok) throw new SsrfBlockedError(verdict.reason, verdict.detail);
+      const port = verdict.url.port || (verdict.url.protocol === "https:" ? "443" : "80");
+      const pinIp = verdict.addresses[0];
+      const result = await curlOnce(verdict.url.href, pinIp ? { host: verdict.url.hostname, port, ip: pinIp } : undefined);
+      if (result.status >= 300 && result.status < 400 && result.redirect) {
+        current = new URL(result.redirect, verdict.url).href;
+        if (hop === 5) throw new SsrfBlockedError("too_many_redirects", `Terlalu banyak redirect (>5) mulai dari ${url.slice(0, 120)}`);
+        continue;
+      }
+      html = result.body;
+      break;
+    }
     if (!html || html.length < 500) return null;
     const { title, text } = stripToText(html);
     if (!text) return null;
     return { url, status: 200, title, text };
-  } catch {
+  } catch (error) {
+    reportSsrfBlocked(url, error);
     return null;
   }
 }
@@ -671,7 +758,7 @@ export async function curlFetchPage(url: string): Promise<FetchedPage | null> {
  */
 async function defaultFetchPage(url: string): Promise<FetchedPage | null> {
   if (!/^https?:\/\//i.test(url)) return null;
-  const res = await fetchWithTimeout(url, "text/html,application/xhtml+xml");
+  const res = await fetchWithTimeout(url, "text/html,application/xhtml+xml", undefined, true);
   if (res && res.status === 200) {
     const contentType = res.headers.get("content-type") ?? "";
     if (!contentType || /text\/html|application\/xhtml/i.test(contentType)) {
@@ -890,6 +977,138 @@ export function finishResearchRun(planId: string): void {
   researchRunsInProgress.delete(planId);
 }
 
+/* ------------------------------------------- persistensi ke disk (S7) */
+
+/**
+ * Laporan riset dan pemetaan planId→reportId ditulis ke disk supaya tidak hilang saat server restart (dulu hanya di
+ * memori: TTL 24 jam/1 jam, dan turn riset berubah "gagal" setelah restart). Format laporan TIDAK berubah — berkas
+ * adalah JSON `ResearchReport` apa adanya. Memori tetap menjadi cache: berkas dibaca ulang bila entri memori sudah
+ * kedaluwarsa atau server baru dinyalakan.
+ *
+ *   <dir>/reports/<reportId>.json   laporan
+ *   <dir>/runs/<planId>.json        { reportId, at }
+ */
+const SAFE_ID = /^[A-Za-z0-9_-]{1,100}$/;
+const RESEARCH_DISK_RETENTION = Math.max(10, Number(process.env.DAEDALUS_RESEARCH_RETENTION ?? 500) || 500);
+const RESEARCH_PRELOAD_LIMIT = 50;
+let researchStoreDir: string | undefined;
+const persistenceStatus: { dir?: string; lastError?: string; lastErrorAt?: number } = {};
+
+/** Status untuk /ready: apakah penyimpanan laporan terkonfigurasi dan terakhir kali menulis tanpa galat. */
+export function getResearchPersistenceStatus(): { configured: boolean; dir?: string; lastError?: string } {
+  return { configured: researchStoreDir !== undefined, ...(researchStoreDir ? { dir: researchStoreDir } : {}), ...(persistenceStatus.lastError ? { lastError: persistenceStatus.lastError } : {}) };
+}
+
+function noteDiskError(error: unknown): void {
+  persistenceStatus.lastError = error instanceof Error ? error.message : String(error);
+  persistenceStatus.lastErrorAt = Date.now();
+}
+
+function atomicWrite(file: string, data: string): void {
+  const tmp = `${file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
+  try {
+    writeFileSync(tmp, data, "utf8");
+    renameSync(tmp, file);
+  } catch (error) {
+    try { unlinkSync(tmp); } catch { /* tmp belum ada */ }
+    throw error;
+  }
+}
+
+function reportFile(id: string): string | undefined {
+  return researchStoreDir && SAFE_ID.test(id) ? join(researchStoreDir, "reports", `${id}.json`) : undefined;
+}
+function runFile(id: string): string | undefined {
+  return researchStoreDir && SAFE_ID.test(id) ? join(researchStoreDir, "runs", `${id}.json`) : undefined;
+}
+
+function readReportFromDisk(id: string): ResearchReport | undefined {
+  const file = reportFile(id);
+  if (!file) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as Partial<ResearchReport> | null;
+    // Berkas terpotong/korup atau bukan laporan: lewati (jangan melempar ke route).
+    if (!parsed || typeof parsed !== "object" || parsed.reportId !== id || !Array.isArray((parsed as { sources?: unknown }).sources)) return undefined;
+    return parsed as ResearchReport;
+  } catch {
+    return undefined;
+  }
+}
+
+function pruneDisk(): void {
+  if (!researchStoreDir) return;
+  for (const sub of ["reports", "runs"]) {
+    const dir = join(researchStoreDir, sub);
+    try {
+      const files = readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs })).sort((a, b) => b.t - a.t);
+      for (const old of files.slice(RESEARCH_DISK_RETENTION)) rmSync(join(dir, old.f), { force: true });
+    } catch { /* direktori belum ada */ }
+  }
+}
+
+/** Aktifkan persistensi ke `dir` (dibuat bila belum ada). Idempoten. Mengembalikan false bila direktori tak bisa dipakai. */
+export function configureResearchPersistence(dir: string | undefined): boolean {
+  if (!dir) { researchStoreDir = undefined; return false; }
+  try {
+    mkdirSync(join(dir, "reports"), { recursive: true });
+    mkdirSync(join(dir, "runs"), { recursive: true });
+    researchStoreDir = dir;
+    persistenceStatus.dir = dir;
+    delete persistenceStatus.lastError;
+    return true;
+  } catch (error) {
+    researchStoreDir = undefined;
+    noteDiskError(error);
+    return false;
+  }
+}
+
+/**
+ * Muat kembali dari disk saat startup: seluruh pemetaan plan→laporan (kecil) dan `RESEARCH_PRELOAD_LIMIT` laporan
+ * terbaru ke cache memori; sisanya dibaca saat diminta. Mengembalikan jumlah laporan yang dimuat.
+ */
+export function loadPersistedResearchReports(): { reports: number; runs: number } {
+  if (!researchStoreDir) return { reports: 0, runs: 0 };
+  let runs = 0;
+  try {
+    const dir = join(researchStoreDir, "runs");
+    for (const f of readdirSync(dir).filter((x) => x.endsWith(".json")).slice(0, 1000)) {
+      try {
+        const parsed = JSON.parse(readFileSync(join(dir, f), "utf8")) as { reportId?: unknown; at?: unknown };
+        const planId = f.slice(0, -5);
+        if (SAFE_ID.test(planId) && typeof parsed.reportId === "string" && SAFE_ID.test(parsed.reportId)) {
+          researchRunReports.set(planId, { reportId: parsed.reportId, at: typeof parsed.at === "number" ? parsed.at : Date.now() });
+          runs++;
+        }
+      } catch { /* berkas korup: lewati */ }
+    }
+  } catch { /* belum ada */ }
+  let reports = 0;
+  try {
+    const dir = join(researchStoreDir, "reports");
+    const newest = readdirSync(dir).filter((f) => f.endsWith(".json")).map((f) => ({ f, t: statSync(join(dir, f)).mtimeMs })).sort((a, b) => b.t - a.t).slice(0, RESEARCH_PRELOAD_LIMIT);
+    for (const { f, t } of newest) {
+      const id = f.slice(0, -5);
+      const report = readReportFromDisk(id);
+      if (report) { completedReports.set(id, { report, createdAt: t }); reports++; }
+    }
+  } catch { /* belum ada */ }
+  return { reports, runs };
+}
+
+/** Khusus test: kosongkan seluruh keadaan memori (meniru proses baru); berkas di disk tidak disentuh. */
+export function __resetResearchStateForTests(): void {
+  completedReports.clear();
+  researchRunReports.clear();
+  progressLog.clear();
+}
+
+/** Apakah ada laporan tersimpan untuk plan ini (memori atau disk)? Dipakai sapuan boot agar turn riset yang sudah selesai tak ditandai gagal. */
+export function hasPersistedResearchRun(planId: string): boolean {
+  const reportId = getResearchRunReportId(planId);
+  return reportId !== undefined && getResearchReport(reportId) !== undefined;
+}
+
 /**
  * reportId per planId yang run-nya selesai — untuk recovery client
  * yang request-nya putus di tengah jalan (timeout/proxy). TTL 1 jam.
@@ -899,6 +1118,10 @@ const RESEARCH_RUN_REPORT_TTL_MS = 60 * 60 * 1000;
 
 export function rememberResearchRunReport(planId: string, reportId: string): void {
   researchRunReports.set(planId, { reportId, at: Date.now() });
+  const file = runFile(planId);
+  if (file) {
+    try { atomicWrite(file, JSON.stringify({ reportId, at: Date.now() })); } catch (error) { noteDiskError(error); }
+  }
   if (researchRunReports.size > 100) {
     const oldest = [...researchRunReports.entries()].sort((a, b) => a[1].at - b[1].at)[0];
     if (oldest) researchRunReports.delete(oldest[0]);
@@ -907,12 +1130,20 @@ export function rememberResearchRunReport(planId: string, reportId: string): voi
 
 export function getResearchRunReportId(planId: string): string | undefined {
   const entry = researchRunReports.get(planId);
-  if (!entry) return undefined;
-  if (Date.now() - entry.at >= RESEARCH_RUN_REPORT_TTL_MS) {
-    researchRunReports.delete(planId);
-    return undefined;
-  }
-  return entry.reportId;
+  if (entry && Date.now() - entry.at < RESEARCH_RUN_REPORT_TTL_MS) return entry.reportId;
+  if (entry) researchRunReports.delete(planId);
+  // TTL memori (1 jam) hanya untuk recovery request yang putus; pemetaan di disk tidak kedaluwarsa, supaya turn riset
+  // lama (dan turn yang selesai tepat sebelum restart) tetap bisa menemukan laporannya.
+  const file = runFile(planId);
+  if (!file) return undefined;
+  try {
+    const parsed = JSON.parse(readFileSync(file, "utf8")) as { reportId?: unknown; at?: unknown };
+    if (typeof parsed.reportId === "string" && SAFE_ID.test(parsed.reportId)) {
+      researchRunReports.set(planId, { reportId: parsed.reportId, at: Date.now() });
+      return parsed.reportId;
+    }
+  } catch { /* tidak ada / korup */ }
+  return undefined;
 }
 
 /**
@@ -969,17 +1200,29 @@ function sweepCompletedReports(now: number = Date.now()): void {
 export function storeResearchReport(report: ResearchReport): void {
   sweepCompletedReports();
   completedReports.set(report.reportId, { report, createdAt: Date.now() });
+  const file = reportFile(report.reportId);
+  if (file) {
+    try {
+      atomicWrite(file, JSON.stringify(report));
+      pruneDisk();
+    } catch (error) {
+      // Gagal menulis tidak boleh menggagalkan riset yang sudah selesai: laporan tetap ada di memori; /ready melaporkannya.
+      noteDiskError(error);
+    }
+  }
 }
 
 export function getResearchReport(reportId: string): ResearchReport | undefined {
   const entry = completedReports.get(reportId);
-  if (!entry) return undefined;
-  if (Date.now() - entry.createdAt >= REPORT_TTL_MS) {
+  if (entry && Date.now() - entry.createdAt < REPORT_TTL_MS) return entry.report;
+  if (entry) {
     completedReports.delete(reportId);
     progressLog.delete(reportId);
-    return undefined;
   }
-  return entry.report;
+  // Cache memori kosong/kedaluwarsa (mis. server baru dinyalakan): baca dari disk lalu cache ulang.
+  const fromDisk = readReportFromDisk(reportId);
+  if (fromDisk) completedReports.set(reportId, { report: fromDisk, createdAt: Date.now() });
+  return fromDisk;
 }
 
 /** Konten sumber untuk preview inline di panel tengah (embed browser / mode baca). */

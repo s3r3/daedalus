@@ -24,6 +24,9 @@ afterEach(async () => {
   workspace = undefined
 })
 
+// S6: daemon token for mutation routes, set by listen()/boot() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen() {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-prov-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-prov-ws-'))
@@ -42,6 +45,7 @@ async function listen() {
   })
   ctx.providersReady = Promise.resolve()
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
   return `http://127.0.0.1:${port}`
@@ -66,7 +70,7 @@ describe('GET /providers registry location', () => {
     const base = await listen()
     const created = await fetch(new URL('/providers', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ id: 'k', name: 'K', baseUrl: 'https://example.com/v1', apiKey: 'old', models: ['m1'] }),
     })
     expect(created.status).toBe(201)
@@ -74,7 +78,7 @@ describe('GET /providers registry location', () => {
     // Key rotation sends only the key: base URL, name, and models survive.
     const rotated = await fetch(new URL('/providers/k', base), {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ apiKey: 'new' }),
     })
     expect(rotated.status).toBe(200)
@@ -87,7 +91,7 @@ describe('GET /providers registry location', () => {
     // the stored secret (never blanked by accident).
     const renamed = await fetch(new URL('/providers/k', base), {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ name: 'K2', apiKey: '' }),
     })
     expect(renamed.status).toBe(200)
@@ -101,7 +105,7 @@ describe('GET /providers registry location', () => {
     const base = await listen()
     const created = await fetch(new URL('/providers', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ id: 'manual', name: 'Manual', baseUrl: 'https://example.com/v1', apiKey: 'k', models: ['m'] }),
     })
     expect(created.status).toBe(201)

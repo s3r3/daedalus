@@ -82,6 +82,9 @@ async function startFakeProvider(reply: (call: number) => FakeReply): Promise<st
   return `http://127.0.0.1:${port}/v1`
 }
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(fakeReply?: (call: number) => FakeReply): Promise<{ base: string; ctx: ReturnType<typeof createContext> }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-fastpath-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-fastpath-ws-'))
@@ -95,6 +98,7 @@ async function listen(fakeReply?: (call: number) => FakeReply): Promise<{ base: 
     ctx.providerStore.registry.upsert({ id: 'fake', name: 'Fake', baseUrl, apiKey: 'fake-key', models: ['fake-model'], defaultModel: 'fake-model', enabled: true })
   }
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   channel = attachWebSocket(ctx, server)
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
@@ -104,7 +108,7 @@ async function listen(fakeReply?: (call: number) => FakeReply): Promise<{ base: 
 async function postTask(base: string, body: Record<string, unknown>): Promise<{ status: number; body: { id: string; intent?: string } }> {
   const res = await fetch(new URL('/tasks', base), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     body: JSON.stringify(body),
   })
   return { status: res.status, body: (await res.json()) as { id: string; intent?: string } }

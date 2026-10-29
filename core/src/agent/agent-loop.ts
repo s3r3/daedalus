@@ -262,6 +262,8 @@ export class AgentLoop {
   readonly #providerBackoff: { baseMs: number; maxMs: number; retryAfterCapMs: number };
   /** Notice yang sudah di-drain tetapi request model gagal: dikirim ulang pada request berikutnya. */
   readonly #carriedNotices = new Map<string, string[]>();
+  /** Alasan stop non-pengguna per task (mis. 'watchdog'); dibersihkan saat run selesai. */
+  readonly #stopReasons = new Map<string, 'watchdog'>();
   readonly #spillCounters = new Map<string, number>();
   readonly #loopGuards = new Map<string, LoopGuard>();
   readonly #pendingGuidance = new Map<string, string>();
@@ -444,7 +446,12 @@ export class AgentLoop {
     return this.#modeController;
   }
 
-  stop(taskId: string): void {
+  /**
+   * Hentikan task. `reason` mencatat SIAPA yang menghentikan ('user' bawaan; 'watchdog' untuk task macet) — dipakai
+   * `cancelled_by` pada TASK_COMPLETED agar laporan akhir tidak menuduh pengguna.
+   */
+  stop(taskId: string, reason: 'user' | 'watchdog' = 'user'): void {
+    if (reason !== 'user') this.#stopReasons.set(taskId, reason);
     this.#cancelled.add(taskId);
     // Abort the in-flight model request for this task, if any. A Stop
     // press during a long model call must end the call now — the
@@ -464,6 +471,7 @@ export class AgentLoop {
       this.#pendingGuidance.delete(spec.id);
       this.#pendingImages.delete(spec.id);
       this.#carriedNotices.delete(spec.id);
+      this.#stopReasons.delete(spec.id);
       this.#modelFailures.delete(spec.id);
       this.#spillCounters.delete(spec.id);
       this.#taskMutated.delete(spec.id);
@@ -546,7 +554,7 @@ export class AgentLoop {
     let validationFailures = 0;
     const validationRecoveryLimit = Math.max(1, Math.min(3, this.#stopPolicy.max_errors));
     for (;;) {
-      if (this.#cancelled.has(state.id) || this.#store.isCancelRequested(state.id)) { state = { ...state, status: 'failed', last_error: 'aborted' }; await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: 'aborted', cancelled_by: 'user' }); this.#store.saveState(state.id, state); return state; }
+      if (this.#cancelled.has(state.id) || this.#store.isCancelRequested(state.id)) { state = { ...state, status: 'failed', last_error: 'aborted' }; await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: 'aborted', ...this.#cancelledBy({ ...state, last_error: 'aborted' }) }); this.#store.saveState(state.id, state); return state; }
       // Cooperative pause (Dae Captain pill ⏸): suspend at this safe
       // checkpoint until the pause marker is cleared. State is untouched —
       // resume continues the loop from here.
@@ -658,7 +666,7 @@ export class AgentLoop {
           // Stop saat validasi: jangan menyatakan sukses/gagal atas validasi yang terpotong — hentikan sebagai dibatalkan.
           if (this.#isCancelled(state.id)) {
             state = { ...state, status: 'failed', last_error: 'aborted' };
-            await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: 'aborted', cancelled_by: 'user' });
+            await this.#emit(state.id, undefined, 'TASK_COMPLETED', { state, outcome: 'failed', reason: 'aborted', ...this.#cancelledBy({ ...state, last_error: 'aborted' }) });
             this.#store.saveState(state.id, state);
             return state;
           }
@@ -2119,8 +2127,9 @@ export class AgentLoop {
    * `last_error: 'aborted'` dipakai untuk DUA hal yang berbeda: Stop dari pengguna, dan balasan model yang diawali
    * "stop". Payload TASK_COMPLETED membawa `cancelled_by` supaya laporan akhir tidak menuduh pengguna atas keputusan model.
    */
-  #cancelledBy(state: TaskState): { cancelled_by?: 'user' | 'model' } {
+  #cancelledBy(state: TaskState): { cancelled_by?: 'user' | 'model' | 'watchdog' } {
     if (state.last_error !== 'aborted') return {};
+    if (this.#stopReasons.get(state.id) === 'watchdog') return { cancelled_by: 'watchdog' };
     return { cancelled_by: this.#isCancelled(state.id) ? 'user' : 'model' };
   }
 

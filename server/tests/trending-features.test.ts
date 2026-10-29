@@ -73,6 +73,9 @@ async function startModelServer(script: Array<{ tool: string; args: unknown } | 
   return `http://127.0.0.1:${(modelServer.address() as AddressInfo).port}/v1`;
 }
 
+// S6: daemon token for mutation routes, set by listen()/boot() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function startApp(workspace: string, baseUrl?: string): Promise<{ base: string; providerStore: ProviderRegistryStore }> {
   const home = temp('daedalus-server-home-');
   const settings = loadSettings({
@@ -90,6 +93,7 @@ async function startApp(workspace: string, baseUrl?: string): Promise<{ base: st
     providerStore,
   });
   app = createApp(ctx);
+  daemonToken = ctx.daemonToken ?? '';
   await new Promise<void>((resolve) => app?.listen(0, '127.0.0.1', resolve));
   return { base: `http://127.0.0.1:${(app.address() as AddressInfo).port}`, providerStore };
 }
@@ -133,6 +137,7 @@ describe('trending features — server', () => {
       providerStore: new ProviderRegistryStore(join(home, 'providers')),
     });
     app = createApp(ctx);
+  daemonToken = ctx.daemonToken ?? '';
     await new Promise<void>((resolve) => app?.listen(0, '127.0.0.1', resolve));
     const base = `http://127.0.0.1:${(app.address() as AddressInfo).port}`;
     const health = await json<{ workspace_root: string }>(await fetch(`${base}/health`));
@@ -146,7 +151,7 @@ describe('trending features — server', () => {
 
     const ok = await fetch(`${base}/review`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ diff: 'diff --git a/src/pay.ts b/src/pay.ts\n+transfer(amount)' }),
     });
     expect(ok.status).toBe(200);
@@ -154,7 +159,7 @@ describe('trending features — server', () => {
     expect(review.source).toBe('provided');
     expect(review.findings).toEqual([{ severity: 'high', file: 'src/pay.ts', line: 42, message: 'amount is not validated before the transfer' }]);
 
-    const empty = await fetch(`${base}/review`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    const empty = await fetch(`${base}/review`, { method: 'POST', headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) }, body: '{}' });
     expect(empty.status).toBe(200);
     const emptyReview = await json<{ findings: unknown[]; raw: string }>(empty);
     expect(emptyReview.findings).toEqual([]);
@@ -170,7 +175,7 @@ describe('trending features — server', () => {
 
     const bad = await fetch(`${base}/tasks`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ goal: 'x', isolation: 'bogus' }),
     });
     expect(bad.status).toBe(400);
@@ -178,7 +183,7 @@ describe('trending features — server', () => {
 
     const created = await fetch(`${base}/tasks`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ goal: 'Create isolated.txt\ndone: isolated.txt exists', isolation: 'worktree', auto_approve: true }),
     });
     expect(created.status).toBe(201);

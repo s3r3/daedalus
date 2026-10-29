@@ -29,6 +29,9 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 function listen(workspace: string, home: string): Promise<{ base: string; ctx: ReturnType<typeof createContext> }> {
   const settings: Settings = {
     llm: { baseUrl: 'http://127.0.0.1:1/v1', apiKey: '', model: '', models: [], modelStrategy: 'failover', timeoutMs: null },
@@ -41,6 +44,7 @@ function listen(workspace: string, home: string): Promise<{ base: string; ctx: R
   };
   const ctx = createContext({ settings, store: new TaskStore(join(home, 'state')), bus: new EventBus(), cwd: workspace });
   app = createApp(ctx);
+  daemonToken = ctx.daemonToken ?? '';
   channel = attachWebSocket(ctx, app);
   return new Promise((resolve) => {
     app?.listen(0, '127.0.0.1', () => {
@@ -64,7 +68,7 @@ async function json<T>(res: Response): Promise<T> {
 function post(base: string, path: string, body: unknown): Promise<Response> {
   return fetch(new URL(path, base), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     body: JSON.stringify(body),
   });
 }

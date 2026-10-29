@@ -40,7 +40,8 @@ async function listen(): Promise<{ base: string; token: string }> {
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
   // createApp mints the daemon token; restore is a sensitive route and
-  // requires it (unlike cancel/pause, which are open by design).
+  // requires it (S6: only cancel is exempt from the token guard; pause
+  // requires it too).
   return { base: `http://127.0.0.1:${port}`, token: ctx.daemonToken ?? '' }
 }
 

@@ -27,11 +27,15 @@ afterEach(async () => {
   workspace = undefined
 })
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(): Promise<{ base: string; wsUrl: string; ctx: AppContext }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-terminals-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-terminals-ws-'))
   ctx = createContext({ store: new TaskStore(join(tmp, 'state')), bus: new EventBus(), cwd: workspace })
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   channel = attachWebSocket(ctx, server)
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
@@ -52,7 +56,7 @@ async function waitFor<T>(fn: () => Promise<T>, predicate: (value: T) => boolean
 async function createTerminal(base: string, kind?: string): Promise<TerminalSession> {
   const res = await fetch(new URL('/terminals', base), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     body: JSON.stringify({ root: workspace, ...(kind ? { kind } : {}) }),
   })
   expect(res.status).toBe(201)
@@ -62,7 +66,7 @@ async function createTerminal(base: string, kind?: string): Promise<TerminalSess
 async function postInput(base: string, id: string, data: string): Promise<number> {
   const res = await fetch(new URL(`/terminals/${id}/input`, base), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     body: JSON.stringify({ data }),
   })
   return res.status
@@ -112,7 +116,7 @@ describe('terminal sessions', () => {
       expect(list.terminals.find((t) => t.id === sleeper.id)?.status).toBe('running')
 
       // DELETE kills the sleeper (and only the sleeper) and forgets it.
-      const del = await fetch(new URL(`/terminals/${sleeper.id}`, base), { method: 'DELETE' })
+      const del = await fetch(new URL(`/terminals/${sleeper.id}`, base), { method: 'DELETE', headers: { ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) } })
       expect(del.status).toBe(200)
       const deleted = (await del.json()) as { killed: boolean; terminal: TerminalSession }
       expect(deleted.killed).toBe(true)
@@ -148,11 +152,11 @@ describe('terminal sessions', () => {
       expect(await postInput(base, agent.id, 'echo nope\n')).toBe(403)
       const signal = await fetch(new URL(`/terminals/${agent.id}/signal`, base), {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
         body: JSON.stringify({ signal: 'SIGINT' }),
       })
       expect(signal.status).toBe(403)
-      const del = await fetch(new URL(`/terminals/${agent.id}`, base), { method: 'DELETE' })
+      const del = await fetch(new URL(`/terminals/${agent.id}`, base), { method: 'DELETE', headers: { ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) } })
       expect(del.status).toBe(403)
 
       const list = (await (await fetch(new URL(`/terminals?root=${encodeURIComponent(workspace!)}`, base))).json()) as { terminals: TerminalSession[] }

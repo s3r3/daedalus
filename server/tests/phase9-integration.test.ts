@@ -90,6 +90,9 @@ async function startFakeProvider(): Promise<string> {
   return `http://127.0.0.1:${address.port}/v1`;
 }
 
+// S6: daemon token for mutation routes, set by listen()/boot() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(workspace: string, home: string): Promise<string> {
   const settings: Settings = {
     llm: { baseUrl: 'http://127.0.0.1:1/v1', apiKey: '', model: '', models: [], modelStrategy: 'failover', timeoutMs: null },
@@ -101,6 +104,7 @@ async function listen(workspace: string, home: string): Promise<string> {
   };
   const ctx = createContext({ settings, store: new TaskStore(join(home, 'state')), bus: new EventBus(), cwd: workspace });
   app = createApp(ctx);
+  daemonToken = ctx.daemonToken ?? '';
   channel = attachWebSocket(ctx, app);
   await new Promise<void>((resolve) => app?.listen(0, '127.0.0.1', resolve));
   const { port } = app.address() as AddressInfo;
@@ -135,14 +139,14 @@ describe('Phase 9 — CLI/Web parity through the shared core', () => {
 
     const providerRes = await fetch(new URL('/providers', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ id: 'fake', name: 'Fake', baseUrl: fakeBase, apiKey: 'fake-key', models: ['fake-model'] }),
     });
     expect(providerRes.status).toBe(201);
 
     const createdRes = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({
         goal: 'Create the app',
         repo_path: webWorkspace,

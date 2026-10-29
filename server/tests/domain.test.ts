@@ -55,6 +55,9 @@ async function startFakeProvider(): Promise<string> {
   return `http://127.0.0.1:${port}/v1`
 }
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(): Promise<{ base: string }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-domain-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-domain-ws-'))
@@ -65,6 +68,7 @@ async function listen(): Promise<{ base: string }> {
   const baseUrl = await startFakeProvider()
   ctx.providerStore.registry.upsert({ id: 'fake', name: 'Fake', baseUrl, apiKey: 'fake-key', models: ['fake-model'], defaultModel: 'fake-model', enabled: true })
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   channel = attachWebSocket(ctx, server)
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
@@ -74,7 +78,7 @@ async function listen(): Promise<{ base: string }> {
 async function postTask(base: string, body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(new URL('/tasks', base), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     body: JSON.stringify(body),
   })
   return { status: res.status, body: (await res.json()) as Record<string, unknown> }
