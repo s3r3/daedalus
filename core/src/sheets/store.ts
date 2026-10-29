@@ -153,7 +153,23 @@ export type WorkbookCheckpoint = {
 async function snapshotWorkbookCheckpoint(root: string, previousText: string): Promise<void> {
   const dir = join(root, '.daedalus', 'workbook-history');
   await mkdir(dir, { recursive: true });
-  const name = `${Date.now()}-${randomUUID().slice(0, 6)}.json`;
+  // Monotonic names: listWorkbookCheckpoints sorts filenames reversed
+  // (newest-first), and the old Date.now() prefix collides when two saves
+  // land in the same millisecond — then the random suffix decides the
+  // order (~50% wrong, flaky test). Clamp to one millisecond past the
+  // newest existing snapshot so names strictly increase and listing
+  // order is deterministic.
+  let maxExisting = 0;
+  try {
+    for (const f of await readdir(dir)) {
+      if (!f.endsWith('.json')) continue;
+      const ms = Number(f.split('-')[0]);
+      if (Number.isFinite(ms)) maxExisting = Math.max(maxExisting, ms);
+    }
+  } catch {
+    // Empty/unreadable dir: no existing snapshot to beat.
+  }
+  const name = `${Math.max(Date.now(), maxExisting + 1)}-${randomUUID().slice(0, 6)}.json`;
   await writeFile(join(dir, name), previousText, 'utf8');
   const entries = (await readdir(dir)).filter((f) => f.endsWith('.json')).sort();
   for (const stale of entries.slice(0, Math.max(0, entries.length - MAX_WORKBOOK_CHECKPOINTS))) {
