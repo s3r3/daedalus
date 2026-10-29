@@ -235,6 +235,7 @@ export {
 
 export {
   DEFAULT_TOOLS,
+  FETCH_URL_DNS_TIMEOUT_MS,
   FETCH_URL_MAX_BODY_CHARS,
   FETCH_URL_MAX_CHARS,
   FETCH_URL_MAX_REDIRECTS,
@@ -289,6 +290,7 @@ export {
   htmlToText,
   imageDimensions,
   isBlockedFetchHost,
+  isBlockedIp,
   listDirTool,
   mergeImageResults,
   parseOpenverseResults,
@@ -316,6 +318,7 @@ export {
   type DownloadFetchImpl,
   type DownloadFetchResponse,
   type FetchUrlImpl,
+  type FetchUrlLookup,
   type FetchUrlResponse,
   type ImageSearchFetchImpl,
   type ImageSearchResult,

@@ -10,6 +10,7 @@ import {
   isToolVisible,
   validateFetchTarget,
   type FetchUrlImpl,
+  type FetchUrlLookup,
   type FetchUrlResponse,
   type ToolExecutionContext,
 } from '../src/index.ts';
@@ -38,6 +39,9 @@ function stubFetch(handler: (url: string) => FetchUrlResponse | Promise<FetchUrl
   };
   return { impl, calls };
 }
+
+/** DNS stub for the pre-existing tests: every hostname resolves publicly, so no test touches the network. */
+const publicLookup: FetchUrlLookup = async () => [{ address: '93.184.216.34' }];
 
 describe('htmlToText extraction', () => {
   test('strips scripts/styles/tags, breaks blocks into lines, decodes entities', () => {
@@ -82,7 +86,7 @@ describe('fetch_url SSRF guard', () => {
 
   test('the tool refuses private targets and bad schemes without fetching', async () => {
     const { impl, calls } = stubFetch(() => stubResponse(200, 'secret'));
-    const tool = createFetchUrlTool({ fetchImpl: impl });
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: publicLookup });
 
     const loopback = await tool.execute({ url: 'http://127.0.0.1:8080/admin' }, CTX);
     expect(loopback.status).toBe('denied');
@@ -108,7 +112,7 @@ describe('fetch_url SSRF guard', () => {
         ? stubResponse(302, '', { location: 'http://169.254.169.254/latest/meta-data/' })
         : stubResponse(200, 'secret')
     ));
-    const tool = createFetchUrlTool({ fetchImpl: impl });
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: publicLookup });
     const result = await tool.execute({ url: 'https://docs.example.com/start' }, CTX);
     expect(result.status).toBe('denied');
     expect(result.meta.reason).toBe('private_host');
@@ -124,7 +128,7 @@ describe('fetch_url fetching', () => {
       '<html><body><h1>Getting started</h1><script>track()</script><p>Install with <b>pip install django</b>.</p></body></html>',
       { 'content-type': 'text/html; charset=utf-8' },
     ));
-    const tool = createFetchUrlTool({ fetchImpl: impl });
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: publicLookup });
     const result = await tool.execute({ url: 'https://docs.example.com/start' }, CTX);
     expect(result.status).toBe('ok');
     expect(result.output).toContain('Fetched https://docs.example.com/start (HTTP 200');
@@ -136,7 +140,7 @@ describe('fetch_url fetching', () => {
 
   test('passes plain text and markdown through verbatim', async () => {
     const { impl } = stubFetch(() => stubResponse(200, '# Install\n\nRun `make docs` & read <carefully>.\n', { 'content-type': 'text/markdown' }));
-    const tool = createFetchUrlTool({ fetchImpl: impl });
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: publicLookup });
     const result = await tool.execute({ url: 'https://docs.example.com/guide.md' }, CTX);
     expect(result.status).toBe('ok');
     expect(result.output).toContain('# Install\n\nRun `make docs` & read <carefully>.');
@@ -144,7 +148,7 @@ describe('fetch_url fetching', () => {
 
   test('caps long pages at 12,000 chars with an explicit truncation note', async () => {
     const { impl } = stubFetch(() => stubResponse(200, 'a'.repeat(13_500), { 'content-type': 'text/plain' }));
-    const tool = createFetchUrlTool({ fetchImpl: impl });
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: publicLookup });
     const result = await tool.execute({ url: 'https://docs.example.com/huge' }, CTX);
     expect(result.status).toBe('ok');
     expect(result.truncated).toBe(true);
@@ -164,7 +168,7 @@ describe('fetch_url fetching', () => {
       if (!page) throw new Error(`unexpected fetch ${url}`);
       return page;
     });
-    const tool = createFetchUrlTool({ fetchImpl: impl });
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: publicLookup });
     const result = await tool.execute({ url: 'https://docs.example.com/a' }, CTX);
     expect(result.status).toBe('ok');
     expect(result.output).toContain('final docs');
@@ -175,7 +179,7 @@ describe('fetch_url fetching', () => {
 
   test('a 4th redirect is refused as too many redirects', async () => {
     const { impl, calls } = stubFetch(() => stubResponse(301, '', { location: 'https://docs.example.com/next' }));
-    const tool = createFetchUrlTool({ fetchImpl: impl });
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: publicLookup });
     const result = await tool.execute({ url: 'https://docs.example.com/next' }, CTX);
     expect(result.status).toBe('error');
     expect(result.meta.reason).toBe('too_many_redirects');
@@ -184,7 +188,7 @@ describe('fetch_url fetching', () => {
 
   test('HTTP errors are typed errors naming the status', async () => {
     const { impl } = stubFetch(() => stubResponse(404, 'nope', { 'content-type': 'text/html' }));
-    const tool = createFetchUrlTool({ fetchImpl: impl });
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: publicLookup });
     const result = await tool.execute({ url: 'https://docs.example.com/missing' }, CTX);
     expect(result.status).toBe('error');
     expect(result.output).toContain('HTTP 404');
@@ -194,7 +198,7 @@ describe('fetch_url fetching', () => {
 
   test('binary content types are refused as unreadable', async () => {
     const { impl } = stubFetch(() => stubResponse(200, 'binary', { 'content-type': 'application/octet-stream' }));
-    const tool = createFetchUrlTool({ fetchImpl: impl });
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: publicLookup });
     const result = await tool.execute({ url: 'https://docs.example.com/manual.pdf' }, CTX);
     expect(result.status).toBe('error');
     expect(result.meta.reason).toBe('unreadable_content_type');
@@ -208,7 +212,7 @@ describe('fetch_url fetching', () => {
         reject(error);
       });
     });
-    const tool = createFetchUrlTool({ fetchImpl: hanging, timeoutMs: 25 });
+    const tool = createFetchUrlTool({ fetchImpl: hanging, timeoutMs: 25, lookup: publicLookup });
     const result = await tool.execute({ url: 'https://docs.example.com/slow' }, CTX);
     expect(result.status).toBe('timeout');
     expect(result.meta.reason).toBe('timeout');
@@ -217,7 +221,7 @@ describe('fetch_url fetching', () => {
 
   test('a network failure is an error result, not a throw', async () => {
     const failing: FetchUrlImpl = async () => { throw new Error('getaddrinfo ENOTFOUND docs.example.com'); };
-    const tool = createFetchUrlTool({ fetchImpl: failing });
+    const tool = createFetchUrlTool({ fetchImpl: failing, lookup: publicLookup });
     const result = await tool.execute({ url: 'https://docs.example.com/' }, CTX);
     expect(result.status).toBe('error');
     expect(result.meta.reason).toBe('fetch_failed');
@@ -244,5 +248,89 @@ describe('fetch_url availability', () => {
     const tool = createDefaultRegistry().get('fetch_url');
     expect(tool.mutating).toBe(false);
     expect(tool.inputSchema).toMatchObject({ required: ['url'] });
+  });
+});
+
+describe('fetch_url SSRF guard, ported from server ssrf.ts (Q7)', () => {
+  const privateLookup: FetchUrlLookup = async () => [{ address: '127.0.0.1' }];
+
+  test('blocks IPv6 disguises and CGNAT literals (the proven bypasses)', () => {
+    for (const host of [
+      '100.64.0.1', '100.127.255.255',
+      '[::ffff:127.0.0.1]', '[::ffff:7f00:1]', '[::ffff:a9fe:a9fe]', '[::ffff:0a00:0001]',
+      '::ffff:127.0.0.1', '::10.0.0.1', '64:ff9b::7f00:1', '2002:0a00:0001::', '2002:7f00:0001::',
+    ]) {
+      expect(isBlockedFetchHost(host), host).toBe(true);
+    }
+  });
+
+  test('keeps public IPv6 and public IPv4 allowed', () => {
+    for (const host of ['2001:4860:4860::8888', '2606:4700:4700::1111', '1.1.1.1', '93.184.216.34']) {
+      expect(isBlockedFetchHost(host), host).toBe(false);
+    }
+  });
+
+  test('blocks internal hostnames without over-blocking suffixes', () => {
+    for (const host of ['foo.internal', 'foo.lan', 'foo.home', 'foo.corp', 'foo.localdomain', 'foo.intranet', 'metadata.google.internal']) {
+      expect(isBlockedFetchHost(host), host).toBe(true);
+    }
+    for (const host of ['example.com', 'myhome.example.com', 'internal.example.com']) {
+      expect(isBlockedFetchHost(host), host).toBe(false);
+    }
+  });
+
+  test('the tool refuses a hostname that resolves to a private address, without fetching', async () => {
+    const { impl, calls } = stubFetch(() => stubResponse(200, 'secret'));
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: privateLookup });
+    const result = await tool.execute({ url: 'https://docs.example.com/secret' }, CTX);
+    expect(result.status).toBe('denied');
+    expect(result.meta.reason).toBe('private_host');
+    expect(calls).toEqual([]);
+  });
+
+  test('a hostname resolving to a public address is fetched', async () => {
+    const { impl } = stubFetch(() => stubResponse(200, 'public docs', { 'content-type': 'text/plain' }));
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: publicLookup });
+    const result = await tool.execute({ url: 'https://docs.example.com/start' }, CTX);
+    expect(result.status).toBe('ok');
+  });
+
+  test('a redirect to a hostname resolving privately is refused', async () => {
+    const { impl, calls } = stubFetch((url) => (
+      url.startsWith('https://docs.example.com/')
+        ? stubResponse(302, '', { location: 'https://evil.example.com/x' })
+        : stubResponse(200, 'secret')
+    ));
+    const lookup: FetchUrlLookup = async (host) => [{ address: host === 'evil.example.com' ? '10.1.2.3' : '93.184.216.34' }];
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup });
+    const result = await tool.execute({ url: 'https://docs.example.com/start' }, CTX);
+    expect(result.status).toBe('denied');
+    expect(result.meta.reason).toBe('private_host');
+    expect(calls).toEqual(['https://docs.example.com/start']);
+  });
+
+  test('a DNS failure is a typed denial, not a fetch', async () => {
+    const { impl, calls } = stubFetch(() => stubResponse(200, 'secret'));
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: async () => { throw new Error('getaddrinfo ENOTFOUND'); } });
+    const result = await tool.execute({ url: 'https://docs.example.com/start' }, CTX);
+    expect(result.status).toBe('denied');
+    expect(result.meta.reason).toBe('dns_failed');
+    expect(calls).toEqual([]);
+  });
+
+  test('an allow-listed hostname resolving privately is fetched', async () => {
+    const { impl } = stubFetch(() => stubResponse(200, 'intranet docs', { 'content-type': 'text/plain' }));
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: privateLookup, allowHosts: ['docs.example.com'] });
+    const result = await tool.execute({ url: 'https://docs.example.com/start' }, CTX);
+    expect(result.status).toBe('ok');
+  });
+
+  test('the tool refuses an IPv6-mapped loopback literal without fetching', async () => {
+    const { impl, calls } = stubFetch(() => stubResponse(200, 'secret'));
+    const tool = createFetchUrlTool({ fetchImpl: impl, lookup: publicLookup });
+    const result = await tool.execute({ url: 'http://[::ffff:127.0.0.1]/admin' }, CTX);
+    expect(result.status).toBe('denied');
+    expect(result.meta.reason).toBe('private_host');
+    expect(calls).toEqual([]);
   });
 });

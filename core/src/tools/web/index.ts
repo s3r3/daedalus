@@ -1,3 +1,5 @@
+import { lookup as dnsLookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import type { ToolDefinition } from '../registry.ts';
 import type { ToolResult } from '../../contracts.ts';
 
@@ -11,13 +13,15 @@ import type { ToolResult } from '../../contracts.ts';
  * docs URL from its own knowledge, and a failed fetch falls back to
  * probing `<generator> --help`, never to invented install steps.
  *
- * Safety: http/https only; literal private/loopback/link-local hosts are
- * refused, and every redirect target is re-validated before it is
- * followed (max 3 hops). DNS is NOT inspected — the codebase has no DNS
- * seam, so a public hostname that resolves to a private address (DNS
- * rebinding) is outside the implemented layer; the block list covers
- * literal hosts plus redirect targets, which is the layer these tools
- * conventionally enforce.
+ * Safety: http/https only; private/loopback/link-local/CGNAT hosts are
+ * refused — including IPv6 disguises (mapped/compatible/NAT64/6to4) and
+ * internal names — and every redirect target is re-validated before it
+ * is followed (max 3 hops). Hostnames are also resolved (DNS) and
+ * refused when they point at a private address, so DNS rebinding is
+ * covered too (the lookup is injectable for tests; the default uses the
+ * system resolver with a 3s cap). Operator-approved hosts can be
+ * allow-listed via DAEDALUS_SSRF_ALLOW_HOSTS for the DNS check only —
+ * literal private addresses are never allow-listed.
  */
 
 /** Hard cap on returned text; the rest is dropped with an explicit note. */
@@ -27,6 +31,10 @@ export const FETCH_URL_TIMEOUT_MS = 15_000;
 export const FETCH_URL_MAX_REDIRECTS = 3;
 /** Bodies beyond this are refused before extraction (memory guard). */
 export const FETCH_URL_MAX_BODY_CHARS = 2_000_000;
+/** Cap on a single DNS resolution inside the guard (mirrors server ssrf.ts). */
+export const FETCH_URL_DNS_TIMEOUT_MS = 3_000;
+/** Injectable DNS seam (tests resolve fake hosts — no test touches the network). */
+export type FetchUrlLookup = (hostname: string) => Promise<Array<{ address: string }>>;
 
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
@@ -39,33 +47,114 @@ export type FetchUrlResponse = {
 /** Injectable fetch seam (tests drive redirects, timeouts, bodies — never the network). */
 export type FetchUrlImpl = (url: string, init: { redirect: 'manual'; signal: AbortSignal }) => Promise<FetchUrlResponse>;
 
+/** IPv4 ranges blocked by the SSRF guard (ported from server ssrf.ts). */
+function isBlockedIPv4(o: number[]): boolean {
+  const [a, b, c] = [o[0]!, o[1]!, o[2]!];
+  if (a === 0 || a === 10 || a === 127) return true; // unspecified, private, loopback
+  if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT 100.64.0.0/10
+  if (a === 169 && b === 254) return true; // link-local (+ cloud metadata)
+  if (a === 172 && b >= 16 && b <= 31) return true; // private
+  if (a === 192 && b === 168) return true; // private
+  if (a === 192 && b === 0 && c === 0) return true; // IETF protocol assignments
+  if (a === 198 && (b === 18 || b === 19)) return true; // benchmarking
+  if (a >= 224) return true; // multicast + reserved + broadcast
+  return false;
+}
+
+/** Parse an IPv6 literal into 8 groups (handles embedded dotted IPv4 and zone ids). */
+function parseIPv6(ip: string): number[] | undefined {
+  let s = ip.split('%')[0]!.toLowerCase();
+  const v4 = /(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(s);
+  if (v4) {
+    const o = [v4[1], v4[2], v4[3], v4[4]].map(Number);
+    if (o.some((n) => n > 255)) return undefined;
+    s = s.slice(0, s.length - v4[0].length) + ((o[0]! << 8) | o[1]!).toString(16) + ':' + ((o[2]! << 8) | o[3]!).toString(16);
+  }
+  const halves = s.split('::');
+  if (halves.length > 2) return undefined;
+  const head = halves[0] ? halves[0].split(':') : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(':') : [];
+  if (halves.length === 1 && head.length !== 8) return undefined;
+  const fill = 8 - head.length - tail.length;
+  if (halves.length === 2 && fill < 0) return undefined;
+  const groups = [...head, ...(halves.length === 2 ? Array(fill).fill('0') : []), ...tail].map((g) => parseInt(g || '0', 16));
+  return groups.length === 8 && groups.every((n) => Number.isInteger(n) && n >= 0 && n <= 0xffff) ? groups : undefined;
+}
+
+/** IPv6 ranges blocked by the SSRF guard (ported from server ssrf.ts). */
+function isBlockedIPv6(groups: number[]): boolean {
+  const g = groups;
+  const v4of = (hi: number, lo: number) => [hi >> 8, hi & 255, lo >> 8, lo & 255];
+  if (g.every((n) => n === 0)) return true; // ::
+  if (g.slice(0, 7).every((n) => n === 0) && g[7] === 1) return true; // ::1
+  if (g.slice(0, 5).every((n) => n === 0) && g[5] === 0xffff) return isBlockedIPv4(v4of(g[6]!, g[7]!)); // ::ffff:a.b.c.d (mapped)
+  if (g.slice(0, 6).every((n) => n === 0)) return isBlockedIPv4(v4of(g[6]!, g[7]!)); // ::a.b.c.d (compatible)
+  if (g[0] === 0x64 && g[1] === 0xff9b && g.slice(2, 6).every((n) => n === 0)) return isBlockedIPv4(v4of(g[6]!, g[7]!)); // NAT64
+  if (g[0] === 0x2002) return isBlockedIPv4(v4of(g[1]!, g[2]!)); // 6to4
+  if ((g[0]! & 0xffc0) === 0xfe80) return true; // link-local
+  if ((g[0]! & 0xfe00) === 0xfc00) return true; // ULA
+  if ((g[0]! & 0xff00) === 0xff00) return true; // multicast
+  return false;
+}
+
+/** Is this literal IP address blocked? Unparseable IPv6 fails closed. */
+export function isBlockedIp(address: string): boolean {
+  const bare = address.replace(/^\[|\]$/g, '').split('%')[0]!;
+  if (isIP(bare) === 4) return isBlockedIPv4(bare.split('.').map(Number));
+  if (isIP(bare) === 6) {
+    const groups = parseIPv6(bare);
+    return groups ? isBlockedIPv6(groups) : true;
+  }
+  return false;
+}
+
+const BLOCKED_INTERNAL_NAME = /(^|\.)(localhost|local|localdomain|internal|intranet|lan|home|corp)$/;
+
+/** Expand an all-numeric/hex hostname (dotted, short, hex, integer form) to 4 octets, inet_aton-style. */
+function numericHostToOctets(parts: string[]): number[] | undefined {
+  const values = parts.map((part) => (part.toLowerCase().startsWith('0x') ? parseInt(part, 16) : Number(part)));
+  if (values.some((n) => !Number.isInteger(n) || n < 0)) return undefined;
+  if (values.length === 1) {
+    const v = values[0]!;
+    if (v > 0xffffffff) return undefined;
+    return [(v >>> 24) & 0xff, (v >>> 16) & 0xff, (v >>> 8) & 0xff, v & 0xff];
+  }
+  if (values.length === 2) {
+    const [a, b] = values as [number, number];
+    if (a > 255 || b > 0xffffff) return undefined;
+    return [a, (b >>> 16) & 0xff, (b >>> 8) & 0xff, b & 0xff];
+  }
+  if (values.length === 3) {
+    const [a, b, c] = values as [number, number, number];
+    if (a > 255 || b > 255 || c > 0xffff) return undefined;
+    return [a, b, (c >>> 8) & 0xff, c & 0xff];
+  }
+  if (values.length === 4) {
+    if (values.some((n) => n! > 255)) return undefined;
+    return values as number[];
+  }
+  return undefined;
+}
+
 /**
- * Is this hostname a literal private/loopback/link-local address (or
- * `localhost`)? Handles dotted IPv4, short/obfuscated IPv4 forms the URL
- * parser passes through (127.1, 0x7f.1, integer form), and IPv6 literals.
- * Public hostnames are allowed — DNS resolution is not inspected.
+ * Is this hostname a literal private/loopback/link-local/CGNAT address,
+ * an internal name, or an IPv6 disguise of one (mapped/compatible/NAT64/
+ * 6to4)? Keeps core's short/obfuscated IPv4 handling (127.1, 0x7f.1,
+ * integer form) and adds the server guard's ranges and disguises.
+ * Public hostnames are allowed here — DNS resolution is a separate,
+ * async step in the tool itself.
  */
 export function isBlockedFetchHost(rawHostname: string): boolean {
   const host = rawHostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
   if (host.length === 0) return true;
   if (host === 'localhost' || host.endsWith('.localhost')) return true;
-  if (host.includes(':')) {
-    // IPv6 literal: loopback, unspecified, link-local (fe80::/10), ULA (fc00::/7).
-    return host === '::1'
-      || host === '::'
-      || host.startsWith('fe8') || host.startsWith('fe9') || host.startsWith('fea') || host.startsWith('feb')
-      || host.startsWith('fc') || host.startsWith('fd');
-  }
+  if (BLOCKED_INTERNAL_NAME.test(host) || host === 'metadata.google.internal') return true;
+  if (host.includes(':')) return isBlockedIp(host);
   const parts = host.split('.');
   if (parts.every((part) => /^(0x[0-9a-f]+|\d+)$/i.test(part))) {
-    const values = parts.map((part) => (part.toLowerCase().startsWith('0x') ? parseInt(part, 16) : Number(part)));
-    // Single integer form (2130706433): the first octet is the top byte.
-    const first = values.length === 1 && values[0]! > 255 ? values[0]! >>> 24 : values[0]!;
-    const second = values.length === 1 ? (values[0]! >>> 16) & 0xff : values[1]!;
-    if (first === 127 || first === 10 || first === 0) return true;
-    if (first === 172 && second >= 16 && second <= 31) return true;
-    if (first === 192 && second === 168) return true;
-    if (first === 169 && second === 254) return true;
+    const octets = numericHostToOctets(parts);
+    // Malformed numeric host: fail closed (not a legitimate public host).
+    return octets ? isBlockedIPv4(octets) : true;
   }
   return false;
 }
@@ -148,14 +237,84 @@ export function capFetchedText(text: string, cap = FETCH_URL_MAX_CHARS): { text:
   };
 }
 
-export function createFetchUrlTool(options: { fetchImpl?: FetchUrlImpl; timeoutMs?: number } = {}): ToolDefinition {
+function envAllowHosts(): string[] {
+  return (process.env.DAEDALUS_SSRF_ALLOW_HOSTS ?? '').split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+}
+
+function hostAllowed(host: string, list: string[]): boolean {
+  return list.some((entry) => (entry.startsWith('*.') ? host.endsWith(entry.slice(1)) : host === entry));
+}
+
+class DnsAbortError extends Error {
+  constructor() { super('dns aborted'); this.name = 'DnsAbortError'; }
+}
+
+async function withTimeoutAndAbort<T>(p: Promise<T>, ms: number, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) throw new DnsAbortError();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let onAbort: (() => void) | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('dns timeout')), ms);
+        timer.unref?.();
+        onAbort = () => reject(new DnsAbortError());
+        signal.addEventListener('abort', onAbort, { once: true });
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+    if (onAbort) signal.removeEventListener('abort', onAbort);
+  }
+}
+
+/**
+ * DNS half of the SSRF guard: resolve a non-literal hostname and refuse
+ * it when any address is private (DNS rebinding). Literal IPs skip
+ * resolution (already covered by validateFetchTarget) and allow-listed
+ * hosts skip it too — the allow-list never excuses a literal private
+ * address, only a hostname whose resolution the operator trusts.
+ */
+async function checkFetchTargetDns(url: URL, lookup: FetchUrlLookup, allowHosts: string[], signal: AbortSignal): Promise<{ ok: true } | { reason: string; detail: string }> {
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (isIP(host) !== 0) return { ok: true };
+  if (hostAllowed(host, allowHosts)) return { ok: true };
+  let addresses: string[];
+  try {
+    const resolved = await withTimeoutAndAbort(lookup(host), FETCH_URL_DNS_TIMEOUT_MS, signal);
+    addresses = resolved.map((r) => r.address);
+  } catch (error) {
+    if (error instanceof DnsAbortError) throw error;
+    return { reason: 'dns_failed', detail: `fetch_url: host ${host} could not be resolved` };
+  }
+  if (addresses.length === 0) return { reason: 'dns_failed', detail: `fetch_url: host ${host} has no addresses` };
+  const bad = addresses.find((a) => isBlockedIp(a));
+  if (bad) {
+    return { reason: 'private_host', detail: `fetch_url refuses ${host} (resolves to private address ${bad}) — fetch_url is for public documentation only` };
+  }
+  return { ok: true };
+}
+
+export type FetchUrlOptions = {
+  fetchImpl?: FetchUrlImpl;
+  timeoutMs?: number;
+  /** DNS seam for the SSRF guard (tests inject fake resolvers). Default: the system resolver. */
+  lookup?: FetchUrlLookup;
+  /** Hosts exempt from the DNS check only. Default: DAEDALUS_SSRF_ALLOW_HOSTS. */
+  allowHosts?: string[];
+};
+
+export function createFetchUrlTool(options: FetchUrlOptions = {}): ToolDefinition {
   const timeoutMs = options.timeoutMs ?? FETCH_URL_TIMEOUT_MS;
   const fetchImpl: FetchUrlImpl = options.fetchImpl ?? ((url, init) => fetch(url, init));
+  const lookup: FetchUrlLookup = options.lookup ?? ((h) => dnsLookup(h, { all: true }));
+  const allowHosts = options.allowHosts ?? envAllowHosts();
   return {
     name: 'fetch_url',
     description: [
       'Fetch a public web page (official documentation, install guides, API references) and return its readable text, so you can look up how to install or use a tool/framework instead of guessing from memory.',
-      'HTTP/HTTPS only; private/loopback addresses are refused. There is no search engine behind it — you supply the exact docs URL. Long pages are truncated with a note; fetch a more specific page/anchor then.',
+      'HTTP/HTTPS only; private/loopback addresses are refused, including hostnames that resolve to one. There is no search engine behind it — you supply the exact docs URL. Long pages are truncated with a note; fetch a more specific page/anchor then.',
       'If the fetch fails, fall back to probing `<generator> --help` with run_command — never invent install steps and present them as verified.',
     ].join(' '),
     mutating: false,
@@ -183,6 +342,24 @@ export function createFetchUrlTool(options: { fetchImpl?: FetchUrlImpl; timeoutM
       context.signal?.addEventListener('abort', onHostAbort, { once: true });
       try {
         for (let hop = 0; hop <= FETCH_URL_MAX_REDIRECTS; hop++) {
+          // DNS half of the guard, re-run per hop like the sync check.
+          try {
+            const dns = await checkFetchTargetDns(current, lookup, allowHosts, controller.signal);
+            if ('reason' in dns) {
+              return { call_id: '', status: 'denied', output: dns.detail, truncated: false, meta: { reason: dns.reason, url: raw } };
+            }
+          } catch (error) {
+            if (error instanceof DnsAbortError || controller.signal.aborted) {
+              return {
+                call_id: '',
+                status: 'timeout',
+                output: `fetch_url timed out after ${timeoutMs}ms fetching ${current.href} — try again, or fall back to probing the tool with \`--help\` via run_command.`,
+                truncated: false,
+                meta: { reason: 'timeout', url: raw },
+              };
+            }
+            throw error;
+          }
           let response: FetchUrlResponse;
           try {
             response = await fetchImpl(current.href, { redirect: 'manual', signal: controller.signal });
