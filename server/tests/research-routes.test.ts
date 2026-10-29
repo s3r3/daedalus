@@ -117,6 +117,9 @@ afterEach(async () => {
   workspace = undefined
 })
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(hooks: ResearchCoreHooks): Promise<{ base: string; root: string }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-research-srv-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-research-ws-'))
@@ -132,6 +135,7 @@ async function listen(hooks: ResearchCoreHooks): Promise<{ base: string; root: s
     },
   })
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
   return { base: `http://127.0.0.1:${port}`, root: workspace }
@@ -145,7 +149,7 @@ async function req(
 ): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(new URL(path, base), {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   })
   const text = await res.text()
@@ -304,6 +308,7 @@ describe('GET /research/report/:reportId/source/:sourceId/document', () => {
       },
     })
     server = createApp(ctx)
+    daemonToken = ctx.daemonToken ?? ''
     await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
     const { port } = server.address() as AddressInfo
     return `http://127.0.0.1:${port}`

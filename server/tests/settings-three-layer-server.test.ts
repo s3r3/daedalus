@@ -56,6 +56,9 @@ async function startFakeProvider(): Promise<string> {
   return `http://127.0.0.1:${port}/v1`
 }
 
+// S6: daemon token for mutation routes, set by listen()/boot() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(withFakeProvider = false): Promise<{ base: string }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-settings3-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-settings3-ws-'))
@@ -67,6 +70,7 @@ async function listen(withFakeProvider = false): Promise<{ base: string }> {
     ctx.providerStore.registry.upsert({ id: 'fake', name: 'Fake', baseUrl, apiKey: 'fake-key', models: ['fake-model'], defaultModel: 'fake-model', enabled: true })
   }
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   channel = attachWebSocket(ctx, server)
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
@@ -76,7 +80,7 @@ async function listen(withFakeProvider = false): Promise<{ base: string }> {
 async function patchSettings(base: string, body: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(new URL('/settings', base), {
     method: 'PATCH',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     body: JSON.stringify(body),
   })
   return { status: res.status, body: (await res.json()) as Record<string, unknown> }
@@ -255,7 +259,7 @@ describe('thinkingLevel on the session', () => {
     const { base } = await listen()
     let res = await fetch(new URL('/session', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ thinkingLevel: 'low' }),
     })
     expect(res.status).toBe(200)
@@ -263,7 +267,7 @@ describe('thinkingLevel on the session', () => {
 
     res = await fetch(new URL('/session', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ thinking_level: 'high' }),
     })
     expect(res.status).toBe(200)
@@ -274,7 +278,7 @@ describe('thinkingLevel on the session', () => {
     const { base } = await listen()
     const res = await fetch(new URL('/session', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ thinkingLevel: 'ultra' }),
     })
     expect(res.status).toBe(400)
@@ -285,7 +289,7 @@ describe('thinkingLevel on the session', () => {
     const { base } = await listen()
     let res = await fetch(new URL('/session', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ thinking: false }),
     })
     expect(res.status).toBe(200)
@@ -296,7 +300,7 @@ describe('thinkingLevel on the session', () => {
     // An explicit level wins over the boolean.
     res = await fetch(new URL('/session', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ thinking: false, thinkingLevel: 'high' }),
     })
     expect(res.status).toBe(200)
@@ -333,7 +337,7 @@ describe('POST /tasks — token budget and tool rules', () => {
     ]) {
       const res = await fetch(new URL('/tasks', base), {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
         body: JSON.stringify(body),
       })
       expect(res.status).toBe(201)
@@ -351,7 +355,7 @@ describe('POST /tasks — token budget and tool rules', () => {
     for (const token_budget of [0, -5, 1.5, 'lots']) {
       const res = await fetch(new URL('/tasks', base), {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
         body: JSON.stringify({ goal: 'budgeted work', token_budget }),
       })
       expect(res.status).toBe(400)
@@ -363,7 +367,7 @@ describe('POST /tasks — token budget and tool rules', () => {
     const { base } = await listen(true)
     const res = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({
         goal: 'locked-down work',
         domain: 'slide',
@@ -377,7 +381,7 @@ describe('POST /tasks — token budget and tool rules', () => {
 
     const camel = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ goal: 'more locked-down work', domain: 'slide', provider_id: 'fake', toolRules: { ask: ['write_file'] } }),
     })
     expect(camel.status).toBe(201)
@@ -389,7 +393,7 @@ describe('POST /tasks — token budget and tool rules', () => {
     for (const tool_rules of [{ deny: 'nope' }, { allow: [42] }, {}, 'nope', []] as unknown[]) {
       const res = await fetch(new URL('/tasks', base), {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
         body: JSON.stringify({ goal: 'ruled work', tool_rules }),
       })
       expect(res.status).toBe(400)
@@ -401,7 +405,7 @@ describe('POST /tasks — token budget and tool rules', () => {
     const { base } = await listen(true)
     const res = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ goal: 'override the model', domain: 'slide', provider_id: 'fake', model: 'one-shot-model' }),
     })
     expect(res.status).toBe(201)
@@ -414,14 +418,14 @@ describe('providers — contextWindows', () => {
     const { base } = await listen()
     let res = await fetch(new URL('/providers', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ name: 'Win', baseUrl: 'https://example.com/v1', contextWindows: { 'm1': 128000, ' m2 ': 64000 } }),
     })
     expect(res.status).toBe(201)
 
     res = await fetch(new URL('/providers', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ name: 'Win2', baseUrl: 'https://example.com/v1', context_windows: { 'm1': 32000 } }),
     })
     expect(res.status).toBe(201)
@@ -432,7 +436,7 @@ describe('providers — contextWindows', () => {
     for (const contextWindows of [{ 'm1': -5 }, { 'm1': 0 }, { 'm1': 1.5 }, { 'm1': '128000' }, 'lots', [{ 'm1': 8 }], { 'm1': Number.NaN }] as unknown[]) {
       const res = await fetch(new URL('/providers', base), {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
         body: JSON.stringify({ name: 'Bad', baseUrl: 'https://example.com/v1', contextWindows }),
       })
       expect(res.status).toBe(400)
@@ -444,7 +448,7 @@ describe('providers — contextWindows', () => {
     const { base } = await listen()
     const created = await fetch(new URL('/providers', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ name: 'Up', baseUrl: 'https://example.com/v1' }),
     })
     expect(created.status).toBe(201)
@@ -452,7 +456,7 @@ describe('providers — contextWindows', () => {
 
     const bad = await fetch(new URL(`/providers/${id}`, base), {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ contextWindows: { 'm1': -1 } }),
     })
     expect(bad.status).toBe(400)
@@ -460,7 +464,7 @@ describe('providers — contextWindows', () => {
 
     const ok = await fetch(new URL(`/providers/${id}`, base), {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ contextWindows: { 'm1': 200000 } }),
     })
     expect(ok.status).toBe(200)

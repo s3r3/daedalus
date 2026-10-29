@@ -46,6 +46,9 @@ async function waitStatus(base: string, search: string): Promise<PreviewStatus> 
   throw new Error('preview stayed rendering')
 }
 
+// S6: daemon token for mutation routes, set by listen()/boot() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 describe('Dokumen Pratinjau endpoints', () => {
   let ws: string
 
@@ -61,6 +64,7 @@ describe('Dokumen Pratinjau endpoints', () => {
     const ctx = createContext({ cwd: ws })
     ctx.dokumenPreview = new DokumenPreviewService(deps)
     const server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const addr = server.address()
     if (addr === null || typeof addr === 'string') throw new Error('no port')
@@ -111,7 +115,7 @@ describe('Dokumen Pratinjau endpoints', () => {
 
     const started = await fetch(`${base}/dokumen/preview`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: ws }),
     })
     expect(started.status).toBe(200)
@@ -156,7 +160,7 @@ describe('Dokumen Pratinjau endpoints', () => {
     await seedComposed()
     await fetch(`${base}/dokumen/preview`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: ws }),
     })
     const ready = await waitStatus(base, `root=${encodeURIComponent(ws)}`)
@@ -165,7 +169,7 @@ describe('Dokumen Pratinjau endpoints', () => {
     // Edit section prose via the same endpoint the web editor uses.
     const edited = await fetch(`${base}/dokumen/section`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: ws, id: 's1', prose: 'Isi bab 1 yang sudah diubah.' }),
     })
     expect(edited.status).toBe(200)
@@ -176,7 +180,7 @@ describe('Dokumen Pratinjau endpoints', () => {
 
     await fetch(`${base}/dokumen/preview`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: ws, kind: 'compose' }),
     })
     const refreshed = await waitStatus(base, `root=${encodeURIComponent(ws)}`)
@@ -209,7 +213,7 @@ describe('Dokumen Pratinjau endpoints', () => {
     await seedComposed()
     await fetch(`${base}/dokumen/preview`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: ws }),
     })
     const errored = await waitStatus(base, `root=${encodeURIComponent(ws)}`)
@@ -224,7 +228,7 @@ describe('Dokumen Pratinjau endpoints', () => {
     await writeDocument(ws, document)
     await fetch(`${base}/dokumen/preview`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: ws }),
     })
     const errored = await waitStatus(base, `root=${encodeURIComponent(ws)}`)
@@ -247,7 +251,7 @@ describe('Dokumen Pratinjau endpoints', () => {
     const before = (await readActiveDocument(ws))!
     await fetch(`${base}/dokumen/preview`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: ws }),
     })
     const ready = await waitStatus(base, `root=${encodeURIComponent(ws)}`)
@@ -269,7 +273,7 @@ describe('Dokumen Pratinjau endpoints', () => {
 
     await fetch(`${base}/dokumen/preview`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: ws, kind: 'style' }),
     })
     const errored = await waitStatus(base, `root=${encodeURIComponent(ws)}&kind=style`)
@@ -285,7 +289,7 @@ describe('Dokumen Pratinjau endpoints', () => {
 
     await fetch(`${base}/dokumen/preview`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: ws, kind: 'style' }),
     })
     const ready = await waitStatus(base, `root=${encodeURIComponent(ws)}&kind=style`)

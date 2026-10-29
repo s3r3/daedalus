@@ -25,11 +25,15 @@ function writeSkill(root: string, name: string, description: string): void {
   writeFileSync(join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\nBody of ${name}.`)
 }
 
+// S6: daemon token for mutation routes, set by listen()/boot() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(): Promise<string> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-toggle-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-toggle-ws-'))
   const ctx = createContext({ store: new TaskStore(join(tmp, 'state')), bus: new EventBus(), cwd: workspace })
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
   return `http://127.0.0.1:${port}`
@@ -47,7 +51,7 @@ async function statusSkills(base: string): Promise<SkillEntry[]> {
 async function toggle(base: string, body: unknown): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(new URL('/extensions/skills/toggle', base), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     body: JSON.stringify(body),
   })
   return { status: res.status, body: (await res.json()) as Record<string, unknown> }
@@ -92,7 +96,7 @@ describe('per-workspace skill toggling', () => {
     const create = (skills: string[]) =>
       fetch(new URL('/tasks', base), {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
         body: JSON.stringify({ goal: 'ship it', repo_path: workspace!, skills }),
       })
 

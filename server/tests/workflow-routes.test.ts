@@ -27,6 +27,9 @@ afterEach(async () => {
   workspace = undefined
 })
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(): Promise<{ base: string; home: string; ctx: ReturnType<typeof createContext> }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-workflow-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-workflow-ws-'))
@@ -58,6 +61,7 @@ async function listen(): Promise<{ base: string; home: string; ctx: ReturnType<t
   // so it is set directly — the registry stays empty for these tests.
   ctx.providersReady = Promise.resolve()
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
   return { base: `http://127.0.0.1:${port}`, home: join(workspace!, '.daedalus-test-home'), ctx }
@@ -66,7 +70,7 @@ async function listen(): Promise<{ base: string; home: string; ctx: ReturnType<t
 async function postChat(base: string, body: Record<string, unknown>) {
   const res = await fetch(new URL('/workflow/chat', base), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     body: JSON.stringify(body),
   })
   return { status: res.status, body: (await res.json()) as Record<string, unknown> }

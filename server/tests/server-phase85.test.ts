@@ -32,6 +32,9 @@ afterEach(async () => {
   webRoot = undefined;
 });
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(options: { webDist?: string } = {}): Promise<{ base: string; ctx: ReturnType<typeof createContext> }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-server85-'));
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-server85-ws-'));
@@ -53,6 +56,7 @@ async function listen(options: { webDist?: string } = {}): Promise<{ base: strin
     webDist: options.webDist,
   });
   server = createApp(ctx);
+  daemonToken = ctx.daemonToken ?? '';
   channel = attachWebSocket(ctx, server);
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve));
   const { port } = server.address() as AddressInfo;
@@ -159,14 +163,14 @@ describe('settings, session, providers', () => {
 
     const updated = await fetch(new URL('/session', base), {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ mode: 'plan', autoApprove: true, model: 'm1' }),
     });
     expect((await json<{ session: unknown }>(updated)).session).toMatchObject({ mode: 'plan', autoApprove: true, model: 'm1' });
 
     const cycled = await fetch(new URL('/session/mode', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ cycle: true }),
     });
     expect((await json<{ session: { mode: string } }>(cycled)).session.mode).toBe('ask');
@@ -174,7 +178,7 @@ describe('settings, session, providers', () => {
     // The retired orchestrator mode still loads, mapped to auto.
     const legacy = await fetch(new URL('/session', base), {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ mode: 'orchestrator' }),
     });
     expect(legacy.status).toBe(200);
@@ -182,7 +186,7 @@ describe('settings, session, providers', () => {
 
     const invalid = await fetch(new URL('/session', base), {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ mode: 'bogus' }),
     });
     expect(invalid.status).toBe(400);
@@ -221,7 +225,7 @@ describe('settings, session, providers', () => {
 
     const createdRes = await fetch(new URL('/providers', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ id: 'fake', name: 'Fake', baseUrl: modelBase, apiKey: 'super-secret-key', models: ['local-model'], supportsVision: true }),
     });
     const createdText = await createdRes.text();
@@ -233,7 +237,7 @@ describe('settings, session, providers', () => {
     expect(listedText).not.toContain('super-secret-key');
     expect(listedText).toContain('9Router');
 
-    const tested = await fetch(new URL('/providers/fake/test', base), { method: 'POST' });
+    const tested = await fetch(new URL('/providers/fake/test', base), { method: 'POST', headers: { ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) } });
     expect(tested.status).toBe(200);
     expect(await json<{ ok: boolean; models: string[] }>(tested)).toMatchObject({ ok: true });
 
@@ -247,14 +251,14 @@ describe('settings, session, providers', () => {
 
     await fetch(new URL('/providers/nine-router/enabled', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ enabled: false }),
     });
     const union = await fetch(new URL('/models', base));
     const unionBody = await json<{ models: Array<{ providerId: string }> }>(union);
     expect(unionBody.models.every((model) => model.providerId === 'fake')).toBe(true);
 
-    const removed = await fetch(new URL('/providers/fake', base), { method: 'DELETE' });
+    const removed = await fetch(new URL('/providers/fake', base), { method: 'DELETE', headers: { ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) } });
     expect(removed.status).toBe(200);
     expect((await fetch(new URL('/providers/fake', base))).status).toBe(404);
   });
@@ -264,7 +268,7 @@ describe('settings, session, providers', () => {
     const modelBase = await startModelServer();
     const created = await fetch(new URL('/providers', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ id: 'fake', name: 'Fake', baseUrl: modelBase, apiKey: 'fake-key', models: ['fake-model'] }),
     });
     expect(created.status).toBe(201);
@@ -273,7 +277,7 @@ describe('settings, session, providers', () => {
 
     const taskRes = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({
         goal: 'Create the app folder and index file',
         repo_path: workspace,
@@ -305,7 +309,7 @@ describe('workspace creation and mutation', () => {
     const { base } = await listen();
     const created = await fetch(new URL('/workspace/create', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ name: 'project-a' }),
     });
     expect(created.status).toBe(201);
@@ -314,7 +318,7 @@ describe('workspace creation and mutation', () => {
 
     const folder = await fetch(new URL('/workspace/folders', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: createdBody.path, path: 'src/components' }),
     });
     expect(folder.status).toBe(201);
@@ -322,20 +326,20 @@ describe('workspace creation and mutation', () => {
 
     const file = await fetch(new URL('/workspace/files', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: createdBody.path, path: 'src/index.ts', content: 'export const x = 1\n' }),
     });
     expect(file.status).toBe(201);
     const duplicate = await fetch(new URL('/workspace/files', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: createdBody.path, path: 'src/index.ts', content: 'again' }),
     });
     expect(duplicate.status).toBe(409);
 
     const renamed = await fetch(new URL('/workspace/rename', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: createdBody.path, from: 'src/index.ts', to: 'src/main.ts' }),
     });
     expect(renamed.status).toBe(200);
@@ -343,7 +347,7 @@ describe('workspace creation and mutation', () => {
 
     const traversal = await fetch(new URL('/workspace/create', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ path: '../evil' }),
     });
     expect([400, 403]).toContain(traversal.status);
@@ -359,7 +363,7 @@ describe('uploads and attachments', () => {
     const { base } = await listen();
     const res = await fetch(new URL('/uploads', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({
         root: workspace,
         task_id: 'task-123',
@@ -380,7 +384,7 @@ describe('uploads and attachments', () => {
     const { base } = await listen();
     const folder = await fetch(new URL('/uploads', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({
         root: workspace,
         kind: 'folder',
@@ -403,7 +407,7 @@ describe('uploads and attachments', () => {
     ]);
     const zipRes = await fetch(new URL('/uploads', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({
         root: workspace,
         task_id: 'task-zip',
@@ -422,13 +426,13 @@ describe('uploads and attachments', () => {
     form.set('root', workspace as string);
     form.set('destination', 'multipart');
     form.append('file', new Blob(['multipart hello'], { type: 'text/plain' }), 'folder/readme.md');
-    const multipart = await fetch(new URL('/uploads', base), { method: 'POST', body: form });
+    const multipart = await fetch(new URL('/uploads', base), { method: 'POST', headers: { ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) }, body: form });
     expect(multipart.status).toBe(201);
     expect(readFileSync(join(workspace as string, 'multipart/folder/readme.md'), 'utf8')).toBe('multipart hello');
 
     const traversal = await fetch(new URL('/uploads', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root: workspace, files: [{ name: 'evil.txt', path: '../evil.txt', contentBase64: Buffer.from('x').toString('base64') }] }),
     });
     expect([400, 403]).toContain(traversal.status);
@@ -436,7 +440,7 @@ describe('uploads and attachments', () => {
 
     const tooMany = await fetch(new URL('/uploads', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({
         root: workspace,
         files: Array.from({ length: 21 }, (_, index) => ({ name: `f${index}.txt`, path: `f${index}.txt`, contentBase64: Buffer.from('x').toString('base64') })),
@@ -451,14 +455,14 @@ describe('task request validation', () => {
     const { base } = await listen();
     const outside = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ goal: 'do work', repo_path: '/etc' }),
     });
     expect(outside.status).toBe(403);
 
     const invalidMode = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ goal: 'do work', mode: 'bogus' }),
     });
     expect(invalidMode.status).toBe(400);

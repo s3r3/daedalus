@@ -28,6 +28,9 @@ afterEach(async () => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+// S6: daemon token for mutation routes, set by listen()/boot() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 function listen(workspace: string, home: string): Promise<{ base: string; ctx: ReturnType<typeof createContext> }> {
   const settings: Settings = {
     llm: { baseUrl: 'http://127.0.0.1:1/v1', apiKey: '', model: '', models: [], modelStrategy: 'failover', timeoutMs: null },
@@ -39,6 +42,7 @@ function listen(workspace: string, home: string): Promise<{ base: string; ctx: R
   };
   const ctx = createContext({ settings, store: new TaskStore(join(home, 'state')), bus: new EventBus(), cwd: workspace });
   app = createApp(ctx);
+  daemonToken = ctx.daemonToken ?? '';
   channel = attachWebSocket(ctx, app);
   return new Promise((resolve) => {
     app?.listen(0, '127.0.0.1', () => {
@@ -134,21 +138,21 @@ describe('POST /tasks/{id}/questions/{questionId}', () => {
 
     const missing = await fetch(new URL('/tasks/tq/questions/nope', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ answer: 'Terang' }),
     });
     expect(missing.status).toBe(404);
 
     const empty = await fetch(new URL('/tasks/tq/questions/question-1', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ answer: '  ' }),
     });
     expect(empty.status).toBe(400);
 
     const res = await fetch(new URL('/tasks/tq/questions/question-1', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ answer: 'Gelap' }),
     });
     expect(res.status).toBe(200);
@@ -168,7 +172,7 @@ describe('POST /tasks/{id}/questions/{questionId}', () => {
 
     const res = await fetch(new URL('/tasks/tq-done/questions/question-9', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ answer: 'Continue a different way' }),
     });
     expect(res.status).toBe(410);
@@ -188,14 +192,14 @@ describe('interactive plan mode end-to-end', () => {
 
     const providerRes = await fetch(new URL('/providers', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ id: 'fake', name: 'Fake', baseUrl: fakeBase, apiKey: 'fake-key', models: ['fake-model'] }),
     });
     expect(providerRes.status).toBe(201);
 
     const createdRes = await fetch(new URL('/tasks', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({
         goal: 'Buat website dengan database terintegrasi untuk sekolah',
         repo_path: workspace,
@@ -219,7 +223,7 @@ describe('interactive plan mode end-to-end', () => {
     expect(questionId).toBeDefined();
     const answerRes = await fetch(new URL(`/tasks/${task.id}/questions/${questionId}`, base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ answer: 'Website e-learning' }),
     });
     expect(answerRes.status).toBe(200);

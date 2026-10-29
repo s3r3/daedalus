@@ -78,6 +78,9 @@ async function startFakeProvider(): Promise<string> {
   return `http://127.0.0.1:${port}/v1`
 }
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(): Promise<{ base: string; root: string }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-slideengine-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-slideengine-ws-'))
@@ -85,6 +88,7 @@ async function listen(): Promise<{ base: string; root: string }> {
   const baseUrl = await startFakeProvider()
   ctx.providerStore.registry.upsert({ id: 'fake', name: 'Fake', baseUrl, apiKey: 'fake-key', models: ['fake-model'], defaultModel: 'fake-model', enabled: true })
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   channel = attachWebSocket(ctx, server)
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
@@ -94,7 +98,7 @@ async function listen(): Promise<{ base: string; root: string }> {
 async function req(base: string, method: string, path: string, body?: Record<string, unknown>): Promise<{ status: number; body: Record<string, unknown> }> {
   const res = await fetch(new URL(path, base), {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
   })
   return { status: res.status, body: (await res.json()) as Record<string, unknown> }

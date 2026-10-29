@@ -22,6 +22,9 @@ afterEach(async () => {
   workspace = undefined
 })
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listen(): Promise<{ base: string; root: string }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-tailor-server-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-tailor-ws-'))
@@ -29,6 +32,7 @@ async function listen(): Promise<{ base: string; root: string }> {
   writeFileSync(join(workspace, 'src', 'index.ts'), 'export const a = 1\n')
   const ctx = createContext({ store: new TaskStore(join(tmp, 'state')), bus: new EventBus(), cwd: workspace })
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   channel = attachWebSocket(ctx, server)
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
@@ -44,7 +48,7 @@ describe('tailor suite server endpoints', () => {
 
     const saved = await fetch(new URL('/workspace/pins', base), {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ root, pins: ['src/index.ts', '../escape', '/abs', 'src/index.ts'] }),
     })
     expect(saved.status).toBe(200)
@@ -66,7 +70,7 @@ describe('tailor suite server endpoints', () => {
 
     const updated = await fetch(new URL('/settings', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ tailor: { reviewGate: true, modelRouting: false } }),
     })
     expect(updated.status).toBe(200)

@@ -91,6 +91,9 @@ async function startFakeProvider(): Promise<string> {
   return `http://127.0.0.1:${address.port}/v1`
 }
 
+// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+let daemonToken = ''
+
 async function listenWithFake(): Promise<{ base: string; fakeBase: string }> {
   tmp = mkdtempSync(join(tmpdir(), 'daedalus-chat-'))
   workspace = mkdtempSync(join(tmpdir(), 'daedalus-chat-ws-'))
@@ -109,13 +112,14 @@ async function listenWithFake(): Promise<{ base: string; fakeBase: string }> {
   })
   ctx.providersReady = Promise.resolve()
   server = createApp(ctx)
+  daemonToken = ctx.daemonToken ?? ''
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
   const base = `http://127.0.0.1:${port}`
   const fakeBase = await startFakeProvider()
   const providerRes = await fetch(new URL('/providers', base), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     body: JSON.stringify({ id: 'fake', name: 'Fake', baseUrl: fakeBase, apiKey: 'x', models: ['fake-model'] }),
   })
   expect(providerRes.status).toBe(201)
@@ -125,7 +129,7 @@ async function listenWithFake(): Promise<{ base: string; fakeBase: string }> {
 async function postChat(base: string, body: Record<string, unknown>) {
   const res = await fetch(new URL('/workflow/chat', base), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
     body: JSON.stringify(body),
   })
   return { status: res.status, body: (await res.json()) as Record<string, unknown> }
@@ -176,7 +180,7 @@ describe('chat streaming', () => {
     const { base } = await listenWithFake()
     const res = await fetch(new URL('/workflow/chat/stream', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ message: 'Apa lelucon favoritmu?' }),
     })
     expect(res.status).toBe(200)
@@ -205,7 +209,7 @@ describe('chat streaming', () => {
     const { base } = await listenWithFake()
     const res = await fetch(new URL('/workflow/chat/stream', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ message: 'buatkan landing page pakai vue' }),
     })
     expect(res.status).toBe(201)
@@ -244,7 +248,7 @@ describe('token usage', () => {
 
     const stream = await fetch(new URL('/workflow/chat/stream', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ message: 'Apa lelucon favoritmu?' }),
     })
     const done = (await stream.text()).split('\n')
@@ -266,7 +270,7 @@ describe('export', () => {
 
     const res = await fetch(new URL('/workflow/export', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ run_id: runId }),
     })
     expect(res.status).toBe(200)
@@ -279,7 +283,7 @@ describe('export', () => {
 
     const missing = await fetch(new URL('/workflow/export', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({}),
     })
     expect(missing.status).toBe(400)
@@ -290,7 +294,7 @@ describe('session provider pick', () => {
   async function addProvider(base: string, body: Record<string, unknown>) {
     const res = await fetch(new URL('/providers', base), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify(body),
     })
     expect(res.status).toBe(201)
@@ -299,7 +303,7 @@ describe('session provider pick', () => {
   async function pickProvider(base: string, providerId: string) {
     const res = await fetch(new URL('/settings', base), {
       method: 'PUT',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) },
       body: JSON.stringify({ providerId }),
     })
     expect(res.status).toBe(200)
@@ -308,7 +312,7 @@ describe('session provider pick', () => {
   test('a registry with only a baseUrl-less draft falls back to greeting', async () => {
     const { base } = await listenWithFake()
     await addProvider(base, { id: 'draft', name: 'Draft', baseUrl: '' })
-    const del = await fetch(new URL('/providers/fake', base), { method: 'DELETE' })
+    const del = await fetch(new URL('/providers/fake', base), { method: 'DELETE', headers: { ...(daemonToken ? { authorization: `Bearer ${daemonToken}` } : {}) } })
     expect(del.status).toBe(200)
     // Before the fix this answered with a model failure apology (the
     // draft was handed to the HTTP client); now the draft is skipped as
