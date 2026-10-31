@@ -32,8 +32,32 @@ biasa. dae-island adalah satu-satunya island.
   damping 18); hover 120 ms membuka, pointer pergi 300 ms menutup
   (ditahan saat entry chat fokus). v1 sengaja polling, bukan WebSocket
   `/tasks/events` — itu follow-up (trade-off jujur vs "never poll" isle).
-- Follow-up (bukan v1): streaming WebSocket, hormat
-  `gtk-enable-animations` (saat ini spring selalu jalan).
+- **Port konsep dynamic island Dae Captain** (branch `dae-island-concept`,
+  belum merge): seluruh konsep pill Tauri lama pindah ke sini, bukan
+  cuma kerangkanya. Panel kini menampilkan **maskot Kapten** (modul
+  `src/mascot.rs`: data seni SVG disalin verbatim dari
+  `dae-captain/ui/mascot.js`, renderer Cairo baru — pose ikut status
+  pill + engine, mata mengikuti kursor, tidur setelah 120 detik idle,
+  12 dekor musiman + 10 kostum lewat dropdown di panel, tersimpan di
+  `~/.daedalus/island-prefs.json`). Pill memakai **9 status lengkap**
+  dengan prioritas yang sama (approval > error > dijeda > verifikasi >
+  memperbaiki > bekerja > antrian > selesai-flash > idle), **progress
+  ring** dari narasi engine (`8/12`), **smart click** (klik saat dijeda
+  → lanjut; saat error → akui error), **mode notifikasi + DND**
+  (Pulse/Bunyi/Mati; bunyi = dua-nada 880→660 Hz via ffplay,
+  best-effort), dan **posisi pill** (Tengah/Kiri/Kanan via anchor
+  layer-shell). Preferensi lain (notifikasi/DND/posisi) juga di file
+  prefs yang sama.
+- Follow-up (bukan port ini): streaming WebSocket, hormat
+  `gtk-enable-animations` (saat ini spring selalu jalan), hotkey global
+  (dulu Ctrl+Shift+D di Tauri; GTK saja tidak bisa grab hotkey global —
+  butuh mekanisme toggle eksternal, mis. bind Hyprland + IPC), animasi
+  klik maskot (wajah surprised/kiss/wink tidak ikut di-port).
+  Delta jujur port maskot: auto-dekor ramadan/eid tidak otomatis
+  (butuh kalender Hijri; keduanya tetap bisa dipilih manual), auto-dekor
+  memakai UTC (bisa beda di sekitar tengah malam lokal), badge angka
+  pose antrian tetap 2, teks dirender via cairo toy API (font sedikit
+  berbeda dari browser).
 
 ## Dependensi build
 
@@ -92,11 +116,32 @@ Fase 2/3 (baru):
 13. Saat mengetik di entry chat, panel TIDAK auto-tutup walau pointer
     keluar dari island.
 
+Port konsep (baru):
+
+14. Maskot Kapten muncul di panel; pose berubah ikut status pill dan
+    engine task utama (mis. coding/slide saat bekerja, permission saat
+    approval); mata mengikuti kursor; idle 120 detik → pose tidur.
+    Dropdown Dekor (Otomatis + 12) dan Kostum (10) mengubah tampilan
+    maskot dan tersimpan di `~/.daedalus/island-prefs.json`.
+15. Status pill 9-tahap: task verifikasi → "Memverifikasi…", gagal
+    validasi → "Memperbaiki (n/2)", task antre → "Antrian: N task",
+    task selesai → flash "✓ Selesai" singkat; narasi engine dengan
+    `8/12` menampilkan progress ring di dot pill.
+16. Smart click: klik pill saat dijeda → task lanjut (tanpa buka
+    panel); klik saat error → error diakui, pill kembali ke status
+    berikutnya.
+17. Preferensi pill: mode Bunyi → satu ping dua-nada saat masuk
+    approval/selesai/error; DND aktif → approval tidak memunculkan
+    peek dan pill tidak berbunyi/berdenyut; Posisi Kiri/Kanan
+    memindahkan pill ke sudut atas.
+
 ## Struktur
 
 - `src/main.rs` — seluruh island: parser JSON std-only (tanpa
   serde_json), HTTP std-only (tanpa ureq), derivasi status dari
   `/workflow/runs`, UI GTK4 layer-shell, spring, hover/leave timer,
   thread polling + chat SSE + approve.
+- `src/mascot.rs` — maskot Kapten: data seni SVG port verbatim dari
+  Dae Captain + renderer Cairo (parser path, gradient, pattern).
 - `Cargo.toml` — `gtk4 0.10` + `gtk4-layer-shell 0.7` (pasangan yang
   dikonfirmasi resolver; gtk 0.10 menerima GTK sistem 4.14+).
