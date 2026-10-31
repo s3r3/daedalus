@@ -4,10 +4,8 @@ fn main() {
     // them as bare identifiers (e.g. "allow-server-health").
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
-            "compositor_info",
             "daemon_token",
             "pick_folder",
-            "position_island",
             "open_file",
             "reveal_in_folder",
             "get_prefs",

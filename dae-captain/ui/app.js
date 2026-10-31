@@ -1,17 +1,16 @@
-// Dae Captain island — DOM wiring. Pure DOM + Tauri invoke bridge.
+// Dae Captain — DOM wiring. Pure DOM + Tauri invoke bridge.
 // All server communication goes through api.js; all decisions through logic.js.
 
 import { createApiClient } from "./api.js";
 import { createEventStream } from "./events.js";
-import { createInvoker, listenEvent, WINDOW_SET_SIZE_CMD, setSizePayload } from "./bridge.js";
-import { PillController } from "./pill.js";
+import { createInvoker } from "./bridge.js";
 import { renderCard, renderVerifyFail, slideTitle } from "./cards.js";
 import { refreshMascots, setMascotStatus, currentSeason } from "./mascot.js";
 import {
   ENGINES,
   aggregateStatus,
   statusColor,
-  pillText,
+  primaryTask,
   turnSummary,
   formatResolvedArtifacts,
   approvalPayload,
@@ -47,22 +46,12 @@ import {
 } from "./logic.js";
 
 const $ = (id) => document.getElementById(id);
-const COMPACT = { w: 480, h: 76 };
-const EXPANDED = { w: 480, h: 640 };
 
 // ---------------------------------------------------------------------------
 // Tauri bridge (Tauri v2: window.__TAURI_INTERNALS__.invoke; see bridge.js)
 // ---------------------------------------------------------------------------
 
 const invoke = createInvoker(globalThis.window);
-
-async function setWindowSize(w, h) {
-  try {
-    await invoke(WINDOW_SET_SIZE_CMD, setSizePayload(w, h));
-  } catch {
-    /* non-Tauri context or missing capability: ignore */
-  }
-}
 
 // ---------------------------------------------------------------------------
 // State
@@ -76,7 +65,6 @@ const state = {
   runId: null,
   workflowRunId: null, // run shown in the workflow queue view
   engineOverride: null, // null = auto
-  expanded: false,
   runs: [],
   transcript: [], // {kind: 'user'|'turn'|'assistant'|'error', ...}
   serverUrl: "http://127.0.0.1:3080",
@@ -86,16 +74,14 @@ const state = {
   providersCache: [], // last GET /providers list (key state, manage buttons)
   modelsVision: { loaded: false, set: new Set() }, // vision-capable models of the picked provider
   wfFilter: "all", // antrean filter: all|running|approval|done|failed
-  connected: false, // event-stream/HTTP health (honest pill + header status)
+  connected: false, // event-stream/HTTP health (honest header status)
   seenEvents: new Map(), // task_id -> max seq applied (dedupe on reconnect)
   wsSubscribed: false, // wildcard WS subscription done once per workspace
-  approvalOpen: false, // latch: auto-expand once per approval batch
   historyList: [], // run_ids from the last /history listing (for /resume index)
   slashIndex: -1, // suggestion-menu selection (-1 = none)
   stick: true, // auto-scroll pinned to bottom (false while reading history)
   viewLimit: 30, // rendered transcript window (grows via "load more")
   streamAbort: null, // AbortController for the active chat stream, if any
-  pill: null, // PillController (Fase 6) — owns the dynamic-island pill
   // ---- Dae Captain v2 Fase 7: chat cards ----
   seenTimelineEvents: new Set(), // v2 timeline event ids already applied (verify bubbles)
   captainFilePaths: new Set(), // workspace-relative paths from timeline `file` events (Workspace ✨)
@@ -204,141 +190,57 @@ async function exportCurrentSession() {
   renderTranscript();
 }
 
-function expand() {
-  if (state.expanded) return;
-  state.expanded = true;
-  $("pill").classList.add("hidden");
-  $("panel").classList.remove("hidden");
-  setWindowSize(EXPANDED.w, EXPANDED.h);
-  void moveIslandToCorner();
-}
-
-function collapse() {
-  if (!state.expanded) return;
-  state.expanded = false;
-  $("panel").classList.add("hidden");
-  $("pill").classList.remove("hidden");
-  setWindowSize(COMPACT.w, COMPACT.h);
-  void moveIslandToCorner();
-}
-
-/**
- * Dae Captain v2 Fase 8: rest the island on the configured pill corner
- * (Settings → Pill → Posisi). No-op for the default top-center and in
- * plain-browser dev (the Rust command is Tauri-only).
- */
-async function moveIslandToCorner() {
-  const corner = state.prefs?.island_corner ?? "top-center";
-  if (corner === "top-center") return;
-  try {
-    await invoke("position_island", { corner, expanded: state.expanded === true });
-  } catch {
-    /* non-Tauri context: ignore */
-  }
-}
-
 // ---------------------------------------------------------------------------
-// Pill + engine pills + approvals rendering
+// Engine pills + approvals rendering
 // ---------------------------------------------------------------------------
 
-/**
- * Create the PillController (Fase 6) and wire every control to a real
- * operation. Called once during boot, before the first refreshRuns().
- */
-function initPill() {
-  if (state.pill) return;
-  const root = $("pill");
-  if (!root) return;
-  state.pill = new PillController({
-    root,
-    onAction: (action, payload) => handlePillAction(action, payload),
-  });
-}
 
 /**
- * Every pill control does something real:
- * - cancel → POST /tasks/:id/cancel (the existing cancel API)
- * - pause → POST /tasks/:id/pause (cooperative engine pause)
- * - resume → POST /tasks/:id/resume
- * - view/click → smart navigation (approval card / progress / chat)
+ * Task controls for the chat window (replaces the pill's buttons):
+ * Jeda/Lanjut/Batal act on the primary task from primaryTask().
  */
-async function handlePillAction(action, payload = {}) {
+async function handleTaskAction(action, taskId) {
   const status = $("action-status");
   const say = (text, cls) => {
     if (!status) return;
     status.className = "action-status" + (cls ? " " + cls : "");
     status.textContent = text;
   };
-  if ((action === "cancel" || action === "pause" || action === "resume") && !state.api) {
-    say("Belum terhubung ke server.", "error");
-    return;
-  }
+  if (!state.api || !taskId) { say("Belum terhubung ke server.", "error"); return; }
   try {
-    if (action === "cancel" && payload.taskId) {
-      const res = await state.api.cancelTask(payload.taskId);
+    if (action === "cancel") {
+      const res = await state.api.cancelTask(taskId);
       say(res?.cancelled ? "Task dibatalkan." : "Permintaan batal tercatat.", res?.cancelled ? "ok" : "");
-      await refreshRuns();
-    } else if (action === "pause" && payload.taskId) {
-      await state.api.pauseTask(payload.taskId);
-      say("Task dijeda — klik pill untuk lanjut.", "ok");
-      await refreshRuns();
-    } else if (action === "resume" && payload.taskId) {
-      await state.api.resumeTask(payload.taskId);
+    } else if (action === "pause") {
+      await state.api.pauseTask(taskId);
+      say("Task dijeda.", "ok");
+    } else if (action === "resume") {
+      await state.api.resumeTask(taskId);
       say("Task dilanjutkan.", "ok");
-      await refreshRuns();
-    } else if (action === "view" || action === "click") {
-      smartPillClick(payload.status);
     }
+    await refreshRuns();
   } catch (e) {
     say("Gagal: " + errText(e), "error");
   }
 }
 
-/**
- * Smart click: jump to the relevant context.
- * - waiting_approval → expand + scroll to the approval card
- * - error → expand (chat shows what failed)
- * - working/verifying/fixing → expand (progress is visible in chat)
- * - paused → resume is handled by the controller; expand to chat
- * - idle/queued/done → expand to chat
- */
-function smartPillClick(status) {
-  const wasCollapsed = !state.expanded;
-  expand();
-  showView("main");
-  if (!wasCollapsed && status !== "waiting_approval") return;
-  // Jump to the approval card when one is pending.
-  requestAnimationFrame(() => {
-    const card = document.querySelector("#approvals .approval-card");
-    if (card) {
-      card.scrollIntoView({ behavior: "smooth", block: "center" });
-      card.classList.add("flash");
-      setTimeout(() => card.classList.remove("flash"), 1600);
-    } else {
-      const box = $("transcript");
-      if (box) box.scrollTop = box.scrollHeight;
-      // No approval card found but pill claimed waiting_approval:
-      // stale state — refresh workflows to clear the phantom notification.
-      if (status === "waiting_approval") {
-        refreshRunsQuiet();
-      }
-    }
-  });
-}
-
-function renderPill() {
-  // The PillController owns the pill DOM (9 statuses, ring, buttons).
-  // Connection honesty stays here: never show a fake idle pill while
-  // disconnected.
-  if (!state.pill) initPill();
-  if (!state.connected) {
-    state.pill.setStatus("idle", "offline");
-    const pill = $("pill");
-    pill?.classList.add("pill-offline");
-    return;
-  }
-  $("pill")?.classList.remove("pill-offline");
-  state.pill.update(state.runs);
+function renderTaskActions() {
+  const box = $("task-actions");
+  if (!box) return;
+  const primary = primaryTask(state.runs);
+  if (!primary || !state.connected) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+  box.classList.remove("hidden");
+  box.innerHTML = "";
+  const mk = (label, act) => {
+    const b = document.createElement("button");
+    b.className = "action-btn";
+    b.textContent = label;
+    b.addEventListener("click", () => void handleTaskAction(act, primary.taskId));
+    return b;
+  };
+  if (primary.status === "running") box.append(mk("Jeda", "pause"));
+  if (primary.status === "paused") box.append(mk("Lanjut", "resume"));
+  box.append(mk("Batal", "cancel"));
 }
 
 function renderEnginePills() {
@@ -1740,8 +1642,8 @@ async function sendChat(message, override) {
   state.transcript.push(live);
   renderTranscript();
   updateStopButton();
-  // Pill langsung tunjukkan "working" — jangan tunggu polling 10 detik.
-  state.pill?.setStatus("working", "Memproses…");
+  // Maskot langsung tunjukkan "working" — jangan tunggu polling 10 detik.
+  try { setMascotStatus("working"); } catch { /* cosmetic */ }
   const controller = new AbortController();
   state.streamAbort = controller;
   const dropLive = () => {
@@ -1959,9 +1861,9 @@ function clearConversation() {
   if (running.length) {
     text += ` ${running.length} task masih berjalan di latar dan TIDAK dibatalkan — pantau di Antrean atau hentikan via /stop.`;
   }
-  // Reset pill to idle immediately — the next refreshRuns() will repopulate
+  // Reset maskot to idle immediately — the next refreshRuns() will repopulate
   // with fresh data. This gives the "realtime" feel: new chat = clean slate.
-  try { state.pill?.setStatus("idle", "Percakapan baru"); } catch { /* cosmetic */ }
+  try { setMascotStatus("idle"); } catch { /* cosmetic */ }
   pushAssistant(text);
 }
 
@@ -2304,6 +2206,10 @@ function renderHeaderStatus() {
         ? activityLabel(state.runs, agg)
         : (done || "siap");
   el.textContent = (wsName ? wsName + " • " : "") + what;
+  try {
+    const engine = (state.runs ?? []).flatMap((r) => r.turns ?? []).find((t) => t.status === "running")?.engine ?? "";
+    setMascotStatus(agg.status === "attention" ? "waiting_approval" : agg.status, engine, agg.running);
+  } catch { /* mascot is cosmetic */ }
 }
 
 /** Status view: live engine pills + per-run cards. All data from polling. */
@@ -2475,31 +2381,18 @@ async function refreshRuns() {
     state.runs = data.runs ?? [];
     state.connected = true;
   } catch {
-    // Keep last-known runs: a transient failure must not flash the pill
+    // Keep last-known runs: a transient failure must not reset the header
     // to idle or hide approvals.
     state.connected = false;
-    renderPill();
     renderHeaderStatus();
     return;
   }
-  renderPill();
   renderHeaderStatus();
   renderChatEnginePills();
-  const pending = pendingApprovals(state.runs);
-  // Do-not-disturb: approvals stay queued, the pill stays quiet — no
-  // auto-expand, no pulse. (Fase 8 adds the settings toggle; the
-  // controller already exposes setDoNotDisturb().)
-  const dnd = state.pill?.isDoNotDisturb() === true;
-  if (pending.length > 0 && !state.approvalOpen && !dnd) {
-    state.approvalOpen = true;
-    expand(); // approval baru → island mekar (once per batch)
-  } else if (pending.length === 0) {
-    state.approvalOpen = false;
-  }
+  renderTaskActions();
   await refreshTurnActivity();
   // Dae Captain v2 Fase 7: v2 timeline → verify-fail bubbles in chat.
   void pollCaptainTimeline();
-  if (!state.expanded) return;
   const wf = $("view-workflow");
   if (wf && !wf.classList.contains("hidden")) {
     renderWorkflowView();
@@ -2521,7 +2414,7 @@ function findRunTurn(taskId) {
 function isChatViewVisible() {
   const main = $("view-main");
   if (!main) return false;
-  return state.expanded && !main.classList.contains("hidden");
+  return !main.classList.contains("hidden");
 }
 
 /**
@@ -2544,8 +2437,8 @@ function updateStopButton() {
   stop.classList.toggle("hidden", !busy);
   send.classList.toggle("hidden", busy);
   stop.title = isStreaming() && !running ? "Hentikan jawaban" : "Hentikan task";
-  // Mascot v2 observes pill data-status/data-engine via MutationObserver —
-  // no manual status sync needed here.
+  // Mascot status syncs from renderHeaderStatus (setMascotStatus) — nothing
+  // extra needed here.
 }
 
 /**
@@ -2668,22 +2561,12 @@ async function refreshRunsQuiet() {
     state.connected = true;
   } catch {
     state.connected = false;
-    renderPill();
     renderHeaderStatus();
     return;
   }
-  renderPill();
   renderHeaderStatus();
   renderChatEnginePills();
-  const pending = pendingApprovals(state.runs);
-  const dnd = state.pill?.isDoNotDisturb() === true;
-  if (pending.length > 0 && !state.approvalOpen && !dnd) {
-    state.approvalOpen = true;
-    expand();
-  } else if (pending.length === 0) {
-    state.approvalOpen = false;
-  }
-  if (!state.expanded) return;
+  renderTaskActions();
   const wf = $("view-workflow");
   if (wf && !wf.classList.contains("hidden")) {
     renderWorkflowView();
@@ -2708,7 +2591,6 @@ const I18N = {
     "common.back": "← Kembali",
     "nav.workspace": "Pilih workspace",
     "nav.settings": "Pengaturan",
-    "nav.collapse": "Kecilkan",
     "nav.quit": "Keluar",
     "chat.jump": "↓ pesan baru",
     "chat.approveAll": "Approve All",
@@ -2754,17 +2636,6 @@ const I18N = {
     "set.tierStrong": "Tier Kuat",
     "set.tierLight": "Tier Ringan",
     "set.lightEmpty": "Kosongkan tier ringan untuk pakai 1 model global.",
-    "set.pillPosition": "Posisi",
-    "set.posTopCenter": "Tengah atas",
-    "set.posTopLeft": "Kiri atas",
-    "set.posTopRight": "Kanan atas",
-    "set.posBottomLeft": "Kiri bawah",
-    "set.posBottomRight": "Kanan bawah",
-    "set.pillNotify": "Notifikasi",
-    "set.notifyPulse": "Denyut",
-    "set.notifySound": "Suara",
-    "set.notifyOff": "Mati",
-    "set.pillDnd": "Jangan ganggu",
     "set.approval": "Approval",
     "set.askAll": "Tanya semua",
     "set.autoAll": "Otomatis semua",
@@ -2790,7 +2661,6 @@ const I18N = {
     "common.back": "← Back",
     "nav.workspace": "Choose workspace",
     "nav.settings": "Settings",
-    "nav.collapse": "Collapse",
     "nav.quit": "Quit",
     "chat.jump": "↓ new messages",
     "chat.approveAll": "Approve All",
@@ -2836,17 +2706,6 @@ const I18N = {
     "set.tierStrong": "Strong Tier",
     "set.tierLight": "Light Tier",
     "set.lightEmpty": "Leave the light tier empty to use 1 global model.",
-    "set.pillPosition": "Position",
-    "set.posTopCenter": "Top center",
-    "set.posTopLeft": "Top left",
-    "set.posTopRight": "Top right",
-    "set.posBottomLeft": "Bottom left",
-    "set.posBottomRight": "Bottom right",
-    "set.pillNotify": "Notifications",
-    "set.notifyPulse": "Pulse",
-    "set.notifySound": "Sound",
-    "set.notifyOff": "Off",
-    "set.pillDnd": "Do not disturb",
     "set.approval": "Approval",
     "set.askAll": "Ask everything",
     "set.autoAll": "Auto everything",
@@ -2932,7 +2791,6 @@ async function loadSettingsView() {
     await invoke("set_prefs", { prefs: state.prefs }).catch(() => {});
     await loadProviderSection(activeId);
     await loadModelSection(s);
-    loadPillSection();
     // Mirror resolveApprovalTypes(): legacy global auto-approve = all auto.
     renderApprovalTypes(s.session?.autoApprove === true
       ? { newFile: "auto", modifyFile: "auto", command: "auto" }
@@ -3283,52 +3141,7 @@ async function saveModelRoles() {
   }
 }
 
-// ---- 3. Pill ----
-
-function loadPillSection() {
-  const pos = $("set-pill-position");
-  if (pos) pos.value = state.prefs.island_corner ?? "top-center";
-  const mode = state.pill?.getNotificationMode() ?? "pulse";
-  const radio = document.querySelector(`input[name="pill-notify"][value="${mode}"]`);
-  if (radio) radio.checked = true;
-  const dnd = $("set-pill-dnd");
-  if (dnd) dnd.checked = state.pill?.isDoNotDisturb() === true;
-}
-
-/**
- * Move the island to a screen corner for real (Rust `position_island` —
- * also persists the pref). Falls back to persisting the pref only when
- * the backend command is unavailable (plain-browser dev).
- */
-async function setPillPosition(corner) {
-  state.prefs = { ...state.prefs, island_corner: corner };
-  try {
-    await invoke("position_island", { corner, expanded: state.expanded === true });
-  } catch {
-    await invoke("set_prefs", { prefs: state.prefs });
-  }
-  flashSaved();
-}
-
-function setNotifyMode(mode) {
-  try {
-    state.pill?.setNotificationMode(mode);
-    state.prefs = { ...state.prefs, notify_mode: mode };
-    invoke("set_prefs", { prefs: state.prefs }).catch(() => {});
-    flashSaved();
-  } catch (e) {
-    setSettingsStatus("Gagal: " + errText(e), "error");
-  }
-}
-
-function setPillDnd(on) {
-  // Wired straight into Fase 6's PillController: approvals stay queued,
-  // the pill stays quiet (no pulse, no auto-expand).
-  state.pill?.setDoNotDisturb(on === true);
-  flashSaved();
-}
-
-// ---- 4. Approval: radio auto/tanya per jenis ----
+// ---- 3. Approval: radio auto/tanya per jenis ----
 
 const APPROVAL_TYPE_ROWS = [
   ["newFile", "📄 File baru", "file yang belum ada — dibuat baru"],
@@ -3406,7 +3219,7 @@ async function setApprovalPreset(all) {
   }
 }
 
-// ---- 5. Memori ----
+// ---- 4. Memori ----
 
 /** "Apa yang kamu ingat tentang saya?" — everything, via GET /captain/memory. */
 async function showMemories() {
@@ -3482,7 +3295,7 @@ async function clearMemories(btn) {
   }
 }
 
-// ---- 6. Pengingat (read-only list + cancel; creation stays in chat) ----
+// ---- 5. Pengingat (read-only list + cancel; creation stays in chat) ----
 
 async function loadReminderSection() {
   const box = $("set-reminder-list");
@@ -3531,7 +3344,7 @@ async function loadReminderSection() {
   }
 }
 
-// ---- 7. Umum ----
+// ---- 6. Umum ----
 
 function loadGeneralSection(settingsData) {
   const lang = $("set-language");
@@ -3597,7 +3410,7 @@ function saveTemperatureSoon() {
   }, 600);
 }
 
-// ---- 8. Engine aktif (existing — kept) ----
+// ---- 7. Engine aktif (existing — kept) ----
 
 /** Agentic Systems toggles — persisted to Tauri prefs AND the live server. */
 async function loadEngineToggles() {
@@ -3961,7 +3774,6 @@ async function setWorkspace(path) {
     await invoke("set_prefs", { prefs: state.prefs });
     state.seenEvents.clear(); // new workspace = new event history
     state.wsSubscribed = false;
-    state.approvalOpen = false;
     state.captainFilePaths.clear();
     wsOpenDirs.clear();
     wsSearchQuery = "";
@@ -4051,7 +3863,6 @@ async function ensureServer(statusFn) {
 
 async function boot() {
   showView("boot");
-  expand();
   // New mascot: replace inline SVG placeholders with seasonal variant images.
   try { refreshMascots("idle"); } catch { /* mascot is cosmetic */ }
   $("boot-title").textContent = "Menyiapkan Dae Captain…";
@@ -4106,8 +3917,8 @@ async function boot() {
   state.eventStream = createEventStream({
     getWsUrl: () => state.serverUrl.replace(/^http/, "ws") + "/tasks/events",
     onEvents: handleTaskEvents,
-    onConnect: () => { state.connected = true; renderPill(); renderHeaderStatus(); },
-    onDisconnect: () => { state.connected = false; renderPill(); renderHeaderStatus(); },
+    onConnect: () => { state.connected = true; renderHeaderStatus(); },
+    onDisconnect: () => { state.connected = false; renderHeaderStatus(); },
   });
   // HTTP polling fallback if WebSocket unavailable. The wildcard WS
   // subscription covers all turns, so the fallback polls the latest
@@ -4157,13 +3968,13 @@ async function boot() {
   await refreshRuns();
   // Runs list: WebSocket events are primary (via refreshRunsQuiet);
   // adaptive polling: 2s saat ada task berjalan, 10s saat idle.
-  // Ini safety net untuk event yang terlewat + update pill yang responsif.
+  // Ini safety net untuk event yang terlewat + update status yang responsif.
   setInterval(async () => {
     const hasRunning = (state.runs ?? []).some((r) =>
       (r.turns ?? []).some((t) => t?.status === "running")
     );
     await refreshRuns();
-    // Jika ada yang berjalan, poll lagi lebih cepat untuk update pill
+    // Jika ada yang berjalan, poll lagi lebih cepat untuk update status
     if (hasRunning) {
       setTimeout(() => refreshRuns(), 2000);
     }
@@ -4175,7 +3986,7 @@ async function boot() {
 }
 
 /**
- * A1: Poll for fired reminders. For each: pulse the pill + push a chat
+ * A1: Poll for fired reminders. For each: push a chat
  * message with [Tunda 1 jam] [Selesai] actions.
  */
 async function pollDueReminders() {
@@ -4183,8 +3994,6 @@ async function pollDueReminders() {
     const res = await state.api.captainRemindersDue();
     const due = Array.isArray(res?.reminders) ? res.reminders : [];
     for (const r of due) {
-      // Pulse the pill (respects DND).
-      try { state.pill?.notifyReminder?.(); } catch { /* ignore */ }
       // Chat message with actions.
       pushAssistant(`⏰ Waktunya: ${r.message}`);
       pushCard("reminder-due", {
@@ -4212,31 +4021,6 @@ function bindEvents() {
     else el.onclick = fn;
   };
 
-  // Global hotkey Ctrl+Shift+D (registered in Rust via
-  // tauri-plugin-global-shortcut): the backend shows + focuses the window
-  // and emits "dae-captain-hotkey"; here we toggle pill <-> chat.
-  // A local keydown fallback covers plain-browser dev (non-global).
-  const toggleIsland = () => {
-    if (state.expanded) collapse();
-    else { expand(); showView("main"); }
-  };
-  listenEvent(window, "dae-captain-hotkey", toggleIsland).catch(() => {
-    /* non-Tauri context: the keydown fallback below still works */
-  });
-  window.addEventListener("keydown", (e) => {
-    if (e.ctrlKey && e.shiftKey && (e.key === "D" || e.key === "d") && !e.altKey && !e.metaKey) {
-      // In the Tauri app the Rust global shortcut already toggles (via the
-      // event above) — the local fallback is for plain-browser dev only.
-      if (typeof window.__TAURI_INTERNALS__?.invoke === "function") return;
-      // Don't hijack typing in inputs.
-      const tag = (e.target?.tagName ?? "").toLowerCase();
-      if (tag === "input" || tag === "textarea") return;
-      e.preventDefault();
-      toggleIsland();
-    }
-  });
-
-  bindGuarded("btn-collapse", "click", collapse);
   bindGuarded("btn-settings", "click", () => { loadSettingsView(); showView("settings"); });
   bindGuarded("set-back", "click", () => showView("main"));
   // ---- Dae Captain v2 Fase 8: Settings bindings (auto-save, no Save button) ----
@@ -4247,11 +4031,6 @@ function bindEvents() {
   bindGuarded("set-model-strong", "change", saveModelRoles);
   bindGuarded("set-model-light", "change", saveModelRoles);
   bindGuarded("set-model-global", "input", updateAttachVisionWarn);
-  bindGuarded("set-pill-position", "change", (e) => setPillPosition(e.target.value));
-  for (const r of document.querySelectorAll('input[name="pill-notify"]')) {
-    r.addEventListener("change", (e) => { if (e.target.checked) setNotifyMode(e.target.value); });
-  }
-  bindGuarded("set-pill-dnd", "change", (e) => setPillDnd(e.target.checked));
   bindGuarded("approve-ask-all", "click", () => setApprovalPreset("ask"));
   bindGuarded("approve-auto-all", "click", () => setApprovalPreset("auto"));
   bindGuarded("set-memory-show", "click", showMemories);

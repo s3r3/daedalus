@@ -74,7 +74,7 @@ export function createApiClient({ baseUrl, fetchImpl, getToken }) {
       req("POST", `/tasks/${encodeURIComponent(taskId)}/questions/${encodeURIComponent(questionId)}`, { answer }),
     cancelTask: (taskId) =>
       req("POST", `/tasks/${encodeURIComponent(taskId)}/cancel`),
-    /** Cooperative pause (Dae Captain pill ⏸): the engine suspends at its
+    /** Cooperative pause (task pause ⏸): the engine suspends at its
      * next safe checkpoint; resume continues from the same checkpoint. */
     pauseTask: (taskId) =>
       req("POST", `/tasks/${encodeURIComponent(taskId)}/pause`),
