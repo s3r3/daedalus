@@ -1,3 +1,11 @@
+> **DIARSIPKAN 2026-10-31** — Widget ini dipensiunkan atas keputusan Farid.
+> Peran pill/panel-nya digantikan dae-island standalone (`dae-island/`, GTK4 +
+> layer-shell, live pill dari server :3080 + approval peek + tab Chat/Antrean).
+> File-file di sini dipertahankan apa adanya sebagai arsip; tidak lagi
+> dikembangkan dan tidak lagi jadi jalur install yang didukung. Instruksi
+> install di bawah ini hanya berlaku untuk salinan yang sudah terpasang
+> sebelum pengarsipan.
+>
 # Dae Captain — Dynamic Island di Hyprland (Quickshell)
 
 Widget QML layer-shell (overlay, di atas semua window) yang menampilkan
