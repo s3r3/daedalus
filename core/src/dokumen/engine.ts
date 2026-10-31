@@ -138,12 +138,21 @@ export class DokumenEngine {
     staged?.reject(new Error(detail));
   }
 
-  /** Settle the staged schema/outline/style gate as APPROVED (the panel's release button). */
+  /**
+   * Settle the staged schema/outline/style gate as APPROVED (the panel's release button).
+   * True when the release was accepted: either a waiting gate was settled, or no gate
+   * exists yet and the release is recorded for the imminent gate (#stageGate settles
+   * immediately on arrival). The second case matters because the panel polls
+   * document.json: a release can land in the gap between "unapproved schema on disk"
+   * and "gate installed", and reporting it as rejected (the old false) made callers
+   * treat an accepted release as "no staged run" — a race that failed CI runs
+   * intermittently.
+   */
   releaseStaged(): boolean {
     const staged = this.#staged;
     if (!staged) {
       this.#stagedRelease = 'release';
-      return false;
+      return true;
     }
     this.#staged = undefined;
     staged.resolve();
