@@ -403,6 +403,7 @@ struct TaskRow {
     goal: String,
     engine: String,
     status: String,
+    paused: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -444,7 +445,8 @@ fn derive_state(runs_json: &Json, workspace: &str) -> IslandState {
             if status == "running" {
                 st.running += 1;
             }
-            if turn.get("paused").and_then(|v| v.as_bool()) == Some(true) {
+            let paused = turn.get("paused").and_then(|v| v.as_bool()).unwrap_or(false);
+            if paused {
                 st.paused += 1;
             }
             if status == "failed" {
@@ -467,6 +469,7 @@ fn derive_state(runs_json: &Json, workspace: &str) -> IslandState {
                     goal: goal.clone(),
                     engine: engine.clone(),
                     status: status.clone(),
+                    paused,
                 });
             }
             if st.rows.len() < 12 {
@@ -475,6 +478,7 @@ fn derive_state(runs_json: &Json, workspace: &str) -> IslandState {
                     goal,
                     engine,
                     status,
+                    paused,
                 });
             }
         }
@@ -524,6 +528,35 @@ fn status_word(status: &str) -> &str {
     }
 }
 
+// Tombol aksi per baris Antrean, mengikuti semantik Dae Captain:
+// terminal (done/failed/cancelled) → tanpa tombol; dijeda → Lanjut;
+// sisanya → Jeda. Batal selalu ada untuk task non-terminal.
+fn row_actions(status: &str, paused: bool) -> (Option<&'static str>, bool) {
+    match status {
+        "done" | "failed" | "cancelled" => (None, false),
+        _ => (Some(if paused { "resume" } else { "pause" }), true),
+    }
+}
+
+const ENGINES: [(&str, &str); 5] = [
+    ("coding", "Coding"),
+    ("slide", "Slide"),
+    ("dokumen", "Dokumen"),
+    ("spreadsheet", "Spreadsheet"),
+    ("research", "Research"),
+];
+
+// Engine yang sedang bekerja (punya turn running) → disorot di baris engine.
+fn active_engines(rows: &[TaskRow]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for r in rows {
+        if r.status == "running" && !out.contains(&r.engine) {
+            out.push(r.engine.clone());
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // UI: pesan antar-thread, state, spring, handler.
 // Semua widget hanya disentuh dari main thread; thread poll/chat/approve
@@ -548,6 +581,7 @@ struct Ui {
     status: Label,
     peek_box: GtkBox,
     peek_label: Label,
+    engine_labels: Vec<Label>,
     tasks_inner: GtkBox,
     transcript: TextView,
     transcript_scroll: ScrolledWindow,
@@ -652,7 +686,7 @@ fn set_dot(ui: &Ui, color: &str) {
     ui.dot.add_css_class(&format!("dot-{color}"));
 }
 
-fn rebuild_tasks(ui: &Ui, rows: &[TaskRow]) {
+fn rebuild_tasks(ui: &Ui, rows: &[TaskRow], tx: &Tx) {
     while let Some(child) = ui.tasks_inner.first_child() {
         ui.tasks_inner.remove(&child);
     }
@@ -666,12 +700,69 @@ fn rebuild_tasks(ui: &Ui, rows: &[TaskRow]) {
         } else {
             truncate(&row.goal, 44)
         };
-        let paused = if row.status == "paused" { " — dijeda" } else { "" };
-        let lbl = Label::new(Some(&format!("• [{}] {} — {}{}", row.engine, goal, status_word(&row.status), paused)));
+        let paused_txt = if row.paused { " — dijeda" } else { "" };
+        let lbl = Label::new(Some(&format!("• [{}] {} — {}{}", row.engine, goal, status_word(&row.status), paused_txt)));
         lbl.set_ellipsize(gtk4::pango::EllipsizeMode::End);
         lbl.set_xalign(0.0);
-        ui.tasks_inner.append(&lbl);
+        lbl.set_hexpand(true);
+        let row_box = GtkBox::new(Orientation::Horizontal, 6);
+        row_box.append(&lbl);
+        let (primary, show_cancel) = row_actions(&row.status, row.paused);
+        if let Some(action) = primary {
+            let btn = Button::with_label(if action == "pause" { "Jeda" } else { "Lanjut" });
+            let tx2 = tx.clone();
+            let task_id = row.task_id.clone();
+            let goal2 = row.goal.clone();
+            let action = action.to_string();
+            btn.connect_clicked(move |_| {
+                task_action(&tx2, &task_id, &goal2, &action);
+            });
+            row_box.append(&btn);
+        }
+        if show_cancel {
+            let btn = Button::with_label("Batal");
+            let tx2 = tx.clone();
+            let task_id = row.task_id.clone();
+            let goal2 = row.goal.clone();
+            btn.connect_clicked(move |_| {
+                task_action(&tx2, &task_id, &goal2, "cancel");
+            });
+            row_box.append(&btn);
+        }
+        ui.tasks_inner.append(&row_box);
     }
+}
+
+fn task_action(tx: &Tx, task_id: &str, goal: &str, action: &str) {
+    let tx2 = tx.clone();
+    let task_id = task_id.to_string();
+    let goal = goal.to_string();
+    let action = action.to_string();
+    std::thread::spawn(move || {
+        let token = daemon_token();
+        let path = format!("/tasks/{}/{}", url_encode(&task_id), action);
+        // POST tanpa body, persis seperti Dae Captain (api.js req tanpa
+        // body). Token dikirim kalau ada; cancel dikecualikan server (S6).
+        let (verb, verb_lower) = match action.as_str() {
+            "pause" => ("Dijeda", "menjeda"),
+            "resume" => ("Dilanjutkan", "melanjutkan"),
+            _ => ("Dibatalkan", "membatalkan"),
+        };
+        match http_request("POST", &path, None, token.as_deref()) {
+            Ok((200, _)) => {
+                let _ = tx2.send(Msg::Note(format!(
+                    "{verb}: {}",
+                    if goal.is_empty() { "task".to_string() } else { truncate(&goal, 40) }
+                )));
+            }
+            Ok((code, _)) => {
+                let _ = tx2.send(Msg::Note(format!("Gagal {verb_lower}: HTTP {code}")));
+            }
+            Err(e) => {
+                let _ = tx2.send(Msg::Note(format!("Gagal {verb_lower}: {e}")));
+            }
+        }
+    });
 }
 
 fn poll_once() -> IslandState {
@@ -903,6 +994,8 @@ const CSS: &str = "
 .status { color: #cbd5e1; }
 .panel { background: #0f172a; border-radius: 16px; color: #e2e8f0; padding: 12px; }
 .peek { background: rgba(245, 158, 11, 0.15); border: 1px solid #f59e0b; border-radius: 12px; padding: 8px; }
+.engine { padding: 2px 8px; border-radius: 10px; color: #94a3b8; }
+.engine-active { background: #0ea5e9; color: #ffffff; }
 .tab-active { background: #334155; color: #f8fafc; }
 ";
 
@@ -973,6 +1066,17 @@ fn build_ui(app: &Application) {
     tabs_row.append(&chat_tab);
     tabs_row.append(&tasks_tab);
 
+    // Baris engine (warisan Dae Captain island): engine yang sedang
+    // bekerja disorot, sisanya redup.
+    let mut engine_labels = Vec::new();
+    let engine_row = GtkBox::new(Orientation::Horizontal, 4);
+    for (_, label) in ENGINES {
+        let l = Label::new(Some(label));
+        l.add_css_class("engine");
+        engine_row.append(&l);
+        engine_labels.push(l);
+    }
+
     // Tab Chat: transkrip + entry + kirim.
     let transcript = TextView::new();
     transcript.set_editable(false);
@@ -993,7 +1097,7 @@ fn build_ui(app: &Application) {
     chat_box.append(&transcript_scroll);
     chat_box.append(&entry_row);
 
-    // Tab Antrean: daftar task (baca saja di v1).
+    // Tab Antrean: daftar task + tombol aksi per task.
     let tasks_inner = GtkBox::new(Orientation::Vertical, 4);
     let tasks_scroll = ScrolledWindow::builder().vexpand(true).hexpand(true).build();
     tasks_scroll.set_child(Some(&tasks_inner));
@@ -1003,6 +1107,7 @@ fn build_ui(app: &Application) {
     tasks_box.set_visible(false);
 
     panel.append(&peek_box);
+    panel.append(&engine_row);
     panel.append(&tabs_row);
     panel.append(&chat_box);
     panel.append(&tasks_box);
@@ -1016,6 +1121,7 @@ fn build_ui(app: &Application) {
         status,
         peek_box,
         peek_label,
+        engine_labels,
         tasks_inner,
         transcript,
         transcript_scroll,
@@ -1038,6 +1144,7 @@ fn build_ui(app: &Application) {
         let ui = ui.clone();
         let state = state.clone();
         let rx = rx.clone();
+        let tx = tx.clone();
         let _drain = glib::timeout_add_local(Duration::from_millis(100), move || {
             loop {
                 let msg = match rx.lock().unwrap().try_recv() {
@@ -1058,7 +1165,16 @@ fn build_ui(app: &Application) {
                     } else if state.borrow().approval.is_none() {
                         ui.peek_box.set_visible(false);
                     }
-                    rebuild_tasks(&ui, &st.rows);
+                    rebuild_tasks(&ui, &st.rows, &tx);
+                    let active = active_engines(&st.rows);
+                    for (i, (id, _)) in ENGINES.iter().enumerate() {
+                        let lbl = &ui.engine_labels[i];
+                        if active.iter().any(|e| e == id) {
+                            lbl.add_css_class("engine-active");
+                        } else {
+                            lbl.remove_css_class("engine-active");
+                        }
+                    }
                 }
                 Msg::ChatDelta(d) => {
                     let mut s = state.borrow_mut();
@@ -1355,5 +1471,24 @@ mod tests {
     fn truncate_ascii() {
         assert_eq!(truncate("abc", 5), "abc");
         assert_eq!(truncate("abcdef", 3), "abc…");
+    }
+
+    #[test]
+    fn row_actions_by_state() {
+        assert_eq!(row_actions("done", false), (None, false));
+        assert_eq!(row_actions("failed", false), (None, false));
+        assert_eq!(row_actions("cancelled", false), (None, false));
+        assert_eq!(row_actions("running", false), (Some("pause"), true));
+        assert_eq!(row_actions("running", true), (Some("resume"), true));
+    }
+
+    #[test]
+    fn active_engines_from_running() {
+        let rows = vec![
+            TaskRow { task_id: "t1".into(), goal: "".into(), engine: "coding".into(), status: "running".into(), paused: false },
+            TaskRow { task_id: "t2".into(), goal: "".into(), engine: "slide".into(), status: "done".into(), paused: false },
+            TaskRow { task_id: "t3".into(), goal: "".into(), engine: "coding".into(), status: "running".into(), paused: true },
+        ];
+        assert_eq!(active_engines(&rows), vec!["coding".to_string()]);
     }
 }

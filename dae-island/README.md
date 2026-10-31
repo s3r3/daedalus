@@ -20,16 +20,19 @@ biasa. dae-island adalah satu-satunya island.
 - **Fase 1** (skeleton): layer-shell window + pil statis + animasi
   expand/collapse manual. Sudah di main (`0c52c163`).
 - **Fase 2 (data live) + Fase 3 (chat/approve)**: selesai di branch
-  `finish-dae-captain-island`, belum live-test. Pil menampilkan status
-  server secara live (polling `GET /workflow/runs` tiap 2 detik);
-  panel punya peek approval (Izinkan/Tolak, sticky sampai dijawab) +
-  tab Chat (streaming SSE ke `POST /workflow/chat/stream`) + tab Antrean
-  (daftar task, baca saja). Animasi memakai spring isle (stiffness 155,
+  `finish-dae-captain-island`, merge ke main PR #145 (`db9196ab`).
+  Pil menampilkan status server secara live (polling
+  `GET /workflow/runs` tiap 2 detik); panel punya peek approval
+  (Izinkan/Tolak, sticky sampai dijawab) + tab Chat (streaming SSE
+  ke `POST /workflow/chat/stream`) + tab Antrean (daftar task dengan
+  tombol aksi per task: Jeda/Lanjut/Batal via `POST
+  /tasks/:id/pause|resume|cancel` + token daemon.json; cancel
+  dikecualikan token) + baris engine (5 engine, yang sedang bekerja
+  disorot). Animasi memakai spring isle (stiffness 155,
   damping 18); hover 120 ms membuka, pointer pergi 300 ms menutup
   (ditahan saat entry chat fokus). v1 sengaja polling, bukan WebSocket
   `/tasks/events` — itu follow-up (trade-off jujur vs "never poll" isle).
-- Follow-up (bukan v1): pause/resume/cancel per baris Antrean,
-  highlight engine aktif, streaming WebSocket, hormat
+- Follow-up (bukan v1): streaming WebSocket, hormat
   `gtk-enable-animations` (saat ini spring selalu jalan).
 
 ## Dependensi build
@@ -82,7 +85,10 @@ Fase 2/3 (baru):
 11. Hover pil 120 ms (tanpa klik) → panel membuka; geser pointer keluar
     → panel menutup setelah ±300 ms.
 12. Tab Chat: kirim pesan → jawaban streaming muncul di transkrip;
-    tab Antrean: daftar task sesuai workspace aktif.
+    tab Antrean: daftar task sesuai workspace aktif, tombol
+    Jeda/Lanjut/Batal per task bekerja (Jeda → task dijeda, Lanjut →
+    lanjut dari checkpoint, Batal → task berhenti), dan baris engine
+    menyorot engine yang sedang bekerja.
 13. Saat mengetik di entry chat, panel TIDAK auto-tutup walau pointer
     keluar dari island.
 
