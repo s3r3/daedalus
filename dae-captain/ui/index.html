@@ -8,38 +8,8 @@
 <link rel="stylesheet" href="theme-mascot.css">
 </head>
 <body>
-  <!-- Compact pill (dynamic island, collapsed). Managed by PillController (pill.js). -->
-  <div id="pill" class="pill status-blue" role="button" tabindex="0" aria-label="Dae Captain — klik untuk membuka">
-    <span class="pill-ring" aria-hidden="true">
-      <svg class="ring-svg" viewBox="0 0 36 36">
-        <circle class="ring-track" cx="18" cy="18" r="15.5"/>
-        <circle class="ring-fill" cx="18" cy="18" r="15.5"/>
-      </svg>
-      <span class="mascot mascot-sm" aria-hidden="true">
-        <svg class="mascot-svg" viewBox="0 0 48 48">
-          <defs>
-            <linearGradient id="daeGradPill" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0" stop-color="#7c8bff"/>
-              <stop offset="1" stop-color="#4a5ae0"/>
-            </linearGradient>
-          </defs>
-          <rect class="m-body" x="6" y="8" width="36" height="34" rx="15" fill="url(#daeGradPill)"/>
-          <g class="m-eyes">
-            <ellipse cx="19" cy="24" rx="3.4" ry="4.4" fill="#14162b"/>
-            <ellipse cx="29" cy="24" rx="3.4" ry="4.4" fill="#14162b"/>
-            <circle cx="20.2" cy="22.4" r="1.1" fill="#fff" opacity="0.9"/>
-            <circle cx="30.2" cy="22.4" r="1.1" fill="#fff" opacity="0.9"/>
-          </g>
-        </svg>
-      </span>
-    </span>
-    <span class="pill-dot blue" aria-hidden="true"></span>
-    <span id="pill-text" class="pill-text"></span>
-    <span class="pill-actions"></span>
-  </div>
-
   <!-- Expanded panel -->
-  <div id="panel" class="panel hidden">
+  <div id="panel" class="panel">
     <header class="panel-header" data-tauri-drag-region>
       <div class="identity">
         <span class="mascot" aria-hidden="true">
@@ -68,7 +38,6 @@
         <button id="btn-wardrobe" class="icon-btn" title="Ganti baju maskot">👕</button>
         <button id="btn-workspace" class="icon-btn" data-i18n-title="nav.workspace" title="Pilih workspace">📁</button>
         <button id="btn-settings" class="icon-btn" data-i18n-title="nav.settings" title="Pengaturan">⚙</button>
-        <button id="btn-collapse" class="icon-btn" data-i18n-title="nav.collapse" title="Kecilkan">–</button>
         <button id="btn-quit" class="icon-btn" data-i18n-title="nav.quit" title="Keluar">✕</button>
       </span>
     </header>
@@ -85,6 +54,7 @@
         <button id="btn-goto-crew" class="action-btn" data-i18n="chat.crew">Kru</button>
         <button id="btn-export" class="action-btn" data-i18n="chat.export">Ekspor</button>
       </div>
+      <div id="task-actions" class="action-row hidden"></div>
       <div id="action-status" class="action-status"></div>
       <div class="composer">
         <div id="slash-menu" class="slash-menu hidden"></div>
@@ -169,24 +139,6 @@
           <input id="set-model-light" type="text" list="set-model-list" placeholder="— sama dengan global —" autocomplete="off">
         </div>
         <p class="hint" data-i18n="set.lightEmpty">Kosongkan tier ringan untuk pakai 1 model global.</p>
-
-        <h3 class="section-header">💊 Pill</h3>
-        <div class="field"><label data-i18n="set.pillPosition">Posisi</label>
-          <select id="set-pill-position">
-            <option value="top-center" data-i18n="set.posTopCenter">Tengah atas</option>
-            <option value="top-left" data-i18n="set.posTopLeft">Kiri atas</option>
-            <option value="top-right" data-i18n="set.posTopRight">Kanan atas</option>
-            <option value="bottom-left" data-i18n="set.posBottomLeft">Kiri bawah</option>
-            <option value="bottom-right" data-i18n="set.posBottomRight">Kanan bawah</option>
-          </select>
-        </div>
-        <div class="field"><label>Hotkey</label><input id="set-pill-hotkey" type="text" value="Ctrl+Shift+D" readonly></div>
-        <div class="field"><label data-i18n="set.pillNotify">Notifikasi</label>
-          <span class="radio"><input type="radio" name="pill-notify" value="pulse" checked> <span data-i18n="set.notifyPulse">Denyut</span></span>
-          <span class="radio"><input type="radio" name="pill-notify" value="sound"> <span data-i18n="set.notifySound">Suara</span></span>
-          <span class="radio"><input type="radio" name="pill-notify" value="off"> <span data-i18n="set.notifyOff">Mati</span></span>
-        </div>
-        <div class="field"><span class="radio"><input id="set-pill-dnd" type="checkbox"> <span data-i18n="set.pillDnd">Jangan ganggu</span></span></div>
 
         <h3 class="section-header">✅ <span data-i18n="set.approval">Approval</span></h3>
         <div id="set-approval-types"></div>

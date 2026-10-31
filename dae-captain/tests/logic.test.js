@@ -5,7 +5,8 @@ import {
   ENGINES,
   aggregateStatus,
   statusColor,
-  pillText,
+  primaryTask,
+  parseProgressFraction,
   turnSummary,
   formatResolvedArtifacts,
   approvalPayload,
@@ -77,16 +78,11 @@ describe("aggregateStatus", () => {
   });
 });
 
-describe("statusColor / pillText", () => {
+describe("statusColor", () => {
   it("maps statuses to colors", () => {
     assert.equal(statusColor("attention"), "amber");
     assert.equal(statusColor("working"), "green");
     assert.equal(statusColor("idle"), "blue");
-  });
-  it("pill shows ! on attention, count when working", () => {
-    assert.equal(pillText({ status: "attention", running: 2, attention: 1 }), "!");
-    assert.equal(pillText({ status: "working", running: 3, attention: 0 }), "3");
-    assert.equal(pillText({ status: "idle", running: 0, attention: 0 }), "");
   });
 });
 
@@ -618,5 +614,36 @@ describe("renderMarkdown", () => {
     const html = renderMarkdown("<script>alert(1)</script>");
     assert.ok(!html.includes("<script>"));
     assert.ok(html.includes("&lt;script&gt;"));
+  });
+});
+
+describe("primaryTask", () => {
+  const run = (turns) => [{ turns }];
+  it("prefers the first running turn", () => {
+    const p = primaryTask(run([{ task_id: "a", status: "done", engine: "coding" }, { task_id: "b", status: "running", engine: "slide" }]));
+    assert.deepEqual(p, { taskId: "b", engine: "slide", status: "running" });
+  });
+  it("falls back to the first paused turn", () => {
+    const p = primaryTask(run([{ task_id: "a", status: "done" }, { task_id: "b", status: "paused", paused: true, engine: "coding" }]));
+    assert.deepEqual(p, { taskId: "b", engine: "coding", status: "paused" });
+  });
+  it("returns null when nothing runs or pauses", () => {
+    assert.equal(primaryTask(run([{ task_id: "a", status: "done" }])), null);
+    assert.equal(primaryTask([]), null);
+  });
+});
+
+describe("parseProgressFraction", () => {
+  it("takes the last x/y in the text", () => {
+    assert.deepEqual(parseProgressFraction("Mengisi slide 8/12: Judul"), { current: 8, total: 12 });
+    assert.deepEqual(parseProgressFraction("slide 3/12 lalu 8/12"), { current: 8, total: 12 });
+    assert.deepEqual(parseProgressFraction("slide 15/12"), { current: 12, total: 12 });
+  });
+  it("returns null for non-fractions", () => {
+    assert.equal(parseProgressFraction("Berpikir…"), null);
+    assert.equal(parseProgressFraction(""), null);
+    assert.equal(parseProgressFraction(null), null);
+    assert.equal(parseProgressFraction("slide 5/0"), null);
+    assert.equal(parseProgressFraction("x/y"), null);
   });
 });

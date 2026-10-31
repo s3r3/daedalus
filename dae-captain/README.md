@@ -1,7 +1,7 @@
 # Dae Captain
 
-Dynamic-island companion untuk Daedalus: satu chat + satu pulau kecil yang
-mengatur **lima engine agentic** (Coding, Slide, Dokumen, Spreadsheet,
+Desktop chat companion untuk Daedalus: satu jendela chat yang mengatur
+**lima engine agentic** (Coding, Slide, Dokumen, Spreadsheet,
 Research) — pantau agent yang berjalan, approve/deny inline, tanpa buka
 tab browser.
 
@@ -9,8 +9,8 @@ tab browser.
 
 ```
 ┌──────────────────────────────────────────┐
-│ Dae Captain (aplikasi Tauri ini)         │  ← dynamic island: pill ↔ panel
-│ chat + pill per engine + approve/deny   │     thin client, tanpa logika engine
+│ Dae Captain (aplikasi Tauri ini)         │  ← jendela chat normal
+│ chat + chip per engine + approve/deny   │     thin client, tanpa logika engine
 └───────────────┬──────────────────────────┘
                 │ HTTP 127.0.0.1:3080
 ┌───────────────▼──────────────────────────┐
@@ -41,39 +41,46 @@ dae-captain/
   README.md            ← file ini
   BUILD.md             ← perintah build persis untuk laptop Arch
   src-tauri/           ← backend Rust (tipis): window, sidecar, prefs
-    Cargo.toml         ← hanya tauri + serde (+ tauri-build); tanpa plugin
+    Cargo.toml         ← tauri + serde + dialog (+ tauri-build)
     tauri.conf.json
     src/main.rs
     icons/             ← icon.png (placeholder "D") + render-icon.py
   ui/                  ← frontend TANPA build step: HTML/CSS/JS polos
     index.html
     styles.css
+    theme-mascot.css   ← tema selaras maskot (dimuat setelah styles.css)
     logic.js           ← fungsi murni (di-test)
     api.js             ← client HTTP server (di-test, fetch injectable)
+    bridge.js          ← invoke Tauri v2 (di-test)
+    cards.js           ← kartu chat (di-test, butuh jsdom)
+    events.js          ← event stream server (di-test)
+    mascot.js          ← maskot v2 (status dari renderHeaderStatus)
     app.js             ← wiring DOM + bridge Tauri
-  tests/               ← node:test, tanpa dependensi
+  tests/               ← node:test (chat-cards butuh jsdom dari node_modules
+                         root repo)
 ```
 
 Frontend sengaja tanpa bundler/framework: yang diserve Tauri adalah file
-statis di `ui/`. Bridge Tauri dipakai lewat `window.__TAURI__` yang
-di-inject runtime (tanpa npm package).
+statis di `ui/`. Bridge Tauri dipakai lewat
+`window.__TAURI_INTERNALS__.invoke` (Tauri 2, tanpa npm package).
 
-## Perilaku island
+## Perilaku jendela
 
-- **Compact pill**: dot "D" + warna status — hijau (ada yang running),
-  amber (butuh approval — berdenyut), biru (idle). Teks: "!" atau jumlah
-  yang running.
-- **Expand** → panel: pill per engine (live), kartu approval (Allow/Deny),
-  transcript chat + input (chip override engine: Auto/Coding/…), Settings,
+- **Jendela chat normal**: decorated, resizable, default 1024×720.
+  Header menunjukkan workspace aktif + status jujur (siap / berjalan /
+  butuh perhatian / terputus).
+- **Chat**: chip per engine (live), kartu approval (Allow/Deny),
+  transcript + input (chip override engine: Auto/Coding/…), Settings,
   Workspace picker.
-- Island mekar otomatis saat approval baru masuk; menciut manual via tombol.
+- **Task berjalan**: tombol Jeda/Lanjut/Batal muncul di chat, bekerja
+  pada task utama (pause/resume/cancel via API server).
+- **Maskot** mengikuti status task (dari `renderHeaderStatus`, bukan
+  observer pill lagi).
 
 ## Status jujur
 
-- **Layer-shell**: v1 memakai panel borderless always-on-top di top-center
-  (pendekatan yang terbukti di WhisperShell). Pinning layer-shell sejati
-  (`zwlr_layer_shell`, seperti coucou) butuh integrasi native
-  (gtk-layer-shell / wayland-protocols-wlr) — follow-up terdokumentasi,
-  bukan janji v1. Di Hyprland bisa dibantu windowrule (lihat BUILD.md).
+- **Island / pinning**: bukan lagi urusan aplikasi ini — pindah ke
+  `dae-island` (GTK4 + gtk4-layer-shell, native Rust tanpa webview).
+  Aplikasi ini jendela desktop biasa.
 - Binary Tauri **tidak bisa** di-build di VM ini (tanpa Rust toolchain /
   webkit) — build + live proof milik laptop Arch Farid (lihat BUILD.md).

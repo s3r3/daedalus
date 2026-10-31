@@ -9,8 +9,6 @@ import assert from "node:assert/strict";
 import {
   detectBridge,
   createInvoker,
-  WINDOW_SET_SIZE_CMD,
-  setSizePayload,
 } from "../ui/bridge.js";
 
 const tauri2Window = (invokeImpl) => ({
@@ -75,11 +73,3 @@ describe("createInvoker", () => {
   });
 });
 
-describe("window resize command", () => {
-  it("uses the core window plugin command with a Logical size", () => {
-    assert.equal(WINDOW_SET_SIZE_CMD, "plugin:window|set_size");
-    assert.deepEqual(setSizePayload(480, 640), {
-      value: { Logical: { width: 480, height: 640 } },
-    });
-  });
-});

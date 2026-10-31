@@ -54,37 +54,37 @@ cargo tauri build
 
 ```bash
 cd ~/workspace/repos/daedalus/dae-captain
-node --test tests/logic.test.js tests/api.test.js
+node --test tests/*.test.js
 ```
+
+(Jalan dari checkout repo: `chat-cards.test.js` butuh `jsdom` yang
+di-resolve dari `node_modules` root repo.)
 
 ## 7. Verifikasi live (checklist laptop)
 
-1. Buka aplikasi → pill biru (idle) muncul top-center.
+1. Buka aplikasi → jendela chat normal muncul (bukan overlay pill).
 2. Stop server (`daedalus stop`), buka ulang aplikasi → server ke-spawn
    sebagai sidecar (cek `daedalus status` — PID sama).
-3. Chat: "buatkan slide tentang X" → pill Slide hijau, turn tercatat.
-4. Buat task coding dengan auto-approve off → kartu approval muncul +
-   island mekar otomatis → Allow/Deny bekerja.
+3. Chat: "buatkan slide tentang X" → chip engine Slide hijau, turn tercatat.
+4. Buat task coding dengan auto-approve off → kartu approval muncul di
+   chat → Allow/Deny bekerja.
 5. Settings → ganti provider/model → tersimpan, berlaku untuk engine.
 6. Workspace picker → pindah folder → dispatch berikutnya di folder itu.
 7. Quit → dialog keep-alive → "biarkan jalan" = server tetap hidup.
+8. Task berjalan → tombol Jeda/Lanjut/Batal muncul di chat; Pause →
+   Resume bekerja, Stop menghentikan task (gate Q5: cancel exempt dari
+   token, jadi Stop tidak boleh 401).
 
-## 8. Opsional: pin di Hyprland (sementara, sampai layer-shell native)
+## 8. Jendela normal — tidak perlu windowrule
 
-```ini
-# ~/.config/hypr/hyprland.conf
-windowrulev2 = float, title:^(Dae Captain)$
-windowrulev2 = pin, title:^(Dae Captain)$
-windowrulev2 = noborder, title:^(Dae Captain)$
-windowrulev2 = move 50% 8, title:^(Dae Captain)$
-```
+Dae Captain kini jendela desktop biasa (decorated, resizable). Pin /
+layer-shell bukan lagi urusannya — itu menjadi urusan `dae-island`
+(GTK4 + gtk4-layer-shell).
 
 ## 9. Follow-up yang disengaja TIDAK masuk v1
 
-- **Layer-shell pinning sejati** (`zwlr_layer_shell_v1`): butuh integrasi
-  native — opsi yang diteliti: `gtk4-layer-shell` membungkus window GTK
-  Tauri, atau `wayland-protocols-wlr` + `smithay-client-toolkit` di Rust.
-  v1 = panel borderless always-on-top (jujur, bukan pura-pura layer-shell).
+- **Island / layer-shell**: PINDAH ke `dae-island` (GTK4 +
+  gtk4-layer-shell) — bukan lagi urusan aplikasi Tauri ini.
 - **Ikon final**: Farid desain sendiri; placeholder "D" di
   `src-tauri/icons/` (regenerasi: `python3 render-icon.py`).
 - **Bundling node + repo**: v1 berjalan dari checkout repo; packaging

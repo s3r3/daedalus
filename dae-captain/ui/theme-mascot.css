@@ -10,7 +10,7 @@
   --hue: #6f8bff;          /* warna aksen dekorasi aktif */
   --hue2: #8b7bff;         /* pasangan gradien */
   --on: #ffffff;           /* teks di atas aksen */
-  --glyph: "✦";            /* simbol dekorasi (pill + header chat) */
+  --glyph: "✦";            /* simbol dekorasi (header chat) */
 
   --ground: #070818;
   --panel: #0c0d26;
@@ -95,73 +95,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
 button { transition: transform var(--t-fast) var(--ease), background-color var(--t-fast) ease,
   border-color var(--t-fast) ease, color var(--t-fast) ease, box-shadow var(--t-mid) ease, opacity var(--t-fast) ease; }
 
-/* ---------- 5. PILL (dynamic island) ---------- */
-.pill {
-  --st: var(--accent);
-  position: relative; gap: 10px; min-height: 48px; padding: 4px 16px 4px 4px;
-  border: 1.5px solid transparent; border-radius: 999px; color: var(--text);
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--panel) 96%, #fff 4%), var(--panel)) padding-box,
-    linear-gradient(120deg, var(--st), var(--accent2) 55%, var(--st)) border-box;
-  box-shadow: 0 12px 34px rgba(4, 4, 24, .62), 0 0 26px -10px var(--st);
-  transition: box-shadow var(--t-slow) ease, background var(--t-slow) ease, transform var(--t-fast) var(--ease), opacity var(--t-mid) ease;
-}
-.pill[data-status="working"]          { --st: #6f8bff; }
-.pill[data-status="verifying"]        { --st: #4fd1c5; }
-.pill[data-status="fixing"]           { --st: #ffb84a; }
-.pill[data-status="waiting_approval"] { --st: #ffc13a; }
-.pill[data-status="paused"]           { --st: #8c93d9; }
-.pill[data-status="queued"]           { --st: #8c93d9; }
-.pill[data-status="done"]             { --st: #5bd18a; }
-.pill[data-status="error"]            { --st: #ff6b81; }
-.pill:hover { transform: translateY(-1px); box-shadow: 0 16px 40px rgba(4, 4, 24, .7), 0 0 32px -8px var(--st); }
-.pill:active { transform: scale(.97); }
-.pill-ring { width: 40px; height: 40px; }
-.pill-ring .ring-svg { pointer-events: none; } /* klik harus sampai ke maskot (animasi klik) */
-.pill-ring .mascot { position: relative; z-index: 1; }
-.ring-track { stroke: color-mix(in srgb, var(--st, var(--accent)) 24%, transparent); opacity: 1; }
-.ring-fill { stroke: var(--st, var(--accent)); stroke-width: 3; transition: stroke-dasharray var(--t-mid) var(--ease), opacity var(--t-fast) ease, stroke var(--t-slow) ease; }
-.pill .pill-dot {
-  width: 8px; height: 8px; background: var(--st) !important;
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--st) 24%, transparent);
-  transition: background var(--t-slow) ease, box-shadow var(--t-slow) ease;
-}
-.pill-text { font-size: 13px; font-weight: 600; letter-spacing: .01em; color: var(--text); }
-.pill-btn {
-  border-color: color-mix(in srgb, var(--st) 45%, transparent); color: var(--text);
-  background: color-mix(in srgb, var(--st) 14%, transparent); height: 26px; min-width: 26px;
-}
-.pill-btn:hover { background: color-mix(in srgb, var(--st) 30%, transparent); border-color: var(--st); color: var(--text); }
-.pill-btn-text { background: linear-gradient(135deg, var(--st), var(--accent2)); border-color: transparent; color: #0a0a28; font-weight: 700; }
-.pill-btn-text:hover { color: #0a0a28; filter: brightness(1.08); }
-/* simbol dekorasi di sudut pill */
-.pill::after {
-  content: var(--glyph); position: absolute; top: -10px; right: 16px; font-size: 14px; line-height: 1;
-  color: var(--accent); pointer-events: none; filter: drop-shadow(0 2px 4px rgba(0, 0, 0, .55));
-  animation: dae-glyph-bob 3.4s ease-in-out infinite;
-}
-@keyframes dae-glyph-bob { 50% { transform: translateY(-2px) rotate(6deg); } }
-
-/* animasi masuk status (dipicu saat atribut data-status berganti) */
-.pill[data-status="done"]             { animation: dae-pill-pop .5s cubic-bezier(.2, 1.4, .4, 1); }
-.pill[data-status="error"]            { animation: dae-pill-shake .45s ease; }
-.pill[data-status="waiting_approval"] { animation: dae-pill-nudge .55s ease; }
-.pill.pill-pulse[data-status="done"],
-.pill.pill-pulse[data-status="waiting_approval"] { animation: dae-pill-pop .5s cubic-bezier(.2, 1.4, .4, 1), pill-throb 1.6s ease-in-out .5s infinite; }
-.pill.pill-pulse { animation: pill-throb 1.6s ease-in-out infinite; }
-@keyframes dae-pill-pop { 0% { transform: scale(.94); } 55% { transform: scale(1.06); } 100% { transform: scale(1); } }
-@keyframes dae-pill-shake { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-5px); } 45% { transform: translateX(4px); } 70% { transform: translateX(-2px); } }
-@keyframes dae-pill-nudge { 0%, 100% { transform: translateY(0); } 35% { transform: translateY(-4px); } 65% { transform: translateY(1px); } }
-@keyframes pill-throb {
-  0%, 100% { box-shadow: 0 12px 34px rgba(4, 4, 24, .62), 0 0 26px -10px var(--st); }
-  50% { box-shadow: 0 12px 34px rgba(4, 4, 24, .62), 0 0 0 6px color-mix(in srgb, var(--st) 28%, transparent), 0 0 34px -4px var(--st); }
-}
-.pill.pill-dnd { filter: saturate(.7); }
-.pill.pill-offline { opacity: .8; }
-
-/* ---------- 6. PANEL & HEADER ---------- */
+/* ---------- 5. PANEL & HEADER ---------- */
 .panel {
-  position: relative; width: 480px; border: 1.5px solid transparent; border-radius: var(--radius);
+  position: relative; width: 100%; border: 1.5px solid transparent; border-radius: 0;
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--panel) 92%, var(--accent) 8%), var(--panel) 38%) padding-box,
     linear-gradient(140deg, color-mix(in srgb, var(--accent) 75%, transparent), transparent 38%, color-mix(in srgb, var(--accent2) 55%, transparent)) border-box;
@@ -194,8 +130,8 @@ section { padding: 12px 14px; }
 h2 { font-size: 15px; font-weight: 700; }
 h3 { color: var(--dim); }
 
-/* ---------- 7. CHAT ---------- */
-.transcript { gap: 10px; max-height: 340px; padding: 4px 2px; }
+/* ---------- 6. CHAT ---------- */
+.transcript { gap: 10px; padding: 4px 2px; }
 .bubble { padding: 10px 14px; border-radius: 20px; line-height: 1.5; }
 .bubble.user {
   background: linear-gradient(135deg, var(--accent), var(--accent2)); color: var(--on-accent);
@@ -238,7 +174,7 @@ h3 { color: var(--dim); }
 .slash-item.active { background: color-mix(in srgb, var(--accent) 18%, transparent); }
 .attach-chip { background: var(--card); border-radius: 999px; }
 
-/* ---------- 8. TOMBOL UMUM ---------- */
+/* ---------- 7. TOMBOL UMUM ---------- */
 .primary-btn {
   background: linear-gradient(135deg, var(--accent), var(--accent2)); color: var(--on-accent);
   border-radius: 14px; padding: 9px 16px; box-shadow: 0 10px 22px -12px var(--accent);
@@ -249,7 +185,7 @@ h3 { color: var(--dim); }
 .deny-btn { border-radius: 14px; }
 .deny-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--red) 14%, transparent); }
 
-/* ---------- 9. ANTREAN ---------- */
+/* ---------- 8. ANTREAN ---------- */
 .filter-chips { gap: 8px; }
 .filter-chip { border-radius: 999px; padding: 7px 15px; }
 .filter-chip.active { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: var(--on-accent); border-color: transparent; }
@@ -280,7 +216,7 @@ h3 { color: var(--dim); }
 .wf-engine { text-transform: capitalize; }
 .wf-feed, .scan-out { background: var(--ground); border: 1px solid var(--line); border-radius: 12px; }
 
-/* ---------- 10. PENGATURAN ---------- */
+/* ---------- 9. PENGATURAN ---------- */
 .settings-single { gap: 0; }
 .settings-title { font-size: 17px; font-weight: 800; margin-bottom: 14px; }
 .set-group {
@@ -321,7 +257,7 @@ h3 { color: var(--dim); }
 .set-wardrobe .mascot { width: 64px; height: 64px; flex: none; cursor: pointer; }
 .set-wardrobe p { margin: 0 0 8px; }
 
-/* ---------- 11. WORKSPACE ---------- */
+/* ---------- 10. WORKSPACE ---------- */
 .ws-search-row input { border-radius: 999px; padding: 10px 16px; }
 .ws-list, .ws-tree { gap: 2px; }
 .ws-item { border-radius: 12px; padding: 7px 12px; transition: background-color var(--t-fast) ease, transform var(--t-mid) var(--ease); }
@@ -331,7 +267,7 @@ h3 { color: var(--dim); }
 .tag-cap { color: var(--accent2); }
 .ws-git { color: var(--dim); }
 
-/* ---------- 12. KARTU (approval, deliverable, outline, dll.) ---------- */
+/* ---------- 11. KARTU (approval, deliverable, outline, dll.) ---------- */
 .approval-card {
   position: relative; overflow: hidden; border: 1px solid color-mix(in srgb, var(--amber) 55%, transparent);
   border-radius: 18px; padding: 14px;

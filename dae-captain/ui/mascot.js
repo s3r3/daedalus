@@ -2,7 +2,7 @@
  * Dae Captain — mascot v2 (SATU FILE, pengganti mascot.js + folder mascot/*.svg).
  *
  * - SVG inline (bukan <img>) → state, dekor, ekspresi bisa diganti halus tanpa reload.
- * - 9 status pill (idle, working, verifying, fixing, waiting_approval, paused, queued,
+ * - 9 task status (idle, working, verifying, fixing, waiting_approval, paused, queued,
  *   done, error) + thinking + sleep, + 5 engine (coding, slide, dokumen, spreadsheet, research).
  * - 12 dekor: default (kapten), spring, summer, autumn, winter, halloween, christmas,
  *   newyear, valentine, ramadan, eid, independence — otomatis menurut tanggal.
@@ -10,12 +10,12 @@
  *   jas, beret, sombrero, aloha) — hanya lewat pilihan manual (Panel Ganti Baju).
  * - Animasi klik per dekor/kostum: triggerMascotAction() (visual saja, 1–2 detik).
  * - Mata mengikuti kursor, reaksi hover, tidur saat idle lama, animasi berhenti saat
- *   tab/jendela tersembunyi, DND, dan prefers-reduced-motion.
+ *   tab/jendela tersembunyi, dan prefers-reduced-motion.
  *
  * Kompatibel dengan app.js lama: currentSeason, variantFor, mascotHtml,
  * refreshMascots, setMascotStatus tetap diekspor. Tidak ada perubahan wajib di app.js.
- * Opsional (1 baris di pill.js → _render): this.root.dataset.engine = s.primary?.engine ?? "";
- * supaya pose Working berganti sesuai engine (tanpa baris ini pose Working generik dipakai).
+ * app.js memanggil setMascotStatus(status, engine) dari renderHeaderStatus
+ * supaya pose Working berganti sesuai engine (tanpa engine, pose Working generik dipakai).
  *
  * Modul ini TIDAK menyentuh `document` saat di-import (aman untuk node:test).
  */
@@ -29,10 +29,7 @@ const SLEEP_ENABLED = true;
 /* Daftar publik                                                       */
 /* ------------------------------------------------------------------ */
 
-export const PILL_STATUSES = [
-  "idle", "working", "verifying", "fixing", "waiting_approval",
-  "paused", "queued", "done", "error",
-];
+
 
 /** Semua pose yang bisa dirender. */
 export const POSES = [
@@ -582,7 +579,7 @@ const CSS_ACT = Object.entries(MOTION).map(([n, [kf, sec, org]]) =>
 `;
 
 /* ------------------------------------------------------------------ */
-/* CSS (animasi + pill)                                                */
+/* CSS (animasi) */
 /* ------------------------------------------------------------------ */
 
 const CSS_ANIM = `
@@ -639,11 +636,9 @@ const CSS_ANIM = `
 @media (prefers-reduced-motion:reduce){.dae-m *{animation:none!important}}
 ${CSS_ACT}`;
 
-/** Penyesuaian pill/header supaya maskot tampil utuh (menimpa styles.css lama). */
+/** Penyesuaian header supaya maskot tampil utuh (menimpa styles.css lama). */
 const CSS_LAYOUT = `
-.pill .mascot.mascot-sm,.pill-ring .mascot.mascot-sm{width:30px!important;height:30px!important;border-radius:0!important;overflow:visible!important;outline:none!important;animation:none!important}
 .identity .mascot{width:44px;height:44px}
-.pill.pill-dnd .dae-m *{animation-play-state:paused!important}
 `;
 
 /* ------------------------------------------------------------------ */
@@ -694,8 +689,6 @@ export function mascotHtml(status = "idle", cls = "") {
 
 const instances = new Set();
 let booted = false;
-let pillEl = null;
-let pillObserver = null;
 let globalState = { status: "idle", engine: "", count: 0 };
 let decorTimer = null;
 
@@ -905,36 +898,6 @@ function onPointerLeave() {
   instances.forEach((m) => m.gaze(0, 0));
 }
 
-function readPill() {
-  if (!pillEl) return null;
-  const status = pillEl.dataset.status || "idle";
-  const engine = pillEl.dataset.engine || "";
-  let count = 0;
-  if (status === "queued") {
-    const m = /(\d+)/.exec(pillEl.querySelector("#pill-text")?.textContent ?? "");
-    count = m ? Number(m[1]) : 0;
-  }
-  return { status, engine, count };
-}
-
-function watchPill() {
-  const el = document.getElementById("pill");
-  if (!el || el === pillEl) return;
-  pillObserver?.disconnect();
-  pillEl = el;
-  pillObserver = new MutationObserver(() => {
-    const s = readPill();
-    if (!s) return;
-    globalState = s;
-    applyAll();
-  });
-  pillObserver.observe(el, { attributes: true, attributeFilter: ["data-status", "data-engine"] });
-  const text = el.querySelector("#pill-text");
-  if (text) pillObserver.observe(text, { childList: true, characterData: true, subtree: true });
-  const s = readPill();
-  if (s) globalState = s;
-}
-
 function boot() {
   if (booted) return;
   booted = true;
@@ -961,15 +924,13 @@ export function mountMascots(root = document) {
   for (const m of [...instances]) {
     if (!m.host.isConnected) { m.destroy(); instances.delete(m); }
   }
-  watchPill();
   applyAll();
 }
 
 /** Kompat: dipanggil app.js saat boot → refreshMascots("idle"). */
 export function refreshMascots(status = "idle") {
   mountMascots();
-  const fromPill = readPill();
-  globalState = fromPill && fromPill.status !== "idle" ? fromPill : { status, engine: "", count: 0 };
+  globalState = { status, engine: "", count: 0 };
   applyAll();
 }
 
@@ -1035,9 +996,6 @@ export function triggerMascotAction(name) {
 export function disposeMascots() {
   instances.forEach((m) => m.destroy());
   instances.clear();
-  pillObserver?.disconnect();
-  pillObserver = null;
-  pillEl = null;
   clearInterval(decorTimer);
   previewKey = null;
   booted = false;
