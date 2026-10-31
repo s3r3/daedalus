@@ -1776,7 +1776,8 @@ export class TaskRunner {
   /**
    * Dokumen staging seam (the Panel Skema/Outline/Terapkan release
    * buttons): settle the staged gate of the dokumen run waiting in
-   * this workspace. True when a waiting gate was released.
+   * this workspace. True when the release was accepted (a waiting gate
+   * settled, or recorded for the imminent gate).
    */
   releaseDokumenGate(root: string): boolean {
     for (const engine of this.#activeDokumenEngines.values()) {

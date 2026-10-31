@@ -385,6 +385,14 @@ export class SlideEngine {
       const outlineResult = await generateDeckOutlineStage(this.#provider, root, brief, { signal });
       outline = outlineResult.outline;
       ctx.setStep('outline', 'done');
+      const generation = slide?.generation ?? 'standard';
+      // Install the staging gate BEFORE the skeleton becomes visible:
+      // the Outline panel reacts to the deck file, so a Buat release
+      // landing between "skeleton on disk" and "gate installed" was
+      // previously lost (generateStagedDeck returned null while the run
+      // kept waiting) — a race that failed CI runs intermittently.
+      // The gate is awaited below at the checkpoint.
+      const decisionPromise = generation === 'standard' ? this.#awaitGenerate() : null;
       // The skeleton is on disk now — announce it so the Web's deck
       // surfaces re-read and the Outline panel can offer Buat.
       await this.#emitDeckChanged(root, deckTextBeforeOutline);
@@ -394,7 +402,6 @@ export class SlideEngine {
       this.#throwIfAborted();
       await this.#waitIfPaused();
 
-      const generation = slide?.generation ?? 'standard';
       if (generation === 'smart') {
         ctx.setStep('checkpoint', 'skipped');
       } else {
@@ -406,7 +413,7 @@ export class SlideEngine {
         this.#emit('THOUGHT', {
           text: `Outline selesai dan tersimpan sebagai kerangka deck (${outline.length} slide) — sudah tampil di panel Outline. Periksa judul, layout, dan urutannya, atur warna & font di panel Warna & Font bila perlu, lalu tekan tombol Buat di panel Outline untuk mulai mengisi slide dan export .pptx.`,
         });
-        const decision = await this.#awaitGenerate();
+        const decision = await decisionPromise!;
         if (decision.kind === 'superseded') {
           const summary = 'Outline ini tidak jadi dibuat: prompt baru menggantikannya sebelum tombol Buat ditekan. Yang berlaku sekarang adalah kerangka deck terbaru di panel Outline.';
           this.#emit('THOUGHT', { text: summary });
