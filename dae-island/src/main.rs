@@ -1,11 +1,15 @@
-// dae-island — Fase 2 (data live) + Fase 3 (chat/approve).
+// dae-island — Fase 2 (data live) + Fase 3 (chat/approve) + port konsep
+// dynamic island Dae Captain (maskot, 9 status pill, progress ring,
+// smart click, mode notifikasi/DND — lihat README).
 //
-// Konsep ikut zickrian/isle (docs/product-spec.md) — KODE ditulis dari nol,
-// bukan salinan: isle GPL-3.0, crate ini MIT. Yang diambil hanya idenya:
-// notch yang diam di atas layar, tiga presentasi (compact / peek /
-// expanded), spring yang sama untuk membesar-mengecil, hover 120 ms untuk
-// membuka, tutup 300 ms setelah pointer pergi (kecuali saat mengetik),
-// dan alert yang muncul di tempat yang sama, bukan di tengah layar.
+// Lineage (koreksi 2026-10-31): bentuk dasar pill+panel, dot status,
+// baris engine, dan expand/collapse berasal dari mode dynamic-island
+// Dae Captain (Tauri) — BUKAN dari isle. isle (zickrian/isle, GPL-3.0)
+// hanya menyumbang refinement gerak/interaksi: spring 155/18, hover
+// 120 ms, tutup 300 ms, peek approval sticky. Kode di sini ditulis dari
+// nol (JS→Rust rewrite); tidak ada kode isle maupun Dae Captain yang
+// disalin mentah — yang dicopy adalah DATA seni maskot (path SVG) dan
+// SEMANTIK status/notifikasi, dengan renderer Cairo baru.
 //
 // Berbeda dari isle: tidak ada GNOME Shell extension (Hyprland mendukung
 // layer-shell secara native, jadi satu window GTK4 layer-shell cukup) dan
@@ -39,6 +43,8 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
+
+mod mascot;
 
 const APP_ID: &str = "cc.ayid.dae-island";
 // Spring isle §2: stiffness 155, damping 18 (≈3.5% overshoot, settled 0.57 s).
@@ -399,11 +405,18 @@ fn daemon_token() -> Option<String> {
 
 #[derive(Debug, Clone, Default)]
 struct TaskRow {
+    turn_id: String,
     task_id: String,
     goal: String,
     engine: String,
     status: String,
     paused: bool,
+    queued: bool,
+    last_event: String,
+    last_event_text: String,
+    validation_failures: usize,
+    pending: usize,
+    updated_at: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -434,6 +447,7 @@ fn derive_state(runs_json: &Json, workspace: &str) -> IslandState {
             None => continue,
         };
         for turn in turns {
+            let turn_id = turn.get("turn_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let task_id = turn.get("task_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let status = turn.get("status").and_then(|v| v.as_str()).unwrap_or("").to_string();
             let engine = turn.get("engine").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -463,50 +477,413 @@ fn derive_state(runs_json: &Json, workspace: &str) -> IslandState {
                 .map(|a| a.len())
                 .unwrap_or(0);
             st.questions += questions;
+            let row = TaskRow {
+                turn_id,
+                task_id: task_id.clone(),
+                goal: goal.clone(),
+                engine: engine.clone(),
+                status: status.clone(),
+                paused,
+                queued: turn.get("queued").and_then(|v| v.as_bool()).unwrap_or(false),
+                last_event: turn.get("last_event").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                last_event_text: turn
+                    .get("last_event_text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                validation_failures: match turn.get("validation_failures") {
+                    Some(Json::Num(n)) => *n as usize,
+                    _ => 0,
+                },
+                pending: approvals + questions,
+                updated_at: turn
+                    .get("updated_at")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            };
             if approvals > 0 && st.approval.is_none() && !task_id.is_empty() {
-                st.approval = Some(TaskRow {
-                    task_id: task_id.clone(),
-                    goal: goal.clone(),
-                    engine: engine.clone(),
-                    status: status.clone(),
-                    paused,
-                });
+                st.approval = Some(row.clone());
             }
-            if st.rows.len() < 12 {
-                st.rows.push(TaskRow {
-                    task_id,
-                    goal,
-                    engine,
-                    status,
-                    paused,
-                });
-            }
+            // Tidak dipotong 12 di sini: derivasi pill butuh SEMUA turn;
+            // pemotongan tampilan dilakukan di rebuild_tasks.
+            st.rows.push(row);
         }
     }
     st
 }
 
-fn status_text(st: &IslandState) -> (&'static str, String) {
-    if !st.connected {
-        return ("red", "server tidak terhubung".to_string());
+// Port derivePillState() Dae Captain (ui/logic.js) — 9 status pill dengan
+// prioritas yang sama: waiting_approval > error > paused > verifying >
+// fixing > working > queued > done > idle. Semua angka (progress, jumlah
+// failure) dibaca dari narasi/field server sendiri, tidak pernah dibuat-buat.
+fn parse_progress_fraction(text: &str) -> Option<(usize, usize)> {
+    // Cari SEMUA "N/M", pakai yang TERAKHIR (narasi lama sudah basi).
+    let bytes = text.as_bytes();
+    let mut last: Option<(usize, usize)> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            let mut j = i;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            let cur: usize = text[i..j].parse().ok()?;
+            let mut k = j;
+            while k < bytes.len() && (bytes[k] == b' ' || bytes[k] == b'\t') {
+                k += 1;
+            }
+            if k < bytes.len() && bytes[k] == b'/' {
+                k += 1;
+                while k < bytes.len() && (bytes[k] == b' ' || bytes[k] == b'\t') {
+                    k += 1;
+                }
+                let mut m = k;
+                while m < bytes.len() && bytes[m].is_ascii_digit() {
+                    m += 1;
+                }
+                if m > k {
+                    if let Ok(total) = text[k..m].parse::<usize>() {
+                        if total > 0 {
+                            last = Some((cur.min(total), total));
+                        }
+                    }
+                    i = m;
+                    continue;
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
     }
-    if let Some(a) = &st.approval {
-        let goal = if a.goal.is_empty() { "task".to_string() } else { truncate(&a.goal, 28) };
-        return ("amber", format!("butuh izin: {goal}"));
+    last
+}
+
+fn turn_phase_text(row: &TaskRow) -> String {
+    let narration = row.last_event_text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if !narration.is_empty() {
+        return truncate(&narration, 44);
     }
-    if st.running > 0 {
-        return ("blue", format!("{} berjalan", st.running));
+    let ev = row.last_event.to_uppercase();
+    if ev.contains("VALIDATION_STARTED") {
+        return "Memverifikasi…".to_string();
     }
-    if st.failed > 0 {
-        return ("red", format!("{} gagal", st.failed));
+    if ev.contains("TOOL_CALL_STARTED") {
+        return "Menjalankan alat…".to_string();
     }
-    if st.paused > 0 {
-        return ("gray", format!("{} dijeda", st.paused));
+    if ev.contains("FILE_CHANGED") {
+        return "Mengubah file…".to_string();
     }
-    if st.questions > 0 {
-        return ("amber", format!("{} butuh jawaban", st.questions));
+    if ev.contains("COMMAND") || ev.contains("TEST") {
+        return "Menjalankan perintah…".to_string();
     }
-    ("green", "siap".to_string())
+    if ev.contains("THOUGHT") || ev.contains("MODEL") || ev.contains("LLM") {
+        return "Berpikir…".to_string();
+    }
+    match row.engine.as_str() {
+        "slide" => "Membuat slide…",
+        "dokumen" => "Menyiapkan dokumen…",
+        "spreadsheet" => "Menyiapkan spreadsheet…",
+        "research" => "Menjalankan riset…",
+        _ => "Bekerja…",
+    }
+    .to_string()
+}
+
+fn task_chip(row: &TaskRow) -> String {
+    let engine = if row.engine.is_empty() { "?".to_string() } else { row.engine.to_lowercase() };
+    match parse_progress_fraction(&row.last_event_text) {
+        Some((c, t)) => format!("{engine} {c}/{t}"),
+        None => engine,
+    }
+}
+
+// Detik epoch dari timestamp ISO-8601 server ("2026-10-31T12:00:00Z" atau
+// dengan offset). Tanpa chrono: parse manual + days-from-civil. None =
+// tidak bisa diparse → pemanggil menganggap turn masih fresh (sama seperti
+// JS: Date.parse gagal → isFresh true).
+fn parse_iso_ts(s: &str) -> Option<i64> {
+    let b = s.as_bytes();
+    if b.len() < 19 {
+        return None;
+    }
+    let num = |a: usize, n: usize| -> Option<i64> {
+        s.get(a..a + n)?.parse::<i64>().ok()
+    };
+    let y = num(0, 4)?;
+    let mo = num(5, 2)?;
+    let d = num(8, 2)?;
+    let h = num(11, 2)?;
+    let mi = num(14, 2)?;
+    let se = num(17, 2)?;
+    if !(1..=12).contains(&mo) || !(1..=31).contains(&d) || h > 23 || mi > 59 || se > 60 {
+        return None;
+    }
+    // days-from-civil (Howard Hinnant).
+    let y_adj = if mo <= 2 { y - 1 } else { y };
+    let era = if y_adj >= 0 { y_adj } else { y_adj - 399 } / 400;
+    let yoe = y_adj - era * 400;
+    let mp = (mo + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468;
+    let mut secs = days * 86400 + h * 3600 + mi * 60 + se;
+    // Offset zona ("+07:00" / "-05:00") — "Z" berarti UTC, tanpa offset.
+    if b.len() >= 25 && (b[19] == b'+' || b[19] == b'-') {
+        let oh = num(20, 2)?;
+        let om = num(23, 2)?;
+        let off = oh * 3600 + om * 60;
+        secs += if b[19] == b'+' { -off } else { off };
+    }
+    Some(secs)
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+#[derive(Debug, Clone, Default)]
+struct PillMem {
+    status: String,
+    done_at: i64,
+    failed_at: i64,
+    acked: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PillView {
+    status: &'static str,
+    label: String,
+    dot: &'static str,
+    progress: Option<(usize, usize)>,
+    primary: Option<TaskRow>,
+}
+
+fn pill_dot_hex(dot: &str) -> &'static str {
+    match dot {
+        "green" => "#22c55e",
+        "blue" => "#38bdf8",
+        "purple" => "#a78bfa",
+        "yellow" => "#f59e0b",
+        "gray" => "#94a3b8",
+        _ => "#ef4444",
+    }
+}
+
+fn derive_pill(rows: &[TaskRow], memory: &mut std::collections::HashMap<String, PillMem>, dnd: bool, now: i64) -> PillView {
+    const STALE_S: i64 = 30 * 60;
+    let fresh = |r: &TaskRow| -> bool {
+        match parse_iso_ts(&r.updated_at) {
+            Some(t) => now - t < STALE_S,
+            None => true,
+        }
+    };
+    // Turn running yang fresh (filter phantom: server crash → "running" basi).
+    let running: Vec<&TaskRow> = rows.iter().filter(|t| t.status == "running" && fresh(t)).collect();
+    let approvals: Vec<&TaskRow> = running.iter().copied().filter(|t| t.pending > 0).collect();
+    let paused: Vec<&TaskRow> = running.iter().copied().filter(|t| t.paused).collect();
+    let verifying: Vec<&TaskRow> = running
+        .iter()
+        .copied()
+        .filter(|t| !t.paused && t.last_event.to_uppercase().contains("VALIDATION_STARTED"))
+        .collect();
+    let fixing: Vec<&TaskRow> = running
+        .iter()
+        .copied()
+        .filter(|t| !t.paused && t.last_event == "VALIDATION_FAILED")
+        .collect();
+    let queued: Vec<&TaskRow> = running.iter().copied().filter(|t| t.queued && !t.paused).collect();
+    let excl: Vec<String> = verifying
+        .iter()
+        .chain(fixing.iter())
+        .map(|t| if !t.turn_id.is_empty() { t.turn_id.clone() } else { t.task_id.clone() })
+        .collect();
+    let working: Vec<&TaskRow> = running
+        .iter()
+        .copied()
+        .filter(|t| {
+            !t.paused
+                && !t.queued
+                && t.pending == 0
+                && !excl.contains(&if !t.turn_id.is_empty() { t.turn_id.clone() } else { t.task_id.clone() })
+        })
+        .collect();
+
+    // Ledger lintas poll: done flash 4 detik + failure 10 menit sampai di-ack.
+    let key_of = |t: &TaskRow| -> String {
+        if !t.turn_id.is_empty() {
+            t.turn_id.clone()
+        } else {
+            t.task_id.clone()
+        }
+    };
+    let mut fresh_done: Option<&TaskRow> = None;
+    for t in rows {
+        let key = key_of(t);
+        if key.is_empty() {
+            continue;
+        }
+        let prev = memory.get(&key).cloned().unwrap_or_default();
+        if prev.status == "running" && t.status == "done" {
+            memory.insert(key, PillMem { status: "done".into(), done_at: now, failed_at: prev.failed_at, acked: false });
+            fresh_done = Some(t);
+        } else if prev.status == "running" && t.status == "failed" {
+            memory.insert(key, PillMem { status: "failed".into(), done_at: prev.done_at, failed_at: now, acked: false });
+        } else if prev.status.is_empty() {
+            memory.insert(
+                key,
+                PillMem {
+                    status: t.status.clone(),
+                    done_at: if t.status == "done" { now } else { 0 },
+                    failed_at: if t.status == "failed" { now } else { 0 },
+                    acked: false,
+                },
+            );
+        } else {
+            memory.insert(
+                key,
+                PillMem {
+                    status: t.status.clone(),
+                    done_at: prev.done_at,
+                    failed_at: prev.failed_at,
+                    acked: prev.acked,
+                },
+            );
+        }
+    }
+    let done_flash = match fresh_done {
+        Some(t) => {
+            let at = memory.get(&key_of(t)).map(|m| m.done_at).unwrap_or(0);
+            if now - at < 4 { Some(t) } else { None }
+        }
+        None => None,
+    };
+    let recent_failed: Vec<&TaskRow> = rows
+        .iter()
+        .filter(|t| {
+            if t.status != "failed" {
+                return false;
+            }
+            let e = match memory.get(&key_of(t)) {
+                Some(e) => e,
+                None => return false,
+            };
+            if e.acked {
+                return false;
+            }
+            let at = if e.failed_at > 0 { e.failed_at } else { parse_iso_ts(&t.updated_at).unwrap_or(0) };
+            now - at < 10 * 60
+        })
+        .collect();
+
+    let (status, primary): (&'static str, Option<&TaskRow>) = if !approvals.is_empty() && !dnd {
+        ("waiting_approval", approvals.last().copied())
+    } else if !recent_failed.is_empty() {
+        ("error", recent_failed.last().copied())
+    } else if !paused.is_empty() {
+        ("paused", paused.last().copied())
+    } else if !verifying.is_empty() {
+        ("verifying", verifying.last().copied())
+    } else if !fixing.is_empty() {
+        ("fixing", fixing.last().copied())
+    } else if !working.is_empty() {
+        ("working", working.last().copied())
+    } else if !queued.is_empty() {
+        ("queued", queued.last().copied())
+    } else if let Some(t) = done_flash {
+        ("done", Some(t))
+    } else {
+        ("idle", None)
+    };
+
+    let active_len = paused.len() + verifying.len() + fixing.len() + working.len() + queued.len();
+    let multi = active_len > 1;
+    let label = match status {
+        "waiting_approval" => {
+            let n: usize = approvals.iter().map(|t| t.pending).sum();
+            if n > 1 {
+                format!("⚠ {n} butuh persetujuan")
+            } else {
+                "⚠ Perlu persetujuan".to_string()
+            }
+        }
+        "error" => "✕ Gagal — lihat chat".to_string(),
+        "paused" => {
+            if multi {
+                format!("⏸ Dijeda ({}) — klik untuk lanjut", paused.len())
+            } else {
+                "⏸ Dijeda — klik untuk lanjut".to_string()
+            }
+        }
+        "verifying" => "Memverifikasi…".to_string(),
+        "fixing" => match primary {
+            Some(p) if p.validation_failures > 0 => {
+                format!("Memperbaiki ({}/2)", p.validation_failures.min(99))
+            }
+            _ => "Memperbaiki…".to_string(),
+        },
+        "working" => {
+            if multi {
+                let mut chips: Vec<String> = Vec::new();
+                for t in paused.iter().chain(verifying.iter()).chain(fixing.iter()).chain(working.iter()).chain(queued.iter()) {
+                    chips.push(task_chip(t));
+                }
+                format!("{} task: {}", active_len, chips.join(" + "))
+            } else {
+                primary.map(turn_phase_text).unwrap_or_else(|| "Bekerja…".to_string())
+            }
+        }
+        "queued" => {
+            if queued.len() > 1 {
+                format!("Antrian: {} task", queued.len())
+            } else {
+                "Antrian: 1 task".to_string()
+            }
+        }
+        "done" => "✓ Selesai".to_string(),
+        _ => "Dae Captain".to_string(),
+    };
+    let dot = match status {
+        "idle" | "done" => "green",
+        "working" => "blue",
+        "verifying" => "purple",
+        "fixing" | "waiting_approval" => "yellow",
+        "paused" | "queued" => "gray",
+        _ => "red",
+    };
+    let progress = match primary {
+        Some(p) if status != "idle" && status != "done" => parse_progress_fraction(&p.last_event_text),
+        _ => None,
+    };
+    PillView {
+        status,
+        label,
+        dot,
+        progress,
+        primary: primary.cloned(),
+    }
+}
+
+// Klik pill saat error: tandai semua failure sudah diakui (pill kembali ke
+// status berikutnya sampai ada failure BARU). Cermin acknowledgePillErrors.
+fn acknowledge_errors(rows: &[TaskRow], memory: &mut std::collections::HashMap<String, PillMem>) {
+    for t in rows {
+        if t.status != "failed" {
+            continue;
+        }
+        let key = if !t.turn_id.is_empty() { t.turn_id.clone() } else { t.task_id.clone() };
+        if key.is_empty() {
+            continue;
+        }
+        let mut e = memory.get(&key).cloned().unwrap_or_default();
+        e.status = "failed".to_string();
+        e.acked = true;
+        memory.insert(key, e);
+    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -577,7 +954,9 @@ type Tx = std::sync::mpsc::Sender<Msg>;
 
 #[derive(Clone)]
 struct Ui {
-    dot: Label,
+    pill_dot: gtk4::DrawingArea,
+    pill_btn: Button,
+    mascot_area: gtk4::DrawingArea,
     status: Label,
     peek_box: GtkBox,
     peek_label: Label,
@@ -607,6 +986,22 @@ struct UiState {
     assistant_started: bool,
     approval: Option<TaskRow>,
     workspace: String,
+    // Keadaan pill (port Dae Captain): status turunan terakhir, memori
+    // lintas poll (done flash / error ack), dan baris terakhir untuk
+    // re-derivasi saat klik error.
+    pill_status: &'static str,
+    pill_primary: Option<TaskRow>,
+    pill_dot: &'static str,
+    pill_progress: Option<(usize, usize)>,
+    pill_memory: std::collections::HashMap<String, PillMem>,
+    last_rows: Vec<TaskRow>,
+    last_notified: Option<String>,
+    prefs: Prefs,
+    // Keadaan maskot: pose turunan terakhir, sejak kapan idle (tidur
+    // setelah 120 detik idle, port mascot.js SLEEP_MS), offset pupil.
+    mascot_pose: String,
+    idle_since: Option<Instant>,
+    pupil: (f64, f64),
 }
 
 type SharedState = Rc<RefCell<UiState>>;
@@ -615,6 +1010,14 @@ fn cancel_timer(slot: &mut Option<glib::SourceId>) {
     if let Some(id) = slot.take() {
         id.remove();
     }
+}
+
+// Posisi pill (port pref island_corner Dae Captain): tengah = hanya atas,
+// kiri/kanan = tambah anchor sisi (layer-shell mendukung perubahan live).
+fn apply_corner(window: &ApplicationWindow, corner: &str) {
+    window.set_anchor(Edge::Top, true);
+    window.set_anchor(Edge::Left, corner == "left");
+    window.set_anchor(Edge::Right, corner == "right");
 }
 
 fn start_anim(state: &SharedState, root: &GtkBox, panel: &GtkBox, target: bool) {
@@ -679,11 +1082,177 @@ fn append_transcript(ui: &Ui, text: &str) {
     adj.set_value(bottom);
 }
 
-fn set_dot(ui: &Ui, color: &str) {
-    for cls in ["dot-green", "dot-amber", "dot-blue", "dot-red", "dot-gray"] {
-        ui.dot.remove_css_class(cls);
+// Preferensi pill (port Settings → Pill Dae Captain; dulu localStorage,
+// di sini file JSON kecil di ~/.daedalus/ agar survive restart).
+#[derive(Debug, Clone)]
+struct Prefs {
+    notify: String, // "pulse" (default) | "sound" | "off"
+    dnd: bool,
+    corner: String, // "center" (default) | "left" | "right"
+    decor: String,  // "auto" (default) | kunci dekor maskot
+    costume: String, // "none" (default) | kunci kostum maskot
+}
+
+impl Default for Prefs {
+    fn default() -> Self {
+        Prefs {
+            notify: "pulse".to_string(),
+            dnd: false,
+            corner: "center".to_string(),
+            decor: "auto".to_string(),
+            costume: "none".to_string(),
+        }
     }
-    ui.dot.add_css_class(&format!("dot-{color}"));
+}
+
+fn prefs_path() -> Option<String> {
+    std::env::var("HOME").ok().map(|h| format!("{h}/.daedalus/island-prefs.json"))
+}
+
+fn load_prefs() -> Prefs {
+    let mut p = Prefs::default();
+    let path = match prefs_path() {
+        Some(p) => p,
+        None => return p,
+    };
+    let raw = match std::fs::read_to_string(&path) {
+        Ok(r) => r,
+        Err(_) => return p,
+    };
+    let j = match parse_json(&raw) {
+        Some(j) => j,
+        None => return p,
+    };
+    if let Some(s) = j.get("notify").and_then(|v| v.as_str()) {
+        if ["pulse", "sound", "off"].contains(&s) {
+            p.notify = s.to_string();
+        }
+    }
+    if let Some(b) = j.get("dnd").and_then(|v| v.as_bool()) {
+        p.dnd = b;
+    }
+    if let Some(s) = j.get("corner").and_then(|v| v.as_str()) {
+        if ["center", "left", "right"].contains(&s) {
+            p.corner = s.to_string();
+        }
+    }
+    if let Some(s) = j.get("decor").and_then(|v| v.as_str()) {
+        if s == "auto" || mascot::DECORS.iter().any(|(k, _)| *k == s) {
+            p.decor = s.to_string();
+        }
+    }
+    if let Some(s) = j.get("costume").and_then(|v| v.as_str()) {
+        if s == "none" || mascot::COSTUMES.iter().any(|(k, _)| *k == s) {
+            p.costume = s.to_string();
+        }
+    }
+    p
+}
+
+fn save_prefs(p: &Prefs) {
+    let path = match prefs_path() {
+        Some(p) => p,
+        None => return,
+    };
+    let body = format!(
+        "{{\"notify\":\"{}\",\"dnd\":{},\"corner\":\"{}\",\"decor\":\"{}\",\"costume\":\"{}\"}}",
+        json_escape(&p.notify),
+        p.dnd,
+        json_escape(&p.corner),
+        json_escape(&p.decor),
+        json_escape(&p.costume)
+    );
+    let _ = std::fs::write(&path, body);
+}
+
+// Gambar dot pill: ring progres (kalau ada fraksi) + titik status.
+// Menggantikan Label "●" + kelas CSS dot-*.
+fn draw_pill_dot(cr: &gtk4::cairo::Context, dot: &str, progress: Option<(usize, usize)>) {
+    let size = 28.0;
+    let cx = size / 2.0;
+    let cy = size / 2.0;
+    if let Some((cur, total)) = progress {
+        if total > 0 {
+            // Latar ring redup penuh.
+            cr.set_source_rgba(1.0, 1.0, 1.0, 0.18);
+            cr.set_line_width(3.0);
+            cr.arc(cx, cy, 11.0, 0.0, 2.0 * std::f64::consts::PI);
+            cr.stroke().ok();
+            // Busur progres (mulai atas, searah jarum jam).
+            let frac = cur as f64 / total as f64;
+            let (r, g, b) = hex_rgb(pill_dot_hex(dot));
+            cr.set_source_rgb(r, g, b);
+            cr.arc(cx, cy, 11.0, -std::f64::consts::PI / 2.0, -std::f64::consts::PI / 2.0 + frac * 2.0 * std::f64::consts::PI);
+            cr.stroke().ok();
+        }
+    }
+    let (r, g, b) = hex_rgb(pill_dot_hex(dot));
+    cr.set_source_rgb(r, g, b);
+    cr.arc(cx, cy, 6.0, 0.0, 2.0 * std::f64::consts::PI);
+    cr.fill().ok();
+}
+
+fn hex_rgb(hex: &str) -> (f64, f64, f64) {
+    let h = hex.trim_start_matches('#');
+    let v = |a: usize| -> f64 { u8::from_str_radix(h.get(a..a + 2).unwrap_or("00"), 16).unwrap_or(0) as f64 / 255.0 };
+    (v(0), v(2), v(4))
+}
+
+// Bunyi dua-nada port _beep() pill.js (880 Hz lalu 660 Hz, sine, tanpa
+// file audio): WAV disintesis std-only lalu diputar best-effort via
+// ffplay. Tanpa ffplay, mode sound diam (bukan error).
+fn beep() {
+    std::thread::spawn(|| {
+        let rate: u32 = 44100;
+        let mut pcm: Vec<i16> = Vec::new();
+        for (freq, start) in [(880.0, 0.0), (660.0, 0.12)] {
+            let n0 = (start * rate as f64) as usize;
+            if pcm.len() < n0 {
+                pcm.resize(n0, 0);
+            }
+            let n = (0.18 * rate as f64) as usize;
+            for i in 0..n {
+                let t = i as f64 / rate as f64;
+                let env = if i < (0.02 * rate as f64) as usize {
+                    i as f64 / (0.02 * rate as f64)
+                } else {
+                    1.0 - (i as f64 / n as f64) * 0.9
+                };
+                let s = (env * 0.12 * 32767.0 * (2.0 * std::f64::consts::PI * freq * t).sin()) as i16;
+                if pcm.len() <= n0 + i {
+                    pcm.push(s);
+                } else {
+                    pcm[n0 + i] = pcm[n0 + i].saturating_add(s);
+                }
+            }
+        }
+        let data_len = pcm.len() * 2;
+        let mut wav: Vec<u8> = Vec::with_capacity(44 + data_len);
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&(36 + data_len as u32).to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&rate.to_le_bytes());
+        wav.extend_from_slice(&(rate * 2).to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&(data_len as u32).to_le_bytes());
+        for s in pcm {
+            wav.extend_from_slice(&s.to_le_bytes());
+        }
+        let path = std::env::temp_dir().join("dae-island-beep.wav");
+        if std::fs::write(&path, wav).is_ok() {
+            let _ = std::process::Command::new("ffplay")
+                .args(["-nodisp", "-autoexit", "-loglevel", "quiet"])
+                .arg(&path)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    });
 }
 
 fn rebuild_tasks(ui: &Ui, rows: &[TaskRow], tx: &Tx) {
@@ -694,7 +1263,7 @@ fn rebuild_tasks(ui: &Ui, rows: &[TaskRow], tx: &Tx) {
         ui.tasks_inner.append(&Label::new(Some("Belum ada task.")));
         return;
     }
-    for row in rows {
+    for row in rows.iter().take(12) {
         let goal = if row.goal.is_empty() {
             "(tanpa judul)".to_string()
         } else {
@@ -997,6 +1566,8 @@ const CSS: &str = "
 .engine { padding: 2px 8px; border-radius: 10px; color: #94a3b8; }
 .engine-active { background: #0ea5e9; color: #ffffff; }
 .tab-active { background: #334155; color: #f8fafc; }
+.pill-pulse { animation: pill-pulse 1.5s ease-in-out infinite; }
+@keyframes pill-pulse { 50% { opacity: 0.55; } }
 ";
 
 fn build_ui(app: &Application) {
@@ -1017,7 +1588,10 @@ fn build_ui(app: &Application) {
         .build();
     window.init_layer_shell();
     window.set_layer(Layer::Top);
-    window.set_anchor(Edge::Top, true);
+    // State dibuat awal: draw func dot pill + posisi corner butuh state.
+    let state: SharedState = Rc::new(RefCell::new(UiState::default()));
+    state.borrow_mut().prefs = load_prefs();
+    apply_corner(&window, &state.borrow().prefs.corner);
     window.set_margin(Edge::Top, 8);
     window.set_exclusive_zone(0);
     window.set_keyboard_mode(KeyboardMode::OnDemand);
@@ -1026,15 +1600,21 @@ fn build_ui(app: &Application) {
     let root = GtkBox::new(Orientation::Vertical, 0);
     root.set_size_request(COLLAPSED_W, COLLAPSED_H);
 
-    // Pill: dot + judul + status.
-    let dot = Label::new(Some("●"));
-    dot.add_css_class("dot");
-    dot.add_css_class("dot-gray");
+    // Pill: dot (DrawingArea: ring progres + titik status) + judul + status.
+    let pill_dot = gtk4::DrawingArea::new();
+    pill_dot.set_size_request(28, 28);
+    {
+        let state = state.clone();
+        pill_dot.set_draw_func(move |_, cr, _, _| {
+            let s = state.borrow();
+            draw_pill_dot(cr, s.pill_dot, s.pill_progress);
+        });
+    }
     let title = Label::new(Some("Dae Captain"));
     let status = Label::new(Some("menghubungkan…"));
     status.add_css_class("status");
     let pill_row = GtkBox::new(Orientation::Horizontal, 8);
-    pill_row.append(&dot);
+    pill_row.append(&pill_dot);
     pill_row.append(&title);
     pill_row.append(&status);
     let pill_btn = Button::new();
@@ -1059,6 +1639,37 @@ fn build_ui(app: &Application) {
     peek_box.append(&deny_btn);
     peek_box.set_visible(false);
 
+    // Maskot Kapten (port mascot.js): pose ikut status pill + engine,
+    // mata mengikuti kursor.
+    let mascot_area = gtk4::DrawingArea::new();
+    mascot_area.set_size_request(96, 96);
+    {
+        let state = state.clone();
+        mascot_area.set_draw_func(move |_, cr, _, _| {
+            let s = state.borrow();
+            mascot::draw_mascot(cr, &s.mascot_pose, &s.prefs.decor, &s.prefs.costume, 96.0, s.pupil);
+        });
+    }
+    {
+        let state_m = state.clone();
+        let area = mascot_area.clone();
+        let motion = gtk4::EventControllerMotion::new();
+        motion.connect_motion(move |_, x, y| {
+            state_m.borrow_mut().pupil = (((x / 96.0) - 0.5) * 2.0, ((y / 96.0) - 0.5) * 2.0);
+            area.queue_draw();
+        });
+        let state2 = state.clone();
+        let area2 = mascot_area.clone();
+        motion.connect_leave(move |_| {
+            state2.borrow_mut().pupil = (0.0, 0.0);
+            area2.queue_draw();
+        });
+        mascot_area.add_controller(motion);
+    }
+    let mascot_box = GtkBox::new(Orientation::Horizontal, 0);
+    mascot_box.set_halign(gtk4::Align::Center);
+    mascot_box.append(&mascot_area);
+
     let chat_tab = Button::with_label("Chat");
     chat_tab.add_css_class("tab-active");
     let tasks_tab = Button::with_label("Antrean");
@@ -1076,6 +1687,62 @@ fn build_ui(app: &Application) {
         engine_row.append(&l);
         engine_labels.push(l);
     }
+
+    // Baris preferensi pill (port Settings → Pill Dae Captain): mode
+    // notifikasi, jangan-ganggu, posisi pill.
+    let notify_drop = gtk4::DropDown::from_strings(&["Pulse", "Bunyi", "Mati"]);
+    notify_drop.set_selected(match state.borrow().prefs.notify.as_str() {
+        "sound" => 1,
+        "off" => 2,
+        _ => 0,
+    });
+    let dnd_check = gtk4::CheckButton::with_label("Jangan ganggu");
+    dnd_check.set_active(state.borrow().prefs.dnd);
+    let corner_drop = gtk4::DropDown::from_strings(&["Tengah", "Kiri", "Kanan"]);
+    corner_drop.set_selected(match state.borrow().prefs.corner.as_str() {
+        "left" => 1,
+        "right" => 2,
+        _ => 0,
+    });
+    let prefs_row = GtkBox::new(Orientation::Horizontal, 6);
+    prefs_row.append(&Label::new(Some("Notifikasi:")));
+    prefs_row.append(&notify_drop);
+    prefs_row.append(&dnd_check);
+    prefs_row.append(&Label::new(Some("Posisi:")));
+    prefs_row.append(&corner_drop);
+
+    // Baris dekor/kostum maskot (port Panel Ganti Baju + dekor musiman).
+    let mut decor_names: Vec<&str> = vec!["Otomatis"];
+    for (_, label) in mascot::DECORS {
+        decor_names.push(label);
+    }
+    let decor_drop = gtk4::DropDown::from_strings(&decor_names);
+    {
+        let cur = state.borrow().prefs.decor.clone();
+        decor_drop.set_selected(if cur == "auto" {
+            0
+        } else {
+            1 + mascot::DECORS.iter().position(|(k, _)| *k == cur).unwrap_or(0) as u32
+        });
+    }
+    let mut costume_names: Vec<&str> = vec!["Tanpa kostum"];
+    for (_, label) in mascot::COSTUMES {
+        costume_names.push(label);
+    }
+    let costume_drop = gtk4::DropDown::from_strings(&costume_names);
+    {
+        let cur = state.borrow().prefs.costume.clone();
+        costume_drop.set_selected(if cur == "none" {
+            0
+        } else {
+            1 + mascot::COSTUMES.iter().position(|(k, _)| *k == cur).unwrap_or(0) as u32
+        });
+    }
+    let mascot_row = GtkBox::new(Orientation::Horizontal, 6);
+    mascot_row.append(&Label::new(Some("Dekor:")));
+    mascot_row.append(&decor_drop);
+    mascot_row.append(&Label::new(Some("Kostum:")));
+    mascot_row.append(&costume_drop);
 
     // Tab Chat: transkrip + entry + kirim.
     let transcript = TextView::new();
@@ -1107,7 +1774,10 @@ fn build_ui(app: &Application) {
     tasks_box.set_visible(false);
 
     panel.append(&peek_box);
+    panel.append(&mascot_box);
     panel.append(&engine_row);
+    panel.append(&prefs_row);
+    panel.append(&mascot_row);
     panel.append(&tabs_row);
     panel.append(&chat_box);
     panel.append(&tasks_box);
@@ -1117,7 +1787,9 @@ fn build_ui(app: &Application) {
     window.set_child(Some(&root));
 
     let ui = Ui {
-        dot,
+        pill_dot,
+        pill_btn: pill_btn.clone(),
+        mascot_area,
         status,
         peek_box,
         peek_label,
@@ -1132,7 +1804,6 @@ fn build_ui(app: &Application) {
         chat_tab,
         tasks_tab,
     };
-    let state: SharedState = Rc::new(RefCell::new(UiState::default()));
 
     // Channel std mpsc + drain timer 100 ms: glib 0.21 menghapus
     // MainContext::channel; crate ini tetap std-only (tanpa async-channel).
@@ -1153,26 +1824,98 @@ fn build_ui(app: &Application) {
                 };
                 match msg {
                 Msg::Poll(st) => {
-                    let (color, text) = status_text(&st);
-                    set_dot(&ui, color);
-                    ui.status.set_text(&text);
-                    state.borrow_mut().workspace = st.workspace.clone();
-                    state.borrow_mut().approval = st.approval.clone();
-                    if let Some(a) = &st.approval {
-                        let goal = if a.goal.is_empty() { "task".to_string() } else { truncate(&a.goal, 40) };
-                        ui.peek_label.set_text(&format!("Butuh izin: {goal}"));
-                        ui.peek_box.set_visible(true);
-                    } else if state.borrow().approval.is_none() {
+                    if !st.connected {
+                        let mut s = state.borrow_mut();
+                        s.pill_status = "offline";
+                        s.pill_dot = "red";
+                        s.pill_progress = None;
+                        s.pill_primary = None;
+                        s.mascot_pose = "idle".to_string();
+                        s.idle_since = None;
+                        drop(s);
+                        ui.pill_dot.queue_draw();
+                        ui.mascot_area.queue_draw();
+                        ui.status.set_text("server tidak terhubung");
                         ui.peek_box.set_visible(false);
-                    }
-                    rebuild_tasks(&ui, &st.rows, &tx);
-                    let active = active_engines(&st.rows);
-                    for (i, (id, _)) in ENGINES.iter().enumerate() {
-                        let lbl = &ui.engine_labels[i];
-                        if active.iter().any(|e| e == id) {
-                            lbl.add_css_class("engine-active");
+                        ui.pill_btn.remove_css_class("pill-pulse");
+                        rebuild_tasks(&ui, &st.rows, &tx);
+                    } else {
+                        let now = now_unix();
+                        let mut s = state.borrow_mut();
+                        let dnd = s.prefs.dnd;
+                        let view = derive_pill(&st.rows, &mut s.pill_memory, dnd, now);
+                        // Bunyi: SATU kali per transisi masuk status alert,
+                        // mode sound, bukan DND (port _beep pill.js).
+                        let alert = matches!(view.status, "waiting_approval" | "done" | "error");
+                        if alert
+                            && s.last_notified.as_deref() != Some(view.status)
+                            && s.prefs.notify == "sound"
+                            && !dnd
+                        {
+                            beep();
+                        }
+                        if matches!(view.status, "idle" | "working") {
+                            s.last_notified = None;
+                        } else if alert {
+                            s.last_notified = Some(view.status.to_string());
+                        }
+                        let pulse_on = s.prefs.notify == "pulse"
+                            && matches!(view.status, "waiting_approval" | "done")
+                            && !dnd;
+                        s.pill_status = view.status;
+                        s.pill_dot = view.dot;
+                        s.pill_progress = view.progress;
+                        s.pill_primary = view.primary.clone();
+                        s.last_rows = st.rows.clone();
+                        s.approval = st.approval.clone();
+                        s.workspace = st.workspace.clone();
+                        // Maskot: pose ikut status pill + engine task utama;
+                        // tidur setelah 120 detik idle (port SLEEP_MS).
+                        let engine = view.primary.as_ref().map(|p| p.engine.clone()).unwrap_or_default();
+                        let mut pose = mascot::pose_for(view.status, &engine).to_string();
+                        if view.status == "idle" {
+                            match s.idle_since {
+                                None => s.idle_since = Some(Instant::now()),
+                                Some(t) if t.elapsed() >= Duration::from_secs(120) => {
+                                    pose = "sleep".to_string()
+                                }
+                                _ => {}
+                            }
                         } else {
-                            lbl.remove_css_class("engine-active");
+                            s.idle_since = None;
+                        }
+                        s.mascot_pose = pose;
+                        drop(s);
+                        ui.pill_dot.queue_draw();
+                        ui.mascot_area.queue_draw();
+                        ui.status.set_text(&view.label);
+                        if pulse_on {
+                            ui.pill_btn.add_css_class("pill-pulse");
+                        } else {
+                            ui.pill_btn.remove_css_class("pill-pulse");
+                        }
+                        // Peek sticky hanya saat approval aktif DAN bukan DND:
+                        // saat DND, approval tetap antre di tab Antrean.
+                        if view.status == "waiting_approval" {
+                            if let Some(a) = &view.primary {
+                                let goal = if a.goal.is_empty() { "task".to_string() } else { truncate(&a.goal, 40) };
+                                ui.peek_label.set_text(&format!("Butuh izin: {goal}"));
+                                ui.peek_box.set_visible(true);
+                            } else {
+                                ui.peek_box.set_visible(false);
+                            }
+                        } else {
+                            ui.peek_box.set_visible(false);
+                        }
+                        rebuild_tasks(&ui, &st.rows, &tx);
+                        let active = active_engines(&st.rows);
+                        for (i, (id, _)) in ENGINES.iter().enumerate() {
+                            let lbl = &ui.engine_labels[i];
+                            if active.iter().any(|e| e == id) {
+                                lbl.add_css_class("engine-active");
+                            } else {
+                                lbl.remove_css_class("engine-active");
+                            }
                         }
                     }
                 }
@@ -1225,16 +1968,112 @@ fn build_ui(app: &Application) {
         });
     }
 
-    // Klik pill: toggle.
+    // Klik pill: smart click port PillController — dijeda → lanjut,
+    // error → akui semua failure, sisanya → toggle panel.
     {
         let state = state.clone();
         let root = root.clone();
         let panel = panel.clone();
+        let ui_c = ui.clone();
+        let tx_c = tx.clone();
         pill_btn.connect_clicked(move |_| {
+            let (status, primary) = {
+                let s = state.borrow();
+                (s.pill_status, s.pill_primary.clone())
+            };
+            if status == "paused" {
+                if let Some(p) = primary {
+                    task_action(&tx_c, &p.task_id, &p.goal, "resume");
+                    return;
+                }
+            }
+            if status == "error" {
+                let mut s = state.borrow_mut();
+                let rows = s.last_rows.clone();
+                acknowledge_errors(&rows, &mut s.pill_memory);
+                let dnd = s.prefs.dnd;
+                let view = derive_pill(&rows, &mut s.pill_memory, dnd, now_unix());
+                s.pill_status = view.status;
+                s.pill_dot = view.dot;
+                s.pill_progress = view.progress;
+                s.pill_primary = view.primary;
+                drop(s);
+                ui_c.pill_dot.queue_draw();
+                ui_c.status.set_text(&view.label);
+                return;
+            }
             cancel_timer(&mut state.borrow_mut().hover_timer);
             cancel_timer(&mut state.borrow_mut().leave_timer);
             let target = !state.borrow().target_expanded;
             start_anim(&state, &root, &panel, target);
+        });
+    }
+
+    // Preferensi pill: simpan + terapkan live.
+    {
+        let state = state.clone();
+        notify_drop.connect_selected_notify(move |d| {
+            let mut s = state.borrow_mut();
+            s.prefs.notify = match d.selected() {
+                1 => "sound",
+                2 => "off",
+                _ => "pulse",
+            }
+            .to_string();
+            save_prefs(&s.prefs);
+        });
+    }
+    {
+        let state = state.clone();
+        dnd_check.connect_toggled(move |c| {
+            let mut s = state.borrow_mut();
+            s.prefs.dnd = c.is_active();
+            save_prefs(&s.prefs);
+        });
+    }
+    {
+        let state = state.clone();
+        let window = window.clone();
+        corner_drop.connect_selected_notify(move |d| {
+            let mut s = state.borrow_mut();
+            s.prefs.corner = match d.selected() {
+                1 => "left",
+                2 => "right",
+                _ => "center",
+            }
+            .to_string();
+            save_prefs(&s.prefs);
+            apply_corner(&window, &s.prefs.corner);
+        });
+    }
+    {
+        let state = state.clone();
+        let area = ui.mascot_area.clone();
+        decor_drop.connect_selected_notify(move |d| {
+            let mut s = state.borrow_mut();
+            s.prefs.decor = if d.selected() == 0 {
+                "auto".to_string()
+            } else {
+                mascot::DECORS[(d.selected() - 1) as usize].0.to_string()
+            };
+            save_prefs(&s.prefs);
+            drop(s);
+            area.queue_draw();
+        });
+    }
+    {
+        let state = state.clone();
+        let area = ui.mascot_area.clone();
+        costume_drop.connect_selected_notify(move |d| {
+            let mut s = state.borrow_mut();
+            s.prefs.costume = if d.selected() == 0 {
+                "none".to_string()
+            } else {
+                mascot::COSTUMES[(d.selected() - 1) as usize].0.to_string()
+            };
+            save_prefs(&s.prefs);
+            drop(s);
+            area.queue_draw();
         });
     }
 
@@ -1450,21 +2289,117 @@ mod tests {
         let a = st.approval.as_ref().unwrap();
         assert_eq!(a.task_id, "t2");
         assert_eq!(a.goal, "Deck Y");
-        assert_eq!(status_text(&st).0, "amber");
+        let mut mem = std::collections::HashMap::new();
+        let view = derive_pill(&st.rows, &mut mem, false, 1_800_000_000);
+        assert_eq!(view.status, "waiting_approval");
+        assert_eq!(view.dot, "yellow");
     }
 
     #[test]
-    fn derive_disconnected_and_idle() {
-        let st = IslandState {
-            connected: false,
+    fn derive_pill_idle_and_offline_shape() {
+        // Derivasi pill pada daftar kosong = idle; offline ditangani drain
+        // (bukan derive_pill) sebagai dot merah + label server tidak terhubung.
+        let mut mem = std::collections::HashMap::new();
+        let view = derive_pill(&[], &mut mem, false, 1_800_000_000);
+        assert_eq!(view.status, "idle");
+        assert_eq!(view.label, "Dae Captain");
+        assert_eq!(view.dot, "green");
+        assert!(view.progress.is_none());
+    }
+
+    #[test]
+    fn pill_priority_verifying_fixing_working_queued() {
+        let mk = |id: &str, ev: &str, queued: bool| TaskRow {
+            turn_id: id.to_string(),
+            task_id: id.to_string(),
+            goal: "G".to_string(),
+            engine: "coding".to_string(),
+            status: "running".to_string(),
+            paused: false,
+            queued,
+            last_event: ev.to_string(),
+            last_event_text: String::new(),
+            validation_failures: if ev == "VALIDATION_FAILED" { 1 } else { 0 },
+            pending: 0,
+            updated_at: String::new(),
+        };
+        let mut mem = std::collections::HashMap::new();
+        let now = 1_800_000_000;
+        let rows = vec![mk("v", "VALIDATION_STARTED", false), mk("f", "VALIDATION_FAILED", false), mk("w", "TOOL_CALL_STARTED", false), mk("q", "", true)];
+        assert_eq!(derive_pill(&rows, &mut mem, false, now).status, "verifying");
+        let rows = vec![mk("f", "VALIDATION_FAILED", false), mk("w", "TOOL_CALL_STARTED", false), mk("q", "", true)];
+        let view = derive_pill(&rows, &mut mem, false, now);
+        assert_eq!(view.status, "fixing");
+        assert_eq!(view.label, "Memperbaiki (1/2)");
+        let rows = vec![mk("w", "TOOL_CALL_STARTED", false), mk("q", "", true)];
+        assert_eq!(derive_pill(&rows, &mut mem, false, now).status, "working");
+        let rows = vec![mk("q", "", true)];
+        let view = derive_pill(&rows, &mut mem, false, now);
+        assert_eq!(view.status, "queued");
+        assert_eq!(view.label, "Antrian: 1 task");
+    }
+
+    #[test]
+    fn pill_done_flash_and_error_ack() {
+        let mut mem = std::collections::HashMap::new();
+        let now = 1_800_000_000;
+        let run = TaskRow {
+            turn_id: "t".to_string(),
+            task_id: "t".to_string(),
+            goal: "G".to_string(),
+            engine: "coding".to_string(),
+            status: "running".to_string(),
             ..Default::default()
         };
-        assert_eq!(status_text(&st).0, "red");
-        let st = IslandState {
-            connected: true,
+        assert_eq!(derive_pill(std::slice::from_ref(&run), &mut mem, false, now).status, "working");
+        let done = TaskRow { status: "done".to_string(), ..run.clone() };
+        let view = derive_pill(std::slice::from_ref(&done), &mut mem, false, now);
+        assert_eq!(view.status, "done");
+        assert_eq!(view.label, "✓ Selesai");
+        // Flash 4 detik berlalu → kembali idle (tidak ada turn aktif).
+        assert_eq!(derive_pill(std::slice::from_ref(&done), &mut mem, false, now + 10).status, "idle");
+        // Failure → error; klik (ack) → jatuh ke idle sampai failure baru.
+        let failed = TaskRow { status: "failed".to_string(), ..run.clone() };
+        let mut mem2 = std::collections::HashMap::new();
+        assert_eq!(derive_pill(std::slice::from_ref(&failed), &mut mem2, false, now).status, "error");
+        acknowledge_errors(std::slice::from_ref(&failed), &mut mem2);
+        assert_eq!(derive_pill(std::slice::from_ref(&failed), &mut mem2, false, now).status, "idle");
+    }
+
+    #[test]
+    fn progress_fraction_and_phase_text() {
+        assert_eq!(parse_progress_fraction("Mengisi slide 8/12…"), Some((8, 12)));
+        // Yang terakhir menang; narasi lama diabaikan.
+        assert_eq!(parse_progress_fraction("3/9 lalu 5/10"), Some((5, 10)));
+        assert_eq!(parse_progress_fraction("tanpa angka"), None);
+        assert_eq!(parse_progress_fraction("7/0"), None);
+        let row = TaskRow {
+            last_event_text: "Mengisi slide 8/12…".to_string(),
             ..Default::default()
         };
-        assert_eq!(status_text(&st), ("green", "siap".to_string()));
+        assert_eq!(turn_phase_text(&row), "Mengisi slide 8/12…");
+        let row = TaskRow {
+            last_event: "TOOL_CALL_STARTED".to_string(),
+            engine: "coding".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(turn_phase_text(&row), "Menjalankan alat…");
+        let row = TaskRow { engine: "slide".to_string(), ..Default::default() };
+        assert_eq!(turn_phase_text(&row), "Membuat slide…");
+        assert_eq!(task_chip(&TaskRow {
+            engine: "Slide".to_string(),
+            last_event_text: "8/12".to_string(),
+            ..Default::default()
+        }), "slide 8/12");
+    }
+
+    #[test]
+    fn iso_timestamp_parse() {
+        assert_eq!(parse_iso_ts("2026-10-31T12:00:00Z"), Some(1_793_448_000));
+        // Offset +07:00 dikurangkan kembali ke UTC.
+        assert_eq!(parse_iso_ts("2026-10-31T19:00:00+07:00"), Some(1_793_448_000));
+        assert_eq!(parse_iso_ts("bukan tanggal"), None);
+        assert_eq!(parse_iso_ts(""), None);
     }
 
     #[test]
@@ -1485,9 +2420,9 @@ mod tests {
     #[test]
     fn active_engines_from_running() {
         let rows = vec![
-            TaskRow { task_id: "t1".into(), goal: "".into(), engine: "coding".into(), status: "running".into(), paused: false },
-            TaskRow { task_id: "t2".into(), goal: "".into(), engine: "slide".into(), status: "done".into(), paused: false },
-            TaskRow { task_id: "t3".into(), goal: "".into(), engine: "coding".into(), status: "running".into(), paused: true },
+            TaskRow { task_id: "t1".into(), goal: "".into(), engine: "coding".into(), status: "running".into(), paused: false, ..Default::default() },
+            TaskRow { task_id: "t2".into(), goal: "".into(), engine: "slide".into(), status: "done".into(), paused: false, ..Default::default() },
+            TaskRow { task_id: "t3".into(), goal: "".into(), engine: "coding".into(), status: "running".into(), paused: true, ..Default::default() },
         ];
         assert_eq!(active_engines(&rows), vec!["coding".to_string()]);
     }
