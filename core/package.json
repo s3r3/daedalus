@@ -97,7 +97,7 @@
     "jszip": "^3.10.1",
     "mailparser": "^3.9.38",
     "mammoth": "^1.13.0",
-    "pdfjs-dist": "^4.10.38",
+    "pdfjs-dist": "^6.4.299",
     "pptxgenjs": "^4.0.1"
   },
   "types": "./dist/index.d.ts",
