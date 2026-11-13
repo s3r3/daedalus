@@ -307,16 +307,16 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
       ? override.model.trim()
       : composer.providerId && composer.model
         ? `${composer.providerId}/${composer.model}`
-        : composer.model || 'model global'
+        : composer.model || 'global model'
     const temp = override.temperature ?? temperature
     const iters = override.maxIterations ?? maxIterations ?? 25
-    return `efektif: ${model} · temp ${temp} · maks iterasi ${iters}`
+    return `effective: ${model} · temp ${temp} · max iterations ${iters}`
   }
 
   /** Context caption under the session model picker: global limit + per-model value when the provider knows it. */
   const contextCaption = (): string | null => {
     const parts: string[] = []
-    if (typeof contextLimit === 'number' && contextLimit > 0) parts.push(`konteks global ${formatTokens(contextLimit)}`)
+    if (typeof contextLimit === 'number' && contextLimit > 0) parts.push(`global context ${formatTokens(contextLimit)}`)
     if (composer.providerId && composer.model) {
       const provider = providers.find((entry) => entry.id === composer.providerId)
       const perModel = provider?.contextWindows?.[composer.model]
@@ -516,7 +516,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
       {tab === 'global' ? (
         <div className="flex flex-col gap-3" data-testid="settings-tab-global">
           <div className="flex flex-col gap-2" data-testid="global-model-section">
-            <p className="text-[10px] uppercase tracking-wider text-muted">model & perilaku</p>
+            <p className="text-[10px] uppercase tracking-wider text-muted">model & behavior</p>
             <label className="flex flex-col gap-1 text-[10px] uppercase tracking-wider text-muted">
               <span className="flex items-center gap-1.5">
                 session model
@@ -971,7 +971,7 @@ function DomainTab({
           value={selectedValue}
           onChange={(event) => onDraft({ model: event.target.value })}
         >
-          <option value="">Ikut global</option>
+          <option value="">Follow global</option>
           {models.map((entry) => (
             <option key={`${entry.providerId}::${entry.model}`} value={`${entry.providerId}::${entry.model}`}>
               {entry.providerId}/{entry.model}{entry.supportsVision ? ' · vision' : ''}

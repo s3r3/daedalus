@@ -155,7 +155,7 @@ export type UpdateSettingsInput = {
     /** Failover-only since the 3-layer restructure (round-robin was removed). */
     modelStrategy?: 'failover'
   }
-  /** Per-domain overrides; null clears a field back to "ikut global". */
+  /** Per-domain overrides; null clears a field back to "follow global". */
   domains?: Partial<Record<TaskDomain, { model?: string | null; temperature?: number | null; maxIterations?: number | null }>>
   session?: { thinkingLevel?: ThinkingLevel }
   tailor?: { modelRouting?: boolean; qualityEscalation?: boolean; reviewGate?: boolean; earlyEscalation?: boolean }

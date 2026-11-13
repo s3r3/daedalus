@@ -387,9 +387,9 @@ describe('SettingsDialog and functional settings', () => {
     await screen.findByTestId('provider-row')
     await userEvent.click(screen.getByTestId('settings-tab-slide'))
     const tab = screen.getByTestId('settings-tab-domain-slide')
-    expect(textOf(tab)).toContain('Ikut global')
+    expect(textOf(tab)).toContain('Follow global')
     // No overrides stored: the effective line follows the global settings.
-    expect(textOf(screen.getByTestId('domain-effective-slide'))).toContain('efektif:')
+    expect(textOf(screen.getByTestId('domain-effective-slide'))).toContain('effective:')
     expect(textOf(screen.getByTestId('domain-effective-slide'))).toContain('temp 0.7')
   })
 
