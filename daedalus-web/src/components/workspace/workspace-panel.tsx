@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react'
-import { ChevronDown, ChevronRight, File as FileIcon, Folder, FolderOpen, ImagePlus, Pin, PinOff, UploadCloud } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Copy, File as FileIcon, Folder, FolderOpen, ImagePlus, Pin, PinOff, UploadCloud } from 'lucide-react'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -43,6 +43,29 @@ export function WorkspacePanel({ className, style }: { className?: string; style
   const [mutationStatus, setMutationStatus] = useState<string | null>(null)
   const [mutationError, setMutationError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [copiedPath, setCopiedPath] = useState(false)
+  const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const copyPath = useCallback(async (): Promise<void> => {
+    const path = useDaedalusStore.getState().workspace.root
+    if (!path) return
+    try {
+      await navigator.clipboard.writeText(path)
+    } catch {
+      /* clipboard unavailable (non-secure context) — the title tooltip still shows the full path */
+      return
+    }
+    setCopiedPath(true)
+    if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+    copyTimerRef.current = setTimeout(() => setCopiedPath(false), 1500)
+  }, [])
+
+  useEffect(
+    () => () => {
+      if (copyTimerRef.current) clearTimeout(copyTimerRef.current)
+    },
+    [],
+  )
   const fileInputRef = useRef<HTMLInputElement>(null)
   const folderInputRef = useRef<HTMLInputElement>(null)
   const imageInputRef = useRef<HTMLInputElement>(null)
@@ -296,19 +319,36 @@ export function WorkspacePanel({ className, style }: { className?: string; style
       style={style}
       action={
         root.length > 0 ? (
-          <Badge tone="primary" className="max-w-[150px] truncate">
-            {root}
-          </Badge>
+          <span className="flex min-w-0 items-center gap-1" title={root}>
+            {/* Badge is uppercase by default; a filesystem path must render verbatim. */}
+            <Badge tone="primary" className="max-w-[220px] truncate normal-case">
+              {root}
+            </Badge>
+            <button
+              type="button"
+              aria-label="copy workspace path"
+              title={copiedPath ? 'Copied!' : 'Copy workspace path'}
+              data-testid="workspace-copy-path"
+              onClick={() => void copyPath()}
+              className="shrink-0 rounded p-1 text-muted hover:bg-surface hover:text-foreground focus:outline-none"
+            >
+              {copiedPath ? <Check className="size-3" aria-hidden /> : <Copy className="size-3" aria-hidden />}
+            </button>
+          </span>
         ) : null
       }
       bodyClassName="flex min-h-0 flex-col gap-2 overflow-y-auto"
     >
-      <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
-        repository
+      {/* The `uppercase` must stay on the label text only: text-transform is
+          inherited, so putting it on this <label> uppercased the paths
+          inside the native <select> (/tmp/… rendered as /TMP/…). */}
+      <label className="flex items-center gap-1.5 text-[10px] tracking-wider text-muted">
+        <span className="uppercase">repository</span>
         <select
           aria-label="workspace root"
           data-testid="workspace-root"
-          className="h-7 w-full rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
+          title={root || undefined}
+          className="h-7 w-full rounded border border-line bg-surface px-1.5 text-[11px] normal-case text-foreground"
           value={workspace.root}
           onChange={(event) => {
             const nextRoot = event.target.value

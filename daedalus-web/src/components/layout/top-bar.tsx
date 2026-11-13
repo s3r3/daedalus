@@ -141,9 +141,11 @@ export function TopBar() {
   // Thinking level lives in Settings → Global now; the top bar only
   // reports the session's current level next to the model summary.
 
+  // Header is nowrap + horizontal scroll: the history/refresh/settings
+  // buttons used to wrap onto a second row (flex-wrap) on narrower screens.
   return (
-    <header className="flex flex-wrap items-center gap-2 border-b border-line bg-surface-base px-3 py-2" data-testid="top-bar">
-      <div className="flex items-center gap-2">
+    <header className="flex flex-nowrap items-center gap-2 overflow-x-auto border-b border-line bg-surface-base px-3 py-2" data-testid="top-bar">
+      <div className="flex shrink-0 items-center gap-2">
         <strong className="text-sm tracking-[0.2em] text-primary">DAEDALUS</strong>
         <span className="hidden text-[10px] uppercase tracking-wider text-muted sm:inline">agentic coding framework</span>
       </div>
@@ -187,7 +189,7 @@ export function TopBar() {
         </Badge>
       ) : null}
 
-      <div className="ml-auto flex flex-wrap items-center gap-2">
+      <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2">
         <div className="relative" ref={historyAnchorRef}>
           <Button
             variant="outline"

@@ -29,11 +29,19 @@ export function ModelPicker({
   const [filter, setFilter] = useState('')
   const [active, setActive] = useState(0)
   const rootRef = useRef<HTMLDivElement>(null)
+  const activeRowRef = useRef<HTMLLIElement>(null)
 
   const currentLabel = providerId && model ? `${providerId}/${model}` : model ? model : 'default model'
 
+  // Numeric-aware sort: model ids are case-sensitive and often numbered,
+  // so plain lexicographic order would list 1, 10, 13, 16… instead of 1, 2, 3.
   const sorted = useMemo(
-    () => [...models].sort((a, b) => a.providerId.localeCompare(b.providerId) || a.model.localeCompare(b.model)),
+    () =>
+      [...models].sort(
+        (a, b) =>
+          a.providerId.localeCompare(b.providerId, undefined, { numeric: true }) ||
+          a.model.localeCompare(b.model, undefined, { numeric: true }),
+      ),
     [models],
   )
   const filtered = useMemo(() => {
@@ -46,6 +54,14 @@ export function ModelPicker({
   const rows = filtered.slice(0, MAX_ROWS)
   const overflow = filtered.length - rows.length
   const rowCount = rows.length + 1
+
+  // Keep the keyboard-highlighted row visible: without this, arrowing
+  // past the list's visible window moves the highlight out of sight.
+  // (jsdom has no scrollIntoView, so the optional call is a deliberate
+  // no-op under tests; the behaviour is covered by a real browser.)
+  useEffect(() => {
+    if (open) activeRowRef.current?.scrollIntoView?.({ block: 'nearest' })
+  }, [active, open])
 
   // With a filter typed, the first match is highlighted so Enter picks it;
   // unfiltered, the highlight starts on the default-model entry.
@@ -119,6 +135,7 @@ export function ModelPicker({
           <ul role="listbox" aria-label="models" className="max-h-56 overflow-auto py-0.5">
             <li
               role="option"
+              ref={active === 0 ? activeRowRef : undefined}
               aria-selected={active === 0}
               data-testid="model-option"
               data-value=""
@@ -132,6 +149,7 @@ export function ModelPicker({
               <li
                 key={`${entry.providerId}::${entry.model}`}
                 role="option"
+                ref={active === index + 1 ? activeRowRef : undefined}
                 aria-selected={active === index + 1}
                 data-testid="model-option"
                 data-value={`${entry.providerId}/${entry.model}`}

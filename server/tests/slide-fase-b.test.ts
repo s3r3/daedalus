@@ -47,7 +47,8 @@ async function startFakeProvider(): Promise<string> {
   return `http://127.0.0.1:${port}/v1`
 }
 
-// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+// The daemon token is still minted by listen() and sent by these tests,
+// but the server no longer enforces it on any route (removed 2026-11-13).
 let daemonToken = ''
 
 async function listen(): Promise<{ base: string; root: string }> {

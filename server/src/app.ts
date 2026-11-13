@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { cp, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { basename, extname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 // Dae Captain v2 Fase 7 — chat cards: decompose plans, approval UndoStore,
@@ -471,7 +471,7 @@ export type AppContext = {
   session: SessionState;
   workspaces: Set<string>;
   providersReady?: Promise<void>;
-  /** Local daemon token for sensitive endpoints (approve/cancel). */
+  /** Local daemon token. Still issued for Tauri/island clients; the server no longer enforces it (removed 2026-11-13). */
   daemonToken?: string;
   webDist?: string;
   extensionStatusCache?: Map<string, { expiresAt: number; value: ExtensionStatus }>;
@@ -3697,9 +3697,12 @@ function presentWorkflowRun(
 }
 /**
  * Local daemon token (FASE 4 security). Generated once, stored in
- * ~/.daedalus/daemon.json. Sensitive endpoints (approve/cancel) require it
- * via `Authorization: Bearer <token>`. The Tauri app reads the same file
- * from disk — no network fetch, no exposure.
+ * ~/.daedalus/daemon.json. The Tauri app reads the same file from disk —
+ * no network fetch, no exposure. The server NO LONGER enforces the token
+ * on any route (removed 2026-11-13 on Farid's decision: no token
+ * enforcement — the web UI must work without token plumbing); the token
+ * is still issued so Tauri/island clients that send it keep working, and
+ * enforcement can be restored from git history.
  */
 export function ensureDaemonToken(daedalusHome: string): string {
   const path = join(daedalusHome, "daemon.json");
@@ -3725,39 +3728,6 @@ export function ensureDaemonToken(daedalusHome: string): string {
   }
   return token;
 }
-
-const MUTATING_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
-
-/**
- * Route mutasi yang boleh TANPA token. Satu-satunya pengecualian adalah cancel: tombol Stop adalah jalur
- * keselamatan (safety-critical) yang TIDAK BOLEH gagal dengan 401 — pengguna yang tak bisa menghentikan task
- * yang lepas kendali lebih berbahaya daripada risiko cancel lokal tanpa token (cancel hanya menghentikan task
- * milik pengguna sendiri, tidak ada state yang hilang). Pause/resume tetap dijaga token. GET dan OPTIONS
- * (preflight) tidak pernah butuh token.
- */
-const TOKEN_EXEMPT_MUTATIONS: RegExp[] = [/^\/tasks\/([^/]+)\/cancel$/];
-
-/** Penegakan token pada semua route mutasi. Matikan HANYA untuk rollout bertahap: DAEDALUS_ENFORCE_TOKEN=0. */
-function tokenEnforced(): boolean {
-  const flag = (process.env.DAEDALUS_ENFORCE_TOKEN ?? "").trim().toLowerCase();
-  return !(flag === "0" || flag === "off" || flag === "false");
-}
-
-/** Bandingkan token dalam waktu konstan (hindari tebakan token lewat selisih waktu). */
-function tokenMatches(presented: string | undefined, expected: string | undefined): boolean {
-  if (!presented || !expected) return false;
-  const a = createHash("sha256").update(presented).digest();
-  const b = createHash("sha256").update(expected).digest();
-  return timingSafeEqual(a, b);
-}
-
-function bearerToken(req: IncomingMessage): string | undefined {
-  const h = req.headers.authorization;
-  if (typeof h !== "string") return undefined;
-  const m = /^Bearer\s+(.+)$/i.exec(h.trim());
-  return m?.[1];
-}
-
 
 export function createApp(ctx: AppContext) {
   reconcileInterruptedTasks(ctx);
@@ -3835,20 +3805,12 @@ export function createApp(ctx: AppContext) {
       return;
     }
 
-    // S6 — token daemon untuk SEMUA route mutasi (POST/PUT/PATCH/DELETE). Sebelumnya hanya approve & restore;
-    // cancel/pause/resume sengaja terbuka karena jembatan token Tauri dulu tak andal (sudah diperbaiki: daemon_token
-    // membaca daemon.json workspace). Dicek SEBELUM routing, jadi path yang tidak dikenal pun tidak bisa di-probe tanpa token.
-    if (MUTATING_METHODS.has(method) && tokenEnforced() && !TOKEN_EXEMPT_MUTATIONS.some((p) => p.test(url.pathname))) {
-      if (!tokenMatches(bearerToken(req), ctx.daemonToken)) {
-        res.setHeader("www-authenticate", 'Bearer realm="daedalus"');
-        sendJson(res, 401, {
-          error: "unauthorized",
-          message: "Token tidak ada atau tidak valid. Kirim header Authorization: Bearer <token> (token ada di daemon.json workspace atau lewat perintah daemon_token).",
-          request_id: requestId,
-        });
-        return;
-      }
-    }
+    // NOTE (2026-11-13, Farid's decision: no token enforcement): the S6
+    // daemon-token gate on all mutations — plus the per-route checks on
+    // approve/restore — was removed. The daemon binds localhost only and
+    // the web UI must work without token plumbing; the token is still
+    // issued (daemon.json) for Tauri/island clients. Enforcement can be
+    // restored from git history if ever needed.
 
     if (method === "GET" && url.pathname === "/health") {
       sendJson(res, 200, {
@@ -5045,11 +5007,7 @@ export function createApp(ctx: AppContext) {
     const approveMatch = /^\/tasks\/([^/]+)\/approve$/.exec(url.pathname);
     if (method === "POST" && approveMatch?.[1] !== undefined) {
       runRoute(ctx, res, requestId, async () => {
-        // Sensitive: require the local daemon token.
-        if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
-          sendJson(res, 401, { error: "unauthorized" });
-          return;
-        }
+        // NOTE (2026-11-13): no token enforcement — see the note above /health.
         const taskId = approveMatch[1] as string;
         const parsed = await readJson(req);
         if (!parsed) {
@@ -5174,7 +5132,6 @@ export function createApp(ctx: AppContext) {
 
     const cancelMatch = /^\/tasks\/([^/]+)\/cancel$/.exec(url.pathname);
     if (method === "POST" && cancelMatch?.[1] !== undefined) {
-      // Guard global S6 mengecualikan cancel (lihat TOKEN_EXEMPT_MUTATIONS): Stop tak boleh gagal 401.
       const taskId = cancelMatch[1] as string;
       const runner = ctx.activeRunners.get(taskId);
       const lookup = findTask(ctx, taskId);
@@ -5299,11 +5256,7 @@ export function createApp(ctx: AppContext) {
     }
 
     if (method === "POST" && restoreMatch?.[1] !== undefined) {
-      // Sensitive: require the local daemon token (same as /cancel, /pause, /resume).
-      if (ctx.daemonToken && bearerToken(req) !== ctx.daemonToken) {
-        sendJson(res, 401, { error: "unauthorized", request_id: requestId });
-        return;
-      }
+      // NOTE (2026-11-13): no token enforcement — see the note above /health.
       const taskId = restoreMatch[1] as string;
       const lookup = findTask(ctx, taskId);
       if (!lookup) {

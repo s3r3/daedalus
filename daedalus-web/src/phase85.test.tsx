@@ -312,7 +312,7 @@ describe('SettingsDialog and functional settings', () => {
     fireEvent.change(input, { target: { value: '9' } })
     fireEvent.blur(input)
     expect(mocks.updateSettings).toHaveBeenCalledWith({ maxIterations: 9 })
-    expect(textOf(await screen.findByTestId('settings-status'))).toContain('Max iterations global 9')
+    expect(textOf(await screen.findByTestId('settings-status'))).toContain('Global max iterations 9')
   })
 
   test('temperature and prompt caching persist server-side', async () => {
@@ -327,7 +327,7 @@ describe('SettingsDialog and functional settings', () => {
     expect(caching.checked).toBe(false)
     await userEvent.click(caching)
     expect(mocks.updateSettings).toHaveBeenCalledWith({ llm: { promptCaching: true } })
-    expect(textOf(screen.getByTestId('prompt-caching-settings'))).toContain('aktif penuh setelah mesin prompt-caching mendarat')
+    expect(textOf(screen.getByTestId('prompt-caching-settings'))).toContain('fully active once the prompt-caching engine lands')
   })
 
   test('the model pool moved to Global: comma-separated input, failover-only, round-robin gone', async () => {
@@ -343,7 +343,7 @@ describe('SettingsDialog and functional settings', () => {
     // The strategy dropdown is gone; the label is a static failover.
     expect(screen.queryByTestId('settings-model-strategy')).toBeNull()
     expect(textOf(screen.getByTestId('model-pool-strategy'))).toBe('failover')
-    expect(textOf(screen.getByTestId('model-pool-settings'))).toContain('Round-robin dihapus')
+    expect(textOf(screen.getByTestId('model-pool-settings'))).toContain('Round-robin removed')
 
     // The composer no longer sends a pool or a strategy with the task.
     cleanup()
@@ -362,7 +362,7 @@ describe('SettingsDialog and functional settings', () => {
     for (const testId of ['settings-review-gate', 'settings-early-escalation', 'settings-model-routing', 'settings-quality-escalation']) {
       expect((screen.getByTestId(testId) as HTMLInputElement).disabled).toBe(true)
     }
-    expect(screen.getAllByText('butuh pool 2+ model').length).toBeGreaterThanOrEqual(4)
+    expect(screen.getAllByText('needs a 2+ model pool').length).toBeGreaterThanOrEqual(4)
 
     // With 2+ models typed, the toggles enable and the hints disappear.
     const pool = screen.getByTestId('settings-model-pool') as HTMLInputElement
@@ -371,15 +371,15 @@ describe('SettingsDialog and functional settings', () => {
     for (const testId of ['settings-review-gate', 'settings-early-escalation', 'settings-model-routing', 'settings-quality-escalation']) {
       expect((screen.getByTestId(testId) as HTMLInputElement).disabled).toBe(false)
     }
-    expect(screen.queryByText('butuh pool 2+ model')).toBeNull()
+    expect(screen.queryByText('needs a 2+ model pool')).toBeNull()
 
     // The new tailor toggles write through with honest labels.
     await userEvent.click(screen.getByTestId('settings-model-routing'))
     expect(mocks.updateSettings).toHaveBeenCalledWith({ tailor: { modelRouting: false } })
-    expect(textOf(screen.getByTestId('model-routing-settings'))).toContain('routing model per fase')
+    expect(textOf(screen.getByTestId('model-routing-settings'))).toContain('model routing per phase')
     await userEvent.click(screen.getByTestId('settings-quality-escalation'))
     expect(mocks.updateSettings).toHaveBeenCalledWith({ tailor: { qualityEscalation: false } })
-    expect(textOf(screen.getByTestId('quality-escalation-settings'))).toContain('eskalasi kualitas')
+    expect(textOf(screen.getByTestId('quality-escalation-settings'))).toContain('quality escalation')
   })
 
   test('tab switching renders the domain tab with ikut-global defaults and the effective caption', async () => {
@@ -407,7 +407,7 @@ describe('SettingsDialog and functional settings', () => {
     expect(mocks.updateSettings).toHaveBeenCalledWith({
       domains: { slide: { model: 'kr/auto', temperature: 0.3, maxIterations: null } },
     })
-    expect(textOf(await screen.findByTestId('settings-status'))).toContain('Override Slide disimpan')
+    expect(textOf(await screen.findByTestId('settings-status'))).toContain('Override Slide saved')
     // The echoed response drives the draft: model kept, temperature kept, iterations cleared.
     expect((screen.getByTestId('domain-temperature-slide') as HTMLInputElement).value).toBe('0.3')
     expect((screen.getByTestId('domain-max-iterations-slide') as HTMLInputElement).value).toBe('')

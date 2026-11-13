@@ -39,9 +39,9 @@ async function listen(): Promise<{ base: string; token: string }> {
   server = createApp(ctx)
   await new Promise<void>((resolve) => server?.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
-  // createApp mints the daemon token; restore is a sensitive route and
-  // requires it (S6: only cancel is exempt from the token guard; pause
-  // requires it too).
+  // createApp still mints the daemon token (for Tauri/island clients),
+  // but the server no longer enforces it on any route (removed
+  // 2026-11-13); the token is returned only because the helper accepts it.
   return { base: `http://127.0.0.1:${port}`, token: ctx.daemonToken ?? '' }
 }
 
@@ -123,12 +123,17 @@ describe('task checkpoints', () => {
     expect(noRoot.body.error).toBe('restore_failed')
   })
 
-  test('POST restore requires the daemon token', async () => {
+  test('POST restore works without a token (no token enforcement since 2026-11-13)', async () => {
     const { base } = await listen()
     seedTask('task-1')
+    writeFileSync(join(workspace!, 'src', 'index.ts'), 'agent edit\n')
+    writeFileSync(join(workspace!, 'new-file.txt'), 'brand new\n')
 
     const res = await post(base, '/tasks/task-1/restore', { root: workspace })
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('unauthorized')
+    expect(res.status).toBe(200)
+    expect(res.body.restored).toEqual(['src/index.ts'])
+    expect(res.body.deleted).toEqual(['new-file.txt'])
+    expect(readFileSync(join(workspace!, 'src', 'index.ts'), 'utf8')).toBe('export const a = 1\n')
+    expect(existsSync(join(workspace!, 'new-file.txt'))).toBe(false)
   })
 })

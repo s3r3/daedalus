@@ -58,7 +58,7 @@ const EMPTY_DOMAIN_DRAFT: DomainDraft = { model: '', temperature: '', maxIterati
  *   default (temperature, prompt caching, model pool, max iterations,
  *   output compression, tailor suite) plus the providers section.
  * - Coding/Slide/Spreadsheet/Dokumen: per-domain model/temperature/
- *   max-iterations overrides; empty = ikut global.
+ *   max-iterations overrides; empty = follow global.
  *
  * Mode and auto-approve live in the composer only (no duplicate panels);
  * thinking/max-iterations/pool moved here from the composer because the
@@ -191,19 +191,19 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
   const commitTemperature = async (): Promise<void> => {
     const value = Number(temperatureDraft)
     if (!Number.isFinite(value) || value < 0 || value > 2) {
-      setError('Temperature harus di antara 0 dan 2.')
+      setError('Temperature must be between 0 and 2.')
       setTemperatureDraft(String(temperature))
       return
     }
     setTemperature(value)
-    await pushSettings({ llm: { temperature: value } }, `Temperature ${value}: default sampling untuk semua model call.`)
+    await pushSettings({ llm: { temperature: value } }, `Temperature ${value}: default sampling for all model calls.`)
   }
 
   const changePromptCaching = async (enabled: boolean): Promise<void> => {
     setPromptCaching(enabled)
     await pushSettings(
       { llm: { promptCaching: enabled } },
-      enabled ? 'Prompt caching on: preferensi diteruskan ke provider.' : 'Prompt caching off.',
+      enabled ? 'Prompt caching on: preference forwarded to the provider.' : 'Prompt caching off.',
     )
   }
 
@@ -213,8 +213,8 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
     await pushSettings(
       { llm: { models: list } },
       list.length === 0
-        ? 'Model pool dikosongkan: task berjalan pada session model.'
-        : `Model pool disimpan: ${list.length} model (strategi failover — pindah model saat error).`,
+        ? 'Model pool cleared: tasks run on the session model.'
+        : `Model pool saved: ${list.length} model${list.length === 1 ? '' : 's'} (failover strategy — switch model on error).`,
     )
   }
 
@@ -222,17 +222,17 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
     const trimmed = maxIterationsDraft.trim()
     if (trimmed === '') {
       setMaxIterations(undefined)
-      await pushSettings({ maxIterations: null }, 'Max iterations global dikosongkan: kembali ke default 25.')
+      await pushSettings({ maxIterations: null }, 'Global max iterations cleared: back to the default of 25.')
       return
     }
     const value = Math.round(Number(trimmed))
     if (!Number.isInteger(value) || value < 1) {
-      setError('Max iterations harus bilangan bulat positif.')
+      setError('Max iterations must be a positive integer.')
       setMaxIterationsDraft(maxIterations !== undefined ? String(maxIterations) : '')
       return
     }
     setMaxIterations(value)
-    await pushSettings({ maxIterations: value }, `Max iterations global ${value}: default untuk semua task.`)
+    await pushSettings({ maxIterations: value }, `Global max iterations ${value}: default for all tasks.`)
   }
 
   const changeTailor = async (key: 'modelRouting' | 'qualityEscalation' | 'reviewGate' | 'earlyEscalation', enabled: boolean): Promise<void> => {
@@ -242,11 +242,11 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
     if (key === 'earlyEscalation') setEarlyEscalation(enabled)
     const messages: Record<typeof key, string> = {
       modelRouting: enabled
-        ? 'Routing model on: tiap fase dikerjakan model pool yang tier-nya cocok.'
-        : 'Routing model off: semua fase berjalan pada model yang sama.',
+        ? 'Model routing on: each phase runs on the pool model whose tier fits.'
+        : 'Model routing off: all phases run on the same model.',
       qualityEscalation: enabled
-        ? 'Eskalasi kualitas on: validasi gagal memindahkan sisa task ke model terkuat (sekali per task).'
-        : 'Eskalasi kualitas off: task yang gagal validasi tidak dipindahkan.',
+        ? 'Quality escalation on: failed validation moves the rest of the task to the strongest model (once per task).'
+        : 'Quality escalation off: tasks that fail validation are not moved.',
       reviewGate: enabled
         ? "Review gate on: the strongest pool model reviews weaker models' changes before completion."
         : 'Review gate off.',
@@ -275,24 +275,24 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
     const temperatureValue = draft.temperature.trim() === '' ? null : Number(draft.temperature)
     const maxIterationsValue = draft.maxIterations.trim() === '' ? null : Math.round(Number(draft.maxIterations))
     if (temperatureValue !== null && (!Number.isFinite(temperatureValue) || temperatureValue < 0 || temperatureValue > 2)) {
-      setError(`Temperature ${DOMAIN_LABELS[domain]} harus di antara 0 dan 2, atau kosongkan untuk ikut global.`)
+      setError(`Temperature ${DOMAIN_LABELS[domain]} must be between 0 and 2, or leave it empty to follow global.`)
       return
     }
     if (maxIterationsValue !== null && (!Number.isInteger(maxIterationsValue) || maxIterationsValue < 1)) {
-      setError(`Max iterations ${DOMAIN_LABELS[domain]} harus bilangan bulat positif, atau kosongkan untuk ikut global.`)
+      setError(`Max iterations ${DOMAIN_LABELS[domain]} must be a positive integer, or leave it empty to follow global.`)
       return
     }
     setDomainBusy(domain)
     setError(null)
     try {
-      // null clears the override back to "ikut global" (DomainModelSettings: unset = follow the global setting).
+      // null clears the override back to "follow global" (DomainModelSettings: unset = follow the global setting).
       const response = await api.updateSettings({
         domains: { [domain]: { model: modelName || null, temperature: temperatureValue, maxIterations: maxIterationsValue } },
       })
       const next = (response.settings as { domains?: DomainsSettings }).domains ?? {}
       setDomains(next)
       setDomainDrafts((current) => ({ ...current, [domain]: draftOf(next[domain]) }))
-      setStatus(`Override ${DOMAIN_LABELS[domain]} disimpan.`)
+      setStatus(`Override ${DOMAIN_LABELS[domain]} saved.`)
     } catch (caught) {
       setError(errorMessage(caught))
     } finally {
@@ -586,7 +586,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
               </label>
             </div>
             <p className="text-[10px] text-muted">
-              Thinking level off mematikan reasoning budget; max iterations & temperature kosong = default (25 / 0.7). Nilai tersimpan di server, bukan browser ini.
+              Thinking level off disables the reasoning budget; empty max iterations & temperature = default (25 / 0.7). Values are stored on the server, not in this browser.
             </p>
             <div className="flex flex-col gap-1" data-testid="prompt-caching-settings">
               <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
@@ -601,7 +601,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
                 prompt caching
               </label>
               <p className="text-[10px] text-muted">
-                Preferensi tersimpan & diteruskan ke provider; aktif penuh setelah mesin prompt-caching mendarat.
+                Preference saved & forwarded to the provider; fully active once the prompt-caching engine lands.
               </p>
             </div>
             <div className="flex flex-col gap-1" data-testid="output-compression-settings">
@@ -647,7 +647,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
               </span>
             </div>
             <p className="text-[10px] text-muted">
-              Dengan 2+ model, task berjalan pada pool ini (failover: pindah model saat error). Round-robin dihapus. Kosongkan untuk memakai session model.
+              With 2+ models, tasks run on this pool (failover: switch model on error). Round-robin removed. Leave empty to use the session model.
             </p>
             <div className="flex flex-col gap-1" data-testid="review-gate-settings">
               <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
@@ -661,7 +661,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
                   aria-label="review gate"
                 />
                 review gate — strongest model checks weaker models' work
-                {!poolReady ? <span className="normal-case text-warning" data-testid="pool-hint-review-gate">butuh pool 2+ model</span> : null}
+                {!poolReady ? <span className="normal-case text-warning" data-testid="pool-hint-review-gate">needs a 2+ model pool</span> : null}
               </label>
               <p className="text-[10px] text-muted">
                 Off by default. When on and a pool with 2+ models is in play, the strongest model reviews a weaker model's file changes
@@ -680,7 +680,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
                   aria-label="early escalation"
                 />
                 early escalation — pin looping tasks to the strongest model
-                {!poolReady ? <span className="normal-case text-warning" data-testid="pool-hint-early-escalation">butuh pool 2+ model</span> : null}
+                {!poolReady ? <span className="normal-case text-warning" data-testid="pool-hint-early-escalation">needs a 2+ model pool</span> : null}
               </label>
               <p className="text-[10px] text-muted">
                 On by default. When the loop breaker or the stall counter fires and a pool with 2+ models is in play, the task is
@@ -697,13 +697,13 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
                   disabled={!poolReady}
                   onChange={(event) => void changeTailor('modelRouting', event.target.checked)}
                   data-testid="settings-model-routing"
-                  aria-label="routing model per fase"
+                  aria-label="model routing per phase"
                 />
-                routing model per fase
-                {!poolReady ? <span className="normal-case text-warning" data-testid="pool-hint-model-routing">butuh pool 2+ model</span> : null}
+                model routing per phase
+                {!poolReady ? <span className="normal-case text-warning" data-testid="pool-hint-model-routing">needs a 2+ model pool</span> : null}
               </label>
               <p className="text-[10px] text-muted">
-                On by default. Tiap fase (eksplorasi/edit/perbaikan) dikerjakan model pool yang tier-nya paling cocok; tanpa pool bertier tidak berpengaruh.
+                On by default. Each phase (explore/edit/fix) runs on the pool model whose tier fits best; without a tiered pool it has no effect.
               </p>
             </div>
             <div className="flex flex-col gap-1" data-testid="quality-escalation-settings">
@@ -715,13 +715,13 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
                   disabled={!poolReady}
                   onChange={(event) => void changeTailor('qualityEscalation', event.target.checked)}
                   data-testid="settings-quality-escalation"
-                  aria-label="eskalasi kualitas"
+                  aria-label="quality escalation"
                 />
-                eskalasi kualitas
-                {!poolReady ? <span className="normal-case text-warning" data-testid="pool-hint-quality-escalation">butuh pool 2+ model</span> : null}
+                quality escalation
+                {!poolReady ? <span className="normal-case text-warning" data-testid="pool-hint-quality-escalation">needs a 2+ model pool</span> : null}
               </label>
               <p className="text-[10px] text-muted">
-                On by default. Validasi yang gagal memindahkan sisa task ke model terkuat di pool — sekali per task; tanpa pool tidak berpengaruh.
+                On by default. Failed validation moves the rest of the task to the strongest model in the pool — once per task; without a pool it has no effect.
               </p>
             </div>
           </div>
@@ -926,7 +926,7 @@ export function SettingsPanel({ onClose }: { onClose?: () => void } = {}) {
   )
 }
 
-/** Server domain settings → the tab's text drafts (empty = ikut global). */
+/** Server domain settings → the tab's text drafts (empty = follow global). */
 function draftOf(settings: DomainsSettings[TaskDomain]): DomainDraft {
   return {
     model: settings?.model?.trim() ?? '',
@@ -961,7 +961,7 @@ function DomainTab({
   }, [draft.model, models])
   return (
     <div className="flex flex-col gap-2" data-testid={`settings-tab-domain-${domain}`}>
-      <p className="text-[10px] uppercase tracking-wider text-muted">override {DOMAIN_LABELS[domain]} — kosong = ikut global</p>
+      <p className="text-[10px] uppercase tracking-wider text-muted">override {DOMAIN_LABELS[domain]} — empty = follow global</p>
       <label className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-muted">
         model
         <select
@@ -989,7 +989,7 @@ function DomainTab({
             step={0.1}
             aria-label={`${DOMAIN_LABELS[domain]} temperature override`}
             data-testid={`domain-temperature-${domain}`}
-            placeholder="ikut global"
+            placeholder="follow global"
             className="h-6 w-24 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
             value={draft.temperature}
             onChange={(event) => onDraft({ temperature: event.target.value })}
@@ -1002,7 +1002,7 @@ function DomainTab({
             min={1}
             aria-label={`${DOMAIN_LABELS[domain]} max iterations override`}
             data-testid={`domain-max-iterations-${domain}`}
-            placeholder="ikut global"
+            placeholder="follow global"
             className="h-6 w-24 rounded border border-line bg-surface px-1.5 text-[11px] text-foreground"
             value={draft.maxIterations}
             onChange={(event) => onDraft({ maxIterations: event.target.value })}

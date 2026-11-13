@@ -46,7 +46,8 @@ async function waitStatus(base: string, search: string): Promise<PreviewStatus> 
   throw new Error('preview stayed rendering')
 }
 
-// S6: daemon token for mutation routes, set by listen()/boot() (GET/OPTIONS ignore it).
+// The daemon token is still minted by listen() and sent by these tests,
+// but the server no longer enforces it on any route (removed 2026-11-13).
 let daemonToken = ''
 
 describe('Dokumen Pratinjau endpoints', () => {
