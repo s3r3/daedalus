@@ -82,7 +82,8 @@ async function startFakeProvider(reply: (call: number) => FakeReply): Promise<st
   return `http://127.0.0.1:${port}/v1`
 }
 
-// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+// The daemon token is still minted by listen() and sent by these tests,
+// but the server no longer enforces it on any route (removed 2026-11-13).
 let daemonToken = ''
 
 async function listen(fakeReply?: (call: number) => FakeReply): Promise<{ base: string; ctx: ReturnType<typeof createContext> }> {
@@ -249,8 +250,8 @@ describe('POST /tasks fast paths', () => {
     const created = await postTask(base, { goal: 'baca file src/index.ts berulang kali dan analisis isinya', provider_id: 'fake', max_iterations: 25 })
     expect(created.status).toBe(201)
 
-    // Let it get going, then stop it mid-flight. Cancel is a sensitive
-    // route: it requires the local daemon token, same as pause/approve.
+    // Let it get going, then stop it mid-flight. (No token needed since
+    // 2026-11-13; the token is still sent here out of habit.)
     await fetch(new URL('/health', base))
     const cancelRes = await fetch(new URL(`/tasks/${created.body.id}/cancel`, base), {
       method: 'POST',

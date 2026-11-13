@@ -20,6 +20,18 @@ export default defineConfig({
       '/attachments': { target: gateway, changeOrigin: true },
       '/tasks': { target: gateway, changeOrigin: true, ws: true },
       '/workspace': { target: gateway, changeOrigin: true },
+      // Every first-segment the app calls (see src/api/client.ts) must be
+      // listed here, or `npm run dev` fails those calls even with the
+      // server running: terminal, extensions, and all domain engines
+      // (slides, sheets, dokumen, research) were missing before this.
+      '/slides': { target: gateway, changeOrigin: true },
+      '/sheets': { target: gateway, changeOrigin: true },
+      '/dokumen': { target: gateway, changeOrigin: true },
+      '/research': { target: gateway, changeOrigin: true },
+      '/terminals': { target: gateway, changeOrigin: true },
+      '/conversations': { target: gateway, changeOrigin: true },
+      '/extensions': { target: gateway, changeOrigin: true },
+      '/review': { target: gateway, changeOrigin: true },
     },
   },
 })

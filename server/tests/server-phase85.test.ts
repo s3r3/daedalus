@@ -32,7 +32,8 @@ afterEach(async () => {
   webRoot = undefined;
 });
 
-// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+// The daemon token is still minted by listen() and sent by these tests,
+// but the server no longer enforces it on any route (removed 2026-11-13).
 let daemonToken = ''
 
 async function listen(options: { webDist?: string } = {}): Promise<{ base: string; ctx: ReturnType<typeof createContext> }> {

@@ -23,7 +23,8 @@ afterEach(async () => {
   workspace = undefined
 })
 
-// S6: daemon token for mutation routes, set by listen() (GET/OPTIONS ignore it).
+// The daemon token is still minted by listen() and sent by these tests,
+// but the server no longer enforces it on any route (removed 2026-11-13).
 let daemonToken = ''
 
 async function listen(): Promise<{ base: string; wsUrl: string; ctx: ReturnType<typeof createContext> }> {
@@ -203,7 +204,7 @@ describe('server', () => {
   test('POST /tasks/{id}/cancel records a cancellation request', async () => {
     const { base, ctx } = await listen()
     ctx.store.saveState('t4', { status: 'active' })
-    // Cancel is a sensitive route: it requires the local daemon token.
+    // Cancel works without a token (no token enforcement since 2026-11-13).
     await fetch(new URL('/health', base))
     const auth = { authorization: `Bearer ${ctx.daemonToken ?? ''}` }
     const res = await fetch(new URL('/tasks/t4/cancel', base), { method: 'POST', headers: auth })
@@ -242,19 +243,15 @@ describe('server', () => {
     expect(ctx.store.isPauseRequested('t6')).toBe(false)
   })
 
-  test('POST /tasks/{id}/pause requires the daemon token (S6; only cancel is exempt)', async () => {
+  test('POST /tasks/{id}/pause works without a token (no token enforcement since 2026-11-13)', async () => {
     const { base, ctx } = await listen()
     ctx.store.saveState('t7', { status: 'active' })
-    // Without a token the guard answers 401; with the token the pause
-    // marker is recorded and resume clears it.
+    // No token needed: the pause marker is recorded and resume clears it.
     await fetch(new URL('/health', base))
-    const denied = await fetch(new URL('/tasks/t7/pause', base), { method: 'POST' })
-    expect(denied.status).toBe(401)
-    const auth = { authorization: `Bearer ${ctx.daemonToken ?? ''}` }
-    const pauseRes = await fetch(new URL('/tasks/t7/pause', base), { method: 'POST', headers: auth })
+    const pauseRes = await fetch(new URL('/tasks/t7/pause', base), { method: 'POST' })
     expect(pauseRes.status).toBe(200)
     expect(ctx.store.isPauseRequested('t7')).toBe(true)
-    const resumeRes = await fetch(new URL('/tasks/t7/resume', base), { method: 'POST', headers: auth })
+    const resumeRes = await fetch(new URL('/tasks/t7/resume', base), { method: 'POST' })
     expect(resumeRes.status).toBe(200)
     expect(ctx.store.isPauseRequested('t7')).toBe(false)
   })
@@ -269,7 +266,7 @@ describe('server', () => {
     ctx.activeRunners.set('t5', runner)
     const key = { taskId: 't5', tool: 'write_file', action: 'write' as const, path: 'a.ts' }
     const decision = runner.approvals.request(key, 'ask')
-    // Approve is a sensitive route: it requires the local daemon token.
+    // Approve works without a token (no token enforcement since 2026-11-13).
     await fetch(new URL('/health', base))
     const res = await fetch(new URL('/tasks/t5/approve', base), {
       method: 'POST',
